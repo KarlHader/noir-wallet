@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { ReceivingAddressLayout } from '@/popup/components/common/ReceivingAddressLayout'
 import { resolveEvmChainIconAlias } from '@/config/icons'
@@ -17,7 +17,6 @@ import { getZcashChainId } from '@/core/chains/registry'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatSortAddress, formatSymbol } from '@/lib/format'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
-import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
 import {
@@ -40,7 +39,12 @@ import {
   type ExternalShieldDeposit
 } from '@/popup/services/confidential-funding-client'
 import { useWalletStore } from '@/store/wallet-store'
-import { PageHeader } from '@/popup/components/common/PageHeader'
+import { PublicReceive } from '@/popup/components/portfolio/PublicReceive'
+import {
+  ReceiveField,
+  ReceiveForm,
+  type ReceiveMode
+} from '@/popup/components/portfolio/ReceiveForm'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
@@ -48,6 +52,7 @@ import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDial
 import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import { ShieldProviderLogo, SHIELD_PROVIDERS } from '@/popup/components/portfolio/shield-providers'
+import { ShieldProviderDialog } from '@/popup/components/portfolio/ShieldProviderDialog'
 import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import {
@@ -65,43 +70,98 @@ function depositChainIconAlias(network: ChainDefinition): string {
     : resolveChainIconAlias(network.family, network.displayName)
 }
 
-export function ShieldDepositPage() {
+export function ReceivePage() {
+  const { key } = useLocation()
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
-  return <ShieldDepositContent key={`${network}:${walletId}:${accountId}`} />
+  return <ReceiveFlow key={`${network}:${walletId}:${accountId}:${key}`} />
 }
 
-function ShieldDepositContent() {
+function ReceiveFlow() {
   const [searchParams] = useSearchParams()
-  const requestedProvider = searchParams.get('provider')
-  const requestedProviderIsNear = requestedProvider === 'near-confidential'
-  const requestedProviderIsZcash = requestedProvider === 'zcash-shield'
-  const currentWalletId = useWalletStore(state => state.currentWalletId)
-  const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const {
-    catalog: accountCatalog,
-    activeAccount,
-    loading,
-    error: accountCatalogError,
-    refresh: refreshAccountCatalog
-  } = useActiveAccountNetworks()
-  const effectiveAccount = resolveEffectiveActiveAccountIdentity({
-    currentWalletId,
-    currentAccountId,
-    nativeAccount: activeAccount
-  })
-  const walletId = effectiveAccount?.walletId ?? null
-  const accountId = effectiveAccount?.accountId ?? null
+  const { catalog, activeAccount, loading, error, refresh, contextChanging } =
+    useActiveAccountNetworks()
+  const [mode, setMode] = useState<ReceiveMode>(
+    searchParams.get('mode') === 'shield' ? 'shield' : 'public'
+  )
+  const requestedWalletId = searchParams.get('walletId')
+  const requestedAccountId = searchParams.get('accountId')
   const account =
-    accountCatalog?.accounts.find(
-      item => item.walletId === walletId && item.accountId === accountId
-    ) ?? null
+    !contextChanging &&
+    (!requestedWalletId || requestedWalletId === activeAccount?.walletId) &&
+    (!requestedAccountId || requestedAccountId === activeAccount?.accountId)
+      ? activeAccount
+      : null
   const canManageNear = getPrivateTransferChainIds(account, currentNetwork === 'mainnet').length > 0
   const zcashNetwork = account?.networks.find(
     item => item.chain.id === getZcashChainId(currentNetwork)
   )
+  const shieldAvailable = canManageNear || Boolean(zcashNetwork)
+  if (mode === 'public') {
+    return (
+      <PublicReceive
+        account={account}
+        assetId={searchParams.get('assetId')}
+        chainId={searchParams.get('chainId')}
+        loading={loading || contextChanging}
+        shieldAvailable={shieldAvailable}
+        refresh={refresh}
+        onModeChange={setMode}
+      />
+    )
+  }
+  return (
+    <ShieldReceive
+      account={account}
+      accountCatalog={catalog}
+      loading={loading || contextChanging}
+      accountCatalogError={error}
+      refreshAccountCatalog={refresh}
+      currentNetwork={currentNetwork}
+      canManageNear={canManageNear}
+      zcashNetwork={zcashNetwork}
+      requestedProvider={searchParams.get('provider')}
+      requestedAssetId={searchParams.get('assetId')}
+      onModeChange={setMode}
+    />
+  )
+}
+
+type ReceiveAccountState = ReturnType<typeof useActiveAccountNetworks>
+
+function ShieldReceive({
+  account,
+  accountCatalog,
+  loading,
+  accountCatalogError,
+  refreshAccountCatalog,
+  currentNetwork,
+  canManageNear,
+  zcashNetwork,
+  requestedProvider,
+  requestedAssetId,
+  onModeChange
+}: {
+  readonly account: ReceiveAccountState['activeAccount']
+  readonly accountCatalog: ReceiveAccountState['catalog']
+  readonly loading: boolean
+  readonly accountCatalogError: boolean
+  readonly refreshAccountCatalog: ReceiveAccountState['refresh']
+  readonly currentNetwork: ReturnType<typeof useWalletStore.getState>['currentNetwork']
+  readonly canManageNear: boolean
+  readonly zcashNetwork:
+    | NonNullable<ReceiveAccountState['activeAccount']>['networks'][number]
+    | undefined
+  readonly requestedProvider: string | null
+  readonly requestedAssetId: string | null
+  readonly onModeChange: (mode: ReceiveMode) => void
+}) {
+  const walletId = account?.walletId ?? null
+  const accountId = account?.accountId ?? null
+  const requestedProviderIsNear = requestedProvider === 'near-confidential'
+  const requestedProviderIsZcash = requestedProvider === 'zcash-shield'
   const zcashAddress = zcashNetwork?.addresses.find(
     address => address.scheme === 'zcash-shielded-unified' && address.privacy === 'shielded'
   )?.value
@@ -298,7 +358,6 @@ function ShieldDepositContent() {
   const networks = useMemo(() => depositSourceNetworks(), [account])
   const tokens = useMemo(() => availableDepositTokens(catalog, networks), [catalog, networks])
   const tokenChoices = useMemo(() => listDepositTokenChoices(tokens), [tokens])
-  const requestedAssetId = searchParams.get('assetId')
   const requestedTokenId = useMemo(() => {
     if (!requestedAssetId) return null
     const requested =
@@ -939,11 +998,28 @@ function ShieldDepositContent() {
   }
 
   return (
-    <div className="page-container min-h-0 overflow-hidden">
-      <PageHeader
-        title="Receive"
-        showBack
-        rightContent={
+    <>
+      <ReceiveForm
+        mode="shield"
+        onModeChange={onModeChange}
+        shieldAvailable={canManageNear || canReceiveZcash}
+        busy={busy}
+        disabled={
+          loading ||
+          !account ||
+          busy ||
+          (provider === 'zcash-shield'
+            ? !zcashAddress
+            : !canManageNear ||
+              historyLoading ||
+              !selectedToken ||
+              !selectedNetwork ||
+              !sourceAssetId)
+        }
+        onShowAddress={() =>
+          provider === 'zcash-shield' ? setShowZcashAddress(true) : void createDeposit()
+        }
+        headerAction={
           provider === 'near-confidential' && (
             <button
               type="button"
@@ -965,8 +1041,7 @@ function ShieldDepositContent() {
             </button>
           )
         }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-5">
+      >
         {accountUnavailable && (
           <div
             role="alert"
@@ -989,21 +1064,12 @@ function ShieldDepositContent() {
           </div>
         )}
         {(canManageNear || canReceiveZcash) && (
-          <button
-            type="button"
-            aria-label="Shield Provider"
+          <ReceiveField
+            label="Shield Provider"
+            value={SHIELD_PROVIDERS[provider].detailName}
+            icon={<ShieldProviderLogo provider={provider} size={32} />}
             onClick={() => setPicker('provider')}
-            className="wallet-interactive mt-4 flex h-[62px] w-full items-center gap-2.5 rounded-lg bg-wallet-surface px-4 text-left hover:bg-wallet-selected"
-          >
-            <ShieldProviderLogo provider={provider} size={32} />
-            <span className="min-w-0 flex-1">
-              <span className="block text-xs text-muted">Shield Provider</span>
-              <span className="block truncate text-sm">
-                {SHIELD_PROVIDERS[provider].detailName}
-              </span>
-            </span>
-            <Icon icon="lucide:chevron-down" width={17} />
-          </button>
+          />
         )}
         {!loading &&
           ((provider === 'near-confidential' && !canManageNear) ||
@@ -1015,83 +1081,54 @@ function ShieldDepositContent() {
           )}
         {provider === 'near-confidential' && canManageNear && (
           <>
-            <div className="space-y-2.5 pt-4">
-              <button
-                type="button"
-                onClick={() => setPicker('token')}
-                disabled={loading || tokenChoices.length === 0}
-                className="wallet-interactive flex h-[62px] w-full items-center gap-2.5 rounded-lg bg-wallet-surface px-4 text-left enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
-              >
-                {displayedToken ? (
+            <ReceiveField
+              label="Receive Token"
+              value={displayedToken ? formatSymbol(displayedToken.symbol) : undefined}
+              placeholderIcon="lucide:coins"
+              onClick={() => setPicker('token')}
+              disabled={loading || tokenChoices.length === 0}
+              icon={
+                displayedToken && (
                   <TokenIcon
                     assetId={displayedToken.assetId}
                     symbol={formatSymbol(displayedToken.symbol)}
                     icon={resolveSwapTokenIconUrl(displayedToken)}
                     size={32}
                   />
-                ) : (
-                  <Icon
-                    icon="lucide:circle-dollar-sign"
-                    width={32}
-                    height={32}
-                    className="text-muted"
-                  />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs text-muted">Receive Token</span>
-                  <span className="block truncate text-sm">
-                    {displayedToken ? formatSymbol(displayedToken.symbol) : 'Select token'}
-                  </span>
-                </span>
-                <Icon icon="lucide:chevron-down" width={17} height={17} />
-              </button>
-              <button
-                type="button"
-                onClick={() => setNetworkPickerOpen(true)}
-                disabled={loading || !displayedToken || availableNetworks.length === 0}
-                className="wallet-interactive flex h-[62px] w-full items-center gap-2.5 rounded-lg bg-wallet-surface px-4 text-left enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
-              >
-                {selectedNetwork ? (
+                )
+              }
+            />
+            <ReceiveField
+              label={selectedNetwork ? 'Network' : 'Select Network'}
+              value={selectedNetwork?.displayName}
+              placeholderIcon="lucide:globe"
+              onClick={() => setNetworkPickerOpen(true)}
+              disabled={loading || !displayedToken || availableNetworks.length === 0}
+              icon={
+                selectedNetwork && (
                   <ChainIcon
                     chain={depositChainIconAlias(selectedNetwork)}
                     width={32}
                     height={32}
                     className="rounded-md"
                   />
-                ) : (
-                  <Icon icon="lucide:globe" width={32} height={32} className="text-muted" />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs text-muted">Network</span>
-                  <span className="block truncate text-sm">
-                    {selectedNetwork?.displayName ?? 'Select network'}
-                  </span>
-                </span>
-                <Icon icon="lucide:chevron-down" width={17} height={17} />
-              </button>
-            </div>
+                )
+              }
+            />
           </>
         )}
         {provider === 'zcash-shield' && canReceiveZcash && (
-          <section className="pt-4" aria-label="Zcash shielded receive address">
-            <div className="space-y-2.5">
-              <div className="flex h-[62px] items-center gap-2.5 rounded-lg bg-wallet-surface px-4">
-                <TokenIcon symbol="ZEC" nativeChain="zcash" size={32} />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs text-muted">Receive Token</span>
-                  <span className="block text-sm">ZEC</span>
-                </span>
-                <Icon icon="lucide:lock-keyhole" width={16} height={16} className="text-muted" />
-              </div>
-              <div className="flex h-[62px] items-center gap-2.5 rounded-lg bg-wallet-surface px-4">
-                <ChainIcon chain="zcash" width={32} height={32} className="rounded-md" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs text-muted">Network</span>
-                  <span className="block text-sm">{zcashNetwork?.chain.displayName}</span>
-                </span>
-                <Icon icon="lucide:lock-keyhole" width={16} height={16} className="text-muted" />
-              </div>
-            </div>
+          <section className="space-y-2.5" aria-label="Zcash shielded receive address">
+            <ReceiveField
+              label="Receive Token"
+              value="ZEC"
+              icon={<TokenIcon symbol="ZEC" nativeChain="zcash" size={32} />}
+            />
+            <ReceiveField
+              label="Network"
+              value={zcashNetwork?.chain.displayName}
+              icon={<ChainIcon chain="zcash" width={32} height={32} className="rounded-md" />}
+            />
             {!zcashAddress && (
               <InlineError
                 message="Shielded receiving address unavailable"
@@ -1107,31 +1144,7 @@ function ShieldDepositContent() {
             {error}
           </p>
         )}
-      </div>
-      <div className="page-footer">
-        <button
-          type="button"
-          onClick={() =>
-            provider === 'zcash-shield' ? setShowZcashAddress(true) : void createDeposit()
-          }
-          disabled={
-            loading ||
-            !account ||
-            busy ||
-            (provider === 'zcash-shield'
-              ? !zcashAddress
-              : !canManageNear ||
-                historyLoading ||
-                !selectedToken ||
-                !selectedNetwork ||
-                !sourceAssetId)
-          }
-          aria-busy={busy || undefined}
-          className="wallet-interactive h-11 w-full rounded-lg bg-primary text-sm font-medium text-background enabled:hover:brightness-110 enabled:active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
-        >
-          {busy ? 'Generating…' : 'Receiving address'}
-        </button>
-      </div>
+      </ReceiveForm>
       <Dialog open={showHistory} onOpenChange={setShowHistory}>
         <DialogContent
           position="bottom"
@@ -1209,44 +1222,15 @@ function ShieldDepositContent() {
           </section>
         </DialogContent>
       </Dialog>
-      <Dialog open={picker === 'provider'} onOpenChange={open => !open && setPicker(null)}>
-        <DialogContent
-          position="bottom"
-          showCloseButton={false}
-          className="flex max-h-[90dvh] min-h-[320px] flex-col gap-0 bg-background p-0"
-        >
-          <div className="flex h-14 shrink-0 items-center justify-between px-4">
-            <DialogTitle className="text-base font-medium">Shield Provider</DialogTitle>
-            <button
-              type="button"
-              aria-label="Close"
-              onClick={() => setPicker(null)}
-              className="wallet-interactive flex size-6 items-center justify-center rounded-md hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-            >
-              <Icon icon="lucide:x" width={20} height={20} />
-            </button>
-          </div>
-          <DialogDescription className="sr-only">Choose deposit source</DialogDescription>
-          <div className="min-h-0 overflow-y-auto px-4 pb-5">
-            {(['near-confidential', 'zcash-shield'] as const).map(item => (
-              <button
-                key={item}
-                type="button"
-                disabled={item === 'near-confidential' ? !canManageNear : !canReceiveZcash}
-                aria-pressed={provider === item}
-                onClick={() => selectProvider(item)}
-                className="wallet-interactive flex h-16 w-full items-center gap-3 rounded-lg px-2 text-left text-sm enabled:hover:bg-wallet-selected disabled:opacity-45"
-              >
-                <ShieldProviderLogo provider={item} size={32} />
-                <span className="flex-1">{SHIELD_PROVIDERS[item].detailName}</span>
-                {provider === item && (
-                  <Icon icon="lucide:check" width={18} className="text-primary" />
-                )}
-              </button>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ShieldProviderDialog
+        open={picker === 'provider'}
+        onClose={() => setPicker(null)}
+        selected={provider}
+        available={{ 'near-confidential': canManageNear, 'zcash-shield': canReceiveZcash }}
+        onSelect={selectProvider}
+        networks={networks}
+        tokens={catalog.length > 0 ? tokens : null}
+      />
       <TokenSelectorDialog
         open={picker === 'token'}
         onOpenChange={open => !open && setPicker(null)}
@@ -1297,6 +1281,6 @@ function ShieldDepositContent() {
         onSelect={selectNetwork}
       />
       <CopyToast show={showToast} />
-    </div>
+    </>
   )
 }

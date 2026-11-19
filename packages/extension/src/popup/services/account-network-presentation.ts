@@ -16,6 +16,10 @@ export function accountNetworkIconChain(network: AccountNetworkView): string {
   return resolveChainIconAlias(network.chain.family, network.chain.displayName)
 }
 
+export function zcashSettingsPath(walletId: string, accountId: string): string {
+  return `/zcash-settings?${new URLSearchParams({ walletId, accountId })}`
+}
+
 export function evmExecutionAddresses(networks: readonly AccountNetworkView[]): {
   readonly mainAddress?: string
   readonly privateAddress?: string

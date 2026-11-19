@@ -52,7 +52,7 @@ import { ShieldProviderDetail } from './pages/portfolio/ShieldProviderDetail'
 import { ShieldFundsPage } from './pages/portfolio/ShieldFundsPage'
 import { ShieldWithdrawPage } from './pages/portfolio/ShieldWithdrawPage'
 import { ShieldZcashMovePage } from './pages/portfolio/ShieldZcashMovePage'
-import { ShieldDepositPage } from './pages/portfolio/ShieldDepositPage'
+import { ReceivePage } from './pages/portfolio/ReceivePage'
 
 // Swap Page
 import { Swap } from './pages/swap/Swap'
@@ -295,7 +295,7 @@ function AppRoutes() {
       <Route path="/shield-funds" element={<ShieldFundsPage />} />
       <Route path="/shield-withdraw" element={<ShieldWithdrawPage />} />
       <Route path="/shield-zcash-move" element={<ShieldZcashMovePage />} />
-      <Route path="/shield-deposit" element={<ShieldDepositPage />} />
+      <Route path="/receive" element={<ReceivePage />} />
       <Route path="/shield-swap" element={<Swap />} />
       <Route path="/settings" element={<Settings />} />
       <Route path="/default-evm-wallet" element={<DefaultEvmWallet />} />

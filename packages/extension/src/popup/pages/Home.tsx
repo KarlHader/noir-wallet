@@ -628,15 +628,6 @@ export function Home() {
   const selectedDomainTotal = domainTotals[assetDomain]
   const selectedDomainLoading = !balancesHidden && domainLoading[assetDomain]
 
-  const openAddressesList = useCallback(() => {
-    const search = new URLSearchParams({ source: 'receive' })
-    if (effectiveWalletId && effectiveAccountId) {
-      search.set('walletId', effectiveWalletId)
-      search.set('accountId', effectiveAccountId)
-    }
-    navigate.navigate(`/addresses-list?${search.toString()}`)
-  }, [effectiveAccountId, effectiveWalletId, navigate])
-
   const handleMultichainActivityClick = async (item: ActivityItem) => {
     setFocusTransactionId(null)
     await openModal({
@@ -936,7 +927,7 @@ export function Home() {
               <WalletActionButton
                 icon={<WalletActionIcon action="receive" />}
                 label="Receive"
-                onClick={openAddressesList}
+                onClick={() => navigate.navigate('/receive')}
               />
             </>
           )}

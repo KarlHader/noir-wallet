@@ -45,7 +45,7 @@ test('V2 pages and chain families resolve to bounded analytics values', () => {
     '/shield-provider',
     '/shield-funds',
     '/shield-withdraw',
-    '/shield-deposit',
+    '/receive',
     '/shield-swap',
     '/dapp-connections',
     '/account-networks',

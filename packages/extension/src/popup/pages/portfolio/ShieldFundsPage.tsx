@@ -216,7 +216,7 @@ function ShieldFundsContent() {
       return
     }
     if (action === 'receive') {
-      go('/shield-deposit')
+      go('/receive?mode=shield')
       return
     }
     if (action === 'swap') {
@@ -237,11 +237,9 @@ function ShieldFundsContent() {
       }
       return
     }
-    go(
-      action === 'send'
-        ? `/shield-withdraw?provider=near-confidential&originPath=${sendOriginPath}`
-        : '/shield-deposit?provider=near-confidential'
-    )
+    if (action === 'send') {
+      go(`/shield-withdraw?provider=near-confidential&originPath=${sendOriginPath}`)
+    }
   }
   const openAction = (action: ShieldAction) => {
     if (action === 'move') {
@@ -252,7 +250,7 @@ function ShieldFundsContent() {
       return
     }
     if (action === 'receive') {
-      navigate(withShieldAsset('/shield-deposit', requestedAssetId))
+      navigate(withShieldAsset('/receive?mode=shield', requestedAssetId))
       return
     }
     if (action === 'send') {
@@ -292,7 +290,7 @@ function ShieldFundsContent() {
             : zcashMovePath!
       )
     } else if (requestedAction === 'receive' && providers.length > 0) {
-      replace(withShieldAsset('/shield-deposit', requestedAssetId))
+      replace(withShieldAsset('/receive?mode=shield', requestedAssetId))
     } else if (requestedAction === 'send' && canManageNear)
       runAction('near-confidential', requestedAction, true)
     else if (providers.length === 1) runAction(providers[0]!, requestedAction, true)

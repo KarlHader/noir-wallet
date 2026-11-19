@@ -113,6 +113,8 @@ export function ChainSelector({
                 key={option.id}
                 type="button"
                 role="radio"
+                aria-label={option.name}
+                aria-description={option.note}
                 aria-checked={selectedId === option.id}
                 disabled={busy || option.disabled}
                 onClick={() => void select(option.id)}

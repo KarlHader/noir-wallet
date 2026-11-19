@@ -11,7 +11,8 @@ import {
 import {
   accountNetworkIconChain,
   accountNetworkLabel,
-  evmExecutionAddresses
+  evmExecutionAddresses,
+  zcashSettingsPath
 } from '@/popup/services/account-network-presentation'
 import {
   buildAccountSwitcherGroups,
@@ -118,6 +119,7 @@ function AccountAddressPopover({
   isCopied,
   copyScope,
   onViewAll,
+  onOpenZcashSettings,
   className
 }: {
   readonly account: SwitcherAccount
@@ -127,6 +129,7 @@ function AccountAddressPopover({
   readonly isCopied: (key: string) => boolean
   readonly copyScope: string
   readonly onViewAll: () => void
+  readonly onOpenZcashSettings: () => void
   readonly className?: string
 }) {
   const [selectedEvmMode, setEvmMode] = useState<'public' | 'private' | null>(null)
@@ -169,7 +172,18 @@ function AccountAddressPopover({
             className="mt-1 size-[26px] shrink-0 rounded-[5px]"
           />
           <div className="min-w-0 flex-1">
-            <p className="text-sm leading-[18px]">Zcash</p>
+            <div className="flex min-w-0 items-center justify-between gap-1">
+              <p className="truncate text-sm leading-[18px]">Zcash</p>
+              <button
+                type="button"
+                aria-label="Open Zcash settings"
+                title="Zcash settings"
+                onClick={onOpenZcashSettings}
+                className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-white/8 hover:text-foreground active:bg-white/12 focus-visible:outline-2 focus-visible:outline-primary"
+              >
+                <Icon icon="lucide:settings" width={15} height={15} />
+              </button>
+            </div>
             {zcashAddresses.map(address => (
               <div
                 key={`${address.scheme}:${address.value}`}
@@ -519,6 +533,12 @@ export function AccountSwitcher({
     )
   }
 
+  const openZcashSettings = (account: SwitcherAccount) => {
+    setAddressesOpen(false)
+    setDrawerOpen(false)
+    navigate(zcashSettingsPath(account.walletId, account.accountId))
+  }
+
   const select = async (account: SwitcherAccount) => {
     if (switching) return
     if (account.active) {
@@ -739,6 +759,7 @@ export function AccountSwitcher({
                     isCopied={isCopied}
                     copyScope="preview"
                     onViewAll={() => viewAddresses(previewAccount)}
+                    onOpenZcashSettings={() => openZcashSettings(previewAccount)}
                   />
                 </div>
               </div>
@@ -817,6 +838,7 @@ export function AccountSwitcher({
               isCopied={isCopied}
               copyScope="active"
               onViewAll={() => viewAddresses(activeAccount)}
+              onOpenZcashSettings={() => openZcashSettings(activeAccount)}
               className="!w-full"
             />
           )}

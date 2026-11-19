@@ -31,8 +31,11 @@ import { NearConfidentialHoldingRow } from '@/popup/components/portfolio/NearCon
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { PortfolioChainAssetRow } from '@/popup/components/portfolio/PortfolioAssetGroupCard'
-import { ShieldProviderLogo, SHIELD_PROVIDERS } from '@/popup/components/portfolio/shield-providers'
-import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
+import {
+  NearShieldSupport,
+  ShieldProviderLogo,
+  SHIELD_PROVIDERS
+} from '@/popup/components/portfolio/shield-providers'
 import { MultichainActivityPanel } from '@/popup/components/transaction/MultichainActivityPanel'
 import { MultichainActivityDetail } from '@/popup/components/transaction/MultichainActivityDetail'
 import { openModal } from '@/popup/provider/ModalManager'
@@ -326,51 +329,12 @@ function ShieldProviderContent() {
           <h1 className="mt-5 text-lg font-bold">{info.detailName}</h1>
           {provider === 'near-confidential' && (
             <p className="mx-auto mt-2 max-w-[343px] text-xs leading-4 text-wallet-secondary">
-              Confidential Intents extend the NEAR Intents protocol with privacy-preserving swaps.
-              Market makers can provide liquidity on a private chain where balances and swap details
-              are shielded from public view.
+              {info.description}
             </p>
           )}
           {provider === 'near-confidential' ? (
-            <div className="mt-5 grid grid-cols-2 gap-3 text-center">
-              <div className="min-w-0">
-                <div className="flex h-5 items-center justify-center gap-1.5">
-                  {supportedNetworks.some(network => network.family === 'evm') && (
-                    <ChainIcon chain="evm" width={17} height={17} />
-                  )}
-                  {supportedNetworks
-                    .filter(network => network.family !== 'evm')
-                    .slice(0, 4)
-                    .map(network => (
-                      <ChainIcon
-                        key={network.id}
-                        chain={resolveChainIconAlias(network.family, network.displayName)}
-                        width={17}
-                        height={17}
-                        className="shrink-0 rounded-full border border-background"
-                      />
-                    ))}
-                </div>
-                <p className="mt-1 text-sm text-wallet-secondary">
-                  {supportedNetworks.length} Supported networks
-                </p>
-              </div>
-              <div className="min-w-0">
-                <div className="flex h-5 items-center justify-center -space-x-1">
-                  {supportedTokens?.slice(0, 5).map(token => (
-                    <TokenIcon
-                      key={token.assetId}
-                      token={token}
-                      showChainBadge={false}
-                      size={17}
-                      className="shrink-0 rounded-full border border-background"
-                    />
-                  ))}
-                </div>
-                <p className="mt-1 text-sm text-wallet-secondary">
-                  {supportedTokens?.length ?? '—'} Supported tokens
-                </p>
-              </div>
+            <div className="mt-5">
+              <NearShieldSupport networks={supportedNetworks} tokens={supportedTokens} />
             </div>
           ) : (
             <div className="mt-5 flex min-h-5 items-center justify-between gap-3 text-left">
@@ -418,7 +382,7 @@ function ShieldProviderContent() {
                   onClick={() =>
                     navigate(
                       withShieldAsset(
-                        '/shield-deposit?provider=near-confidential',
+                        '/receive?mode=shield&provider=near-confidential',
                         requestedAssetId
                       )
                     )
@@ -479,7 +443,7 @@ function ShieldProviderContent() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => navigate('/shield-deposit?provider=zcash-shield')}
+                  onClick={() => navigate('/receive?mode=shield&provider=zcash-shield')}
                   disabled={!account || !hasZcashAccount}
                   className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs enabled:hover:bg-[var(--color-wallet-selected)] enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
                 >

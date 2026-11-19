@@ -185,21 +185,30 @@ export function AssetDetail() {
   }, [requestedAssetId])
 
   const visibleModel = model
+  const requestedChainId = useMemo(() => {
+    if (!requestedAssetId) return null
+    try {
+      return parseAssetId(requestedAssetId).chainId
+    } catch {
+      return null
+    }
+  }, [requestedAssetId])
+  const requestedChainEnabled =
+    requestedChainId !== null &&
+    storageV2Account?.walletId === effectiveWalletId &&
+    storageV2Account.accountId === effectiveAccountId &&
+    storageV2Account.networks.some(network => network.chain.id === requestedChainId)
   useEffect(() => {
-    if (!visibleModel || !requestedAssetId || !effectiveWalletId || !effectiveAccountId) return
-    if (visibleModel.assets.some(item => item.asset.id === requestedAssetId)) return
     if (
-      storageV2Account?.walletId !== effectiveWalletId ||
-      storageV2Account.accountId !== effectiveAccountId
+      !visibleModel ||
+      !requestedAssetId ||
+      !requestedChainId ||
+      !requestedChainEnabled ||
+      !effectiveWalletId ||
+      !effectiveAccountId
     )
       return
-    let chainId: string
-    try {
-      chainId = parseAssetId(requestedAssetId).chainId
-    } catch {
-      return
-    }
-    if (!storageV2Account.networks.some(network => network.chain.id === chainId)) return
+    if (visibleModel.assets.some(item => item.asset.id === requestedAssetId)) return
     const attemptKey = JSON.stringify([
       currentNetwork,
       effectiveWalletId,
@@ -209,13 +218,14 @@ export function AssetDetail() {
     ])
     if (missingAssetRefreshes.current.has(attemptKey)) return
     missingAssetRefreshes.current.add(attemptKey)
-    void refresh(false, { additionalChainIds: [chainId] })
+    void refresh(false, { additionalChainIds: [requestedChainId] })
   }, [
     visibleModel,
     requestedAssetId,
     effectiveWalletId,
     effectiveAccountId,
-    storageV2Account,
+    requestedChainEnabled,
+    requestedChainId,
     currentNetwork,
     chainEndpointRuntimeKey,
     refresh
@@ -484,18 +494,17 @@ export function AssetDetail() {
     })
   }
 
-  const handleReceive = (domain: 'public' | 'private' = actionDomain) => {
-    if (!chain || !canReceive || !effectiveWalletId || !effectiveAccountId) return
+  const handleReceive = (mode: 'public' | 'shield' = 'public') => {
+    if (!chain || !asset || !canReceive || !effectiveWalletId || !effectiveAccountId) return
     const query = new URLSearchParams({
       walletId: effectiveWalletId,
       accountId: effectiveAccountId,
       chainId: chain.chain.id,
-      mode: domain
+      assetId: asset.asset.id,
+      mode
     })
-    if (chain.chain.family === 'zcash') {
-      query.set('privacy', 'transparent')
-    }
-    navigate(`/addresses-list?${query.toString()}`)
+    if (mode === 'shield') query.set('provider', 'zcash-shield')
+    navigate(`/receive?${query.toString()}`)
   }
 
   const handleBitcoinAccountChange = async (
@@ -557,7 +566,11 @@ export function AssetDetail() {
       {
         action: 'receive' as const,
         label: 'Receive',
-        onClick: () => navigate(`/shield-deposit?${query}`)
+        onClick: () => {
+          const receiveQuery = new URLSearchParams(query)
+          receiveQuery.set('mode', 'shield')
+          navigate(`/receive?${receiveQuery}`)
+        }
       },
       ...(chain?.chain.family === 'zcash' &&
       getConfidentialZcashMoveRecipients(storageV2Account, currentNetwork).length > 0
@@ -600,7 +613,7 @@ export function AssetDetail() {
             action: 'receive' as const,
             label: 'Receive',
             disabled: !canReceive,
-            onClick: () => handleReceive(domain)
+            onClick: () => handleReceive()
           }
         ]
       : []),
@@ -630,10 +643,7 @@ export function AssetDetail() {
         action: 'receive' as const,
         label: 'Receive',
         disabled: !canReceive,
-        onClick: () =>
-          navigate(
-            `/addresses-list?${new URLSearchParams({ walletId: effectiveWalletId ?? '', accountId: effectiveAccountId ?? '', chainId: chain?.chain.id ?? '', privacy })}`
-          )
+        onClick: () => handleReceive(privacy === 'shielded' ? 'shield' : 'public')
       },
       {
         action: 'move' as const,
@@ -680,7 +690,11 @@ export function AssetDetail() {
     [currentNetwork, visibleModel, navigate, storageV2Account?.networks]
   )
 
-  if (status === 'loading' && (!visibleModel || !asset)) {
+  if (
+    (!asset || !chain || !display) &&
+    requestedChainId &&
+    (status === 'loading' || requestedChainEnabled)
+  ) {
     return (
       <div className="page-container">
         <PageHeader title="Asset details" showBack />
@@ -703,6 +717,12 @@ export function AssetDetail() {
             <Skeleton className="h-4 w-24" />
             <ListSkeleton rows={2} label="Loading activity" className="mt-2 px-0 py-1" />
           </div>
+          {status === 'error' && (
+            <InlineError
+              message="This asset could not be refreshed. Check your connection."
+              onRetry={() => void refresh(true, { additionalChainIds: [requestedChainId] })}
+            />
+          )}
         </div>
       </div>
     )
