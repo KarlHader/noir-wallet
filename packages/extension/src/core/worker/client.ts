@@ -27,6 +27,8 @@ import type { Network } from '@/types'
 import type { VaultDkgMethod } from '@/core/multisig/dkg-rpc'
 import type { VaultGroupMethod } from '@/core/multisig/vault-group-rpc'
 import type { VaultSendMethod } from '@/core/multisig/send-rpc'
+import { isVaultSendMethod } from '@/core/multisig/send-rpc'
+import { decodeMultisigSendError, toMultisigSendError } from '@/core/multisig/send-errors'
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { DedupPromise, ReadyFlag, TimeoutError } from '@/lib/async-utils'
 import { WALLET_CONFIG } from '@/config/wallet'
@@ -272,6 +274,7 @@ type OffscreenRpcResponse = {
   txIds?: string[]
   retryable?: boolean
   deferred?: boolean
+  multisigErrorCode?: unknown
 }
 
 function sendOffscreenRpcOnce(
@@ -399,6 +402,7 @@ async function forwardToOffscreen<T = any>(
     const response = await sendOffscreenRpcOnce(method, payload, timeout, transactionContext)
 
     if (response.error) {
+      if (isVaultSendMethod(method)) throw decodeMultisigSendError(response.multisigErrorCode)
       const canRetry =
         response.retryable === true &&
         isRetryableWalletRpcError(response.error) &&
@@ -451,11 +455,15 @@ export function requestVaultGroup<M extends VaultGroupMethod>(
   return forwardToOffscreen(method, payload)
 }
 
-export function requestVaultSend<M extends VaultSendMethod>(
+export async function requestVaultSend<M extends VaultSendMethod>(
   method: M,
   payload: RPCSchema[M]['request']
 ): Promise<RPCSchema[M]['response']> {
-  return forwardToOffscreen(method, payload)
+  try {
+    return await forwardToOffscreen(method, payload)
+  } catch (error) {
+    throw toMultisigSendError(error, 'worker_unavailable')
+  }
 }
 
 export async function applyZeroIndexerOptionsToActiveWorker(

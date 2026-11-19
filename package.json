@@ -14,6 +14,7 @@
     "build": "pnpm -r build",
     "build:extension": "pnpm --filter @noir-wallet/extension build",
     "build:extension:testnet": "pnpm --filter @noir-wallet/extension build:testnet",
+    "build:extension:testnet:multisig": "pnpm --filter @noir-wallet/extension build:testnet:multisig",
     "build:web": "pnpm --filter @noir-wallet/web build",
     "build:docs": "pnpm --filter @noir-wallet/docs build",
     "test": "pnpm --filter @noir-wallet/extension test",

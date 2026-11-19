@@ -98,7 +98,7 @@ export class FrostAccountMetadataCoordinator {
           id: `frost-address:${account.id}`,
           chainAccountId: chainId,
           value: account.addresses.shielded,
-          scheme: 'zcash-unified',
+          scheme: 'zcash-shielded-unified',
           purpose: 'receive',
           rotatable: true,
           preferredForReceive: true,

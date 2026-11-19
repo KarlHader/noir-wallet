@@ -13,6 +13,30 @@ import {
 import type { MultisigGroupRecord, MultisigThreshold } from '../../../src/core/multisig/types'
 import type { VaultSendReview } from '../../../src/core/multisig/send-rpc'
 import type { VaultSendTransaction } from '../../../src/core/multisig/send-rpc'
+import {
+  decodeMultisigSendError,
+  getMultisigSendErrorMessage,
+  MultisigSendError,
+  toMultisigSendError
+} from '../../../src/core/multisig/send-errors'
+
+test('multisig errors retain only allowlisted failure categories across page messages', () => {
+  const privateText = 'synthetic-private-request-content'
+  for (const value of [undefined, '__proto__', 'constructor', privateText]) {
+    const error = decodeMultisigSendError(value)
+    assert.equal(error.code, 'signing_unavailable')
+    assert.equal(getMultisigSendErrorMessage(error).includes(privateText), false)
+  }
+  const error = new MultisigSendError('credential_not_bound')
+  error.message = privateText
+  assert.equal(toMultisigSendError(error).message.includes(privateText), false)
+  assert.equal(decodeMultisigSendError('credential_not_bound').code, 'credential_not_bound')
+  assert.equal(
+    toMultisigSendError(new Error('Account not initialized')).code,
+    'account_not_initialized'
+  )
+  assert.equal(toMultisigSendError(new Error(privateText)).code, 'signing_unavailable')
+})
 
 const scope = { network: 'testnet' as const, walletId: 'wallet', accountId: 'account' }
 const active = {

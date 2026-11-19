@@ -33,12 +33,15 @@ test('nonce checkpoints yield before every durable boundary and exact ACK replay
   const created = await start()
   expect(actions).toEqual([])
   expect(created.persistence?.phase).toBe('created')
+  // Progress crosses postMessage before Background can acknowledge durable nonce storage.
+  expect(structuredClone(created)).toEqual(created)
   expect(await start()).toEqual(created)
   const ack = { ...created.persistence!, persisted: true }
   const [committed, replay] = await Promise.all([checkpoint.advance(ack), checkpoint.advance(ack)])
   expect(committed).toEqual(replay)
   expect(actions).toEqual(['nonce'])
   expect(committed.persistence?.phase).toBe('committed')
+  expect(structuredClone(committed)).toEqual(committed)
   const ready = await checkpoint.advance({ ...committed.persistence!, persisted: true })
   expect(ready.persistence).toBeUndefined()
   expect(actions).toEqual(['nonce', 'commitment'])
@@ -48,6 +51,7 @@ test('nonce checkpoints yield before every durable boundary and exact ACK replay
     actions.push('share')
     return { status: status(), outbound: [] }
   })
+  expect(structuredClone(consuming)).toEqual(consuming)
   expect(actions).toEqual(['nonce', 'commitment'])
   await checkpoint.advance({ ...consuming.persistence!, persisted: true })
   expect(actions).toEqual(['nonce', 'commitment', 'share'])

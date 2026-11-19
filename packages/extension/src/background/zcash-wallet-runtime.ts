@@ -350,6 +350,7 @@ export class BackgroundZcashWalletRuntime {
   private password: string | null = null
   private passwordGeneration = 0
   private sessionCredentialWalletId: string | null = null
+  private credentialRestoreGeneration = 0
   private isInitialized: boolean = false
   private network: Network = DEFAULT_NETWORK
   private currentWalletId: string | null = null
@@ -1363,7 +1364,11 @@ export class BackgroundZcashWalletRuntime {
               return
             }
             const accountId = this.store.currentAccountId
-            if (accountId) await this.refreshCachedBalancesAfterReady(walletId, accountId, core)
+            const account = accountId ? this.store.getAccount(walletId, accountId) : null
+            // A sealed FROST record needs the Worker credential, which the unlock
+            // coordinator binds after this non-blocking initialization completes.
+            if (accountId && account && !isFrostAccount(account))
+              await this.refreshCachedBalancesAfterReady(walletId, accountId, core)
           })().catch(() => {
             logger.warn('Cached balance refresh after initialization failed', walletId)
           })
@@ -1968,6 +1973,16 @@ export class BackgroundZcashWalletRuntime {
         }
       }
 
+      if (isFrostAccount(unlockAccount)) {
+        logger.refreshCache(this.store.wallets)
+        return {
+          success: true,
+          ...(recovered
+            ? { recoveredWalletId: storeWalletId, recoveredAccountId: currentAccount.id }
+            : {})
+        }
+      }
+
       // Optimistic Unlock: Do not await WASM heavy operations, allow immediate UI access
       // createAccount runs in background Worker, UI will show cached balance/addresses initially
       const restoreAbort = new AbortController()
@@ -1978,11 +1993,6 @@ export class BackgroundZcashWalletRuntime {
       const restorePromise = this.withWalletCoreLock(storeWalletId, async () => {
         if (signal.aborted) return
         const core = this.getOrCreateWalletCore(storeWalletId)
-        if (isFrostAccount(unlockAccount)) {
-          const restored = await this.restoreAccountFromDB(core, unlockAccount)
-          if (!restored) await this.registerFrostAccount(storeWalletId, unlockAccount)
-          return
-        }
         // Re-check under the lock: a concurrent unlock or the sync readiness
         // path may have already created/restored this account in the same WASM
         // instance. Adopt it instead of issuing a duplicate create.
@@ -2472,6 +2482,7 @@ export class BackgroundZcashWalletRuntime {
   }
 
   beginLock(): void {
+    this.credentialRestoreGeneration += 1
     this.setSessionPassword(null)
     this.sessionCredentialWalletId = null
     this.cancelActiveRestore(undefined, true)
@@ -2546,6 +2557,32 @@ export class BackgroundZcashWalletRuntime {
     return this.sessionCredentialWalletId === walletId
   }
 
+  /** Start a selected FROST restore only after Background binds the Worker credential. */
+  async resumeDeferredFrostRestore(): Promise<boolean> {
+    const walletId = this.store.currentWalletId
+    const accountId = this.store.currentAccountId
+    const account = walletId && accountId ? this.store.getAccount(walletId, accountId) : null
+    if (
+      !walletId ||
+      !accountId ||
+      !account ||
+      !isFrostAccount(account) ||
+      !isAccountNetworkEnabled(account, this.network, 'zcash')
+    )
+      return false
+    const previousGeneration = this.credentialRestoreGeneration
+    const restored = await this.restoreFromCredentialSession(walletId, accountId)
+    if (
+      restored &&
+      this.credentialRestoreGeneration === previousGeneration + 1 &&
+      this.store.currentWalletId === walletId &&
+      this.store.currentAccountId === accountId &&
+      !this.isLocked()
+    )
+      this.requestSync()
+    return restored
+  }
+
   /**
    * Restore a software wallet after Background memory loss without receiving
    * its password or mnemonic. The selected credential must already be bound
@@ -2561,6 +2598,7 @@ export class BackgroundZcashWalletRuntime {
         wallet.accounts[0]
     if (!account) return false
 
+    const restoreGeneration = ++this.credentialRestoreGeneration
     this.cancelActiveRestore()
     for (const [otherWalletId, otherCore] of this.walletCores) {
       if (otherWalletId !== walletId && otherCore.isSessionCredentialReady()) {
@@ -2576,20 +2614,28 @@ export class BackgroundZcashWalletRuntime {
     }
     this.sessionCredentialWalletId = walletId
     this.currentWalletId = walletId
+    const passwordGeneration = this.passwordGeneration
+    const isCurrentRestore = () =>
+      this.credentialRestoreGeneration === restoreGeneration &&
+      this.passwordGeneration === passwordGeneration &&
+      this.sessionCredentialWalletId === walletId
 
     try {
       await this.withWalletCoreLock(walletId, async () => {
         const core = this.getOrCreateWalletCore(walletId)
         const dbKey = `${this.network}_${walletId}`
         await core.ensureInitialized(dbKey)
+        if (!isCurrentRestore()) throw new Error('Wallet credential session changed')
         if (isFrostAccount(account)) {
-          if (!(await this.restoreAccountFromDB(core, account)))
-            await this.registerFrostAccount(walletId, account)
+          const restored = await this.restoreAccountFromDB(core, account)
+          if (!isCurrentRestore()) throw new Error('Wallet credential session changed')
+          if (!restored) await this.registerFrostAccount(walletId, account)
           return
         }
 
         if (!core.hasAccount() || core.accountIndex !== account.derivationIndex) {
           const restored = await this.restoreAccountFromDB(core, account)
+          if (!isCurrentRestore()) throw new Error('Wallet credential session changed')
           if (!restored) {
             try {
               await core.createAccountFromSession(
@@ -2620,13 +2666,25 @@ export class BackgroundZcashWalletRuntime {
           await flushWalletStore()
         }
       })
+      if (!isCurrentRestore()) throw new Error('Wallet credential session changed')
+      if (
+        isFrostAccount(account) &&
+        this.store.currentWalletId === walletId &&
+        this.store.currentAccountId === account.id &&
+        !this.isLocked()
+      ) {
+        const core = this.getOrCreateWalletCore(walletId)
+        void this.refreshCachedBalancesAfterReady(walletId, account.id, core).catch(() => {
+          logger.warn('Cached balance refresh after FROST restore failed', walletId)
+        })
+      }
       logger.refreshCache(this.store.wallets)
       return true
     } catch (error) {
-      if (this.sessionCredentialWalletId === walletId) {
+      if (isCurrentRestore()) {
         this.sessionCredentialWalletId = null
+        this.walletCores.get(walletId)?.clearSession()
       }
-      this.walletCores.get(walletId)?.clearSession()
       throw error
     }
   }

@@ -9,6 +9,7 @@ import { forwardKeyringRpcToOffscreen } from '@/core/worker/client'
 import { SETTINGS_STORAGE_KEY, resolvePersistedAutoLockMs } from '@/lib/wallet-settings-storage'
 import { credentialLifecycle } from './credential-lifecycle'
 import { CREDENTIAL_SESSION_DESCRIPTOR_KEY } from '@/core/wallet/credential-session-state'
+import { logger } from '@/lib/logger'
 
 const MAX_PROVISIONING_PASSWORD_BYTES = 1024 * 1024
 
@@ -101,9 +102,12 @@ export class CredentialSessionCoordinator {
 
   bindZcashCredential(keyDomainId: string): Promise<boolean> {
     return this.enqueue(async () => {
+      let stage: 'session_attestation' | 'credential_selection' | 'worker_bind' =
+        'session_attestation'
       try {
         const descriptor = await this.attestDescriptor()
         if (!descriptor) return false
+        stage = 'credential_selection'
         const parsedKeyDomainId = parseSessionKeyDomainId(keyDomainId)
         if (
           !descriptor.unlockedCredentials.some(
@@ -112,11 +116,15 @@ export class CredentialSessionCoordinator {
         ) {
           throw new Error('Credential is not unlocked')
         }
-        return await forwardKeyringRpcToOffscreen<boolean>('session.bind-zcash', {
+        stage = 'worker_bind'
+        const bound = await forwardKeyringRpcToOffscreen<boolean>('session.bind-zcash', {
           descriptor,
           keyDomainId: parsedKeyDomainId
         })
+        if (!bound) logger.warn('Zcash credential binding failed: worker_bind_rejected')
+        return bound
       } catch {
+        logger.warn(`Zcash credential binding failed: ${stage}`)
         await forwardKeyringRpcToOffscreen<boolean>('session.lock', {}).catch(() => {})
         await this.clearPersistedDescriptor()
         return false

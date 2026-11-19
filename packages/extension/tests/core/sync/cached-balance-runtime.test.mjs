@@ -293,6 +293,26 @@ test('startup returns before WASM init and refreshes after account cache hydrati
   assert.deepEqual(fixture.events, ['rehydrate', 'refresh'])
 })
 
+test('startup defers FROST cached refresh until its credential is bound', async () => {
+  const fixture = createRuntime()
+  const initialized = deferred()
+  fixture.walletState.wallets[0].accounts.push({
+    id: 'vault',
+    source: { kind: 'frost-vault', version: 1, groupId: 'group', network: 'mainnet' }
+  })
+  fixture.walletState.currentAccountId = 'vault'
+  fixture.runtime.getOrCreateWalletCore = () => ({ initialize: () => initialized.promise })
+  fixture.runtime.refreshCachedBalancesAfterReady = async () => {
+    fixture.events.push('refresh')
+  }
+
+  await fixture.runtime.initialize()
+  initialized.resolve()
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.deepEqual(fixture.events, ['rehydrate'])
+})
+
 test('startup init completion after a lock does not start a cached refresh', async () => {
   const fixture = createRuntime()
   const initialized = deferred()

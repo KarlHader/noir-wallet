@@ -79,7 +79,7 @@ await Promise.all([
     moduleName: 'zcash_wallet_wasm',
     engine: 'zcash',
     schemaVersion: 3,
-    sourceCommit: '120364293a6e8bf78c50abbe7603b143c6fcbd27'
+    sourceCommit: '1b4f11327685a11a0536da473942dbc270062cee'
   }),
   verifyPackagedWasm({
     directory: path.join(extensionDirectory, 'src/infrastructure/generated/wasm/multichain'),

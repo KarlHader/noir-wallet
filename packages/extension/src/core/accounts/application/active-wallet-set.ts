@@ -16,6 +16,7 @@ import {
   keySourceSupportsChainFamily,
   resolveKeyDomain
 } from './key-source-chain-policy'
+import { projectLegacyFrostAddressScheme } from './legacy-frost-address'
 
 type ActiveWalletSetRepository = Pick<StorageV2ReadRepository, 'getActivePointer' | 'getSnapshot'>
 
@@ -130,9 +131,17 @@ async function loadActiveWalletSetForCapability(
         ) {
           return []
         }
-        const addresses = snapshot.addresses.filter(
-          address => address.chainAccountId === chainAccount.id
-        )
+        const addresses = snapshot.addresses
+          .filter(address => address.chainAccountId === chainAccount.id)
+          .map(address => {
+            const scheme = projectLegacyFrostAddressScheme(
+              activeAccount,
+              chainAccount,
+              chain,
+              address
+            )
+            return scheme === address.scheme ? address : Object.freeze({ ...address, scheme })
+          })
         return [requireAvailableChainAccount(chain, chainAccount, addresses)]
       })
     : []

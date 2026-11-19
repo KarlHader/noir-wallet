@@ -22,7 +22,10 @@ import {
   deleteMultisigDataForAccount,
   deleteMultisigDataForWallet
 } from '../../../src/lib/multisig-vault-storage'
-import { clearMultisigData } from '../../../src/lib/multisig-group-storage'
+import {
+  clearMultisigData,
+  MULTISIG_SIGNING_STORAGE_KEY
+} from '../../../src/lib/multisig-group-storage'
 import { parseMultisigTransactionRecord } from '../../../src/core/multisig/transaction-journal'
 import {
   beginFinalizationBarrier,
@@ -704,6 +707,50 @@ test('only a confirmed matching transaction settles signed intent and permits a 
   const next = { ...BINDING, reviewId: 'review-next', sessionId: 'AQEBAQEBAQEBAQEBAQEBAQ==' }
   await journal.reserveSigningIntent(next, NOW + 10)
   await assert.rejects(journal.reserveSigningIntent(BINDING, NOW + 10))
+})
+
+test('expired confirmed intent remains settled after compaction without losing its replay marker', async () => {
+  await sign()
+  const journal = createSigningJournal()
+  const transactions = createMultisigTransactionJournal()
+  await transactions.recordFinalized(FINALIZED, NOW + 6)
+  await transactions.beginSubmission(BINDING, FINALIZED.txId, NOW + 7)
+  await transactions.recordConfirmed(BINDING, FINALIZED.txId, NOW + 8)
+  await journal.settleConfirmedSigningIntent(BINDING, FINALIZED.txId, NOW + 9)
+
+  const next: SigningIntentBinding = {
+    ...BINDING,
+    reviewId: 'review-after-expiry',
+    sessionId: 'AQEBAQEBAQEBAQEBAQEBAQ==',
+    createdAt: BINDING.expiresAt + 1,
+    expiresAt: BINDING.expiresAt + 300_001
+  }
+  await journal.reserveSigningIntent(next, next.createdAt)
+  assert.equal(await journal.readSigningIntent(BINDING), null)
+  const before = structuredClone(env.store.get(MULTISIG_SIGNING_STORAGE_KEY))
+
+  const settled = await createSigningJournal().settleConfirmedSigningIntent(
+    BINDING,
+    FINALIZED.txId,
+    next.createdAt + 1
+  )
+  assert.equal(settled.phase, 'confirmed')
+  assert.equal(settled.noncePhase, 'consumed')
+  assert.deepEqual(env.store.get(MULTISIG_SIGNING_STORAGE_KEY), before)
+  await assert.rejects(
+    journal.settleConfirmedSigningIntent(
+      { ...BINDING, pcztDigest: '00'.repeat(32) },
+      FINALIZED.txId,
+      next.createdAt + 1
+    )
+  )
+  await assert.rejects(
+    journal.settleConfirmedSigningIntent(BINDING, '00'.repeat(32), next.createdAt + 1)
+  )
+  await assert.rejects(
+    journal.reserveSigningIntent({ ...BINDING, expiresAt: next.expiresAt }, next.createdAt + 1)
+  )
+  assert.equal((await journal.readSigningIntent(next))?.phase, 'review_ready')
 })
 
 test('signed intent without a confirmed transaction blocks deletion after a crash before finalization', async () => {

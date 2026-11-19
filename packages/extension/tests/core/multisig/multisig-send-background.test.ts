@@ -35,6 +35,7 @@ import { closeConnection } from '../../../src/lib/indexed-db'
 import { buildAccountKey } from '../../../src/core/wallet/account-scope'
 import type { Transaction } from '../../../src/types/wallet'
 import type { MultisigTransactionRecord } from '../../../src/core/multisig/transaction-journal'
+import { getMultisigSendErrorCode } from '../../../src/core/multisig/send-errors'
 
 const NOW = 1_800_000_000_000
 const scope = { walletId: 'w', accountId: 'a', network: 'testnet' as const }
@@ -345,6 +346,33 @@ test('startup with no signing journal does not wake Worker; active recovery conf
   assert.deepEqual(s.calls, [])
 })
 
+test('one unmatched confirmed history row does not block a new review', async () => {
+  const s = setup()
+  s.setAvailable()
+  const diagnostics: string[] = []
+  const seenTransactions: string[] = []
+  const old = {
+    binding: {
+      ...binding,
+      threshold: '2-of-3' as const,
+      transport: 'qr' as const,
+      createdAt: NOW
+    },
+    txId: '13'.repeat(32),
+    phase: 'confirmed' as const
+  }
+  s.deps.transactions.listTransactions = async () => [old as never]
+  s.deps.onDiagnostic = stage => diagnostics.push(stage)
+  s.deps.onTransaction = async record => {
+    seenTransactions.push(record.txId)
+  }
+  const restarted = createMultisigSendHandler(s.deps)
+  await restarted.initialize()
+  assert.equal((await restarted.handle('vault.send.prepare', draft)).available, true)
+  assert.deepEqual(diagnostics, ['confirmed_intent_unsettled'])
+  assert.deepEqual(seenTransactions, [old.txId])
+})
+
 test('malformed drafts and inactive, changed network/source/group scopes never reach Worker prepare', async () => {
   for (const patch of [
     { amountZats: '1.0' },
@@ -384,6 +412,42 @@ test('malformed drafts and inactive, changed network/source/group scopes never r
       false
     )
   }
+})
+
+test('prepare preserves safe credential failure and hides an unknown Worker error', async () => {
+  const unbound = setup()
+  unbound.setAvailable()
+  unbound.deps.bindCredential = async () => false
+  await assert.rejects(
+    unbound.handler.handle('vault.send.prepare', draft),
+    error => getMultisigSendErrorCode(error) === 'credential_not_bound'
+  )
+  const unsafe = setup()
+  unsafe.setAvailable()
+  unsafe.deps.forwardToWorker = async method => {
+    if (method === 'vault.sign.worker.invalidate') return true
+    throw new Error('private payload must stay inside Background')
+  }
+  await assert.rejects(
+    unsafe.handler.handle('vault.send.prepare', draft),
+    error =>
+      getMultisigSendErrorCode(error) === 'signing_unavailable' &&
+      !String(error).includes('private payload')
+  )
+})
+
+test('malformed signing roster has a safe error code and closes its review', async () => {
+  const s = setup()
+  s.setAvailable()
+  const forward = s.deps.forwardToWorker
+  s.deps.forwardToWorker = async (method, payload) =>
+    method === 'vault.sign.worker.roster' ? { malformed: true } : forward(method, payload)
+  await s.handler.handle('vault.send.prepare', draft)
+  await assert.rejects(
+    s.handler.handle('vault.send.roster', authority),
+    error => getMultisigSendErrorCode(error) === 'roster_unavailable'
+  )
+  assert.equal((await s.journal.listSigningIntents())[0].phase, 'interrupted')
 })
 
 test('a page cannot mint a fee quote or alter a trusted prepared binding', async () => {
@@ -1207,6 +1271,35 @@ test('only a sufficient chain confirmation settles a signed intent and releases 
   await s.handler.reconcileTransactions()
   assert.equal((await s.deps.transactions.listTransactions())[0].phase, 'confirmed')
   assert.equal((await s.journal.listSigningIntents())[0].phase, 'confirmed')
+})
+
+test('failed intent settlement after confirmation still reports the transaction and keeps the signed blocker', async () => {
+  const s = await prepareSignedTransfer()
+  const forward = s.deps.forwardToWorker
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method === 'vault.sign.worker.finalize') return persistFinalizationReceipt()
+    if (method === 'vault.sign.worker.submit')
+      return { phase: 'broadcast', txId: finalizedReceipt.txId, outbound: [] }
+    return forward(method, payload)
+  }
+  await s.handler.handle('vault.send.finalize', authority)
+  await s.handler.handle('vault.send.submit', authority)
+  const diagnostics: string[] = []
+  const seenTransactions: string[] = []
+  s.deps.confirmations = async () => 100
+  s.deps.journal.settleConfirmedSigningIntent = async () => {
+    throw new Error('synthetic settlement failure')
+  }
+  s.deps.onDiagnostic = stage => diagnostics.push(stage)
+  s.deps.onTransaction = async record => {
+    seenTransactions.push(record.phase)
+  }
+
+  await s.handler.reconcileTransactions()
+  assert.equal((await s.deps.transactions.listTransactions())[0].phase, 'confirmed')
+  assert.equal((await s.journal.listSigningIntents())[0].phase, 'signed')
+  assert.deepEqual(diagnostics, ['confirmed_intent_unsettled'])
+  assert.deepEqual(seenTransactions, ['confirmed'])
 })
 
 test('a confirmed transaction is never downgraded by a cached broadcast response', async () => {

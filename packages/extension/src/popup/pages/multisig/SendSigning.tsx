@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react'
 import type { UR } from '@ngraveio/bc-ur'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { getMultisigSendErrorMessage } from '@/core/multisig/send-errors'
 import { FlowButton } from '@/popup/components/multisig/FlowButton'
 import { createQrSigningTransport } from '@/popup/multisig/signing-transport'
 import { createBleSigningTransport } from '@/popup/multisig/ble-signing-transport'
@@ -181,11 +182,8 @@ export function SendSigning({
         if (isDisposed.current || isTerminal.current) return
         applyProgress(next)
         setScanCount(count => count + 1)
-      } catch {
-        await stop(
-          'failed',
-          'The phone response was rejected. Check this account before trying again.'
-        )
+      } catch (error) {
+        await stop('failed', getMultisigSendErrorMessage(error))
         throw new Error('Phone response rejected')
       }
     },
@@ -207,12 +205,8 @@ export function SendSigning({
         .then(next => {
           if (isEffectActive) applyProgress(next)
         })
-        .catch(() => {
-          if (isEffectActive)
-            return stop(
-              'failed',
-              'Unable to start signing. Check this account before trying again.'
-            )
+        .catch(error => {
+          if (isEffectActive) return stop('failed', getMultisigSendErrorMessage(error))
         })
     } else {
       void Promise.all([getMultisigSendRoster(authority), loadSharedIdentity(defaultLoadIdentity)])
@@ -241,12 +235,8 @@ export function SendSigning({
           })
           setView('connecting')
         })
-        .catch(() => {
-          if (isEffectActive)
-            return stop(
-              'failed',
-              'Unable to verify signing devices. Check this account before trying again.'
-            )
+        .catch(error => {
+          if (isEffectActive) return stop('failed', getMultisigSendErrorMessage(error))
         })
     }
     const timer = window.setTimeout(
@@ -292,9 +282,7 @@ export function SendSigning({
           setView('starting')
           void startMultisigSend(authority)
             .then(applyProgress)
-            .catch(() =>
-              stop('failed', 'Unable to start signing. Check this account before trying again.')
-            )
+            .catch(error => stop('failed', getMultisigSendErrorMessage(error)))
         }
       })
       .catch(() => {

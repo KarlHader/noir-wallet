@@ -145,6 +145,7 @@ import {
 import { AutoLockCoordinator, WALLET_AUTO_LOCK_ALARM } from './auto-lock'
 import { credentialLifecycle } from './credential-lifecycle'
 import { credentialSession } from './credential-session'
+import { toMultisigSendError } from '@/core/multisig/send-errors'
 import { switchActiveAccountPersistently } from './account-switch'
 import {
   getContentScriptSenderOrigin,
@@ -246,7 +247,7 @@ import {
 } from './rhea-swap-near'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseAccountId } from '@/core/accounts/domain'
-import { isDerivedAccount } from '@/core/accounts/domain/account-source'
+import { isDerivedAccount, isFrostAccount } from '@/core/accounts/domain/account-source'
 import { isAssetMarketHistoryRange } from '@/core/prices'
 import { UnsupportedAssetMarketHistoryError } from '@/infrastructure/prices'
 import {
@@ -3023,9 +3024,11 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       void multisigSend
         .handle(rpcMessage.method, rpcMessage.payload)
         .then(result => sendResponse({ result }))
-        .catch(() =>
-          sendResponse({ error: 'Multisig signing is unavailable. Review this action again.' })
-        )
+        .catch(error => {
+          const safe = toMultisigSendError(error)
+          logger.warn(`Multisig send failed: ${safe.code}`)
+          sendResponse({ error: safe.message, multisigErrorCode: safe.code })
+        })
       return true
     }
 
@@ -6156,6 +6159,7 @@ const multisigVault = createMultisigVaultHandler({
 void multisigVault.resumePending().catch(() => {})
 
 const multisigSend = createMultisigSendHandler({
+  onDiagnostic: stage => logger.warn(`Multisig recovery: ${stage}`),
   journal: createSigningJournal(),
   transactions: createMultisigTransactionJournal(),
   verifyFinalizationSnapshot: verifyMultisigSnapshot,
@@ -6571,6 +6575,12 @@ function restoreZcashDAppPermissionsAfterUnlock(): void {
     })
 }
 
+function resumeFrostAccountAfterCredentialBinding(): void {
+  void backgroundZcashWalletRuntime.resumeDeferredFrostRestore().catch(() => {
+    logger.warn('Multisig account restore failed: account_not_initialized')
+  })
+}
+
 async function performWalletUnlock(password: string): Promise<any> {
   syncScheduler.pauseForTx()
   syncScheduler.abortSync()
@@ -6611,6 +6621,20 @@ async function performWalletUnlock(password: string): Promise<any> {
         }
         const descriptor = await credentialSession.unlock(password, Date.now())
         if (!descriptor) throw new Error('No active Wallet credential was found')
+        if (unlockPath.restoreZcashRuntime) {
+          const currentWalletId = useWalletStore.getState().currentWalletId
+          const currentWallet = currentWalletId
+            ? useWalletStore.getState().getWallet(currentWalletId)
+            : null
+          if (
+            currentWalletId &&
+            !isZcashHardwareKeySource(currentWallet?.keySource) &&
+            !(await credentialSession.bindZcashCredential(currentWalletId))
+          ) {
+            throw new Error('Unable to bind the Zcash credential session')
+          }
+          resumeFrostAccountAfterCredentialBinding()
+        }
         await Promise.all([
           SecureStorage.resetLoginAttempts(),
           SecureStorage.saveLastActivityTime()
@@ -6687,6 +6711,8 @@ async function performWalletUnlock(password: string): Promise<any> {
     }
     await synchronizeCurrentSoftwareWalletNetworkMetadata()
 
+    resumeFrostAccountAfterCredentialBinding()
+
     restoreZcashDAppPermissionsAfterUnlock()
 
     await SecureStorage.saveLastActivityTime()
@@ -6731,6 +6757,7 @@ function handleWalletCreated(
           throw new Error('Unable to bind the Zcash credential session')
         }
         await synchronizeCurrentSoftwareWalletNetworkMetadata()
+        resumeFrostAccountAfterCredentialBinding()
         logger.log(
           'Zcash wallet runtime re-initialized after wallet creation',
           useWalletStore.getState().currentWalletId || undefined
@@ -6961,6 +6988,13 @@ async function ensureZcashAccountProvisioningSession(): Promise<void> {
     if (!unlocked.success) {
       throw new Error('Wallet credential session could not authorize account setup')
     }
+    const account = backgroundZcashWalletRuntime.getCurrentAccount()
+    const walletId = useWalletStore.getState().currentWalletId
+    if (account && isFrostAccount(account) && walletId) {
+      if (!(await credentialSession.bindZcashCredential(walletId)))
+        throw new Error('Unable to bind the Zcash credential session')
+      await backgroundZcashWalletRuntime.resumeDeferredFrostRestore()
+    }
   }
 }
 
@@ -7060,6 +7094,12 @@ async function handleResyncZcashWallet(
       const unlocked = await backgroundZcashWalletRuntime.unlock(password, { skipFailCount: true })
       if (!unlocked.success) {
         throw new Error('Wallet credential session could not authorize Zcash resync')
+      }
+      const account = backgroundZcashWalletRuntime.getCurrentAccount()
+      if (account && isFrostAccount(account)) {
+        if (!(await credentialSession.bindZcashCredential(walletId)))
+          throw new Error('Unable to bind the Zcash credential session')
+        await backgroundZcashWalletRuntime.resumeDeferredFrostRestore()
       }
     }
 

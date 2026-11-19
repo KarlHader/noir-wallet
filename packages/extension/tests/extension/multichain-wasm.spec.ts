@@ -2240,6 +2240,9 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
   let accountId = `frost-account-${crypto.randomUUID()}`
   let groupId = crypto.randomUUID()
   let birthdayHeight = 3_000_000
+  // The retained fixture begins at 2,000,000. Keep its empty chain below all
+  // imported birthdays; this case tests account identity, not block scanning.
+  let chainTip = 1_999_999
   let operation: MultisigCreationOperation | null = null
   let parentAccountId: string | null = null
   const pageRpc = async <T>(method: string, payload: unknown): Promise<T> => {
@@ -2314,9 +2317,9 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
         stringField(3, '00'.repeat(32))
       ])
     } else if (request.url?.endsWith('/GetLatestBlock')) {
-      bytes = Buffer.concat([Buffer.from([8]), varint(3_000_100)])
+      bytes = Buffer.concat([Buffer.from([8]), varint(chainTip)])
     } else if (request.url?.endsWith('/GetLightdInfo')) {
-      bytes = Buffer.concat([stringField(4, 'main'), Buffer.from([56]), varint(3_000_100)])
+      bytes = Buffer.concat([stringField(4, 'main'), Buffer.from([56]), varint(chainTip)])
     } else if (request.url?.endsWith('/GetStandardFee')) {
       bytes = Buffer.concat([Buffer.from([8]), varint(5_000)])
     } else if (request.url?.endsWith('/SendTransaction')) {
@@ -2333,6 +2336,17 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Missing test RPC endpoint')
   const endpoint = `http://127.0.0.1:${address.port}`
+  // Unlock can create a core before its endpoint override is adopted. Keep every
+  // read in this unfunded fixture on the local chain, including that first core.
+  await context.route(
+    url => url.pathname.startsWith('/cash.z.wallet.sdk.rpc.CompactTxStreamer/'),
+    async route => {
+      const url = new URL(route.request().url())
+      await route.fulfill({
+        response: await route.fetch({ url: `${endpoint}${url.pathname}`, maxRedirects: 0 })
+      })
+    }
+  )
   try {
     if (verifyUi) {
       await popup.goto(
@@ -2397,6 +2411,7 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       accountId = operation.scope.accountId
       groupId = operation.groupId
       birthdayHeight = operation.birthdayHeight
+      chainTip = birthdayHeight - 1
     }
     const dbKey = `mainnet_${walletId}`
     const vault = verifyUi
@@ -2674,6 +2689,10 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       sessionId: Buffer.alloc(16).toString('base64')
     }
     await expect(rpc('vault.sign.worker.start', absentReview)).rejects.toThrow()
+    // Exercise the actual Worker switch, rather than only its standalone signing handler.
+    await expect(rpc('vault.sign.worker.roster', absentReview)).rejects.toThrow(
+      'Signing session is unavailable'
+    )
     const deniedSigning = await popup.evaluate(
       input =>
         chrome.runtime.sendMessage({
@@ -2710,9 +2729,7 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       await sendPage.getByRole('textbox', { name: 'Amount in ZEC' }).fill('0.00000001')
       await sendPage.getByRole('button', { name: 'Prepare transfer', exact: true }).click()
       await expect(
-        sendPage.getByText(
-          'Unable to prepare this transfer. Check that the wallet is unlocked and try again.'
-        )
+        sendPage.getByText(/\((?:signing_unavailable|fee_quote_unavailable|fee_quote_timeout)\)$/)
       ).toBeVisible({ timeout: 50_000 })
       // This unfunded chain fixture cannot complete preparation's full sync.
       // Rejection must leave no review or signing authority; enabled signing is separate acceptance.

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from '@iconify/react'
 import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
+import { getMultisigSendErrorMessage } from '@/core/multisig/send-errors'
 import { withTimeout } from '@/lib/async-utils'
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
@@ -101,6 +102,8 @@ export function SendPage() {
             <Icon icon="lucide:loader-2" className="animate-spin motion-reduce:animate-none" />
             Loading multisig account…
           </div>
+        ) : !isMultisigUiEnabled() ? (
+          <InlineError message="Multisig sending is not enabled in this build." />
         ) : (
           <InlineError message="This multisig account is unavailable or the active account or network has changed. Open Send again from the account you want to use." />
         )}
@@ -252,11 +255,9 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
             : 'Multisig sending is unavailable in this wallet version.'
         )
       }
-    } catch {
+    } catch (error) {
       if (!controller.signal.aborted) {
-        setFeedback(
-          'Unable to prepare this transfer. Check that the wallet is unlocked and try again.'
-        )
+        setFeedback(getMultisigSendErrorMessage(error))
       }
     } finally {
       controller.abort()

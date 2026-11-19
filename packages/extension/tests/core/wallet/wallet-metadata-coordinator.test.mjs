@@ -180,6 +180,7 @@ test.describe('Wallet metadata coordinator', () => {
       expect(target.accounts[1]).not.toHaveProperty('accountIndex')
       expect(target.chainAccounts[1]).not.toHaveProperty('derivation')
       expect(target.keyDomains).toEqual(source.keyDomains)
+      expect(target.addresses[0].scheme).toBe('zcash-shielded-unified')
       const retained = env.store.get('wallet_state')
       expect(retained.state.wallets[0].accounts).toHaveLength(2)
       expect(retained.state.wallets[0].accounts[0]).toEqual({

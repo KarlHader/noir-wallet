@@ -92,6 +92,137 @@ test('failed unlock activity persistence does not expose a session or start cred
   }
 })
 
+test('FROST unlock waits for the bound credential before restoring its sealed account', async () => {
+  const originalState = useWalletStore.getState()
+  const originalGetLoginAttempts = SecureStorage.getLoginAttempts
+  const originalResetLoginAttempts = SecureStorage.resetLoginAttempts
+  const originalSaveLastActivityTime = SecureStorage.saveLastActivityTime
+  const runtime = new BackgroundZcashWalletRuntime()
+  const account = {
+    id: 'frost-account',
+    name: 'Vault',
+    addresses: { transparent: '', shielded: 'u1test' },
+    birthdayHeight: 1,
+    source: { kind: 'frost-vault', version: 1, groupId: 'group', network: 'mainnet' }
+  }
+  const restores = []
+  try {
+    useWalletStore.setState({
+      currentWalletId: 'wallet-1',
+      currentAccountId: account.id,
+      wallets: [{ id: 'wallet-1', name: 'Test wallet', keySource: 'software', accounts: [account] }]
+    })
+    SecureStorage.getLoginAttempts = async () => ({ isLocked: false })
+    SecureStorage.resetLoginAttempts = async () => {}
+    SecureStorage.saveLastActivityTime = async () => {}
+    runtime.inspectWalletCredential = async () => ({
+      status: 'valid',
+      credential: { kind: 'seed', seedPhrase: 'test-only' }
+    })
+    runtime.initialize = async () => {}
+    runtime.withWalletCoreLock = async () => {
+      restores.push('premature')
+    }
+    runtime.requestSync = () => {
+      restores.push('sync')
+    }
+
+    assert.equal((await runtime.unlock('test-only')).success, true)
+    assert.deepEqual(restores, [])
+    runtime.withWalletCoreLock = async (_walletId, operation) => operation()
+    runtime.getOrCreateWalletCore = () => ({ async ensureInitialized() {} })
+    runtime.restoreAccountFromDB = async () => {
+      restores.push('restore')
+      return true
+    }
+    runtime.refreshCachedBalancesAfterReady = async () => {
+      restores.push('refresh')
+    }
+    assert.equal(await runtime.resumeDeferredFrostRestore(), true)
+    assert.deepEqual(restores, ['restore', 'refresh', 'sync'])
+  } finally {
+    SecureStorage.getLoginAttempts = originalGetLoginAttempts
+    SecureStorage.resetLoginAttempts = originalResetLoginAttempts
+    SecureStorage.saveLastActivityTime = originalSaveLastActivityTime
+    useWalletStore.setState(originalState, true)
+  }
+})
+
+test('credential-bound FROST restore refreshes the local balance', async () => {
+  const originalState = useWalletStore.getState()
+  const runtime = new BackgroundZcashWalletRuntime()
+  const account = {
+    id: 'frost-account',
+    name: 'Vault',
+    addresses: { transparent: '', shielded: 'u1test' },
+    birthdayHeight: 1,
+    source: { kind: 'frost-vault', version: 1, groupId: 'group', network: 'mainnet' }
+  }
+  const events = []
+  try {
+    useWalletStore.setState({
+      currentWalletId: 'wallet-1',
+      currentAccountId: account.id,
+      wallets: [{ id: 'wallet-1', name: 'Test wallet', keySource: 'software', accounts: [account] }]
+    })
+    const core = { walletId: 'wallet-1', async ensureInitialized() {} }
+    runtime.getOrCreateWalletCore = () => core
+    runtime.restoreAccountFromDB = async () => {
+      events.push('restore')
+      return true
+    }
+    runtime.refreshCachedBalancesAfterReady = async () => {
+      events.push('refresh')
+    }
+    runtime.requestSync = () => {
+      events.push('sync')
+    }
+
+    assert.equal(await runtime.restoreFromCredentialSession('wallet-1', account.id), true)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(events, ['restore', 'refresh'])
+  } finally {
+    useWalletStore.setState(originalState, true)
+  }
+})
+
+test('late failed restore cannot clear a newer same-wallet credential session', async () => {
+  const originalState = useWalletStore.getState()
+  const runtime = new BackgroundZcashWalletRuntime()
+  let rejectOldRestore = () => {}
+  const oldRestore = new Promise((_resolve, reject) => {
+    rejectOldRestore = () => reject(new Error('old restore failed'))
+  })
+  let restores = 0
+  let clears = 0
+  try {
+    useWalletStore.setState({
+      currentWalletId: 'wallet-1',
+      currentAccountId: 'account-1',
+      wallets: [
+        {
+          id: 'wallet-1',
+          name: 'Test wallet',
+          keySource: 'software',
+          accounts: [{ id: 'account-1', derivationIndex: 0 }]
+        }
+      ]
+    })
+    runtime.walletCores.set('wallet-1', { clearSession: () => clears++ })
+    runtime.withWalletCoreLock = async () => (++restores === 1 ? oldRestore : undefined)
+
+    const previous = runtime.restoreFromCredentialSession('wallet-1', 'account-1')
+    assert.equal(await runtime.restoreFromCredentialSession('wallet-1', 'account-1'), true)
+    rejectOldRestore()
+    await assert.rejects(previous, /old restore failed/)
+    assert.equal(runtime.sessionCredentialWalletId, 'wallet-1')
+    assert.equal(clears, 0)
+  } finally {
+    rejectOldRestore()
+    useWalletStore.setState(originalState, true)
+  }
+})
+
 test('failed first-wallet persistence does not install the session password', async () => {
   const originalState = useWalletStore.getState()
   const originalSaveLastActivityTime = SecureStorage.saveLastActivityTime

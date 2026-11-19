@@ -48,6 +48,7 @@ import type { SigningJournal } from '@/lib/multisig-signing-storage'
 import { isValidMarginalFeeZats, type FeeQuote } from '@/config/fee'
 import { parseKeyringCommandBinding, type KeyringCommandBinding } from '@/core/keyring/ports'
 import { storageJsonEquals } from '@/lib/storage-json-equality'
+import { MultisigSendError, toMultisigSendError } from '@/core/multisig/send-errors'
 
 type CredentialBinding = Extract<KeyringCommandBinding, { readonly kind: 'credential' }>
 
@@ -64,6 +65,7 @@ export interface MultisigSendDeps {
   confirmations?(network: 'mainnet' | 'testnet', txId: string): Promise<number | null>
   scheduleMonitor?(): void
   onTransaction?(record: Readonly<MultisigTransactionRecord>): Promise<void>
+  onDiagnostic?(stage: 'confirmed_intent_unsettled'): void
   now?: () => number
   withScope<T>(scope: MultisigGroupScope, run: () => Promise<T>): Promise<T>
   readWalletState(): Promise<{
@@ -147,6 +149,17 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
       .catch(() => {})
     return result
   }
+  async function settleConfirmed(record: Readonly<MultisigTransactionRecord>): Promise<void> {
+    try {
+      await deps.journal.settleConfirmedSigningIntent(record.binding, record.txId, now())
+    } catch {
+      try {
+        deps.onDiagnostic?.('confirmed_intent_unsettled')
+      } catch {
+        // Diagnostic delivery cannot change persisted transaction or signing state.
+      }
+    }
+  }
   async function repairFinalizationRecords(scope?: MultisigGroupScope): Promise<void> {
     const verifyProtectedSnapshot = deps.verifyFinalizationSnapshot
     if (!verifyProtectedSnapshot) return
@@ -200,7 +213,7 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
         await deps.transactions.recoverPending()
         for (const record of await deps.transactions.listTransactions())
           if (record.phase === 'confirmed') {
-            await deps.journal.settleConfirmedSigningIntent(record.binding, record.txId, now())
+            await settleConfirmed(record)
             void deps.onTransaction?.(record).catch(() => {})
           } else if (record.phase === 'submission_unknown' || record.phase === 'broadcast') {
             deps.scheduleMonitor?.()
@@ -208,7 +221,7 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
           }
       })().catch(error => {
         initialization = null
-        throw error
+        throw toMultisigSendError(error, 'session_initialization_failed')
       })
     }
     return initialization
@@ -344,10 +357,10 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
       )
     entries.delete(entry.binding.reviewId)
   }
-  async function fail(entry: Entry): Promise<never> {
-    if ((await read(entry)).phase === 'signed') throw new Error(FAIL)
+  async function fail(entry: Entry, error: unknown): Promise<never> {
+    if ((await read(entry)).phase === 'signed') throw toMultisigSendError(error)
     await finish(entry, now() >= entry.binding.expiresAt ? 'expired' : 'interrupted')
-    throw new Error(FAIL)
+    throw toMultisigSendError(error)
   }
   async function prepare(
     request: VaultSendPrepareRequest
@@ -401,10 +414,11 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
       !sealedVaultRecordEquals(original.record, current.record) ||
       !same(original.source, current.source) ||
       original.group.threshold !== current.group.threshold ||
-      original.group.fingerprint !== current.group.fingerprint ||
-      !(await deps.bindCredential(request.scope.walletId))
+      original.group.fingerprint !== current.group.fingerprint
     )
       throw new Error(FAIL)
+    if (!(await deps.bindCredential(request.scope.walletId)))
+      throw new MultisigSendError('credential_not_bound')
     const credentialBinding = await attest(request.scope.walletId)
     await context(request.scope, request.groupId, request.rosterVersion)
     if (captured !== revision) throw new Error(FAIL)
@@ -493,13 +507,13 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
           fee: reply.summary.fee
         }
       }
-    } catch {
+    } catch (error) {
       if (reserved) await finish(entry, 'interrupted')
       else if (
         (await deps.forwardToWorker('vault.sign.worker.close', { ...ref(binding) })) !== true
       )
         throw new Error(FAIL)
-      throw new Error(FAIL)
+      throw toMultisigSendError(error)
     }
   }
   function checkedProgress(entry: Entry, raw: unknown): SigningWorkerProgress {
@@ -670,15 +684,20 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
       try {
         await authorize(entry)
         if (method === 'vault.send.roster') {
-          const roster = parseRosterManifest(
-            await deps.forwardToWorker('vault.sign.worker.roster', { ...ref(entry.binding) })
-          )
+          let roster: ReturnType<typeof parseRosterManifest>
+          try {
+            roster = parseRosterManifest(
+              await deps.forwardToWorker('vault.sign.worker.roster', { ...ref(entry.binding) })
+            )
+          } catch {
+            throw new MultisigSendError('roster_unavailable')
+          }
           if (
             !roster ||
             roster.groupId !== entry.binding.groupId ||
             roster.threshold !== entry.binding.selectedSlots.length
           )
-            throw new Error(FAIL)
+            throw new MultisigSendError('roster_unavailable')
           await authorize(entry)
           return roster
         }
@@ -722,8 +741,8 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
             ...(authority.envelope ? { envelope: authority.envelope } : {})
           })
         )
-      } catch {
-        return fail(entry)
+      } catch (error) {
+        return fail(entry, error)
       }
     })
   }
@@ -754,7 +773,7 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
             record.txId,
             now()
           )
-          await deps.journal.settleConfirmedSigningIntent(record.binding, record.txId, now())
+          await settleConfirmed(confirmed)
           void deps.onTransaction?.(confirmed).catch(() => {})
           const entry = entries.get(record.binding.reviewId)
           if (entry) await finish(entry, 'interrupted')
@@ -874,8 +893,8 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
           )) as VaultSendSchema[M]['response']
         }
         return (await operation(method, payload)) as VaultSendSchema[M]['response']
-      } catch {
-        throw new Error(FAIL)
+      } catch (error) {
+        throw toMultisigSendError(error)
       }
     }
   }

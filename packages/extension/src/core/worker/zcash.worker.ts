@@ -1205,6 +1205,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       case 'vault.sign.worker.ingest':
       case 'vault.sign.worker.advance':
       case 'vault.sign.worker.status':
+      case 'vault.sign.worker.roster':
       case 'vault.sign.worker.finalize':
       case 'vault.sign.worker.submit':
       case 'vault.sign.worker.close':

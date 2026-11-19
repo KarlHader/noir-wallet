@@ -15,6 +15,7 @@ import {
 } from '../../../src/lib/multisig-vault-storage'
 import { commitAccountMetadataDeletion } from '../../../src/lib/wallet-metadata-storage'
 import { installStorageEnv, reorderStorageObjectKeys } from './helpers/storage-env'
+import { getMultisigSendErrorCode } from '../../../src/core/multisig/send-errors'
 
 const NOW = 1_800_000_000_000
 const BINDING: SigningIntentBinding = {
@@ -75,6 +76,19 @@ function nextBinding(n: number, accountId = 'a'): SigningIntentBinding {
 function storage() {
   return chrome.storage.local
 }
+
+test('malformed signing storage reports a safe journal error during recovery and reservation', async () => {
+  const journal = createSigningJournal()
+  env.store.set(MULTISIG_SIGNING_STORAGE_KEY, { invalid: true })
+  await assert.rejects(
+    journal.interruptSigningIntents(undefined, NOW),
+    error => getMultisigSendErrorCode(error) === 'journal_unavailable'
+  )
+  await assert.rejects(
+    journal.reserveSigningIntent(BINDING, NOW),
+    error => getMultisigSendErrorCode(error) === 'journal_unavailable'
+  )
+})
 
 test('acknowledges two signing scopes when Chrome recursively reorders object keys', async () => {
   const journal = createSigningJournal()

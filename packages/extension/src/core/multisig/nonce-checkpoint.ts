@@ -21,7 +21,10 @@ const copy = (progress: SigningCheckpointProgress): SigningCheckpointProgress =>
     sharedSlots: [...progress.status.sharedSlots]
   },
   outbound: progress.outbound.map(envelope => ({ ...envelope })),
-  ...(progress.persistence ? { persistence: { ...progress.persistence } } : {})
+  // Pending checkpoints also hold promise settlers, which cannot cross postMessage.
+  ...(progress.persistence
+    ? { persistence: { ackId: progress.persistence.ackId, phase: progress.persistence.phase } }
+    : {})
 })
 
 /** Suspends an engine callback while returning the exact durable checkpoint to Background. */

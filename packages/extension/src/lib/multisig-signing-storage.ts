@@ -21,6 +21,7 @@ import { withUndeletedWalletAccountMetadata } from './wallet-metadata-storage'
 import { storageJsonEquals } from './storage-json-equality'
 import { MULTISIG_TRANSACTION_STORAGE_KEY } from './multisig-transaction-guard'
 import { parseMultisigTransactionRecord } from '@/core/multisig/transaction-journal'
+import { MultisigSendError } from '@/core/multisig/send-errors'
 
 // Compact only expired terminal records. Replay IDs and highest nonce phases survive until deletion.
 const PER_ACCOUNT_LIMIT = 128
@@ -38,7 +39,7 @@ interface AccountJournal {
 }
 type Journals = Record<string, AccountJournal>
 const FAIL = 'Signing journal is unavailable'
-async function readStored(): Promise<Journals> {
+async function readStoredUnchecked(): Promise<Journals> {
   const raw: unknown = (await chrome.storage.local.get(MULTISIG_SIGNING_STORAGE_KEY))[
     MULTISIG_SIGNING_STORAGE_KEY
   ]
@@ -120,6 +121,13 @@ async function readStored(): Promise<Journals> {
     })
   }
   return journals
+}
+async function readStored(): Promise<Journals> {
+  try {
+    return await readStoredUnchecked()
+  } catch {
+    throw new MultisigSendError('journal_unavailable')
+  }
 }
 async function saveVerified(journals: Journals): Promise<void> {
   await chrome.storage.local.set({ [MULTISIG_SIGNING_STORAGE_KEY]: journals })
@@ -294,13 +302,24 @@ export function createSigningJournal() {
               account?.records.findIndex(record => record.sessionId === binding.sessionId) ?? -1
             const current = account?.records[index]
             if (
-              !current ||
-              !sameBinding(current, binding) ||
-              (current.phase !== 'signed' && current.phase !== 'confirmed') ||
-              current.noncePhase !== 'consumed' ||
-              now < current.updatedAt
+              current &&
+              (!sameBinding(current, binding) ||
+                (current.phase !== 'signed' && current.phase !== 'confirmed') ||
+                current.noncePhase !== 'consumed' ||
+                now < current.updatedAt)
             )
-              throw new Error(FAIL)
+              throw new MultisigSendError('intent_not_settleable')
+            const marker = !current
+              ? account?.tombstones.find(value => value.sessionId === binding.sessionId)
+              : undefined
+            if (
+              !current &&
+              (!marker ||
+                marker.reviewId !== binding.reviewId ||
+                marker.expiresAt !== binding.expiresAt ||
+                marker.noncePhase !== 'consumed')
+            )
+              throw new MultisigSendError('intent_not_settleable')
             const rawTransactions: unknown = (
               await chrome.storage.local.get(MULTISIG_TRANSACTION_STORAGE_KEY)
             )[MULTISIG_TRANSACTION_STORAGE_KEY]
@@ -320,7 +339,17 @@ export function createSigningJournal() {
                   record.phase === 'confirmed' &&
                   storageJsonEquals(record.binding, binding)
               )
-            if (confirmed.length !== 1) throw new Error(FAIL)
+            if (confirmed.length !== 1 || now < confirmed[0].updatedAt)
+              throw new MultisigSendError('intent_not_settleable')
+            // A confirmed receipt proves the compacted terminal intent; retain its replay marker.
+            if (!current)
+              return parseSigningIntent({
+                ...binding,
+                version: 1,
+                phase: 'confirmed',
+                noncePhase: 'consumed',
+                updatedAt: now
+              })
             if (current.phase === 'confirmed') return current
             const next = parseSigningIntent({
               ...current,

@@ -1,5 +1,6 @@
 import { requestVaultSend } from '@/core/worker/client'
-import { withTimeout } from '@/lib/async-utils'
+import { TimeoutError, withTimeout } from '@/lib/async-utils'
+import { MultisigSendError, toMultisigSendError } from '@/core/multisig/send-errors'
 import { zcashWalletRuntimeClient } from './zcash-wallet-runtime-client'
 import type {
   VaultSendAuthority,
@@ -26,12 +27,15 @@ export async function prepareMultisigSend(
   let quote: FeeQuote
   try {
     quote = await withTimeout(zcashWalletRuntimeClient.getFeeQuote(), 15_000, 'Network fee quote')
-  } catch {
+  } catch (error) {
     assertCurrent()
-    return { available: false, reason: 'fee_quote_unavailable' }
+    throw toMultisigSendError(
+      error,
+      error instanceof TimeoutError ? 'fee_quote_timeout' : 'fee_quote_unavailable'
+    )
   }
   assertCurrent()
-  if (quote.expiresAt <= Date.now()) return { available: false, reason: 'fee_quote_unavailable' }
+  if (quote.expiresAt <= Date.now()) throw new MultisigSendError('fee_quote_unavailable')
   const response = await requestVaultSend('vault.send.prepare', {
     ...draft,
     feeQuoteId: quote.id,

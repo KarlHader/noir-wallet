@@ -327,6 +327,11 @@ export default defineConfig({
     },
     {
       name: 'configure-headers',
+      buildStart() {
+        this.info(
+          `[Noir Wallet] Chrome extension directory: ${path.resolve(__dirname, buildOutDir)}`
+        )
+      },
       configureServer(server) {
         server.config.logger.info(
           `[Noir Wallet] Chrome extension directory: ${path.resolve(__dirname, buildOutDir)}`

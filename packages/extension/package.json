@@ -9,6 +9,7 @@
     "dev:extension": "pnpm run dev",
     "build": "pnpm run type-check && vite build && node scripts/verify-build-surface.mjs",
     "build:testnet": "pnpm run type-check && NETWORK_MODE=testnet vite build && NETWORK_MODE=testnet node scripts/verify-build-surface.mjs",
+    "build:testnet:multisig": "FROST_MULTISIG_UI=1 pnpm run build:testnet",
     "preview": "vite preview",
     "type-check": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "test": "node scripts/run-tests.mjs",
