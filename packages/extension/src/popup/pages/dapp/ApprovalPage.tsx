@@ -1749,10 +1749,7 @@ export function ApprovalPage() {
               (isMultichainConnect &&
                 (!Array.isArray(data.scopes) ||
                   data.scopes.length === 0 ||
-                  data.scopes.some(
-                    (scope: MultichainScopeOption) =>
-                      (selectedScopes[scope.chainId]?.length ?? 0) === 0
-                  )))
+                  !Object.values(selectedScopes).some(ids => ids.length > 0)))
             }
             size="lg"
           >

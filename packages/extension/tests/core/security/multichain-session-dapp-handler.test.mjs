@@ -30,8 +30,8 @@ function proposal(scope = { chainId: ethereum, chainName: 'Ethereum', iconChain:
 
 function createHandler({
   selectedIds = ['account-1'],
+  selectScopes = () => ({ evm: selectedIds }),
   prepareProposal = proposal,
-  activeChainIds,
   manager,
   readFirstPartySnapshot,
   readTokenList,
@@ -46,7 +46,6 @@ function createHandler({
     network: 'mainnet',
     readTokenList,
     openTokenManager,
-    ...(activeChainIds === undefined ? {} : { activeChainIds }),
     ...(readFirstPartySnapshot === undefined ? {} : { readFirstPartySnapshot }),
     evmNetworks: [ethereum, custom].map(chainId => ({
       networkMode: 'mainnet',
@@ -69,6 +68,10 @@ function createHandler({
       getAllConnections: async () => [],
       getAuthorizationRevision: async () => 4,
       getCaip25Session: async () => stored,
+      getChainAuthorization: async (_origin, chainId) =>
+        stored?.scopes.some(scope => scope.chainId === chainId)
+          ? { accounts: [reference], binding: reference, chainId }
+          : null,
       setCaip25Session: async (_origin, _tab, authorizations, session, _zcash, revision) => {
         expect(revision).toBe(4)
         expect(authorizations).toEqual(
@@ -87,7 +90,7 @@ function createHandler({
         return {
           approved: true,
           requestId: 'approval-1',
-          selectedScopes: { evm: selectedIds }
+          selectedScopes: selectScopes(data.scopes)
         }
       },
       broadcastProviderEvent: async (...args) => {
@@ -272,11 +275,16 @@ test('creates one shared EVM approval while preserving atomic chain scopes and m
   ).rejects.toMatchObject({ code: 4100 })
 })
 
-test('multichain Connect grants only networks supported by the active account', async () => {
+test('multichain Connect omits networks unavailable across wallet accounts', async () => {
   const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
   const bitcoin = 'bip122:000000000019d6689c085ae165831e93'
   const { handler, approvals, getStored } = createHandler({
-    activeChainIds: async () => [ethereum]
+    readFirstPartySnapshot: async () => ({
+      identity: 'evm-only',
+      executionMode: 'main',
+      activeReference: reference,
+      accounts: { [ethereum]: [{ reference, address, label: 'Current wallet' }] }
+    })
   })
   const origin = 'https://dapp.example'
   const request = scopes =>
@@ -311,6 +319,76 @@ test('multichain Connect grants only networks supported by the active account', 
   ).rejects.toMatchObject({ code: 5101 })
   expect(approvals).toHaveLength(1)
   expect(getStored().scopes.map(scope => scope.chainId)).toEqual([ethereum])
+})
+
+test('multichain Connect offers other wallets without granting an unchecked or stale scope', async () => {
+  const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const origin = 'https://dapp.example'
+  const scopes = {
+    [zcash]: { methods: ['zcash_getAccounts'], notifications: [] },
+    [ethereum]: { methods: ['eth_accounts'], notifications: [] }
+  }
+  for (const activeChain of [zcash, ethereum]) {
+    const inactiveChain = activeChain === zcash ? ethereum : zcash
+    const other = { walletId: 'wallet-2', accountId: 'account-2' }
+    let snapshot = {
+      identity: 'active-generation',
+      activeReference: reference,
+      executionMode: 'main',
+      accounts: {
+        [activeChain]: [{ reference, address, label: 'Current wallet' }],
+        [inactiveChain]: [{ reference: other, address: 'other-address', label: 'Other wallet' }]
+      }
+    }
+    let mode = 'current-only'
+    let written
+    const { handler } = createHandler({
+      readFirstPartySnapshot: async () => snapshot,
+      executionAccounts: activeChain === ethereum ? [address] : [],
+      manager: {
+        getAuthorizationRevision: async () => 1,
+        getCaip25Session: async () => written?.session ?? null,
+        getChainAuthorization: async (_origin, chainId) =>
+          written?.authorizations.find(item => item.chainId === chainId),
+        setCaip25Session: async (_origin, _tab, authorizations, session) => {
+          written = { authorizations, session }
+        }
+      },
+      selectScopes: choices => {
+        const scopeKey = chainId => (chainId === ethereum ? 'evm' : chainId)
+        expect(choices.map(choice => choice.chainId)).toEqual([
+          scopeKey(activeChain),
+          scopeKey(inactiveChain)
+        ])
+        const [current, optional] = choices
+        expect(optional.preselectedIds).toEqual([])
+        expect(optional.accounts).toMatchObject([{ required: false, label: 'Other wallet' }])
+        if (mode === 'changed') snapshot = { ...snapshot, identity: 'changed-generation' }
+        return {
+          [current.chainId]: current.preselectedIds,
+          [optional.chainId]: mode === 'current-only' ? [] : [optional.accounts[0].id]
+        }
+      }
+    })
+    const connect = () =>
+      handler.request({ method: 'wallet_createSession', params: { scopes } }, origin, {})
+    expect(Object.keys((await connect()).scopes)).toEqual([activeChain])
+    const first = written
+    mode = 'changed'
+    await expect(connect()).rejects.toMatchObject({ code: 4100 })
+    expect(written).toBe(first)
+    mode = 'all'
+    const result = await connect()
+    expect(Object.keys(result.scopes)).toEqual([activeChain, inactiveChain])
+    expect(written.authorizations[1]).toMatchObject({
+      chainId: inactiveChain,
+      accounts: [other],
+      binding: other
+    })
+    if (inactiveChain === ethereum) {
+      expect(result.scopes[ethereum].accounts).toEqual([`${ethereum}:other-address`])
+    }
+  }
 })
 
 test('shared EVM selection cannot widen a scope with a narrower account request', async () => {
@@ -383,8 +461,6 @@ function firstPartyFixture({ executionAccounts, executionMode = 'main' } = {}) {
   }
   const options = {
     manager,
-    // First-party sessions also include enabled chains belonging to other wallets.
-    activeChainIds: async () => [ethereum],
     readFirstPartySnapshot: async () => state.snapshot,
     ...(executionAccounts === undefined ? {} : { executionAccounts })
   }

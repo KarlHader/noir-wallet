@@ -1468,8 +1468,6 @@ async function reloadMultichainRuntime(
     analytics: trackEvent,
     network: DEFAULT_NETWORK,
     evmNetworks: catalog,
-    activeChainIds: async () =>
-      (await accountNetworksCoordinator.readActiveAccount())?.chainIds ?? [],
     readFirstPartySnapshot: () => readFirstPartyDAppSessionSnapshot(accountNetworksCoordinator),
     manager: dappManager,
     approval: dappHandler,
