@@ -3,8 +3,8 @@ import {
   listMultisigSendTransactions,
   readMultisigSendRecovery
 } from '@/popup/services/multisig-send-client'
-import { mergeMultisigSendTransactions } from './send-model'
-import type { VaultSendTransaction } from '@/core/multisig/send-rpc'
+import { mergeMultisigSendTransactions, parseMultisigSendRecovery } from './send-model'
+import type { VaultSendRecovery, VaultSendTransaction } from '@/core/multisig/send-rpc'
 import type { MultisigGroupScope } from '@/lib/multisig-group-storage'
 
 type LoadStatus = 'loading' | 'ready' | 'error'
@@ -16,7 +16,10 @@ export function useMultisigSendTransactions(scope: MultisigGroupScope) {
   const currentTransactions = useRef<VaultSendTransaction[]>([])
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [loadedScopeKey, setLoadedScopeKey] = useState<string | null>(null)
-  const [hasSignedWithoutTransaction, setHasSignedWithoutTransaction] = useState(false)
+  const [recoveryState, setRecoveryState] = useState<{
+    scopeKey: string
+    recovery: VaultSendRecovery
+  } | null>(null)
   const [refreshIndex, setRefreshIndex] = useState(0)
 
   useEffect(() => {
@@ -35,12 +38,11 @@ export function useMultisigSendTransactions(scope: MultisigGroupScope) {
           readMultisigSendRecovery(scope)
         ])
         if (!isActive || read !== latestRead) return
-        if (typeof recovery.signedWithoutTransaction !== 'boolean')
-          throw new Error('Invalid recovery state')
+        const validatedRecovery = parseMultisigSendRecovery(recovery)
         const merged = mergeMultisigSendTransactions(currentTransactions.current, incoming, scope)
         currentTransactions.current = merged
         setTransactions(merged)
-        setHasSignedWithoutTransaction(recovery.signedWithoutTransaction)
+        setRecoveryState({ scopeKey, recovery: validatedRecovery })
         setLoadedScopeKey(scopeKey)
         setStatus('ready')
       } catch {
@@ -59,11 +61,14 @@ export function useMultisigSendTransactions(scope: MultisigGroupScope) {
   }, [scope.accountId, scope.network, scope.walletId, scopeKey, refreshIndex])
 
   const isCurrentScope = loadedScopeKey === scopeKey
+  const recoveryStatus =
+    recoveryState?.scopeKey === scopeKey ? recoveryState.recovery.status : 'none'
 
   return {
     transactions: isCurrentScope ? transactions : [],
     status: isCurrentScope ? status : 'loading',
-    hasSignedWithoutTransaction: isCurrentScope && hasSignedWithoutTransaction,
+    recoveryStatus,
+    hasSignedWithoutTransaction: recoveryStatus !== 'none',
     refresh: () => {
       setStatus('loading')
       setRefreshIndex(index => index + 1)

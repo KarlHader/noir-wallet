@@ -5,6 +5,7 @@ import {
   getUnresolvedMultisigTransactions,
   mergeMultisigSendTransactions,
   parseMultisigSendAmount,
+  parseMultisigSendRecovery,
   resolveMultisigSendContext,
   settleMultisigSendReview,
   validateMultisigSendReview
@@ -195,4 +196,21 @@ test('send keeps the highest transaction phase and rejects cross-account records
   assert.throws(() =>
     mergeMultisigSendTransactions([base], [{ ...base, txId: 'ef'.repeat(32) }], scope)
   )
+})
+
+test('send recovery response rejects inconsistent blocker state', () => {
+  assert.deepEqual(
+    parseMultisigSendRecovery({
+      signedWithoutTransaction: true,
+      status: 'finalization_incomplete'
+    }),
+    { signedWithoutTransaction: true, status: 'finalization_incomplete' }
+  )
+  for (const invalid of [
+    { signedWithoutTransaction: true, status: 'none' },
+    { signedWithoutTransaction: false, status: 'signed_without_receipt' },
+    { signedWithoutTransaction: true, status: 'unverified' },
+    { signedWithoutTransaction: true, status: 'finalization_incomplete', txId: 'ab'.repeat(32) }
+  ])
+    assert.throws(() => parseMultisigSendRecovery(invalid))
 })

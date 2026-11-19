@@ -820,29 +820,49 @@ export function createMultisigSendHandler(deps: MultisigSendDeps) {
               record.binding.accountId === scope.accountId
           )
           if (method === 'vault.send.recovery') {
-            const signedWithoutTransaction =
-              (await deps.journal.listSigningIntents()).some(
-                intent =>
-                  intent.network === scope.network &&
-                  intent.walletId === scope.walletId &&
-                  intent.accountId === scope.accountId &&
-                  intent.phase === 'signed' &&
-                  !transactions.some(record =>
-                    storageJsonEquals(record.binding, signingIntentBinding(intent))
-                  )
-              ) ||
-              (await listFinalizationRecovery()).some(
-                record =>
-                  record.binding.network === scope.network &&
-                  record.binding.walletId === scope.walletId &&
-                  record.binding.accountId === scope.accountId &&
-                  !isConfirmedFinalizationRecovery(record, transactions) &&
-                  !transactions.some(transaction =>
-                    storageJsonEquals(transaction.binding, record.binding)
-                  )
+            const incompleteFinalization = (await listFinalizationRecovery()).some(record => {
+              if (
+                record.binding.network !== scope.network ||
+                record.binding.walletId !== scope.walletId ||
+                record.binding.accountId !== scope.accountId
               )
-            return { signedWithoutTransaction } as VaultSendSchema[M]['response']
+                return false
+              if (isConfirmedFinalizationRecovery(record, transactions)) return false
+              return !(
+                record.phase === 'durable_finalization' &&
+                transactions.some(
+                  transaction =>
+                    storageJsonEquals(transaction.binding, record.binding) &&
+                    storageJsonEquals(transaction.review, record.review) &&
+                    transaction.txId === record.txId &&
+                    transaction.rawTxSha256 === record.rawTxSha256 &&
+                    transaction.rawTxLen === record.rawTxLen &&
+                    transaction.snapshotSha256 === record.snapshotSha256
+                )
+              )
+            })
+            const signedWithoutReceipt = (await deps.journal.listSigningIntents()).some(
+              intent =>
+                intent.network === scope.network &&
+                intent.walletId === scope.walletId &&
+                intent.accountId === scope.accountId &&
+                intent.phase === 'signed' &&
+                !transactions.some(record =>
+                  storageJsonEquals(record.binding, signingIntentBinding(intent))
+                )
+            )
+            const status = incompleteFinalization
+              ? 'finalization_incomplete'
+              : signedWithoutReceipt
+                ? 'signed_without_receipt'
+                : 'none'
+            await context(scope, source.groupId, 1)
+            return {
+              signedWithoutTransaction: status !== 'none',
+              status
+            } as VaultSendSchema[M]['response']
           }
+          await context(scope, source.groupId, 1)
           return transactions.map(projectMultisigTransaction) as VaultSendSchema[M]['response']
         }
         await initialize()

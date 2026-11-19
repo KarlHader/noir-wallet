@@ -9,6 +9,7 @@ import type {
   VaultSendAuthority,
   VaultSendPrepareRequest,
   VaultSendPrepareResponse,
+  VaultSendRecovery,
   VaultSendReview,
   VaultSendTransaction
 } from '@/core/multisig/send-rpc'
@@ -184,6 +185,22 @@ const TRANSACTION_PHASE_RANK = {
   broadcast: 2,
   confirmed: 3
 } as const
+
+export function parseMultisigSendRecovery(value: unknown): VaultSendRecovery {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('Invalid recovery state')
+  const recovery = value as Record<string, unknown>
+  if (
+    Object.keys(recovery).length !== 2 ||
+    typeof recovery.signedWithoutTransaction !== 'boolean' ||
+    !['none', 'signed_without_receipt', 'finalization_incomplete'].includes(
+      recovery.status as string
+    ) ||
+    recovery.signedWithoutTransaction !== (recovery.status !== 'none')
+  )
+    throw new Error('Invalid recovery state')
+  return recovery as unknown as VaultSendRecovery
+}
 
 /** An older storage read must not turn a confirmed or broadcast payment back into pending. */
 export function mergeMultisigSendTransactions(

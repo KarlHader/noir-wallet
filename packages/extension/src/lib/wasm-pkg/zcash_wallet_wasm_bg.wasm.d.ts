@@ -812,11 +812,11 @@ export const rustsecp256k1_v0_14_default_error_callback_fn: (a: number, b: numbe
 export const rustsecp256k1_v0_14_default_illegal_callback_fn: (a: number, b: number) => void
 export const rustsecp256k1_v0_14_context_create: (a: number) => number
 export const rustsecp256k1_v0_14_context_destroy: (a: number) => void
-export const __wasm_bindgen_func_elem_16706: (a: number, b: number, c: number, d: number) => void
-export const __wasm_bindgen_func_elem_16723: (a: number, b: number, c: number, d: number) => void
-export const __wasm_bindgen_func_elem_12600: (a: number, b: number, c: number) => void
-export const __wasm_bindgen_func_elem_16708: (a: number, b: number, c: number) => void
-export const __wasm_bindgen_func_elem_12523: (a: number, b: number) => void
+export const __wasm_bindgen_func_elem_16707: (a: number, b: number, c: number, d: number) => void
+export const __wasm_bindgen_func_elem_16724: (a: number, b: number, c: number, d: number) => void
+export const __wasm_bindgen_func_elem_12601: (a: number, b: number, c: number) => void
+export const __wasm_bindgen_func_elem_16709: (a: number, b: number, c: number) => void
+export const __wasm_bindgen_func_elem_12524: (a: number, b: number) => void
 export const memory: WebAssembly.Memory
 export const __wbindgen_export: (a: number, b: number) => number
 export const __wbindgen_export2: (a: number, b: number, c: number, d: number) => number

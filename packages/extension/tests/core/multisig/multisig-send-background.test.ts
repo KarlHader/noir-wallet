@@ -27,7 +27,14 @@ import { parseSignEnvelopePayload } from '../../../src/core/multisig/sign-protoc
 import { buildRoster } from '../../../src/core/multisig/roster'
 import { generateDeviceIdentity } from '../../../src/core/multisig/identity'
 import { createMultisigTransactionController } from '../../../src/background/multisig-transaction'
-import { projectMultisigActivity } from '../../../src/background/multisig-activity'
+import {
+  persistMultisigActivity,
+  projectMultisigActivity
+} from '../../../src/background/multisig-activity'
+import { closeConnection } from '../../../src/lib/indexed-db'
+import { buildAccountKey } from '../../../src/core/wallet/account-scope'
+import type { Transaction } from '../../../src/types/wallet'
+import type { MultisigTransactionRecord } from '../../../src/core/multisig/transaction-journal'
 
 const NOW = 1_800_000_000_000
 const scope = { walletId: 'w', accountId: 'a', network: 'testnet' as const }
@@ -219,6 +226,62 @@ function setup() {
       failInvalidate = true
     },
     bindCalls: () => bindCalls
+  }
+}
+
+function installActivityDatabase() {
+  const records = new Map<string, Transaction[]>()
+  let queue = Promise.resolve()
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')
+  const database = {
+    open() {
+      const request: { result?: unknown; onsuccess?: () => void } = {}
+      queueMicrotask(() => {
+        request.result = {
+          close() {},
+          transaction() {
+            const transaction: {
+              oncomplete?: () => void
+              onabort?: () => void
+              abort: () => void
+              objectStore: () => unknown
+            } = {
+              abort() {
+                queueMicrotask(() => transaction.onabort?.())
+              },
+              objectStore() {
+                return {
+                  get(key: string) {
+                    const read: { result?: Transaction[]; onsuccess?: () => void } = {}
+                    queue = queue.then(() => {
+                      read.result = records.get(key)
+                      read.onsuccess?.()
+                    })
+                    return read
+                  },
+                  put(value: Transaction[], key: string) {
+                    records.set(key, structuredClone(value))
+                    queueMicrotask(() => transaction.oncomplete?.())
+                  }
+                }
+              }
+            }
+            return transaction
+          }
+        }
+        request.onsuccess?.()
+      })
+      return request
+    }
+  }
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: database })
+  return {
+    records,
+    restore() {
+      closeConnection()
+      if (original) Object.defineProperty(globalThis, 'indexedDB', original)
+      else delete (globalThis as { indexedDB?: IDBFactory }).indexedDB
+    }
   }
 }
 
@@ -922,7 +985,8 @@ test('finalization persists the verified receipt and submission uncertainty prec
   assert.equal((await s.handler.handle('vault.send.finalize', authority)).phase, 'finalized')
   assert.equal((await s.handler.handle('vault.send.finalize', authority)).phase, 'finalized')
   assert.deepEqual(await s.handler.handle('vault.send.recovery', { scope }), {
-    signedWithoutTransaction: false
+    signedWithoutTransaction: false,
+    status: 'none'
   })
   assert.equal(finalizations, 1)
   assert.equal((await s.handler.handle('vault.send.submit', authority)).phase, 'broadcast')
@@ -998,7 +1062,8 @@ test('restart repairs a verified durable receipt without restoring submission au
   })
   assert.deepEqual(await unverified.handle('vault.send.transactions', { scope }), [])
   assert.deepEqual(await unverified.handle('vault.send.recovery', { scope }), {
-    signedWithoutTransaction: true
+    signedWithoutTransaction: true,
+    status: 'finalization_incomplete'
   })
   const restartedTransactions = createMultisigTransactionJournal()
   let verified = 0
@@ -1092,6 +1157,38 @@ test('local transaction queries do not wait for Worker initialization or network
   assert.deepEqual(await s.handler.handle('vault.send.transactions', { scope }), [])
 })
 
+test('transaction and recovery reads reject an account switch during journal access', async () => {
+  const s = await prepareSignedTransfer()
+  const listTransactions = s.deps.transactions.listTransactions
+  for (const method of ['vault.send.transactions', 'vault.send.recovery'] as const) {
+    s.state.activeAccountId = 'a'
+    let enter!: () => void
+    let release!: () => void
+    const entered = new Promise<void>(resolve => {
+      enter = resolve
+    })
+    const released = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const handler = createMultisigSendHandler({
+      ...s.deps,
+      transactions: {
+        ...s.deps.transactions,
+        listTransactions: async () => {
+          enter()
+          await released
+          return listTransactions()
+        }
+      }
+    })
+    const read = handler.handle(method, { scope })
+    await entered
+    s.state.activeAccountId = 'other-account'
+    release()
+    await assert.rejects(read)
+  }
+})
+
 test('only a sufficient chain confirmation settles a signed intent and releases its active slot', async () => {
   const s = await prepareSignedTransfer()
   const forward = s.deps.forwardToWorker
@@ -1156,6 +1253,63 @@ test('a confirmed transaction is never downgraded by a cached broadcast response
   )
 })
 
+test('Activity replay keeps one confirmed payment and rejects a conflicting transaction identity', async t => {
+  const database = installActivityDatabase()
+  t.after(() => database.restore())
+  Object.defineProperty(chrome, 'runtime', {
+    configurable: true,
+    value: { sendMessage: async () => undefined }
+  })
+  const record: MultisigTransactionRecord = {
+    version: 2,
+    binding: { ...binding, threshold: '2-of-3', transport: 'qr', createdAt: NOW },
+    txId: finalizedReceipt.txId,
+    rawTxSha256: finalizedReceipt.rawTxSha256,
+    rawTxLen: finalizedReceipt.rawTxLen,
+    snapshotSha256: finalizedReceipt.snapshotSha256,
+    review: {
+      recipient: draft.to,
+      amount: draft.amountZats,
+      memo: draft.memo,
+      fee: '10000',
+      marginalFeeZats: draft.marginalFeeZats,
+      feeQuoteId: draft.feeQuoteId
+    },
+    phase: 'confirmed',
+    updatedAt: NOW
+  }
+  const key = buildAccountKey('testnet', 'w', 'a')
+  await persistMultisigActivity(record, 'sender')
+  await Promise.all([
+    persistMultisigActivity({ ...record, phase: 'broadcast' }, 'sender'),
+    persistMultisigActivity(record, 'sender')
+  ])
+  assert.equal(database.records.get(key)?.length, 1)
+  assert.equal(database.records.get(key)?.[0]?.status, 'success')
+
+  const other = {
+    ...record,
+    binding: {
+      ...record.binding,
+      network: 'mainnet' as const,
+      accountId: 'other',
+      reviewId: 'other'
+    },
+    txId: 'b'.repeat(64)
+  }
+  await persistMultisigActivity(other, 'other-sender')
+  assert.equal(
+    database.records.get(buildAccountKey('mainnet', 'w', 'other'))?.[0]?.txHash,
+    other.txId
+  )
+  assert.equal(database.records.get(key)?.[0]?.txHash, record.txId)
+
+  const conflicting = { ...database.records.get(key)![0], txHash: 'c'.repeat(64) }
+  database.records.set(key, [conflicting])
+  await assert.rejects(persistMultisigActivity(record, 'sender'))
+  assert.deepEqual(database.records.get(key), [conflicting])
+})
+
 test('signed intents without transaction receipts remain visible after restart without a Worker', async () => {
   const s = await prepareSignedTransfer()
   const restarted = createMultisigSendHandler({
@@ -1165,7 +1319,8 @@ test('signed intents without transaction receipts remain visible after restart w
     }
   })
   assert.deepEqual(await restarted.handle('vault.send.recovery', { scope }), {
-    signedWithoutTransaction: true
+    signedWithoutTransaction: true,
+    status: 'signed_without_receipt'
   })
   await assert.rejects(
     restarted.handle('vault.send.recovery', { scope: { ...scope, accountId: 'other' } })

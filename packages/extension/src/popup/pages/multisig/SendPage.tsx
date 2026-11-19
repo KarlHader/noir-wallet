@@ -329,24 +329,11 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
     )
   }
 
-  if (transactionHistory.hasSignedWithoutTransaction) {
-    return (
-      <SendLayout
-        footer={
-          <FlowButton variant="outline" onClick={transactionHistory.refresh}>
-            Check status
-          </FlowButton>
-        }
-      >
-        <InlineError message="A signed transfer needs recovery. Check this account before starting another payment." />
-      </SendLayout>
-    )
-  }
-
-  if (unresolvedTransactions.length) {
+  if (transactionHistory.hasSignedWithoutTransaction || unresolvedTransactions.length) {
     return (
       <SendPendingTransactions
         transactions={unresolvedTransactions}
+        recoveryStatus={transactionHistory.recoveryStatus}
         hasRefreshFailed={transactionHistory.status === 'error'}
         onRefresh={transactionHistory.refresh}
       />

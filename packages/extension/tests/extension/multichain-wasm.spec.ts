@@ -2757,7 +2757,8 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
         async ({ walletId, accountId, groupId, recipient }) => {
           const saved = await chrome.storage.local.get([
             'multisig_signing_v1',
-            'multisig_transactions_v1'
+            'multisig_transactions_v1',
+            'multisig_finalization_recovery_v1'
           ])
           const createdAt = Date.now()
           const binding = {
@@ -2821,6 +2822,15 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
           return {
             saved,
             key,
+            binding,
+            review: {
+              recipient,
+              amount: '1',
+              memo: '',
+              fee: '10000',
+              marginalFeeZats: 5000,
+              feeQuoteId: 'mv3-recovery-fixture'
+            },
             authority: { walletId, reviewId: binding.reviewId, sessionId: binding.sessionId }
           }
         },
@@ -2849,13 +2859,35 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
         })
         await popup.evaluate(async key => {
           const saved = await chrome.storage.local.get('multisig_transactions_v1')
+          saved.multisig_transactions_v1[key][0].phase = 'finalized'
+          await chrome.storage.local.set(saved)
+        }, recoveryFixture.key)
+        await sendPage.reload()
+        await expect(sendPage.getByText('Transaction saved', { exact: true })).toBeVisible()
+        await expect(sendPage.getByText('13'.repeat(32), { exact: true })).toBeVisible()
+        await expect(
+          sendPage.getByRole('button', { name: 'Prepare transfer', exact: true })
+        ).toHaveCount(0)
+        for (const method of ['vault.send.submit', 'vault.send.execute']) {
+          const repeat = await popup.evaluate(
+            ({ method, payload }) =>
+              chrome.runtime.sendMessage({ type: 'WORKER_RPC', method, payload }),
+            { method, payload: recoveryFixture.authority }
+          )
+          expect(repeat.error).toBeTruthy()
+        }
+        expect(submissionRequests).toBe(0)
+        const finalizedRecord = await popup.evaluate(async key => {
+          const saved = await chrome.storage.local.get('multisig_transactions_v1')
+          const [record] = saved.multisig_transactions_v1[key]
           delete saved.multisig_transactions_v1[key]
           await chrome.storage.local.set(saved)
+          return record
         }, recoveryFixture.key)
         await sendPage.reload()
         await expect(
           sendPage.getByText(
-            'A signed transfer needs recovery. Check this account before starting another payment.'
+            'A signed transfer has no saved transaction receipt. Its finalization and submission status need recovery before another payment.'
           )
         ).toBeVisible()
         await expect(
@@ -2865,9 +2897,64 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
           path: '../../e2e-output/multisig/signed-recovery.png',
           animations: 'disabled'
         })
+        await popup.evaluate(
+          async ({ key, binding, review, finalizedRecord }) => {
+            const saved = await chrome.storage.local.get([
+              'multisig_finalization_recovery_v1',
+              'multisig_transactions_v1'
+            ])
+            await chrome.storage.local.set({
+              multisig_transactions_v1: {
+                ...saved.multisig_transactions_v1,
+                [key]: [finalizedRecord]
+              },
+              multisig_finalization_recovery_v1: {
+                ...saved.multisig_finalization_recovery_v1,
+                [key]: [
+                  {
+                    version: 1,
+                    binding,
+                    review,
+                    phase: 'receipt',
+                    updatedAt: Date.now(),
+                    txId: '46'.repeat(32),
+                    rawTxSha256: '57'.repeat(32),
+                    rawTxLen: 1234
+                  }
+                ]
+              }
+            })
+          },
+          {
+            key: recoveryFixture.key,
+            binding: recoveryFixture.binding,
+            review: recoveryFixture.review,
+            finalizedRecord
+          }
+        )
+        await sendPage.reload()
+        await expect(
+          sendPage.getByRole('alert').filter({ hasText: 'Finalization recovery is incomplete' })
+        ).toBeVisible()
+        await expect(sendPage.getByText('Transaction saved', { exact: true })).toBeVisible()
+        await expect(sendPage.getByText('13'.repeat(32), { exact: true })).toBeVisible()
+        await expect(sendPage.getByText('46'.repeat(32), { exact: true })).toHaveCount(0)
+        await expect(
+          sendPage.getByRole('button', { name: 'Prepare transfer', exact: true })
+        ).toHaveCount(0)
+        expect(
+          await pageRpc('vault.send.recovery', {
+            scope: { network: 'mainnet', walletId, accountId }
+          })
+        ).toEqual({ signedWithoutTransaction: true, status: 'finalization_incomplete' })
+        expect(submissionRequests).toBe(0)
       } finally {
         await popup.evaluate(async saved => {
-          await chrome.storage.local.remove(['multisig_signing_v1', 'multisig_transactions_v1'])
+          await chrome.storage.local.remove([
+            'multisig_signing_v1',
+            'multisig_transactions_v1',
+            'multisig_finalization_recovery_v1'
+          ])
           await chrome.storage.local.set(saved)
         }, recoveryFixture.saved)
       }
@@ -2926,24 +3013,41 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
     if (verifyUi) expect(treeStateRequests).toBeGreaterThanOrEqual(1)
     else expect(treeStateRequests).toBe(1)
     expect(submissionRequests).toBe(0)
-    // Restart the actual Offscreen document with a synthetic pre-mutation marker on disk.
-    // The new document must reject ordinary wallet RPCs before restoring a stale DB.
+    // The E2E-only page faults the production barrier's post-write readback,
+    // not a Worker mid-finalization. Browser storage still holds the marker.
     const barrierKey = `noir_multisig_finalization_barrier_v1:mainnet:${walletId}`
-    await popup.evaluate(
-      async ({ key, walletId, accountId }) => {
-        await chrome.storage.local.set({
-          [key]: {
-            version: 1,
-            network: 'mainnet',
-            walletId,
-            accountId,
-            token: 'mv3-interrupted-finalization'
-          }
-        })
-      },
-      { key: barrierKey, walletId, accountId }
-    )
+    const faultPage = await context.newPage()
     try {
+      await faultPage.goto(
+        `chrome-extension://${extensionId}/tests/extension/credential-repository-integration.html`
+      )
+      await faultPage.waitForFunction(() => 'credentialRepositoryIntegration' in window)
+      const failedReadback = await faultPage.evaluate(
+        ({ walletId, accountId }) =>
+          (
+            window as unknown as {
+              credentialRepositoryIntegration: {
+                failMultisigBarrierReadback(
+                  walletId: string,
+                  accountId: string
+                ): Promise<{ error: string; sessionId: string; token: string }>
+              }
+            }
+          ).credentialRepositoryIntegration.failMultisigBarrierReadback(walletId, accountId),
+        { walletId, accountId }
+      )
+      expect(failedReadback.error).toBe('Multisig finalization barrier readback failed')
+      expect(
+        await popup.evaluate(async key => (await chrome.storage.local.get(key))[key], barrierKey)
+      ).toMatchObject({
+        version: 1,
+        network: 'mainnet',
+        walletId,
+        accountId,
+        reviewId: 'mv3-readback-failure',
+        sessionId: failedReadback.sessionId,
+        token: failedReadback.token
+      })
       await background.evaluate(async () => {
         await chrome.offscreen.closeDocument()
         await chrome.offscreen.createDocument({
@@ -2970,6 +3074,7 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       ).toBe(true)
       expect(submissionRequests).toBe(0)
     } finally {
+      await faultPage.close()
       await popup.evaluate(key => chrome.storage.local.remove(key), barrierKey)
     }
   } finally {

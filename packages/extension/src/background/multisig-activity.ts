@@ -2,6 +2,7 @@ import { buildAccountKey } from '@/core/wallet/account-scope'
 import { formatAmount } from '@/lib/number-format'
 import { mutateTransactions } from '@/lib/indexed-db'
 import { getRequiredConfirmations, mergeTransactionUpdate } from '@/lib/transaction-status'
+import { normalizeTxHash } from '@/lib/tx-history-dedup'
 import { withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
 import type { MultisigTransactionRecord } from '@/core/multisig/transaction-journal'
 import type { Transaction } from '@/types'
@@ -44,6 +45,9 @@ export async function persistMultisigActivity(
       mutateTransactions(accountKey, previous => {
         const index = previous.findIndex(existing => existing.id === transaction.id)
         if (index === -1) return [...previous, transaction]
+        const existingHash = normalizeTxHash(previous[index].txHash)
+        if (existingHash && existingHash !== normalizeTxHash(transaction.txHash))
+          throw new Error('Multisig Activity transaction identity changed')
         const confirmation =
           record.phase === 'confirmed'
             ? { txHash: record.txId, confirmations: getRequiredConfirmations('send') }

@@ -6,6 +6,7 @@ import type {
   VaultSendPrepareRequest,
   VaultSendPrepareResponse,
   VaultSendProgress,
+  VaultSendRecovery,
   VaultSendReview,
   VaultSendTransaction
 } from '@/core/multisig/send-rpc'
@@ -84,8 +85,6 @@ export function listMultisigSendTransactions(
   return requestVaultSend('vault.send.transactions', { scope })
 }
 
-export function readMultisigSendRecovery(
-  scope: MultisigGroupScope
-): Promise<{ signedWithoutTransaction: boolean }> {
+export function readMultisigSendRecovery(scope: MultisigGroupScope): Promise<VaultSendRecovery> {
   return requestVaultSend('vault.send.recovery', { scope })
 }

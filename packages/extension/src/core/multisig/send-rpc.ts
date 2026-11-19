@@ -52,6 +52,10 @@ export interface VaultSendTransaction {
   outbound: MultisigEnvelope[]
   summary?: { recipient: string; amount: string; memo: string; fee: string }
 }
+export interface VaultSendRecovery {
+  signedWithoutTransaction: boolean
+  status: 'none' | 'signed_without_receipt' | 'finalization_incomplete'
+}
 export interface VaultSendSchema {
   'vault.send.prepare': { request: VaultSendPrepareRequest; response: VaultSendPrepareResponse }
   'vault.send.start': { request: VaultSendAuthority; response: VaultSendProgress }
@@ -72,7 +76,7 @@ export interface VaultSendSchema {
   }
   'vault.send.recovery': {
     request: { scope: MultisigGroupScope }
-    response: { signedWithoutTransaction: boolean }
+    response: VaultSendRecovery
   }
 }
 export type VaultSendMethod = keyof VaultSendSchema

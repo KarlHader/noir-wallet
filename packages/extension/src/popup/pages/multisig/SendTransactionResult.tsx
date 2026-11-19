@@ -5,7 +5,8 @@ import type { VaultSendTransaction } from '@/core/multisig/send-rpc'
 const PHASE_COPY = {
   finalized: {
     title: 'Transaction saved',
-    detail: 'The signed transaction is saved. Submission has not been confirmed.'
+    detail:
+      'The signed transaction is saved. Submission has not been confirmed, and recovery is required before it can continue.'
   },
   submission_unknown: {
     title: 'Submission status unknown',
