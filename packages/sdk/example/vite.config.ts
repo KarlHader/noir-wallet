@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
 const base =
-  process.env.GITHUB_PAGES_BASE ?? (process.env.GITHUB_PAGES ? '/noir-wallet-sdk/' : '/example/')
+  process.env.GITHUB_PAGES_BASE ?? (process.env.GITHUB_PAGES ? '/noir-wallet/' : '/example/')
 
 export default defineConfig({
   cacheDir: fileURLToPath(new URL('../../../output/node_modules/.vite/example', import.meta.url)),
