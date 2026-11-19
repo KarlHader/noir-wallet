@@ -27,6 +27,7 @@ import {
   matchesShieldSwapReview
 } from '../../../src/popup/services/shield-swap-form.ts'
 import { initialMoveDraft } from '../../../src/popup/pages/transactions/move-draft.ts'
+import { listMoveSameChainDestinationAssets } from '../../../src/popup/services/move-asset-picker.ts'
 import {
   readShieldMovePreference,
   selectShieldMoveAssetId,
@@ -170,6 +171,56 @@ test('rejects excess precision, exponent notation, and oversized input', () => {
   ).toBe('Enter a valid amount')
   expect(normalizePrivateBalanceTransferInput('1e3')).toBeNull()
   expect(normalizePrivateBalanceTransferInput('1'.repeat(129))).toBeNull()
+})
+
+test('lists only supported same-chain Move network choices for the selected asset', () => {
+  const option = (chainId, symbol = 'ETH', status = 'available') => ({
+    chain: {
+      chain: {
+        id: chainId,
+        family: 'evm',
+        capabilities: { transaction: { status } }
+      }
+    },
+    asset: {
+      asset: {
+        id: `${chainId}/slip44:60`,
+        chainId,
+        namespace: 'slip44',
+        reference: '60',
+        kind: 'native'
+      },
+      metadata: { symbol, decimals: 18 },
+      balance: { totalRaw: '0', mainRaw: '0', privateRaw: '0' }
+    }
+  })
+  const ethereum = option('eip155:1')
+  const arbitrum = option('eip155:42161')
+  const unavailable = option('eip155:8453', 'ETH', 'unavailable')
+  const unrecognized = option('eip155:999999')
+  const choices = listMoveSameChainDestinationAssets({
+    source: ethereum,
+    assets: [ethereum, arbitrum, unavailable, unrecognized],
+    from: 'public',
+    eligibleChainIds: ['eip155:1', 'eip155:42161', 'eip155:8453', 'eip155:999999'],
+    destinationChainIds: ['eip155:1', 'eip155:42161', 'eip155:8453', 'eip155:999999'],
+    managedAssets: [],
+    catalogTokens: [],
+    network: 'mainnet'
+  })
+  expect(choices.map(item => item.chain.chain.id)).toEqual(['eip155:1', 'eip155:42161'])
+  expect(
+    listMoveSameChainDestinationAssets({
+      source: ethereum,
+      assets: [ethereum, arbitrum],
+      from: 'public',
+      eligibleChainIds: ['eip155:1', 'eip155:42161'],
+      destinationChainIds: ['eip155:1'],
+      managedAssets: [],
+      catalogTokens: [],
+      network: 'mainnet'
+    }).map(item => item.chain.chain.id)
+  ).toEqual(['eip155:1'])
 })
 
 test('keeps the selected Shield withdrawal token when choosing its network', () => {

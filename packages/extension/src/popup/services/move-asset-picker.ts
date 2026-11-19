@@ -8,11 +8,54 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { Network } from '@/types'
 import { getTransferDomainBalanceRaw, type TransferDomain } from './private-balance-transfer'
 import { resolveShieldManagedAsset } from './shield-transfer'
+import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
+import { toWalletEvmQuoteToken } from './token-address-discovery'
 
 type MoveAsset = Readonly<{ asset: PortfolioAssetView; chain: PortfolioChainView }>
 type ShieldBalance = Readonly<{ tokenId: string; available: string }>
 
 type MoveAssetPickerRow = MoveAsset & Readonly<{ sourceRaw: string; valueUsd: string | null }>
+
+export function listMoveSameChainDestinationAssets(input: {
+  readonly source: MoveAsset
+  readonly assets: readonly MoveAsset[]
+  readonly from: TransferDomain
+  readonly eligibleChainIds: readonly string[]
+  readonly destinationChainIds: readonly string[]
+  readonly managedAssets: readonly IntentsManagedAsset[]
+  readonly catalogTokens: readonly SwapToken[]
+  readonly network: Network
+}): readonly MoveAsset[] {
+  const sourceGroup = getCrossChainSendAssetGroup(input.source.asset.asset)
+  const eligible = new Set(input.eligibleChainIds)
+  const destinations = new Set(input.destinationChainIds)
+  return [
+    input.source,
+    ...input.assets.filter(item => item.asset.asset.id !== input.source.asset.asset.id)
+  ].filter(item => {
+    if (
+      item.chain.chain.family !== 'evm' ||
+      item.chain.chain.capabilities.transaction.status !== 'available' ||
+      !eligible.has(item.chain.chain.id) ||
+      !destinations.has(item.chain.chain.id) ||
+      getTransferDomainBalanceRaw(item.asset, input.from) === null ||
+      (!toWalletEvmQuoteToken(item.asset) &&
+        !resolveShieldManagedAsset(
+          item.asset,
+          input.managedAssets,
+          input.catalogTokens,
+          input.network
+        ))
+    )
+      return false
+    if (item.asset.asset.id === input.source.asset.asset.id) return true
+    return (
+      sourceGroup !== null &&
+      sourceGroup === getCrossChainSendAssetGroup(item.asset.asset) &&
+      item.asset.asset.kind === input.source.asset.asset.kind
+    )
+  })
+}
 
 export function listMoveAssetPickerRows(input: {
   readonly assets: readonly MoveAsset[]

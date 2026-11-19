@@ -69,7 +69,10 @@ import { toWalletEvmQuoteToken } from '@/popup/services/token-address-discovery'
 import type { SwapToken } from '@/core/services/intents-api'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
-import { listMoveAssetPickerRows } from '@/popup/services/move-asset-picker'
+import {
+  listMoveAssetPickerRows,
+  listMoveSameChainDestinationAssets
+} from '@/popup/services/move-asset-picker'
 import {
   confidentialFundingClient,
   previewClusterNetworkFeeTiers
@@ -1010,8 +1013,41 @@ function TransferForm() {
     currentNetwork,
     eligibleChainIds
   ])
+  const sameChainDestinationOptions = useMemo(
+    () =>
+      selected && to !== 'shield' && from !== 'shield'
+        ? listMoveSameChainDestinationAssets({
+            source: selected,
+            assets,
+            from,
+            eligibleChainIds,
+            managedAssets,
+            catalogTokens,
+            network: currentNetwork,
+            destinationChainIds:
+              activeAccount?.networks.flatMap(network =>
+                network.addresses.some(address => address.preferredForReceive) &&
+                network.privateExecutionAddress
+                  ? [network.chain.id]
+                  : []
+              ) ?? []
+          })
+        : [],
+    [
+      selected,
+      to,
+      from,
+      assets,
+      eligibleChainIds,
+      activeAccount,
+      managedAssets,
+      catalogTokens,
+      currentNetwork
+    ]
+  )
+  const networkAssets = from === 'shield' ? destinationOptions : sameChainDestinationOptions
   const destinationNetworkOptions: ChainSelectorOption[] = [
-    ...new Map(destinationOptions.map(item => [item.chain.chain.id, item])).values()
+    ...new Map(networkAssets.map(item => [item.chain.chain.id, item])).values()
   ].map(item => ({
     id: item.chain.chain.id,
     name: item.chain.chain.displayName,
@@ -1227,7 +1263,7 @@ function TransferForm() {
     canEstimateMethods && managedAsset && shieldConnection === 'connected' && clusterEstimate.value
   )
   const clusterNetworkFee = useMoveMethodEstimate({
-    enabled: clusterQuoted && Boolean(amountState?.amountRaw) && !preparingShield,
+    enabled: clusterQuoted && Boolean(estimateAmountRaw) && !preparingShield,
     requestKey: `${clusterEstimateKey}:${JSON.stringify(evmMoveFee)}`,
     estimate: () =>
       confidentialFundingClient.previewClusterNetworkFee({
@@ -2084,7 +2120,7 @@ function TransferForm() {
             onNetworkClick={() => {
               setNetworkPickerOpen(true)
             }}
-            showNetwork={from === 'shield'}
+            showNetwork={to !== 'shield'}
             onAccountClick={() => openDomainPicker('to')}
             disabled={!selected}
           />
@@ -2361,16 +2397,20 @@ function TransferForm() {
         open={networkPickerOpen}
         onOpenChange={setNetworkPickerOpen}
         options={destinationNetworkOptions}
-        selectedId={destination?.chain.chain.id ?? null}
+        selectedId={targetAsset?.chain.chain.id ?? null}
         label={`Networks for ${symbol}`}
         onSelect={id => {
-          const item =
-            destination?.chain.chain.id === id
-              ? destination
-              : destinationOptions.find(option => option.chain.chain.id === id)
+          const item = networkAssets.find(option => option.chain.chain.id === id)
           if (!item) return
           userEditedMove.current = true
-          setDestinationAssetId(item.asset.asset.id)
+          if (from === 'shield') {
+            setDestinationAssetId(item.asset.asset.id)
+          } else if (item.asset.asset.id !== selected?.asset.asset.id) {
+            setSelectedAssetId(item.asset.asset.id)
+            setDestinationAssetId(null)
+            setAmount('')
+            setMaxSelected(false)
+          }
           setShieldError(null)
         }}
       />
