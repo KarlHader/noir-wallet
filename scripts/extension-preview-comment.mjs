@@ -22,6 +22,32 @@ async function pages(request, route, key) {
   throw new Error('GitHub list exceeds the supported limit')
 }
 
+const previewTarget = (pr, repository) =>
+  pr.base?.repo?.full_name?.toLowerCase() === repository.toLowerCase() &&
+  /^(main|release\/.+)$/.test(pr.base?.ref)
+
+const matchesRunHead = (pr, run) =>
+  pr.head?.sha === run.head_sha && pr.head.repo?.id === run.head_repository.id
+
+async function associatedPullRequests(request, run, repository) {
+  if (run.pull_requests?.length) return run.pull_requests
+  const byCommit = await pages(request, `commits/${run.head_sha}/pulls`)
+  if (byCommit.length) return byCommit
+
+  // GitHub can omit both associations for fork runs; require a unique, exact open PR.
+  const owner = run.head_repository.owner?.login
+  if (!/^[A-Za-z0-9-]+$/.test(owner || '') || !run.head_branch) return []
+  const query = new URLSearchParams({ state: 'open', head: `${owner}:${run.head_branch}` })
+  const matches = (await pages(request, `pulls?${query}`)).filter(
+    pr =>
+      pr.state === 'open' &&
+      pr.head?.ref === run.head_branch &&
+      matchesRunHead(pr, run) &&
+      previewTarget(pr, repository)
+  )
+  return matches.length === 1 ? matches : []
+}
+
 function previewArtifact(artifacts, run, prNumber) {
   const name = previewName(prNumber)
   const matches = artifacts.filter(artifact => {
@@ -63,13 +89,11 @@ function commentBody(repository, run, artifact, forkPreview) {
       'Includes one extension ZIP with runtime Mainnet/Testnet Mode.'
     )
     if (forkPreview)
-      lines.push('Swap is unavailable in fork previews because repository secrets are not shared.')
+      lines.push(
+        'Unofficial fork build. Use a separate browser profile and a test wallet; never import a real recovery phrase.'
+      )
   } else {
     if (run.status !== 'completed') lines.push('Preview package: **building**.')
-    else if (run.conclusion === 'success' && forkPreview)
-      lines.push(
-        'Fork checks passed. No preview package was uploaded. Move the reviewed changes to a repository branch for a configured download.'
-      )
     else if (run.conclusion === 'success')
       lines.push(
         'Preview package: **unavailable or expired**. Re-run Extension CI for this commit.'
@@ -129,9 +153,7 @@ export async function reportExtensionPreview({
     throw new Error('Invalid build conclusion')
   }
   if (!Array.isArray(run.pull_requests)) throw new Error('Invalid build PR response')
-  const associated = run.pull_requests.length
-    ? run.pull_requests
-    : await pages(request, `commits/${run.head_sha}/pulls`)
+  const associated = await associatedPullRequests(request, run, repository)
   const artifacts =
     run.status === 'completed' && run.conclusion === 'success'
       ? await pages(request, `actions/runs/${runId}/artifacts`, 'artifacts')
@@ -143,10 +165,8 @@ export async function reportExtensionPreview({
     if (
       pr.number !== number ||
       pr.state !== 'open' ||
-      pr.head?.sha !== run.head_sha ||
-      pr.head.repo?.id !== run.head_repository.id ||
-      pr.base?.repo?.full_name?.toLowerCase() !== repository.toLowerCase() ||
-      !/^(main|release\/.+)$/.test(pr.base.ref)
+      !matchesRunHead(pr, run) ||
+      !previewTarget(pr, repository)
     )
       continue
     const comments = await pages(request, `issues/${number}/comments`)
@@ -177,9 +197,7 @@ export async function reportExtensionPreview({
         other.head_sha !== run.head_sha
       )
         continue
-      const otherPrs = other.pull_requests?.length
-        ? other.pull_requests
-        : await pages(request, `commits/${other.head_sha}/pulls`)
+      const otherPrs = await associatedPullRequests(request, other, repository)
       if (otherPrs.some(associatedPr => associatedPr.number === number)) {
         newerRun = true
         break

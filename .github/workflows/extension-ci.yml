@@ -44,6 +44,8 @@ env:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      PREVIEW_BUILD_CHANNEL: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'beta' || 'development' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -72,20 +74,21 @@ jobs:
       - name: Build and type-check extension
         working-directory: wallet
         env:
-          BUILD_CHANNEL: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'beta' || 'development' }}
+          BUILD_CHANNEL: ${{ env.PREVIEW_BUILD_CHANNEL }}
           GA_API_SECRET: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GA_API_SECRET || '' }}
           CUSTOM_ANALYTICS_PASSWORD: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.CUSTOM_ANALYTICS_PASSWORD || '' }}
           EVM_HISTORY_API_ORIGIN: ${{ vars.EVM_HISTORY_API_ORIGIN }}
           RHEA_SWAP_ACCESS_TOKEN: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.RHEA_SWAP_ACCESS_TOKEN || '' }}
-          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          RHEA_SWAP_PUBLIC_TOKEN: ${{ env.PREVIEW_BUILD_CHANNEL == 'development' && vars.RHEA_SWAP_PUBLIC_TOKEN || '' }}
         run: |
-          if [ "$PR_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] && [ -z "${RHEA_SWAP_ACCESS_TOKEN//[[:space:]]/}" ]; then
+          if [ "$BUILD_CHANNEL" = 'development' ]; then
+            export RHEA_SWAP_ACCESS_TOKEN="$RHEA_SWAP_PUBLIC_TOKEN"
+          elif [ -z "${RHEA_SWAP_ACCESS_TOKEN//[[:space:]]/}" ]; then
             echo '::error::RHEA_SWAP_ACCESS_TOKEN is required for repository preview builds'
             exit 1
           fi
           pnpm build:extension
       - name: Stage tested ZIPs
-        if: github.event.pull_request.head.repo.full_name == github.repository
         run: |
           set -euo pipefail
           zips=(wallet/packages/extension/dist/*.zip)
@@ -96,14 +99,13 @@ jobs:
           mkdir -p raw-zips/dist
           cp "${zips[0]}" raw-zips/dist/
       - name: Package tested previews
-        if: github.event.pull_request.head.repo.full_name == github.repository
         id: package
         env:
           RELEASE_MODE: preview
           SOURCE_SHA: ${{ github.sha }}
           SOURCE_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.sha }}
-          BUILD_CHANNEL: beta
+          BUILD_CHANNEL: ${{ env.PREVIEW_BUILD_CHANNEL }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -135,7 +137,6 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `artifact_label=${artifactLabel}\n`)
           NODE
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event.pull_request.head.repo.full_name == github.repository
         with:
           name: noir-wallet-development-${{ steps.package.outputs.artifact_label }}
           path: release-assets/

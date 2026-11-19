@@ -155,15 +155,39 @@ test('checks PR identity again before writing after an intervening push', async 
   assert.equal(state.writes.length, 0)
 })
 
-test('finds fork PR associations when the run has no pull_requests entries', async () => {
-  const state = fixture()
+function forkWithoutRunAssociation(state) {
+  const headBranch = 'feat/shield-sdk'
   state.run.pull_requests = []
-  state.run.head_repository.id = state.pr.head.repo.id = 42
-  state.pr.head.repo.full_name = 'contributor/noir-wallet'
+  state.run.head_repository = { id: 42, owner: { login: 'contributor' } }
+  state.run.head_branch = headBranch
+  state.pr.head.ref = headBranch
+  state.pr.head.repo = { id: 42, full_name: 'contributor/noir-wallet' }
+  state.responses.set(`commits/${sha}/pulls?per_page=100&page=1`, [])
+  return 'pulls?state=open&head=contributor%3Afeat%2Fshield-sdk&per_page=100&page=1'
+}
+
+test('links a fork build when GitHub omits both PR associations', async () => {
+  const state = fixture()
+  state.responses.set(forkWithoutRunAssociation(state), [state.pr])
   await state.report()
-  assert.ok(state.routes.includes(`commits/${sha}/pulls?per_page=100&page=1`))
   assert.equal(state.writes.length, 1)
-  assert.match(state.writes[0].body.body, /Swap is unavailable in fork previews/)
+  assert.equal(state.writes[0].route, 'issues/20/comments')
+  assert.match(state.writes[0].body.body, /\/artifacts\/300/)
+  assert.match(state.writes[0].body.body, /Unofficial fork build/)
+})
+
+test('does not comment when a fork branch has no unique exact PR match', async () => {
+  const state = fixture()
+  const route = forkWithoutRunAssociation(state)
+  for (const candidates of [
+    [{ ...state.pr, head: { ...state.pr.head, repo: { id: 43 } } }],
+    [{ ...state.pr, head: { ...state.pr.head, sha: 'b'.repeat(40) } }],
+    [state.pr, { ...state.pr, number: 21, base: { ...state.pr.base, ref: 'release/2.0.0' } }]
+  ]) {
+    state.responses.set(route, candidates)
+    assert.deepEqual(await state.report(), [])
+  }
+  assert.equal(state.writes.length, 0)
 })
 
 test('does not let an older run or attempt overwrite a newer comment', async () => {
@@ -288,9 +312,10 @@ test('an older request or completion cannot overwrite a newer run before it comm
   assert.equal(state.writes.length, 0)
 })
 
-test('finds a newer fork run through commit association on a later inventory page', async () => {
+test('finds a newer fork run through branch association on a later inventory page', async () => {
   const state = fixture()
-  state.pr.head.repo.full_name = 'contributor/noir-wallet'
+  state.responses.set(forkWithoutRunAssociation(state), [state.pr])
+  state.run.pull_requests = [{ number: 20 }]
   state.responses.set(
     `actions/workflows/extension-ci.yml/runs?event=pull_request&head_sha=${sha}&per_page=100&page=1`,
     {
