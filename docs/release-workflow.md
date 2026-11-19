@@ -1,6 +1,6 @@
 # Noir Wallet CI/CD and Release Workflow
 
-This runbook covers V2 extension previews, Beta releases, and production candidates on `main`. [Extension CI](../.github/workflows/extension-ci.yml) creates development inspection artifacts. The [manual release workflow](../.github/workflows/extension-release.yml) prepares Betas and production candidates; [Publish Accepted Extension](../.github/workflows/publish-extension.yml) promotes an accepted production artifact and optionally submits it for Chrome Web Store review. SDK staging and final store go-live remain separate manual operations. The [documentation workflow](../.github/workflows/docs.yml) validates documentation without deploying it.
+This runbook covers V2 extension previews, Beta releases, and production candidates on `main`. [Extension CI](../.github/workflows/extension-ci.yml) creates development inspection artifacts. [Prepare Extension Release](../.github/workflows/extension-release.yml) builds manual Betas and automatic release candidates; [Publish Accepted Extension](../.github/workflows/publish-extension.yml) promotes an accepted production artifact and optionally submits it for Chrome Web Store review. SDK staging and final store go-live remain separate manual operations. The [documentation workflow](../.github/workflows/docs.yml) validates documentation without deploying it.
 
 On repeated PR pushes, SDK and documentation verification reuse a prior successful run only when the target branch commit and relevant inputs are unchanged. A failed, cancelled, or incomparable run performs the checks again.
 
@@ -8,7 +8,7 @@ On repeated PR pushes, SDK and documentation verification reuse a prior successf
 
 - Feature and fix PRs merge into `main`. PRs that change extension code, tests, WASM, the EVM history Worker, or related build and test inputs automatically run Extension CI and build a development extension. New commits cancel older runs for the same PR; no preview label is needed. Changes limited to Markdown documentation, SDK source, or unrelated tooling do not start Extension CI.
 - To prepare a V2 Beta, dispatch `extension-release.yml` from the `main` workflow branch with mode `beta` and `source_ref=main`. The workflow builds that dispatched commit; required `confirm_sha` checks it against the reviewed full SHA. Publishing is controlled by that manual run's `publish_beta` input; see [Routine Previews](#routine-previews).
-- `v1` retains the frozen V1 source. New development targets `main`; V1 packages are no longer built or published. Pushes and tags do not publish extension releases. Production candidates require a reviewed `release/X.Y.Z` branch and a separate manual promotion.
+- `v1` retains the frozen V1 source. New development targets `main`; V1 packages are no longer built or published. Merging a same-repository `release/X.Y.Z` PR into `main` builds an RC only. Publishing a stable release requires separate manual promotion.
 - The production extension has one ZIP with runtime Mainnet/Testnet Mode. `NETWORK_MODE=testnet` is reserved for isolated local test builds, not a second release package.
 
 ## Verification and Build
@@ -73,7 +73,7 @@ Set the extension package version to `2.0.0-beta.N` and add its matching `CHANGE
 
 ### 1. Prepare and review the release source
 
-Create a temporary `release/{version}` branch from the source you intend to ship. For a selective release, use the verified stable source commit or an actual production source tag, then cherry-pick the required fixes. Open a preparation PR for review; merging unrelated integration changes is not required.
+Create a temporary `release/{version}` branch from the source you intend to ship. Open a preparation PR for review. For a selective release that must exclude changes already on `main`, use the verified stable source commit or production source tag, cherry-pick the required fixes, and use manual candidate preparation without merging that source into `main`.
 
 1. Set a new version in `packages/extension/package.json`, for example `2.0.0`, and use branch `release/2.0.0`.
 2. Add exactly one nonempty `## [2.0.0]` section to `CHANGELOG.md`.
@@ -83,7 +83,9 @@ Review the exact diff against the stable baseline and run the [verification and 
 
 ### 2. Build and accept the production candidate
 
-Open **Actions → Prepare Extension Release → Run workflow** from `main`. Select `mode=candidate`, set `source_ref=release/2.0.0`, and enter the full reviewed release branch HEAD in `confirm_sha`. `publish_beta` is ignored for candidates.
+Merge the reviewed `release/2.0.0` PR into `main`. **Prepare Extension Release** pins and builds the commit that landed on `main`; the PR branch may be deleted after merge. Ordinary commits on `main` do not build a candidate.
+
+For a selective release or manual fallback, run **Prepare Extension Release** from `main` with `mode=candidate`, `source_ref=release/2.0.0`, and the full reviewed release branch HEAD as `confirm_sha`. Keep that branch unchanged until publication completes.
 
 After all jobs succeed, open the `v2.0.0-rc.…` prerelease on the repository's Releases page or follow the download link in the run summary. Download its multichain ZIP and `SHA256SUMS`, check the hash, and validate both runtime network modes. The same files remain available in the final Actions artifact. Use these ZIPs, not a local rebuild or a previous Beta. Keep the run ID, attempt, and full source SHA from the prerelease notes or run summary for promotion. See [review responsibilities](../CONTRIBUTING.md#verification).
 
@@ -91,7 +93,7 @@ After all jobs succeed, open the `v2.0.0-rc.…` prerelease on the repository's 
 
 After acceptance, open **Actions → Publish Accepted Extension → Run workflow** from `main`. Leave `operation=publish` selected and enter the accepted `candidate_run_id`, `candidate_run_attempt`, and `confirm_sha`. This separate action is the production publication confirmation.
 
-The workflow verifies the candidate's origin and current release branch before creating the GitHub Release and `v2.0.0` tag. It downloads and publishes the accepted ZIPs without rebuilding. With store automation enabled, separate `sign`, `upload`, `submit`, and `notify` jobs then process the production ZIP. Keep the source branch unchanged and present until publication completes.
+The workflow verifies the candidate's origin before creating the GitHub Release and `v2.0.0` tag. It downloads and publishes the accepted ZIPs without rebuilding. With store automation enabled, separate `sign`, `upload`, `submit`, and `notify` jobs then process the production ZIP.
 
 ### 4. Check publication
 
@@ -122,12 +124,12 @@ Do not replace the existing signing key during setup. If store signing protectio
 
 Candidate packaging and promotion enforce:
 
-1. The source branch is `release/` plus the numeric version in `packages/extension/package.json`, and its resolved commit matches the manually confirmed full SHA.
+1. The release branch name matches the numeric version in `packages/extension/package.json`. Automatic candidates pin the resulting `main` commit from the merged release PR; manual candidates pin the confirmed release branch HEAD.
 2. The candidate uses production build settings and includes one multichain ZIP for both runtime network modes.
 3. `CHANGELOG.md` has exactly one nonempty `## [version]` section for that version.
 4. `packages/web/public/changelog.json` has a matching entry accepted by the wallet's release-notes parser.
 
-Promotion additionally verifies a successful candidate workflow dispatched from this repository's `main`, the exact run attempt and artifact ID, artifact metadata, every ZIP checksum, and unchanged release branch HEAD. A Beta or PR artifact cannot be promoted. Source code need not be contained in `main`. Existing production tags are never moved, and published assets are never overwritten.
+Promotion additionally verifies a successful candidate workflow on this repository's `main`, the exact run attempt and artifact ID, artifact metadata, every ZIP checksum, and either the matching merged release PR or the unchanged manual release branch HEAD. A Beta or PR preview artifact cannot be promoted. Existing production tags are never moved, and published assets are never overwritten.
 
 ## Failure Recovery
 

@@ -8,6 +8,7 @@ import { collectReleaseCommits } from './lib/extension-release-history.mjs'
 const candidateWorkflow = '.github/workflows/extension-release.yml'
 const shaPattern = /^[0-9a-f]{40}$/
 const integerPattern = /^[1-9][0-9]*$/
+const releaseBranchPattern = /^release\/[0-9]+\.[0-9]+\.[0-9]+$/
 const versionPattern =
   /^(?:2|[3-9]|[1-9][0-9]+)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-beta\.[1-9][0-9]*)?$/
 
@@ -40,6 +41,56 @@ function requireBranch(value) {
   return value
 }
 
+async function readReleaseVersion(mode, sourceSha, request) {
+  const packageFile = await request(`contents/packages/extension/package.json?ref=${sourceSha}`)
+  if (packageFile?.encoding !== 'base64' || typeof packageFile.content !== 'string') {
+    throw new Error('Source commit has no readable extension package.json')
+  }
+  const { version } = JSON.parse(Buffer.from(packageFile.content, 'base64').toString('utf8'))
+  if (typeof version !== 'string' || !versionPattern.test(version)) {
+    throw new Error('Extension version must be V2 or newer')
+  }
+  if (mode === 'beta' && !version.includes('-beta.')) {
+    throw new Error('Beta release requires a 2.x-beta version')
+  }
+  if (mode === 'candidate' && version.includes('-')) {
+    throw new Error('Production candidate requires a stable 2.x version')
+  }
+  return version
+}
+
+async function findMergedReleaseBranch({ repository, workflowSha, request }) {
+  requireSha(workflowSha, 'Merged workflow commit')
+  const pulls = await request(`commits/${workflowSha}/pulls`)
+  if (!Array.isArray(pulls)) throw new Error('Invalid commit pull request response')
+  const matches = pulls.filter(
+    pull =>
+      pull?.merged_at &&
+      pull.merge_commit_sha === workflowSha &&
+      pull.base?.ref === 'main' &&
+      pull.base?.repo?.full_name === repository &&
+      pull.head?.repo?.full_name === repository &&
+      releaseBranchPattern.test(pull.head?.ref)
+  )
+  if (matches.length > 1) throw new Error('Commit matches multiple merged release pull requests')
+  return matches[0]?.head.ref
+}
+
+export async function resolveMergedReleaseSource({ repository, workflowSha, request }) {
+  const source = await findMergedReleaseBranch({ repository, workflowSha, request })
+  if (!source) return null
+  const version = await readReleaseVersion('candidate', workflowSha, request)
+  if (source !== `release/${version}`)
+    throw new Error('Release branch must match the extension version')
+  return {
+    source_sha: workflowSha,
+    source_ref: source,
+    version,
+    mode: 'candidate',
+    source_profile: sourceProfileForVersion(version)
+  }
+}
+
 export async function resolveReleaseSource({ mode, source, confirmSha, workflowSha, request }) {
   if (!['beta', 'candidate'].includes(mode))
     throw new Error('Release mode must be beta or candidate')
@@ -70,20 +121,7 @@ export async function resolveReleaseSource({ mode, source, confirmSha, workflowS
       throw new Error('Beta source must match the current dispatched main commit')
     }
   }
-  const packageFile = await request(`contents/packages/extension/package.json?ref=${sourceSha}`)
-  if (packageFile?.encoding !== 'base64' || typeof packageFile.content !== 'string') {
-    throw new Error('Source commit has no readable extension package.json')
-  }
-  const { version } = JSON.parse(Buffer.from(packageFile.content, 'base64').toString('utf8'))
-  if (typeof version !== 'string' || !versionPattern.test(version)) {
-    throw new Error('Extension version must be V2 or newer')
-  }
-  if (mode === 'beta' && !version.includes('-beta.')) {
-    throw new Error('Beta release requires a 2.x-beta version')
-  }
-  if (mode === 'candidate' && version.includes('-')) {
-    throw new Error('Production candidate requires a stable 2.x version')
-  }
+  const version = await readReleaseVersion(mode, sourceSha, request)
   if (mode === 'candidate') {
     if (source !== `release/${version}`)
       throw new Error('Release branch must match the extension version')
@@ -107,14 +145,14 @@ export function validateCandidateRun(run, { repository, runId, runAttempt, workf
     String(run?.run_attempt) !== runAttempt ||
     run?.workflow_id !== workflowId ||
     ![candidateWorkflow, `${candidateWorkflow}@main`].includes(run?.path) ||
-    run?.event !== 'workflow_dispatch' ||
+    !['workflow_dispatch', 'push'].includes(run?.event) ||
     run?.head_branch !== 'main' ||
     run?.status !== 'completed' ||
     run?.conclusion !== 'success' ||
     run?.repository?.full_name?.toLowerCase() !== repository.toLowerCase()
   ) {
     throw new Error(
-      'Candidate must come from a successful manual release workflow on this repository main branch'
+      'Candidate must come from a successful release workflow on this repository main branch'
     )
   }
   requireSha(run.head_sha, 'Candidate workflow commit')
@@ -148,6 +186,9 @@ export async function resolvePromotion({ repository, runId, runAttempt, confirmS
   const workflow = await request('actions/workflows/extension-release.yml')
   const run = await request(`actions/runs/${runId}/attempts/${runAttempt}`)
   validateCandidateRun(run, { repository, runId, runAttempt, workflowId: workflow?.id })
+  if (run.event === 'push' && confirmSha !== run.head_sha) {
+    throw new Error('Confirmed candidate commit must match the merged main commit')
+  }
   const artifacts = []
   for (let page = 1; page <= 20; page++) {
     const result = await request(`actions/runs/${runId}/artifacts?per_page=100&page=${page}`)
@@ -160,13 +201,14 @@ export async function resolvePromotion({ repository, runId, runAttempt, confirmS
   return {
     artifact_id: String(artifact.id),
     workflow_sha: run.head_sha,
+    candidate_event: run.event,
     run_id: runId,
     run_attempt: runAttempt,
     source_sha: confirmSha
   }
 }
 
-export async function validateCurrentCandidate(metadata, request) {
+export async function validateCurrentCandidate(metadata, request, event = 'workflow_dispatch') {
   if (
     sourceProfileForVersion(metadata.version) !== 'multichain' ||
     metadata.mode !== 'candidate' ||
@@ -175,6 +217,18 @@ export async function validateCurrentCandidate(metadata, request) {
   ) {
     throw new Error('Only a production candidate from its matching release branch can be promoted')
   }
+  if (event === 'push') {
+    const source = await findMergedReleaseBranch({
+      repository: metadata.repository,
+      workflowSha: metadata.workflowSha,
+      request
+    })
+    if (metadata.sourceSha !== metadata.workflowSha || source !== metadata.sourceRef) {
+      throw new Error('Automatic candidate must match the merged release pull request and commit')
+    }
+    return
+  }
+  if (event !== 'workflow_dispatch') throw new Error('Invalid candidate workflow event')
   const branch = await request(`branches/${encodeURIComponent(metadata.sourceRef)}`)
   if (branch?.commit?.sha !== metadata.sourceSha) {
     throw new Error(
@@ -265,27 +319,41 @@ const isCli = isCliEntry()
 if (isCli) {
   try {
     const env = process.env
-    if (env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || env.GITHUB_REF !== 'refs/heads/main') {
+    const [command, directory] = process.argv.slice(2)
+    const automatic = command === 'resolve' && env.GITHUB_EVENT_NAME === 'push'
+    if (
+      (!automatic && env.GITHUB_EVENT_NAME !== 'workflow_dispatch') ||
+      env.GITHUB_REF !== 'refs/heads/main'
+    ) {
       throw new Error(
-        'Release workflows must be manually run from main; select the wallet source with the workflow input'
+        'Release workflows must run from main; only candidate preparation can run on a push'
       )
     }
     const request = githubRequest(env.GITHUB_REPOSITORY, env.GH_TOKEN)
-    const [command, directory] = process.argv.slice(2)
     if (command === 'resolve') {
-      const source = await resolveReleaseSource({
-        mode: env.RELEASE_MODE,
-        source: env.SOURCE_INPUT,
-        confirmSha: env.CONFIRM_SHA,
-        workflowSha: env.GITHUB_SHA,
-        request
-      })
-      writeOutputs({
-        ...source,
-        commits_json: JSON.stringify(
-          await collectReleaseCommits({ sourceSha: source.source_sha, request })
-        )
-      })
+      const source = automatic
+        ? await resolveMergedReleaseSource({
+            repository: env.GITHUB_REPOSITORY,
+            workflowSha: env.GITHUB_SHA,
+            request
+          })
+        : await resolveReleaseSource({
+            mode: env.RELEASE_MODE,
+            source: env.SOURCE_INPUT,
+            confirmSha: env.CONFIRM_SHA,
+            workflowSha: env.GITHUB_SHA,
+            request
+          })
+      if (source) {
+        writeOutputs({
+          ...source,
+          commits_json: JSON.stringify(
+            await collectReleaseCommits({ sourceSha: source.source_sha, request })
+          )
+        })
+      } else if (env.GITHUB_STEP_SUMMARY) {
+        appendFileSync(env.GITHUB_STEP_SUMMARY, 'No merged release pull request for this commit.\n')
+      }
     } else if (command === 'promotion') {
       writeOutputs(
         await resolvePromotion({
@@ -306,7 +374,7 @@ if (isCli) {
         workflowSha: env.CANDIDATE_WORKFLOW_SHA,
         sourceSha: requireSha(env.CONFIRM_SHA, 'Confirmed source commit')
       })
-      await validateCurrentCandidate(metadata, request)
+      await validateCurrentCandidate(metadata, request, env.CANDIDATE_EVENT)
       const outputs = {
         version: metadata.version,
         source_sha: metadata.sourceSha,

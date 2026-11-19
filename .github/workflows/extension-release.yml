@@ -1,7 +1,9 @@
-name: '[Manual] Prepare Extension Release'
-run-name: ${{ inputs.mode }} from ${{ inputs.source_ref }} by @${{ github.actor }}
+name: Prepare Extension Release
+run-name: ${{ github.event_name == 'push' && format('Check {0} for a release merge', github.sha) || format('{0} from {1} by @{2}', inputs.mode, inputs.source_ref, github.actor) }}
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       mode:
@@ -26,7 +28,7 @@ on:
         type: string
 
 concurrency:
-  group: extension-manual-${{ inputs.mode }}-${{ inputs.source_ref }}
+  group: extension-prepare-${{ github.event_name == 'push' && github.sha || format('{0}-{1}', inputs.mode, inputs.source_ref) }}
   cancel-in-progress: false
 
 permissions:
@@ -38,10 +40,13 @@ env:
 
 jobs:
   prepare:
+    if: github.event_name != 'push' || (github.repository == 'NoirWallet/noir-wallet' && github.event.repository.fork == false)
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     outputs:
+      mode: ${{ steps.source.outputs.mode }}
       source_sha: ${{ steps.source.outputs.source_sha }}
       source_ref: ${{ steps.source.outputs.source_ref }}
       version: ${{ steps.source.outputs.version }}
@@ -64,6 +69,7 @@ jobs:
           CONFIRM_SHA: ${{ inputs.confirm_sha }}
         run: node scripts/extension-release-gates.mjs resolve
       - name: Show source for review
+        if: steps.source.outputs.source_sha != ''
         env:
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
           SOURCE_REF: ${{ steps.source.outputs.source_ref }}
@@ -72,6 +78,7 @@ jobs:
 
   build:
     needs: prepare
+    if: needs.prepare.outputs.source_sha != ''
     runs-on: ubuntu-latest
     outputs:
       artifact_id: ${{ steps.artifact.outputs.artifact-id }}
@@ -109,7 +116,7 @@ jobs:
       - name: Build extension
         working-directory: wallet
         env:
-          BUILD_CHANNEL: ${{ inputs.mode == 'candidate' && 'production' || 'beta' }}
+          BUILD_CHANNEL: ${{ needs.prepare.outputs.mode == 'candidate' && 'production' || 'beta' }}
           GA_API_SECRET: ${{ secrets.GA_API_SECRET }}
           CUSTOM_ANALYTICS_PASSWORD: ${{ secrets.CUSTOM_ANALYTICS_PASSWORD }}
 
@@ -159,7 +166,7 @@ jobs:
       - name: Package the exact acceptance artifacts
         id: package
         env:
-          RELEASE_MODE: ${{ inputs.mode }}
+          RELEASE_MODE: ${{ needs.prepare.outputs.mode }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           SOURCE_REF: ${{ needs.prepare.outputs.source_ref }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -183,7 +190,7 @@ jobs:
 
   publish_prerelease:
     if: >-
-      (inputs.mode == 'candidate' || (inputs.mode == 'beta' && inputs.publish_beta)) &&
+      (needs.prepare.outputs.mode == 'candidate' || (needs.prepare.outputs.mode == 'beta' && inputs.publish_beta)) &&
       github.ref == 'refs/heads/main' &&
       github.event.repository.fork == false &&
       github.repository == 'NoirWallet/noir-wallet'
@@ -208,7 +215,7 @@ jobs:
           path: release-assets
       - name: Verify prerelease artifact identity and checksums
         env:
-          EXPECTED_MODE: ${{ inputs.mode }}
+          EXPECTED_MODE: ${{ needs.prepare.outputs.mode }}
           EXPECTED_REPOSITORY: ${{ github.repository }}
           EXPECTED_RUN_ID: ${{ github.run_id }}
           EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}

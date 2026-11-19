@@ -42,6 +42,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      pull-requests: read
     outputs:
       artifact_id: ${{ steps.candidate.outputs.artifact_id }}
       workflow_sha: ${{ steps.candidate.outputs.workflow_sha }}
@@ -78,6 +79,7 @@ jobs:
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
           CANDIDATE_WORKFLOW_SHA: ${{ steps.candidate.outputs.workflow_sha }}
+          CANDIDATE_EVENT: ${{ steps.candidate.outputs.candidate_event }}
           CONFIRM_SHA: ${{ inputs.confirm_sha }}
         run: node scripts/extension-release-gates.mjs publication release-assets
       - name: Publish accepted production ZIPs

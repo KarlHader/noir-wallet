@@ -13,6 +13,7 @@ import {
   verifyReleaseArtifact
 } from '../../../../../scripts/extension-release.mjs'
 import {
+  resolveMergedReleaseSource,
   resolveReleaseSource,
   resolvePromotion,
   selectCandidateArtifact,
@@ -458,7 +459,7 @@ describe('Extension release artifacts', () => {
 
     const rejected = spawnSync(
       process.execPath,
-      [path.join(scriptsLink, path.basename(GATE_SCRIPT)), 'resolve'],
+      [path.join(scriptsLink, path.basename(GATE_SCRIPT)), 'publication'],
       {
         encoding: 'utf8',
         env: {
@@ -469,7 +470,7 @@ describe('Extension release artifacts', () => {
       }
     )
     assert.equal(rejected.status, 1)
-    assert.match(rejected.stderr, /Release workflows must be manually run from main/)
+    assert.match(rejected.stderr, /only candidate preparation can run on a push/)
 
     const imported = spawnSync(
       process.execPath,
@@ -760,6 +761,17 @@ const candidateIdentity = {
   workflowId: 41
 }
 
+const releaseMerge = {
+  merged_at: '2026-11-18T18:05:23Z',
+  merge_commit_sha: WORKFLOW_SHA,
+  base: { ref: 'main', repo: { full_name: candidateIdentity.repository } },
+  head: {
+    ref: 'release/2.0.0',
+    sha: PR_HEAD_SHA,
+    repo: { full_name: candidateIdentity.repository }
+  }
+}
+
 describe('Extension release provenance gates', () => {
   it('selects V2 from the confirmed current main Beta commit', async () => {
     const resolved = await resolveReleaseSource({
@@ -888,7 +900,7 @@ describe('Extension release provenance gates', () => {
     for (const run of invalidRuns) {
       assert.throws(
         () => validateCandidateRun(run, candidateIdentity),
-        /successful manual release workflow/
+        /successful release workflow/
       )
     }
     assert.doesNotThrow(() => validateCandidateRun(candidateRun(), candidateIdentity))
@@ -949,10 +961,85 @@ describe('Extension release provenance gates', () => {
       {
         artifact_id: '732',
         workflow_sha: WORKFLOW_SHA,
+        candidate_event: 'workflow_dispatch',
         run_id: '12345',
         run_attempt: '2',
         source_sha: SOURCE_SHA
       }
+    )
+  })
+
+  it('builds only merged same-repository release PRs and pins the resulting main commit', async () => {
+    const context = { repository: candidateIdentity.repository, workflowSha: WORKFLOW_SHA }
+    const pullRoute = `commits/${WORKFLOW_SHA}/pulls`
+    const packageRoute = `contents/packages/extension/package.json?ref=${WORKFLOW_SHA}`
+    assert.equal(
+      await resolveMergedReleaseSource({
+        ...context,
+        request: requestFrom({
+          [pullRoute]: [
+            { ...releaseMerge, head: { ...releaseMerge.head, ref: 'feat/wallet' } },
+            { ...releaseMerge, head: { ...releaseMerge.head, repo: { full_name: 'fork/wallet' } } },
+            { ...releaseMerge, merged_at: null },
+            { ...releaseMerge, merge_commit_sha: PR_HEAD_SHA }
+          ]
+        })
+      }),
+      null
+    )
+    const requestForVersion = version =>
+      requestFrom({
+        [pullRoute]: [releaseMerge],
+        [packageRoute]: {
+          encoding: 'base64',
+          content: Buffer.from(JSON.stringify({ version })).toString('base64')
+        }
+      })
+    assert.deepEqual(
+      await resolveMergedReleaseSource({ ...context, request: requestForVersion('2.0.0') }),
+      {
+        source_sha: WORKFLOW_SHA,
+        source_ref: 'release/2.0.0',
+        version: '2.0.0',
+        mode: 'candidate',
+        source_profile: 'multichain'
+      }
+    )
+    await assert.rejects(
+      resolveMergedReleaseSource({ ...context, request: requestForVersion('2.0.1') }),
+      /Release branch must match/
+    )
+  })
+
+  it('accepts the automatic artifact after branch deletion, but only for the exact release merge', async t => {
+    const { metadata } = await storeCandidate(t, '2.0.0', { SOURCE_SHA: WORKFLOW_SHA })
+    const pullRoute = `commits/${WORKFLOW_SHA}/pulls`
+    const request = requestFrom({
+      'actions/workflows/extension-release.yml': { id: 41 },
+      'actions/runs/12345/attempts/2': candidateRun({ event: 'push' }),
+      'actions/runs/12345/artifacts?per_page=100&page=1': {
+        total_count: 1,
+        artifacts: [{ id: 732, name: `noir-wallet-${metadata.artifactLabel}`, size_in_bytes: 400 }]
+      },
+      [pullRoute]: [releaseMerge]
+    })
+    const selection = { ...candidateIdentity, request }
+    const run = await resolvePromotion({ ...selection, confirmSha: WORKFLOW_SHA })
+    assert.equal(run.artifact_id, '732')
+    await validateCurrentCandidate(metadata, request, run.candidate_event)
+    await assert.rejects(
+      resolvePromotion({ ...selection, confirmSha: PR_HEAD_SHA }),
+      /must match the merged main commit/
+    )
+    await assert.rejects(
+      validateCurrentCandidate(
+        metadata,
+        requestFrom({
+          [pullRoute]: [{ ...releaseMerge, head: { ...releaseMerge.head, ref: 'release/2.0.1' } }]
+        }),
+        run.candidate_event
+      ),
+      /must match the merged release pull request and commit/
     )
   })
 
