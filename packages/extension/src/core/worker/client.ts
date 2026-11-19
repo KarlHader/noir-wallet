@@ -25,8 +25,16 @@ import type {
 } from './types'
 import type { Network } from '@/types'
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
-import { DedupPromise, ReadyFlag, TimeoutError } from '@/lib/async-utils'
+import { DedupPromise, ReadyFlag, TimeoutError, withTimeout } from '@/lib/async-utils'
 import { WALLET_CONFIG } from '@/config/wallet'
+import { NYM_PRIVATE_BROADCAST } from '@/config/nym-private-broadcast'
+import { NYM_TUNNEL_CLOSE_OFFSCREEN_MESSAGE } from '@/core/nym/private-broadcast-protocol'
+import {
+  NYM_PRIVATE_FETCH_OFFSCREEN_MESSAGE,
+  parseNymTextReply,
+  type NymTextRequest,
+  type NymTextResponse
+} from '@/core/nym/private-fetch-relay'
 import { isRetryableWalletRpcError, isWalletDirtyError } from '@/core/zcash/wallet-rpc-errors'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { decodeWorkerRpcError } from './rpc-errors'
@@ -154,6 +162,13 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'transaction.estimateMaxTransfer': LIGHT,
   'transaction.estimateShieldFee': LIGHT,
   default: MEDIUM
+}
+
+let workerCreatedListener: ((worker: Worker) => void) | null = null
+
+/** Lets the offscreen document attach transports to every Zcash Worker it creates. */
+export function onZcashWorkerCreated(listener: (worker: Worker) => void): void {
+  workerCreatedListener = listener
 }
 
 export function getRpcTimeout(method: string): number {
@@ -297,6 +312,66 @@ async function forwardToOffscreen<T = any>(
   payload: any,
   transactionContext?: ZcashTransactionContext
 ): Promise<T> {
+  await ensureOffscreenDocument()
+
+  // Send RPC to Offscreen with method-specific timeout
+  const timeout = getRpcTimeout(method)
+  const maxAttempts = OFFSCREEN_RPC_RETRY_METHODS.has(method)
+    ? WALLET_CONFIG.SYNC.OFFSCREEN_RPC_RETRY_MAX
+    : 1
+  const retryDelays = WALLET_CONFIG.SYNC.OFFSCREEN_RPC_RETRY_DELAYS_MS
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const response = await sendOffscreenRpcOnce(method, payload, timeout, transactionContext)
+
+    if (response.error) {
+      const canRetry =
+        response.retryable === true &&
+        isRetryableWalletRpcError(response.error) &&
+        attempt < maxAttempts - 1
+
+      if (canRetry) {
+        if (isWalletDirtyError(response.error) && attempt === maxAttempts - 2) {
+          await maybeReloadWalletBeforeRetry(payload)
+        }
+        await sleep(retryDelays[attempt] ?? retryDelays[retryDelays.length - 1] ?? 1_000)
+        continue
+      }
+
+      throw decodeWorkerRpcError({
+        error: response.error,
+        errorType: response.errorType,
+        txId: response.txId,
+        txIds: response.txIds
+      })
+    }
+
+    return response.result as T
+  }
+
+  throw new Error(`Offscreen RPC failed after ${maxAttempts} attempts: ${method}`)
+}
+
+/** Sends a Nym-only request through the tunnel owned by the offscreen document. */
+export async function forwardNymPrivateFetchToOffscreen(
+  request: NymTextRequest
+): Promise<NymTextResponse> {
+  await ensureOffscreenDocument()
+  const reply: unknown = await withTimeout(
+    chrome.runtime.sendMessage({ type: NYM_PRIVATE_FETCH_OFFSCREEN_MESSAGE, request }),
+    NYM_PRIVATE_BROADCAST.relayTimeoutMs,
+    'Nym private request'
+  )
+  return parseNymTextReply(reply)
+}
+
+/** Drops the offscreen Nym tunnel once the user turns routing off; no document, no tunnel. */
+export async function closeNymTunnelInOffscreen(): Promise<void> {
+  if (!(await chrome.offscreen.hasDocument())) return
+  await chrome.runtime.sendMessage({ type: NYM_TUNNEL_CLOSE_OFFSCREEN_MESSAGE })
+}
+
+async function ensureOffscreenDocument(): Promise<void> {
   // Check Offscreen API availability
   if (!chrome.offscreen || !chrome.offscreen.hasDocument || !chrome.offscreen.createDocument) {
     throw new Error(
@@ -345,43 +420,6 @@ async function forwardToOffscreen<T = any>(
     await creatingOffscreen
     await ready
   }
-
-  // Send RPC to Offscreen with method-specific timeout
-  const timeout = getRpcTimeout(method)
-  const maxAttempts = OFFSCREEN_RPC_RETRY_METHODS.has(method)
-    ? WALLET_CONFIG.SYNC.OFFSCREEN_RPC_RETRY_MAX
-    : 1
-  const retryDelays = WALLET_CONFIG.SYNC.OFFSCREEN_RPC_RETRY_DELAYS_MS
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await sendOffscreenRpcOnce(method, payload, timeout, transactionContext)
-
-    if (response.error) {
-      const canRetry =
-        response.retryable === true &&
-        isRetryableWalletRpcError(response.error) &&
-        attempt < maxAttempts - 1
-
-      if (canRetry) {
-        if (isWalletDirtyError(response.error) && attempt === maxAttempts - 2) {
-          await maybeReloadWalletBeforeRetry(payload)
-        }
-        await sleep(retryDelays[attempt] ?? retryDelays[retryDelays.length - 1] ?? 1_000)
-        continue
-      }
-
-      throw decodeWorkerRpcError({
-        error: response.error,
-        errorType: response.errorType,
-        txId: response.txId,
-        txIds: response.txIds
-      })
-    }
-
-    return response.result as T
-  }
-
-  throw new Error(`Offscreen RPC failed after ${maxAttempts} attempts: ${method}`)
 }
 
 export function forwardKeyringRpcToOffscreen<T>(
@@ -489,6 +527,7 @@ export class ZcashWorkerClient {
       console.warn('[ZcashWorker] Worker error:', error.message)
       this.handleWorkerCrash(error.message || 'Worker error')
     }
+    workerCreatedListener?.(worker)
   }
 
   recoverWorkerAfterRpcTimeout(method: string, payload?: { walletId?: string }): void {

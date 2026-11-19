@@ -1,7 +1,19 @@
 self.addEventListener('error', e => e.preventDefault())
 self.addEventListener('unhandledrejection', e => e.preventDefault())
 
-import { getOffscreenClient } from '@/core/worker/client'
+import { getOffscreenClient, onZcashWorkerCreated } from '@/core/worker/client'
+import {
+  NYM_PRIVATE_BROADCAST_PORT_MESSAGE,
+  NYM_TUNNEL_CLOSE_OFFSCREEN_MESSAGE
+} from '@/core/nym/private-broadcast-protocol'
+import {
+  NYM_PRIVATE_FETCH_OFFSCREEN_MESSAGE,
+  parseNymTextRequest,
+  type NymTextReply
+} from '@/core/nym/private-fetch-relay'
+import { serveNymWorkerPort } from '@/core/nym/worker-port-host'
+import { readNymPrivateBroadcastEnabledFromBackground } from '@/infrastructure/chains/nym-private-broadcast-preferences'
+import { nymTunnelFetchText, nymTunnelHost, prewarmNymTunnelForSend } from './nym-tunnel-host'
 import type { RPCSchema, ZcashTransactionContext } from '@/core/worker/types'
 import { decodeWorkerRpcError, encodeWorkerRpcError } from '@/core/worker/rpc-errors'
 import { isTransactionSubmissionUnknown } from '@/core/zcash/transfer-result'
@@ -52,6 +64,21 @@ import {
 } from '@/infrastructure/keyring/session'
 
 registerOffscreenSyncAbortListener()
+
+if (__NYM_PRIVATE_BROADCAST__) {
+  onZcashWorkerCreated(worker => {
+    const channel = new MessageChannel()
+    serveNymWorkerPort(channel.port1, {
+      isEnabled: async () => {
+        const enabled = await readNymPrivateBroadcastEnabledFromBackground()
+        if (!enabled) nymTunnelHost.close()
+        return enabled
+      },
+      fetch: (request, withdrawn) => nymTunnelHost.fetch(request, withdrawn)
+    })
+    worker.postMessage({ type: NYM_PRIVATE_BROADCAST_PORT_MESSAGE }, [channel.port2])
+  })
+}
 
 const zcashWorkerClient = getOffscreenClient()
 const multichainWorkerHost = new MultichainWorkerHost()
@@ -149,6 +176,11 @@ const credentialSessionHost = new CredentialSessionHost({
 const debugLogsEnabled = typeof __DEBUG_LOGS__ !== 'boolean' || __DEBUG_LOGS__
 let offscreenDiagnosticSequence = 0
 const SERVICE_WORKER_PATH = 'service-worker-loader.js'
+const SEND_PREPARATION_RPC_METHODS: ReadonlySet<string> = new Set([
+  'transaction.estimateFee',
+  'transaction.getFeeQuote',
+  'transaction.estimateMaxTransfer'
+])
 
 /**
  * Normalize a `wallet.dbToBytes` response into standalone chunk buffers.
@@ -1044,6 +1076,49 @@ function sendRetryableError(
   sendResponse({ error, retryable: true })
 }
 
+if (__NYM_PRIVATE_BROADCAST__) {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!isRuntimeRecord(message) || message.type !== NYM_PRIVATE_FETCH_OFFSCREEN_MESSAGE) {
+      return false
+    }
+    const reply = (value: NymTextReply) => sendResponse(value)
+    if (!isOwnExtensionServiceWorkerSender(sender, chrome.runtime.id, SERVICE_WORKER_PATH)) {
+      reply({ ok: false, error: 'Unauthorized private request sender' })
+      return true
+    }
+    let request
+    try {
+      request = parseNymTextRequest(message.request)
+    } catch {
+      reply({ ok: false, error: 'Invalid private request' })
+      return true
+    }
+    void nymTunnelFetchText(request).then(
+      response => reply({ ok: true, response }),
+      error =>
+        reply({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Private network unavailable'
+        })
+    )
+    return true
+  })
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!isRuntimeRecord(message) || message.type !== NYM_TUNNEL_CLOSE_OFFSCREEN_MESSAGE) {
+      return false
+    }
+    const authorized = isOwnExtensionServiceWorkerSender(
+      sender,
+      chrome.runtime.id,
+      SERVICE_WORKER_PATH
+    )
+    if (authorized) nymTunnelHost.close()
+    sendResponse({ ok: authorized })
+    return true
+  })
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!isRuntimeRecord(message) || message.type !== 'KEYRING_WORKER_RPC') {
     return false
@@ -1237,6 +1312,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.method.startsWith('multichain.')) {
     sendResponse({ error: 'Unsupported Multichain Worker RPC method' })
     return true
+  }
+
+  // A fee estimate means a send is being prepared: ready the tunnel before its broadcast.
+  if (__NYM_PRIVATE_BROADCAST__ && SEND_PREPARATION_RPC_METHODS.has(message.method)) {
+    prewarmNymTunnelForSend()
   }
 
   const rpcWalletId = getMessageWalletId(message)

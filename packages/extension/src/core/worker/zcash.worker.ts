@@ -6,6 +6,9 @@ import { findWasmAccountIdByHdIndex, mapWasmAccountIdsByHdIndex } from './accoun
  */
 
 import './wasm-worker-runtime-setup'
+import { nymPrivateBroadcast } from './nym-private-broadcast-setup'
+import { NYM_PRIVATE_BROADCAST } from '../../config/nym-private-broadcast'
+import { nymDestinationHost } from '../nym/private-broadcast-protocol'
 
 self.addEventListener('error', e => e.preventDefault())
 self.addEventListener('unhandledrejection', e => e.preventDefault())
@@ -45,7 +48,11 @@ import { resolveOneClickExpiryDeltaBlocks } from '../zcash/transaction-expiry'
 import { WALLET_CONFIG } from '../../config/wallet'
 import { runWithCommitmentTreeRecovery } from './commitment-tree-recovery'
 import { getSafeNewWalletBirthdayHeight } from '../wallet/birthday-height'
-import { parseTransferEstimate, parseTransferResult } from '../zcash/transfer-result'
+import {
+  parseTransferEstimate,
+  parseTransferResult,
+  type TransferResult
+} from '../zcash/transfer-result'
 import { isTransactionSubmissionUnknown } from '../zcash/transfer-result'
 import { encodeWorkerRpcError } from './rpc-errors'
 import { parseZeroIndexerRuntimeOptions, type ZeroIndexerOptions } from '../zcash/zero-indexer'
@@ -196,6 +203,51 @@ function feeQuoteContext(walletId: string, accountId: number): FeeQuoteContext {
   return { walletId, accountId, network: entry.network, rpcUrl: entry.lightwalletdUrl }
 }
 
+/**
+ * The lightwalletd's recommended ZIP-317 rate. Through the Nym tunnel the answer may wait on
+ * a tunnel build, so a routed request gets the longer bound; a direct one keeps the probe
+ * bound. Either failure leaves the registry's fallback rate.
+ */
+async function recommendStandardMarginalFee(rpcUrl: string): Promise<number> {
+  const startedAt = performance.now()
+  const routing =
+    NYM_PRIVATE_BROADCAST.routes.feeQuote && nymPrivateBroadcast
+      ? await nymPrivateBroadcast.readRoutingChoice()
+      : false
+  const sentAt = performance.now()
+  // Nym builds compare the two paths here; the timing stays out of the persisted log.
+  const trace = (outcome: string) => {
+    if (!NYM_PRIVATE_BROADCAST.available) return
+    const path = routing === true ? 'via Nym' : routing === false ? 'direct' : 'Nym routing unknown'
+    const routingCheck =
+      nymPrivateBroadcast && NYM_PRIVATE_BROADCAST.routes.feeQuote
+        ? `, routing check ${Math.round(sentAt - startedAt)} ms`
+        : ''
+    traceLocally(
+      `[FeeQuote Nym] GetStandardFee ${path} @ ${nymDestinationHost(rpcUrl)}: ${outcome} ` +
+        `in ${Math.round(performance.now() - sentAt)} ms${routingCheck}`
+    )
+  }
+  try {
+    const rate = await fetchStandardMarginalFee(
+      rpcUrl,
+      undefined,
+      routing === true ? NYM_PRIVATE_BROADCAST.feeQuoteTimeoutMs : undefined
+    )
+    trace(`${rate} zats per action`)
+    return rate
+  } catch (error) {
+    const reason =
+      error instanceof DOMException && error.name === 'AbortError'
+        ? 'timed out'
+        : error instanceof Error
+          ? error.message.slice(0, 160)
+          : 'failed'
+    trace(`no rate (${reason}), fallback rate applies`)
+    throw error
+  }
+}
+
 function approvedFee(walletId: string, accountId: number, rate?: number, id?: string) {
   const feeQuote = feeQuotes.validate(feeQuoteContext(walletId, accountId), id, rate)
   return {
@@ -215,11 +267,13 @@ async function estimateFeeSelection(
 ) {
   if (id !== undefined || rate !== undefined) return approvedFee(walletId, accountId, rate, id)
   const context = feeQuoteContext(walletId, accountId)
-  const feeQuote = await feeQuotes.get(context, () => fetchStandardMarginalFee(context.rpcUrl))
+  const feeQuote = await feeQuotes.get(context, () => recommendStandardMarginalFee(context.rpcUrl))
   return { feeQuote, marginalFeeZats: feeQuote.standardMarginalFeeZats }
 }
 const latestZeroIndexerOptions = new Map<string, ZeroIndexerOptions | null>()
 const walletOperationChains = new Map<string, Promise<void>>()
+const runningWalletOperations = new Map<string, { label: string; startedAt: number }>()
+const WALLET_QUEUE_TRACE = { firstWaitMs: 5_000, repeatWaitMs: 15_000, longHoldMs: 10_000 }
 const votingSessions = new Map<string, WebVotingSession>()
 
 function votingSessionKey(walletId: string, accountId: number): string {
@@ -350,7 +404,15 @@ function getWalletNet(walletId: string): 'main' | 'test' {
   return entry.network === 'mainnet' ? 'main' : 'test'
 }
 
-async function runForWallet<T>(walletId: string, operation: () => Promise<T>): Promise<T> {
+/**
+ * Runs one operation at a time per wallet. `label` names the operation in the queue trace,
+ * which reports long waits together with the operation holding the wallet at that moment.
+ */
+async function runWalletOperation<T>(
+  walletId: string,
+  label: string,
+  operation: () => Promise<T>
+): Promise<T> {
   const previous = walletOperationChains.get(walletId) || Promise.resolve()
   let release!: () => void
   const current = new Promise<void>(resolve => {
@@ -360,11 +422,38 @@ async function runForWallet<T>(walletId: string, operation: () => Promise<T>): P
 
   walletOperationChains.set(walletId, tail)
 
-  await previous
+  const queuedAt = performance.now()
+  const since = (from: number) => Math.round(performance.now() - from)
+  let waitReport: ReturnType<typeof setTimeout> | undefined
+  const reportWait = () => {
+    const holder = runningWalletOperations.get(walletId)
+    traceLocally(
+      `[WalletQueue] ${label} has waited ${since(queuedAt)} ms` +
+        (holder ? `; running now: ${holder.label} for ${since(holder.startedAt)} ms` : '')
+    )
+    waitReport = setTimeout(reportWait, WALLET_QUEUE_TRACE.repeatWaitMs)
+  }
+  waitReport = setTimeout(reportWait, WALLET_QUEUE_TRACE.firstWaitMs)
+  try {
+    await previous
+  } finally {
+    clearTimeout(waitReport)
+  }
 
+  const running = { label, startedAt: performance.now() }
+  if (running.startedAt - queuedAt >= WALLET_QUEUE_TRACE.firstWaitMs) {
+    traceLocally(`[WalletQueue] ${label} started after waiting ${since(queuedAt)} ms`)
+  }
+  runningWalletOperations.set(walletId, running)
   try {
     return await operation()
   } finally {
+    if (since(running.startedAt) >= WALLET_QUEUE_TRACE.longHoldMs) {
+      traceLocally(`[WalletQueue] ${label} held the wallet for ${since(running.startedAt)} ms`)
+    }
+    if (runningWalletOperations.get(walletId) === running) {
+      runningWalletOperations.delete(walletId)
+    }
     release()
     if (walletOperationChains.get(walletId) === tail) {
       walletOperationChains.delete(walletId)
@@ -515,7 +604,7 @@ async function createWalletAccount(
   accountIndex: number,
   birthdayHeight?: number
 ): Promise<number> {
-  return runForWallet(walletId, async () => {
+  return runWalletOperation(walletId, 'createWalletAccount', async () => {
     const entry = wallets.get(walletId)
     if (!entry) throw new Error(`Wallet not initialized: ${walletId}`)
     const w = entry.instance
@@ -592,6 +681,42 @@ if (__DEBUG_LOGS__) {
   console.info = (...args) => forwardLog('info', ...args)
 }
 
+/**
+ * Prints to this Worker's own console (shown in the offscreen document's DevTools) without
+ * forwarding: timing traces stay out of the persisted diagnostic log.
+ */
+function traceLocally(message: string): void {
+  if (debugLogsEnabled) originalConsole.info.call(console, message)
+}
+
+function shortTxId(txId: string): string {
+  return txId.length > 12 ? `${txId.slice(0, 6)}…${txId.slice(-6)}` : txId
+}
+
+/** Reports what the WASM concluded about each transaction of a send and how long it took. */
+async function traceTransfer(transfer: () => Promise<unknown>): Promise<TransferResult> {
+  const startedAt = performance.now()
+  const elapsed = () => Math.round(performance.now() - startedAt)
+  try {
+    const result = parseTransferResult(await transfer())
+    const details = result.transactions
+      .map(transaction => {
+        const code = transaction.errorCode === undefined ? '' : ` code ${transaction.errorCode}`
+        const reason = transaction.errorMessage
+          ? ` "${transaction.errorMessage.slice(0, 300)}"`
+          : ''
+        return `${shortTxId(transaction.txId)} ${transaction.status}${code}${reason}`
+      })
+      .join('; ')
+    traceLocally(`[Send] WASM transfer ${result.status} after ${elapsed()} ms: ${details}`)
+    return result
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    traceLocally(`[Send] WASM transfer threw after ${elapsed()} ms: ${message.slice(0, 300)}`)
+    throw error
+  }
+}
+
 //
 // Initialize WASM
 let initPromise: Promise<void> | null = null
@@ -655,6 +780,9 @@ async function initializeWasm() {
 self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) => {
   const { id, method, payload } = event.data
   activeWalletId = (payload as any)?.walletId
+  // Wallet operations queued by this RPC appear under its method name in the queue trace.
+  const runForWallet = <T>(walletId: string, operation: () => Promise<T>): Promise<T> =>
+    runWalletOperation(walletId, method, operation)
 
   try {
     // Ensure WASM is initialized for all methods
@@ -749,6 +877,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           const broadcastOptions = latestZeroIndexerOptions.has(network)
             ? (latestZeroIndexerOptions.get(network) ?? null)
             : parseZeroIndexerRuntimeOptions(zeroIndexerOptions ?? null)
+          nymPrivateBroadcast?.setZeroIndexerUrls(network, broadcastOptions?.urls ?? null)
           const configUnchanged =
             !!entry &&
             entry.network === network &&
@@ -915,6 +1044,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
         }
         const options = parseZeroIndexerRuntimeOptions(rawOptions)
         latestZeroIndexerOptions.set(network, options)
+        nymPrivateBroadcast?.setZeroIndexerUrls(network, options?.urls ?? null)
         const walletIds = new Set([...wallets.keys(), ...walletOperationChains.keys()])
         for (const walletId of walletIds) {
           await runForWallet(walletId, async () => {
@@ -1488,7 +1618,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
                 resolveRequestedAccountId(walletId, getWallet(walletId), accountId, accountIndex)
               )
         const context = feeQuoteContext(walletId, targetId)
-        result = await feeQuotes.get(context, () => fetchStandardMarginalFee(context.rpcUrl))
+        result = await feeQuotes.get(context, () => recommendStandardMarginalFee(context.rpcUrl))
         break
       }
       case 'transaction.send': {
@@ -1523,17 +1653,18 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
 
             try {
               const selectedFee = approvedFee(walletId, accountId, marginalFeeZats, feeQuoteId)
-              const transfer = await w.oneclick_transfer(
-                accountId,
-                to,
-                BigInt(amount),
-                usk,
-                fundingSource,
-                memoBytes,
-                BigInt(selectedFee.marginalFeeZats),
-                expiryDeltaBlocks
+              return await traceTransfer(() =>
+                w.oneclick_transfer(
+                  accountId,
+                  to,
+                  BigInt(amount),
+                  usk,
+                  fundingSource,
+                  memoBytes,
+                  BigInt(selectedFee.marginalFeeZats),
+                  expiryDeltaBlocks
+                )
               )
-              return parseTransferResult(transfer)
             } finally {
               try {
                 usk.free()

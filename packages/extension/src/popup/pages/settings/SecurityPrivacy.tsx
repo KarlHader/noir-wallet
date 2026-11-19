@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { InlineError } from '../../components/common/InlineError'
 import { useNavigate } from '../../provider/Router'
+import { useNymRoutingPreference } from '../../hooks/useNymRoutingPreference'
 import {
   DEFAULT_GOOGLE_ANALYTICS_ENABLED,
   isGoogleAnalyticsEnabled,
@@ -31,6 +32,7 @@ export function SecurityPrivacy() {
   const [zeroIndexerLoadError, setZeroIndexerLoadError] = useState(false)
   const [zeroIndexerSaving, setZeroIndexerSaving] = useState(false)
   const [broadcastNode, setBroadcastNode] = useState('Auto')
+  const nymRouting = useNymRoutingPreference()
   const enabledRevision = useRef(0)
   const enabledLoadRevision = useRef(0)
 
@@ -195,12 +197,34 @@ export function SecurityPrivacy() {
                 <Icon icon="lucide:chevron-right" className="size-4 shrink-0" />
               </span>
             </button>
+            {nymRouting.available && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={nymRouting.enabled}
+                aria-label="Broadcast over Nym"
+                disabled={!nymRouting.loaded || nymRouting.loading || nymRouting.saving}
+                onClick={() => void nymRouting.toggle()}
+                className="flex w-full items-center justify-between gap-4 border-t border-white/10 p-4 text-left transition-colors hover:bg-white/5 disabled:opacity-50"
+              >
+                <span className="text-sm">Broadcast over Nym</span>
+                <Switch checked={nymRouting.enabled} />
+              </button>
+            )}
           </section>
           {zeroIndexerLoadError && (
             <InlineError
               message="Could not load private broadcast preference"
               onRetry={() => void loadZeroIndexerEnabled()}
               retrying={zeroIndexerLoading}
+              className="mb-3"
+            />
+          )}
+          {nymRouting.loadError && (
+            <InlineError
+              message="Could not load Nym broadcast preference"
+              onRetry={() => void nymRouting.load()}
+              retrying={nymRouting.loading}
               className="mb-3"
             />
           )}

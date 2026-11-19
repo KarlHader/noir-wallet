@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { createStore } from 'zustand/vanilla'
 import { persist } from 'zustand/middleware'
 import { createWalletSettingsPersistStorage } from '../../../src/lib/wallet-settings-persist-storage.ts'
+import { patchStoredWalletSettings } from '../../../src/lib/wallet-settings-storage.ts'
 
 function withChromeStorage(initialValue, run) {
   const originalChrome = globalThis.chrome
@@ -190,6 +191,25 @@ test('a stale page cannot mask legacy endpoint settings with an empty network pa
       const saved = JSON.parse(stored.get('wallet_settings')).state
       assert.deepEqual(saved.chainEndpointSettings, legacy)
       assert.equal(Object.hasOwn(saved, 'chainEndpointSettingsByNetwork'), false)
+    }
+  )
+})
+
+test('a settings patch keeps what other contexts saved after the caller last read', async () => {
+  await withChromeStorage(
+    JSON.stringify({ state: { networkMode: 'mainnet', zeroIndexerEnabled: true }, version: 0 }),
+    async stored => {
+      // A caller read the settings here, then another context saved a newer choice.
+      stored.set(
+        'wallet_settings',
+        JSON.stringify({ state: { networkMode: 'mainnet', zeroIndexerEnabled: false }, version: 0 })
+      )
+      await patchStoredWalletSettings({ rpcEndpointPreferences: { zcash: 'fallback' } })
+      assert.deepEqual(JSON.parse(stored.get('wallet_settings')).state, {
+        networkMode: 'mainnet',
+        zeroIndexerEnabled: false,
+        rpcEndpointPreferences: { zcash: 'fallback' }
+      })
     }
   )
 })

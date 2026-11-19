@@ -86,14 +86,18 @@ function useEstimateForTier({
     setState({ ...emptyEstimate, loading: true, key })
     let expiryTimer: ReturnType<typeof setTimeout> | undefined
     const timer = setTimeout(async () => {
+      const startedAt = Date.now()
+      let step = 'estimate'
       try {
         let expectedQuoteId: string | undefined
         const result = estimate
           ? await estimate(feeTier)
           : await (async () => {
+              step = 'fee quote'
               const quote = await zcashWalletRuntimeClient.getFeeQuote()
               expectedQuoteId = quote.id
               const marginalFeeZats = marginalFeeForTier(feeTier, quote.standardMarginalFeeZats)
+              step = 'fee estimate'
               return type === 'shield'
                 ? zcashWalletRuntimeClient.estimateShieldFee(marginalFeeZats, quote.id)
                 : zcashWalletRuntimeClient.estimateTransferFee({
@@ -106,19 +110,29 @@ function useEstimateForTier({
                   })
             })()
         if (current !== sequence.current) return
+        step = 'result check'
         const feeZats = Number(result.feeZats)
-        if (
-          !Number.isSafeInteger(feeZats) ||
-          feeZats <= 0 ||
-          (expectedQuoteId !== undefined && result.feeQuote.id !== expectedQuoteId) ||
-          result.feeQuote.expiresAt <= Date.now() ||
-          Number(result.marginalFeeZats) !==
-            marginalFeeForTier(feeTier, result.feeQuote.standardMarginalFeeZats)
-        )
-          throw new Error('Invalid network fee estimate')
+        const invalidReason =
+          !Number.isSafeInteger(feeZats) || feeZats <= 0
+            ? 'fee is not a positive amount'
+            : expectedQuoteId !== undefined && result.feeQuote.id !== expectedQuoteId
+              ? 'fee quote was replaced'
+              : result.feeQuote.expiresAt <= Date.now()
+                ? 'fee quote expired'
+                : Number(result.marginalFeeZats) !==
+                    marginalFeeForTier(feeTier, result.feeQuote.standardMarginalFeeZats)
+                  ? 'fee rate does not match the tier'
+                  : null
+        if (invalidReason) throw new Error(`Invalid network fee estimate: ${invalidReason}`)
         setState({ feeZats, feeQuote: result.feeQuote, loading: false, error: false, key })
         expiryTimer = setTimeout(retry, Math.max(0, result.feeQuote.expiresAt - Date.now()))
-      } catch {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(
+          `[FeeEstimate] ${feeTier} failed at ${step} after ${Date.now() - startedAt} ms` +
+            (current === sequence.current ? '' : ' (already replaced by a newer estimate)') +
+            `: ${message.slice(0, 300)}`
+        )
         if (current === sequence.current) setState({ ...emptyEstimate, error: true, key })
       }
     }, debounceMs)

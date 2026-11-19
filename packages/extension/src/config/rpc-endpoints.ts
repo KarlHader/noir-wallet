@@ -30,6 +30,8 @@ export const RPC_DEFAULT_ENDPOINTS = {
       id: 'chainsafe',
       label: 'ChainSafe',
       url: 'https://zcash-testnet.chainsafe.dev'
+      // url: 'https://testnet.zec.rocks',
+      // url: 'https://zcash-wallet-grpc-testnet.deltarpc.com/',
     }
   },
   evm: {

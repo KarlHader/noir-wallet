@@ -73,6 +73,14 @@ export function createChromeStorageAdapter(
               if (Object.prototype.hasOwnProperty.call(previousState, 'networkMode')) {
                 state.networkMode = previousState.networkMode
               }
+              // Background commits the Nym routing choice; page snapshots do not carry it.
+              if (
+                Object.prototype.hasOwnProperty.call(previousState, 'nymPrivateBroadcastEnabled')
+              ) {
+                state.nymPrivateBroadcastEnabled = previousState.nymPrivateBroadcastEnabled
+              } else {
+                delete state.nymPrivateBroadcastEnabled
+              }
               value = JSON.stringify({
                 ...incoming,
                 state: { ...state, zeroIndexerEnabled: previousState.zeroIndexerEnabled !== false }

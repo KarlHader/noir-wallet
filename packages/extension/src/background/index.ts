@@ -107,9 +107,23 @@ import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
 import { buildAccountKey, type AccountScope } from '@/core/wallet/account-scope'
 import {
   applyZeroIndexerOptionsToActiveWorker,
+  closeNymTunnelInOffscreen,
   forwardKeyringRpcToOffscreen,
+  forwardNymPrivateFetchToOffscreen,
   getWorkerClient
 } from '@/core/worker/client'
+import { NYM_PRIVATE_BROADCAST } from '@/config/nym-private-broadcast'
+import { nymPrewarmOrigins } from '@/core/nym/private-broadcast-protocol'
+import {
+  readNymPrivateBroadcastEnabled,
+  writeNymPrivateBroadcastEnabled
+} from '@/infrastructure/chains/nym-private-broadcast-preferences'
+import {
+  NYM_PRIVATE_FETCH_MESSAGE,
+  parseNymTextRequest,
+  setNymPrivateFetchRelay,
+  type NymTextReply
+} from '@/core/nym/private-fetch-relay'
 import {
   addCustomZeroIndexerNode,
   getZeroIndexerBroadcastOptions,
@@ -406,6 +420,9 @@ import {
   getPreferredRpcEndpointOption,
   refreshRpcEndpointRegistry
 } from '@/infrastructure/chains/rpc-endpoints'
+
+// Background txid lookups reach the offscreen tunnel directly instead of messaging themselves.
+if (NYM_PRIVATE_BROADCAST.available) setNymPrivateFetchRelay(forwardNymPrivateFetchToOffscreen)
 
 const MULTICHAIN_WORKER_RPC_METHODS = new Set(['multichain.execute', 'multichain.abort'])
 if (__MULTICHAIN_CONFORMANCE_RPC_ENABLED__) {
@@ -2350,6 +2367,19 @@ async function applyLatestZeroIndexerRuntime(): Promise<string | undefined> {
   }
 }
 
+/**
+ * Destinations the next Zcash broadcast uses, in order: ZeroIndexer, then the lightwalletd
+ * fallback. Empty while Nym routing is off. The status lookup node is left out: its lookups
+ * retry on their own, and an unreachable one must not delay the broadcast.
+ */
+async function getNymPrewarmOrigins(): Promise<string[]> {
+  if (!(await readNymPrivateBroadcastEnabled())) return []
+  const zeroIndexer = await readZeroIndexerEnabled()
+    .then(enabled => getZeroIndexerBroadcastOptions(DEFAULT_NETWORK, enabled))
+    .catch(() => null)
+  return nymPrewarmOrigins([...(zeroIndexer?.urls ?? []), getNetworkConfig(DEFAULT_NETWORK).rpcUrl])
+}
+
 const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListener>[0] = (
   message,
   sender,
@@ -2807,6 +2837,29 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           error: error instanceof Error ? error.message : 'Hardware signing unavailable'
         })
       )
+    return true
+  }
+  if (NYM_PRIVATE_BROADCAST.available && message.type === NYM_PRIVATE_FETCH_MESSAGE) {
+    const reply = (value: NymTextReply) => sendResponse(value)
+    if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'extension-page') {
+      reply({ ok: false, error: 'Unauthorized private request sender' })
+      return true
+    }
+    let request
+    try {
+      request = parseNymTextRequest(runtimeMessage.request)
+    } catch {
+      reply({ ok: false, error: 'Invalid private request' })
+      return true
+    }
+    void forwardNymPrivateFetchToOffscreen(request).then(
+      response => reply({ ok: true, response }),
+      error =>
+        reply({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Private network unavailable'
+        })
+    )
     return true
   }
   if (message.type === 'WORKER_RPC') {
@@ -3290,6 +3343,45 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           error: error instanceof Error ? error.message : 'Could not save privacy preference'
         })
       )
+    return true
+  }
+
+  if (message.type === 'GET_NYM_PRIVATE_BROADCAST_ENABLED') {
+    void readNymPrivateBroadcastEnabled()
+      .then(enabled => sendResponse({ success: true, enabled }))
+      .catch(() => sendResponse({ success: false, error: 'Could not load privacy preference' }))
+    return true
+  }
+
+  if (message.type === 'SET_NYM_PRIVATE_BROADCAST_ENABLED') {
+    if (!NYM_PRIVATE_BROADCAST.available || typeof message.enabled !== 'boolean') {
+      sendResponse({ success: false, error: 'Invalid privacy broadcast preference' })
+      return true
+    }
+    void enqueueZeroIndexerUpdate(async () => {
+      await writeNymPrivateBroadcastEnabled(message.enabled)
+      // The Worker's ZeroIndexer send timeout follows the routing choice.
+      const warning = await applyLatestZeroIndexerRuntime()
+      // Routing is asked per broadcast, so a tunnel that outlives this is only idle.
+      if (!message.enabled) await closeNymTunnelInOffscreen().catch(() => undefined)
+      return { enabled: message.enabled, warning }
+    })
+      .then(({ enabled, warning }) => {
+        sendResponse({ success: true, enabled, ...(warning ? { warning } : {}) })
+      })
+      .catch(error =>
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : 'Could not save privacy preference'
+        })
+      )
+    return true
+  }
+
+  if (message.type === 'GET_NYM_PREWARM_ORIGINS') {
+    void getNymPrewarmOrigins()
+      .then(origins => sendResponse({ success: true, origins }))
+      .catch(() => sendResponse({ success: false }))
     return true
   }
 
@@ -5670,7 +5762,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             error instanceof TimeoutError || isTransactionSubmissionUnknown(error)
               ? TRANSACTION_PENDING_MESSAGE
               : error instanceof Error
-                ? error.message
+                ? getRetryableWalletRpcUserMessage(error.message)
                 : 'Hardware transaction failed',
           completionPending: error instanceof TimeoutError || isTransactionSubmissionUnknown(error),
           retryable: !consumed
@@ -5749,7 +5841,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             error instanceof TimeoutError || isTransactionSubmissionUnknown(error)
               ? TRANSACTION_PENDING_MESSAGE
               : error instanceof Error
-                ? error.message
+                ? getRetryableWalletRpcUserMessage(error.message)
                 : 'Ledger transaction failed',
           completionPending: error instanceof TimeoutError || isTransactionSubmissionUnknown(error),
           retryable: !consumed

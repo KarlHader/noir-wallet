@@ -1,6 +1,14 @@
-import { fetchJsonWithTimeout } from './fetch-utils.ts'
+import { nymPrivateTextFetch } from '../core/nym/private-fetch-relay.ts'
+import { readNymPrivateBroadcastEnabled } from '../infrastructure/chains/nym-private-broadcast-preferences.ts'
+import { FetchHttpError, fetchJsonWithTimeout } from './fetch-utils.ts'
 
 const RPC_TIMEOUT_MS = 10_000
+const MAX_RESPONSE_CHARS = 32 * 1024 * 1024
+
+interface ZcashNodeRpcOptions {
+  /** Send through the Nym tunnel; a tunnel failure rejects instead of falling back. */
+  private?: boolean
+}
 
 interface JsonRpcResponse<T> {
   result?: T
@@ -51,20 +59,55 @@ export async function zcashNodeRpc<T>(
   baseUrl: string,
   method: string,
   params: unknown[] = [],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: ZcashNodeRpcOptions = {}
 ): Promise<T> {
-  const json = await fetchJsonWithTimeout<JsonRpcResponse<T>>(baseUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    timeoutMs: RPC_TIMEOUT_MS,
-    maxBytes: 32 * 1024 * 1024,
-    signal
-  })
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
+  const json = options.private
+    ? await privateNodeRpc<T>(baseUrl, body, signal)
+    : await fetchJsonWithTimeout<JsonRpcResponse<T>>(baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        timeoutMs: RPC_TIMEOUT_MS,
+        maxBytes: MAX_RESPONSE_CHARS,
+        signal
+      })
   if (json.error) {
     throw new ZcashRpcError(`RPC ${method} failed: ${json.error.message}`, json.error.code)
   }
   return json.result as T
+}
+
+async function privateNodeRpc<T>(
+  baseUrl: string,
+  body: string,
+  signal?: AbortSignal
+): Promise<JsonRpcResponse<T>> {
+  if (signal?.aborted) throw signal.reason
+  const request = nymPrivateTextFetch({
+    url: baseUrl,
+    method: 'POST',
+    headers: [['content-type', 'application/json']],
+    bodyText: body
+  })
+  // The tunnel request cannot be cancelled; stop waiting for it instead.
+  const response = await (signal
+    ? Promise.race([
+        request,
+        new Promise<never>((_, reject) =>
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        )
+      ])
+    : request)
+  // Match fetchJsonWithTimeout: a non-2xx status is an HTTP error, not a JSON-RPC result.
+  if (response.status < 200 || response.status > 299) {
+    throw new FetchHttpError(response.status, response.statusText)
+  }
+  if (response.bodyText.length > MAX_RESPONSE_CHARS) {
+    throw new Error('Private RPC response is too large')
+  }
+  return JSON.parse(response.bodyText) as JsonRpcResponse<T>
 }
 
 /**
@@ -86,9 +129,10 @@ export function getAddressTxids(
 export function getVerboseTransaction(
   baseUrl: string,
   txid: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: ZcashNodeRpcOptions
 ): Promise<VerboseTransaction> {
-  return zcashNodeRpc<VerboseTransaction>(baseUrl, 'getrawtransaction', [txid, 1], signal)
+  return zcashNodeRpc<VerboseTransaction>(baseUrl, 'getrawtransaction', [txid, 1], signal, options)
 }
 
 /** zcashd error code for an unknown txid ("No information available about transaction"). */
@@ -107,7 +151,11 @@ export type TxLookup =
  */
 export async function lookupTransaction(baseUrl: string, txid: string): Promise<TxLookup> {
   try {
-    const tx = await getVerboseTransaction(baseUrl, txid)
+    // A status lookup shortly after broadcast identifies the sender as clearly as the broadcast,
+    // so it follows the same routing choice. An unreadable choice fails this lookup.
+    const tx = await getVerboseTransaction(baseUrl, txid, undefined, {
+      private: await readNymPrivateBroadcastEnabled()
+    })
     if (
       !txid.trim() ||
       typeof tx?.txid !== 'string' ||
@@ -192,7 +240,12 @@ export async function pollingTransactionConfirmations(
  */
 export async function getBlockCount(baseUrl: string): Promise<number | null> {
   try {
-    const height = await zcashNodeRpc<number>(baseUrl, 'getblockcount', [])
+    // The monitor asks this right after a status lookup on the same node. Sent directly, its
+    // timing would let the node match the user's IP address to that lookup, so it follows
+    // the same routing choice.
+    const height = await zcashNodeRpc<number>(baseUrl, 'getblockcount', [], undefined, {
+      private: await readNymPrivateBroadcastEnabled()
+    })
     return typeof height === 'number' ? height : null
   } catch {
     return null
