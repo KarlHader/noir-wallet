@@ -17,6 +17,16 @@ Apply these questions to the discovered implementation. Establish the invariant,
 - Inspect generic message, typed-data, raw-transaction, batch, and hardware signing separately when present. Determine replay scope and whether a seemingly harmless signature can authorize a spend or account change.
 - For hardware/offline signing, verify device/account/path identity, transaction decoding, display limitations, returned signature validation, request correlation, QR/UR parsing bounds, cancellation, and stale responses. Host-side tests do not establish device display or firmware behavior; record hardware model/app/firmware for actual checks.
 
+## Protocol and serialization correctness
+
+Check security-critical primitives and encodings against the applicable specification revision even when no incident or threat-model finding points to them. Prioritize key derivation, signing domains and digests, transaction parsing, and amount serialization. Use official public test vectors where available; when behavior is ambiguous, compare with a pinned reference implementation and resolve differences against the specification and supported subset. Record the version and what was actually compared.
+
+Check that the review parser, host, signing engine, and device where verifiable interpret the same reviewed fields consistently. Compare decoded semantics and exact signing input or digest, not just successful parsing or signature verification. Include benign boundary fixtures for integer precision, optional fields, and encoding variants that could cause two layers to disagree.
+
+## Compute and language boundaries
+
+Where signing or wallet state crosses a Worker, WASM, or native boundary, check the shipped loader, bindings, and host consumers together. Verify lossless integer and amount representation, agreement on absent and invalid fields, and that errors or partial results do not become successful replies or leak secrets. Distinguish failure of one request from loss of an instance or shared state, and verify that restart invalidates stale handles, replies, and authorization while restoring only the intended persisted state. Inspect copying and lifetime of secrets across host and engine memory; clearing one copy is not evidence that other copies are gone.
+
 ## Money and transaction lifecycle
 
 - Trace amounts across UI parsing, unit conversion, serialization, APIs, and persisted records. Check integer precision, decimals, negative/NaN/infinite values, overflow, rounding, and Max calculations using destination- and funding-source-specific spendability.

@@ -29,4 +29,11 @@ Cover keys/viewing capabilities, addresses/accounts, balances/amounts, transacti
 - Inspect CI event triggers, fork handling, permissions, secrets, reusable workflows/actions, caches, dependency installation, artifact download/selection, and release promotion. Follow untrusted PR content to privileged execution or publication before claiming a supply-chain exploit.
 - Check browser-store/update ownership, extension identity, signing and update verification, release channel selection, and rollback behavior according to the actual platform. Separate protections supplied by the browser/store from application-controlled checks; do not demand an in-app mechanism already enforced by the platform without a concrete gap.
 - Verify whether the inspected artifact is the one users receive. Successful local builds and importer-recorded hashes do not establish signed-release provenance or reproducibility. Document unavailable store artifacts, credentials, external build systems, and nested repositories as specific boundaries.
-- Earlier audit reports apply only to their stated revisions/components and exclusions. Verify report scope before using it as supporting evidence; never inherit a “safe” conclusion for changed code or binary packages.
+
+## Prior finding reconciliation
+
+When a relevant earlier report is available, a comprehensive audit reconciles its in-scope findings. A scoped review or fix verification reconciles only the affected findings. Verify the earlier report's revision, components, and exclusions before reusing any evidence.
+
+- For each finding, record the original ID and revision, the current path and protective control, and the source verdict: fixed, still present or regressed, affected path removed, or unverified. Check behavior at the pinned target; a commit title, ancestry check, or squash merge does not prove the control still holds.
+- When assessing a release, separately verify whether the fix is in the release source and in the artifact users receive, including embedded WASM or other versioned components. Record artifact identity and delivery evidence or the missing link. A verified source fix or an accepted candidate alone is not evidence that users received it.
+- Keep the reconciliation in the existing coverage ledger with references to finding IDs. Reassess security-relevant changes since the older report rather than carrying forward a project-wide verdict.

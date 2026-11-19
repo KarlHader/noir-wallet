@@ -18,7 +18,9 @@ State can use a compact schema adapted to the run. Record at least:
 target: repository, requested_ref, resolved_sha, remote_verification,
         PR/base/merge_base if applicable, selected build/artifact hashes
 method: skill source/revision or content hash, scope and exclusions
-coverage[]: path_or_boundary, invariant, status, depth, evidence, gap
+coverage[]: path_or_boundary, invariant, status, depth, evidence, gap,
+            incident_ids where applicable
+incident_lookup: date, surfaces searched, material sources, unresolved limits
 findings/candidates: stable IDs and report/evidence locations
 checks[]: command, cwd, tool version when material, outcome/exit code, evidence
 blockers[]: missing condition, affected assertion, safe next action
@@ -26,6 +28,8 @@ next_work: pending investigations and incomplete validation
 ```
 
 Update state at meaningful boundaries and before handoff/context loss. On resumption, verify target, build inputs/artifacts, and evidence still match. For a changed target, retain old evidence with its original SHA, assess affected dependencies/callers, and revalidate impacted conclusions. Do not automatically rerun unrelated checks or carry forward stale verdicts.
+
+When reusing a previous audit, check for incident disclosures, advisories, or external control changes since its recorded lookup even if the source SHA is unchanged. Reopen only affected coverage rows; retain unrelated evidence that still matches.
 
 ## Finding contract
 
@@ -35,7 +39,7 @@ Each finding needs:
 2. Affected revision/build, repository-relative files with precise one-based lines at that revision, and the relevant call chain. Include immutable source links where available; lines from another checkout are not equivalent evidence.
 3. Attacker capabilities, preconditions, default/nondefault configuration, entrypoint, guards examined, and concrete impact.
 4. Root cause and the violated security/privacy property. For PRs, label introduced, pre-existing, or undetermined, with base-version evidence where available.
-5. Minimal safe reproduction or static proof: synthetic inputs, steps, expected versus observed outcome, commands actually run, and evidence references. Explain missing conditions for any unexecuted reproduction.
+5. Minimal defensive evidence or static proof: protective control, expected versus observed behavior, synthetic inputs, commands actually run, and evidence references. Explain missing conditions without providing an exploit recipe.
 6. Remediation, compatibility/migration implications, and a focused regression verification method. Recommendations do not authorize implementation.
 
 Use independent dimensions:
@@ -45,7 +49,9 @@ Use independent dimensions:
 - **Confidence:** high/medium/low with the material uncertainty. Static evidence can have high confidence; a dynamic test with unrealistic attacker privileges may have low confidence.
 - **Severity:** critical/high/medium/low/informational based on impact, feasible attacker capability, reachability, defaults, and protections. Explain the rating; do not inflate it because the code handles funds. An unresolved candidate's estimated severity is provisional. If using CVSS, provide the version/vector and distinguish its score from wallet-specific impact.
 
-Deduplicate common root causes without hiding distinct prerequisites or consequences. Record counterevidence and rejected candidates briefly when it prevents repeating the investigation. Never expose sensitive data to make evidence look more concrete.
+For each finding provisionally rated high or critical, make a separate pass that tries to disprove the conclusion. Check whether the actor has the assumed access, the affected path is reachable in the stated build, and another component rejects the operation or limits its impact. Record the strongest counterevidence and why the conclusion holds, changes, or remains provisional. Separate conditional impact from exposure in the shipped build. Complete static evidence can support a final rating; dynamic reproduction is not a severity gate.
+
+Deduplicate common root causes without hiding distinct prerequisites or consequences. Record rejected candidates briefly when it prevents repeating the investigation. Never expose sensitive data to make evidence look more concrete.
 
 ## Coverage ledger
 
@@ -54,7 +60,9 @@ Deduplicate common root causes without hiding distinct prerequisites or conseque
 
 During work, status is planned, in progress, checked, not applicable, or blocked. “Checked” must state depth: inventory only, call-chain review, core runtime test, real isolated extension, hardware, or artifact verification, as appropriate. Reading a file or matching a string does not establish its entire behavior. Not applicable requires absence/unreachability evidence; a missing tool, source, device, credential, or network is a blocker, not absence of the feature.
 
-Map every user-requested category into this ledger. Keep core logic, browser lifecycle, hardware, external services, and cryptographic internals as distinguishable coverage levels. A coarse row such as “security checked” cannot support completion.
+Map every user-requested category and applicable incident ID into this ledger. In comprehensive audits account for every baseline incident ID, including not-applicable and blocked rows. Keep core logic, browser lifecycle, hardware, external services, and cryptographic internals as distinguishable coverage levels. A coarse row such as “security checked” cannot support completion. If only code was reviewed, mark unverified runtime or operator assertions separately.
+
+Record material threat-model hypotheses in the same ledger, including ones with no public precedent. Under the property, capture the protected outcome, actor capability and precondition, and expected guard or absence of side effects. Use the evidence or gap field to distinguish a verified guard, a supported finding, and an unverified hypothesis. Do not keep a separate threat checklist.
 
 ## Final delivery and release judgment
 
