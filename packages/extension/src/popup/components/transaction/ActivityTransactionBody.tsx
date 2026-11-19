@@ -36,6 +36,7 @@ import {
 } from './activity-interaction-adapters'
 import { resolveActivityChainId } from './activity-chain'
 import {
+  getActivityCancellationPresentation,
   getActivityDisplayChanges,
   getActivityProgressSteps,
   getActivityStatusPresentation,
@@ -478,15 +479,30 @@ export function ActivityTransactionRoute({ view }: { readonly view: ActivityTran
 }
 
 export function ActivityTransactionStatus({ view }: { readonly view: ActivityTransactionView }) {
+  const cancellation = getActivityCancellationPresentation(view.item)
   return (
-    <DetailRow label="Status">
-      <span
-        data-activity-status-value
-        className={cn('text-sm', getTransactionStatusToneClassName(view.statusTone))}
-      >
-        {view.statusLabel}
-      </span>
-    </DetailRow>
+    <>
+      <DetailRow label="Status">
+        <span
+          data-activity-status-value
+          className={cn('text-sm', getTransactionStatusToneClassName(view.statusTone))}
+        >
+          {view.statusLabel}
+        </span>
+      </DetailRow>
+      {cancellation && (
+        <DetailRow label="Cancellation">
+          <span
+            className={cn(
+              'pl-2 text-right text-sm',
+              getTransactionStatusToneClassName(cancellation.tone)
+            )}
+          >
+            {cancellation.label}
+          </span>
+        </DetailRow>
+      )}
+    </>
   )
 }
 

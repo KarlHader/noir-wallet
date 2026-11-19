@@ -15,6 +15,14 @@ export const ACTIVITY_SOURCES = Object.freeze(['zcash-v1', 'wallet-v2', 'rpc'] a
 export type ActivitySource = (typeof ACTIVITY_SOURCES)[number]
 export type ActivityCompleteness = 'complete' | 'partial'
 
+export const ACTIVITY_CANCELLATION_STATUSES = Object.freeze([
+  'signed',
+  'broadcast',
+  'confirming',
+  'final',
+  'failed'
+] as const)
+
 export interface ActivityScope {
   readonly keyDomainId: KeyDomainId
   readonly accountId: AccountId
@@ -45,6 +53,7 @@ export interface ActivityItem {
   readonly updatedAt: number
   readonly failureCode?: TransactionFailureCode
   readonly reconfirming?: true
+  readonly cancellationStatus?: (typeof ACTIVITY_CANCELLATION_STATUSES)[number]
 }
 
 export interface ActivityReadModel {

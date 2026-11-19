@@ -118,6 +118,34 @@ function supplemental({
 }
 
 test.describe('Activity read model', () => {
+  test('keeps a signed EVM cancellation separate from the original confirmed transaction', () => {
+    const original = graph({ id: 'transaction:confirmed-original' })
+    original.root.status = 'final'
+    original.segments[0].status = 'final'
+    const cancellation = graph({ id: 'transaction:cancel-attempt', hash: `0x${'b'.repeat(64)}` })
+    cancellation.root.kind = 'cancel'
+    cancellation.root.status = 'signed'
+    cancellation.root.relation = { kind: 'replacement-of', transactionId: original.root.id }
+    cancellation.segments[0].status = 'signed'
+
+    const readOriginal = localGraphs =>
+      parseActivityReadModel(buildActivityReadModel({ scope, localGraphs })).items.find(
+        item => item.id === original.root.id
+      )
+    expect(readOriginal([original, cancellation])).toMatchObject({
+      status: 'final',
+      cancellationStatus: 'signed',
+      segments: [{ status: 'final', evidence: { transactionHash: evmHash } }]
+    })
+
+    const unrelatedChain = structuredClone(cancellation)
+    unrelatedChain.segments[0].target.chainId = arbitrumChainId
+    expect(readOriginal([original, unrelatedChain]).cancellationStatus).toBeUndefined()
+
+    delete cancellation.segments[0].evidence
+    expect(readOriginal([original, cancellation]).cancellationStatus).toBeUndefined()
+  })
+
   test('orders cross-chain source and destination records by transaction time', () => {
     const origin = graph({ id: 'transaction:cross-chain', updatedAt: 2_000 })
     const received = supplemental({

@@ -878,6 +878,19 @@ function findLatestOnchainEvidence(item: ActivityItem): TransactionSegmentEviden
   return [...item.segments].reverse().find(segment => segment.target.kind === 'onchain')?.evidence
 }
 
+export function getActivityCancellationPresentation(
+  item: ActivityItem
+): ActivityStatusPresentation | null {
+  const status = item.cancellationStatus
+  if (!status) return null
+  if (status === 'final') return { label: 'Confirmed', tone: 'success' }
+  const origin = item.segments.find(segment => segment.role === 'origin')
+  if (origin?.status === 'final') return { label: 'Original confirmed first', tone: 'warning' }
+  if (status === 'signed') return { label: 'Submission unconfirmed', tone: 'warning' }
+  if (status === 'failed') return { label: 'Not completed', tone: 'warning' }
+  return { label: 'Pending', tone: 'neutral' }
+}
+
 export function getActivityStatusPresentation(item: ActivityItem): ActivityStatusPresentation {
   if (isPartiallyCompleted(item)) return { label: 'Partially completed', tone: 'warning' }
   const evidence = findLatestOnchainEvidence(item)

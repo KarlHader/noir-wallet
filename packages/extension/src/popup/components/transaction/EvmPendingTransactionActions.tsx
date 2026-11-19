@@ -214,9 +214,11 @@ export function EvmPendingTransactionActions({
   readonly className?: string
 }) {
   const [busy, setBusy] = useState<PendingAction | null>(null)
-  const [submittedFor, setSubmittedFor] = useState<{ id: string; action: PendingAction } | null>(
-    null
-  )
+  const [submittedFor, setSubmittedFor] = useState<{
+    id: string
+    action: PendingAction
+    status: 'broadcast' | 'signed-pending-broadcast'
+  } | null>(null)
   const [unavailableFor, setUnavailableFor] = useState<string | null>(null)
   const mounted = useRef(true)
   const latest = useRef({ item, evmChainIds, accountMatches, shieldQuoteExpiresAt })
@@ -232,7 +234,10 @@ export function EvmPendingTransactionActions({
     accountMatches && canSpeedUpEvmActivity(item, evmChainIds, Date.now(), shieldQuoteExpiresAt)
   const originKey = getReplacementOriginKey(item, evmChainIds)
   const origin = item.segments.find(segment => segment.role === 'origin')
+  const cancellationStatus = item.cancellationStatus
+  if (cancellationStatus && cancellationStatus !== 'failed') return null
   const cancellationPending =
+    !cancellationStatus &&
     item.source === 'wallet-v2' &&
     item.status !== 'final' &&
     item.status !== 'failed' &&
@@ -248,10 +253,14 @@ export function EvmPendingTransactionActions({
     )
   }
   if (!canCancel && !canSpeedUp) return null
-  if (submittedFor?.id === item.id)
+  if (!cancellationStatus && submittedFor?.id === item.id)
     return (
       <p role="status" className={cn('text-center text-xs text-muted', className)}>
-        {submittedFor.action === 'cancel' ? 'Cancellation pending' : 'Speed up pending'}
+        {submittedFor.action === 'speed-up'
+          ? 'Speed up pending'
+          : submittedFor.status === 'broadcast'
+            ? 'Cancellation pending'
+            : 'Cancellation submission unconfirmed'}
       </p>
     )
   if (originKey !== null && unavailableFor === originKey)
@@ -385,8 +394,8 @@ export function EvmPendingTransactionActions({
         window.close()
         return
       }
-      if (submission.status === 'broadcast' && stillCurrent()) {
-        setSubmittedFor({ id: item.id, action })
+      if ((submission.status === 'broadcast' || action === 'cancel') && stillCurrent()) {
+        setSubmittedFor({ id: item.id, action, status: submission.status })
       }
     } catch (error) {
       if (review) await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
