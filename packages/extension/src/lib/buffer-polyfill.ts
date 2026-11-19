@@ -6,7 +6,8 @@
 import { Buffer } from 'buffer'
 
 // Vite's dev prebundling leaves the browser build of randombytes reading `global.crypto`.
-if (import.meta.env.DEV && typeof global === 'undefined') {
+// Node already has `global` but does not provide Vite's import.meta.env.
+if (typeof global === 'undefined' && import.meta.env.DEV) {
   Object.defineProperty(globalThis, 'global', {
     configurable: true,
     writable: true,
