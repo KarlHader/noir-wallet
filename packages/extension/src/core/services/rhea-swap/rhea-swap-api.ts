@@ -226,7 +226,7 @@ export class RheaSwapApi {
       if (
         !isRecord(payload) ||
         typeof payload.code !== 'number' ||
-        typeof payload.msg !== 'string'
+        (payload.msg !== undefined && typeof payload.msg !== 'string')
       ) {
         throw new RheaSwapHttpError(
           'INVALID_API_RESPONSE',

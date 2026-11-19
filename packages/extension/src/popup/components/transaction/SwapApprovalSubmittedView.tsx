@@ -18,6 +18,8 @@ export function SwapApprovalSubmittedView({
   disabled,
   loading,
   error,
+  continuingAutomatically,
+  awaitingHardwareSignature,
   onContinue,
   onOpenActivity
 }: {
@@ -29,6 +31,8 @@ export function SwapApprovalSubmittedView({
   disabled: boolean
   loading: boolean
   error: string | null
+  continuingAutomatically: boolean
+  awaitingHardwareSignature: boolean
   onContinue: () => void
   onOpenActivity: () => void
 }) {
@@ -38,19 +42,31 @@ export function SwapApprovalSubmittedView({
 
   return (
     <TransactionResult
-      status="submitted"
-      title="Token approval submitted"
+      status={awaitingHardwareSignature ? (error ? 'failed' : 'loading') : 'submitted'}
+      title={
+        awaitingHardwareSignature
+          ? error
+            ? 'Token approval failed'
+            : 'Sign token approval on Ledger'
+          : 'Token approval submitted'
+      }
       footer={
         <div className="w-full space-y-2">
           {error && <InlineError message={error} />}
-          <Button
-            className="h-[45px] w-full"
-            onClick={onContinue}
-            disabled={disabled}
-            isLoading={loading}
-          >
-            {isSend ? 'Continue Send' : 'Continue Swap'}
-          </Button>
+          {continuingAutomatically ? (
+            <p className="text-center text-xs text-muted" role="status">
+              Waiting for token approval
+            </p>
+          ) : awaitingHardwareSignature ? null : (
+            <Button
+              className="h-[45px] w-full"
+              onClick={onContinue}
+              disabled={disabled}
+              isLoading={loading}
+            >
+              {isSend ? 'Continue Send' : 'Continue Swap'}
+            </Button>
+          )}
           <Button variant="outline" className="h-[45px] w-full" onClick={onOpenActivity}>
             View Activity
           </Button>

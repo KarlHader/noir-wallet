@@ -72,7 +72,8 @@ function toEvmCallView(tx: EvmTx): RheaSwapEvmTransactionPlan['transaction'] {
     to: tx.to,
     data: tx.data,
     value: tx.value,
-    from: tx.from ?? null
+    from: tx.from ?? null,
+    ...(tx.gasLimit === undefined ? {} : { gasLimit: tx.gasLimit })
   })
 }
 

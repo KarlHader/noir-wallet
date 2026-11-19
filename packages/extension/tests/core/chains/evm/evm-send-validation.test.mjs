@@ -112,10 +112,16 @@ test.describe('EVM send validation', () => {
     }
     const recipient = `t1${'B'.repeat(33)}`
     const route = new URL(
-      buildPublicPrivateEvmSendPath({ ...scope, recipient, amount: '0.1' }),
+      buildPublicPrivateEvmSendPath({ ...scope, recipient, amount: '0.00199', maximum: true }),
       'https://wallet.invalid'
     )
     expect(route.searchParams.get('fundingSource')).toBe('transparent')
+    expect(route.searchParams.get('amount')).toBe('0.00199')
+    expect(route.searchParams.has('maximum')).toBe(false)
+    expect(parsePublicPrivateEvmSwapRoute(route.searchParams, scope)).toMatchObject({
+      amount: '0.00199',
+      maximum: false
+    })
     expect(parsePublicPrivateEvmSwapRoute(route.searchParams, scope)?.recipient).toBe(recipient)
     expect(
       parsePublicPrivateEvmSwapRoute(route.searchParams, { ...scope, accountId: 'other' })

@@ -75,7 +75,7 @@ function readRawAmount(value: unknown, label: string): string {
 
 function parseEvmCall(value: unknown, label: string): RheaSwapEvmCallView {
   if (!isRecord(value)) throw new Error(`${label} must be an object`)
-  assertKeys(value, ['chainId', 'to', 'data', 'value', 'from'], [], label)
+  assertKeys(value, ['chainId', 'to', 'data', 'value', 'from'], ['gasLimit'], label)
   if (
     !Number.isSafeInteger(value.chainId) ||
     (value.chainId as number) <= 0 ||
@@ -94,7 +94,10 @@ function parseEvmCall(value: unknown, label: string): RheaSwapEvmCallView {
     to: value.to,
     data: value.data,
     value: readRawAmount(value.value, `${label}.value`),
-    from: value.from
+    from: value.from,
+    ...(value.gasLimit === undefined
+      ? {}
+      : { gasLimit: readRawAmount(value.gasLimit, `${label}.gasLimit`) })
   })
 }
 

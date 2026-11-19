@@ -13,6 +13,7 @@ import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-c
 
 export interface SubmittedSwapApproval {
   readonly graph: TransactionGraph
+  readonly awaitingHardwareSignature?: boolean
   readonly token: string
   readonly spender: string
   readonly amountRaw: string

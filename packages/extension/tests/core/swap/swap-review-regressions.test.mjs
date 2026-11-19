@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
 import { selectWalletOwnedQuoteAssetExecution } from '../../../src/popup/services/quote-deposit-transfer-client.ts'
+import {
+  canContinueCombinedSwap,
+  getCombinedSwapFeeLimit
+} from '../../../src/popup/services/rhea-evm-approval.ts'
 import { resolveSwapMaximumAdjustment } from '../../../src/popup/services/swap-maximum.ts'
 import {
   buildLiveSwapQuoteRequest,
@@ -43,6 +47,48 @@ import {
   createPublicPrivateSendPreviewKey,
   getPublicPrivateSendRouteCost
 } from '../../../src/popup/services/public-private-send-preview.ts'
+
+it('continues a combined approval only for the reviewed swap call within its fee ceiling', () => {
+  const owner = `0x${'1'.repeat(40)}`
+  const call = {
+    chainId: 56,
+    to: `0x${'2'.repeat(40)}`,
+    from: owner,
+    data: '0xdeadbeef',
+    value: '0'
+  }
+  const approval = { maximumFeeWei: '50000', maxFeePerGasWei: '1', gasPriceWei: null }
+  const limit = getCombinedSwapFeeLimit(call, approval, '550000')
+  assert.equal(getCombinedSwapFeeLimit(call, approval, '549999'), null)
+  assert.ok(limit)
+  const fields = {
+    from: owner,
+    to: call.to,
+    calldata: { encoding: 'hex', value: call.data },
+    valueWei: '0',
+    maximumFeeWei: '500000',
+    maxFeePerGasWei: '1',
+    gasPriceWei: null
+  }
+  const summary = { chainId: 'eip155:56', fields }
+  assert.equal(canContinueCombinedSwap(summary, limit, call, owner), true)
+  for (const changed of [
+    { maximumFeeWei: '500001' },
+    { maxFeePerGasWei: '2' },
+    { valueWei: '1' },
+    { calldata: { encoding: 'hex', value: '0xbeefdead' } }
+  ]) {
+    assert.equal(
+      canContinueCombinedSwap(
+        { ...summary, fields: { ...fields, ...changed } },
+        limit,
+        call,
+        owner
+      ),
+      false
+    )
+  }
+})
 
 it('rejects a stale Zcash Max fee when a refreshed Max amount differs', () => {
   const feeQuote = { id: 'quote-1', standardMarginalFeeZats: 5000, expiresAt: 2000 }
@@ -532,6 +578,11 @@ it('keeps a quote timeout retryable when a successful HTTP response also mention
 it('uses the native RHEA paths and retries quote reads without replaying writes', async () => {
   const requests = []
   let quoteCalls = 0
+  const quoteData = {
+    bestQuote: { router: 'sushi', amountOut: '1000', minAmountOut: '990' },
+    quoteProviderWarnings: [{ errorCode: 'QUOTE_TIMEOUT' }]
+  }
+  const buildData = { router: 'sushi', executionType: 'transaction' }
   const api = new RheaSwapApi({
     baseUrl: 'https://api.rhea.finance/',
     apiKey: 'test-key',
@@ -544,10 +595,16 @@ it('uses the native RHEA paths and retries quote reads without replaying writes'
         body: init.body && JSON.parse(init.body)
       })
       const path = new URL(url).pathname
-      if (path === '/crosschain/swap/quote' && ++quoteCalls === 1) {
-        return new Response(
-          JSON.stringify({ code: -1, msg: 'provider details', errorCode: 'QUOTE_TIMEOUT' })
-        )
+      if (path === '/crosschain/swap/quote') {
+        if (++quoteCalls === 1) {
+          return new Response(
+            JSON.stringify({ code: -1, msg: 'provider details', errorCode: 'QUOTE_TIMEOUT' })
+          )
+        }
+        return Response.json({ code: 0, errorCode: '', data: quoteData })
+      }
+      if (path === '/crosschain/swap/swap') {
+        return Response.json({ code: 0, errorCode: '', data: buildData })
       }
       if (path === '/crosschain/swap/report') {
         return new Response('<html>provider private error</html>', { status: 503 })
@@ -561,8 +618,8 @@ it('uses the native RHEA paths and retries quote reads without replaying writes'
     }
   })
 
-  await api.quote({ fromChain: '1' })
-  await api.build({ router: 'route' })
+  assert.deepEqual(await api.quote({ fromChain: '1' }), quoteData)
+  assert.deepEqual(await api.build({ router: 'route' }), buildData)
   await api.fromTokens(1)
   await api.crossChainToTokens(1)
   await api.orderStatus({ recordId: '123' })
@@ -599,6 +656,26 @@ it('uses the native RHEA paths and retries quote reads without replaying writes'
     requests.filter(request => request.url.pathname === '/crosschain/swap/report').length,
     1
   )
+})
+
+it('accepts successful RHEA report and order status responses without msg', async () => {
+  const api = new RheaSwapApi({
+    baseUrl: 'https://api.rhea.finance/',
+    fetch: async url =>
+      Response.json({
+        code: 0,
+        errorCode: '',
+        data: new URL(url).pathname.endsWith('/report')
+          ? { id: 123 }
+          : { status: 'SUCCESS', toHash: `0x${'a'.repeat(64)}` }
+      })
+  })
+
+  assert.deepEqual(await api.report({ from_hash: `0x${'b'.repeat(64)}` }), { id: 123 })
+  assert.deepEqual(await api.orderStatus({ recordId: '123' }), {
+    status: 'SUCCESS',
+    toHash: `0x${'a'.repeat(64)}`
+  })
 })
 
 it('keeps provider minimums from multiple route failures without returning provider metadata', () => {

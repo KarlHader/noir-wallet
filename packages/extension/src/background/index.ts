@@ -6440,6 +6440,38 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (isRuntimeRecord(message) && message.type === 'LEDGER_SWAP_APPROVAL_SIGNED') {
+    if (getOwnExtensionSenderContext(sender, chrome.runtime.id) === 'service-worker') return false
+    sendResponse({ error: 'Unauthorized Ledger continuation sender' })
+    return true
+  }
+  if (isRuntimeRecord(message) && message.type === 'CONTINUE_LEDGER_SWAP_IN_PANEL') {
+    const windowId = sender.tab?.windowId
+    if (
+      !hasExactRuntimeKeys(message, ['type', 'transactionId']) ||
+      !isOwnExtensionRouteSender(sender, chrome.runtime.id, '/hardware/ledger-sign') ||
+      typeof windowId !== 'number' ||
+      !Number.isInteger(windowId) ||
+      typeof message.transactionId !== 'string' ||
+      message.transactionId.length === 0 ||
+      message.transactionId.length > 128 ||
+      message.transactionId.trim() !== message.transactionId
+    ) {
+      sendResponse({ error: 'Unauthorized Ledger continuation sender' })
+      return true
+    }
+    void chrome.runtime
+      .sendMessage({
+        type: 'LEDGER_SWAP_APPROVAL_SIGNED',
+        transactionId: message.transactionId,
+        windowId
+      })
+      .then(
+        handled => sendResponse({ result: handled === true }),
+        () => sendResponse({ result: false })
+      )
+    return true
+  }
   if (isRuntimeRecord(message) && message.type === 'REFRESH_EXTENSION_UPDATE') {
     if (
       !__EXTENSION_UPDATES_ENABLED__ ||

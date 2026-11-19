@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { ToastContainer } from './components/common/ToastContainer'
 import { TestnetModeBanner } from './components/common/TestnetModeBanner'
 import { RouterProvider, Routes, Route, useLocation, useNavigate } from './provider/Router'
@@ -15,6 +15,8 @@ import { useAccountDataStore, buildAccountKey } from '@/store/account-data-store
 import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
 import { isTransactionStatusUpdatedMessage } from '@/types/transaction-messages'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
+import { parseTransactionId } from '@/core/transactions/domain'
+import { isSidePanelSurface } from '@/lib/extension-display-mode'
 import { initializeAddressBook } from '@/store/address-book-store'
 
 // Pages
@@ -328,19 +330,59 @@ function AppRoutes() {
 function AppContent() {
   const { isLoading, initializationFailure, retryInitialization } = useAppRouting()
   const location = useLocation()
+  const { navigate } = useNavigate()
+  const sidePanelWindowId = useRef<number | null>(null)
   usePersistedExtensionContextSync()
   const { reloadTransactions } = useAccountDataStore()
+
+  useEffect(() => {
+    if (!isSidePanelSurface(window.location.search)) return
+    let active = true
+    void chrome.windows
+      .getCurrent()
+      .then(currentWindow => {
+        if (active) sidePanelWindowId.current = currentWindow.id ?? null
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+      sidePanelWindowId.current = null
+    }
+  }, [])
 
   useEffect(() => {
     void initializeAddressBook().catch(() => {})
   }, [])
 
   useEffect(() => {
-    const handleMessage = (message: unknown, sender: chrome.runtime.MessageSender) => {
+    const handleMessage = (
+      message: unknown,
+      sender: chrome.runtime.MessageSender,
+      sendResponse: (response?: unknown) => void
+    ) => {
       if (!message || typeof message !== 'object') return
 
       const messageType = 'type' in message ? message.type : undefined
       const senderContext = getOwnExtensionSenderContext(sender, chrome.runtime.id)
+      if (
+        messageType === 'LEDGER_SWAP_APPROVAL_SIGNED' &&
+        isSidePanelSurface(window.location.search) &&
+        senderContext === 'service-worker' &&
+        sidePanelWindowId.current !== null &&
+        sidePanelWindowId.current === ('windowId' in message ? message.windowId : undefined)
+      ) {
+        let transactionId: string
+        try {
+          transactionId = parseTransactionId(
+            'transactionId' in message ? message.transactionId : undefined
+          )
+        } catch {
+          return
+        }
+        navigate(`/swap?resumeApproval=${encodeURIComponent(transactionId)}`)
+        sendResponse(true)
+        return
+      }
       if (messageType === 'ACCOUNT_CONTEXT_CHANGED' && senderContext === 'service-worker') {
         void rehydrateWalletStore().catch(error => {
           console.error('[Popup] Failed to refresh the active Account context:', error)
@@ -367,7 +409,7 @@ function AppContent() {
     return () => {
       chrome.runtime.onMessage.removeListener(handleMessage)
     }
-  }, [reloadTransactions])
+  }, [navigate, reloadTransactions])
 
   useEffect(() => {
     const { currentAccountId, currentWalletId, currentNetwork } = useWalletStore.getState()

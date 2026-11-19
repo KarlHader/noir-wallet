@@ -53,6 +53,7 @@ import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-poli
 import { selectSwapFeeEstimate } from '@/lib/swap-fee'
 import { isZecToken, type SwapToken } from '@/core/services/intents-api'
 import type {
+  RheaSwapEvmCallView,
   RheaSwapEvmSignatureReview,
   RheaSwapNearTransactionBatchReview,
   RheaSwapQuoteView,
@@ -246,7 +247,12 @@ import {
   buildPublicPrivateEvmSendPath,
   parsePublicPrivateEvmSwapRoute
 } from '@/popup/services/evm-send-validation'
-import { requiredRheaEvmApproval } from '@/popup/services/rhea-evm-approval'
+import {
+  canContinueCombinedSwap,
+  getCombinedSwapFeeLimit,
+  requiredRheaEvmApproval,
+  type CombinedSwapFeeLimit
+} from '@/popup/services/rhea-evm-approval'
 import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-continuation-client'
 import type { SwapApprovalContinuation } from '@/background/swap-approval-continuation'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
@@ -310,6 +316,10 @@ type PendingRheaEvmAfterApproval = Readonly<{
     readonly spender: string
     readonly amountRaw: string
   }>
+  readonly combined?: {
+    readonly limit: CombinedSwapFeeLimit
+    readonly transaction: RheaSwapEvmCallView
+  }
 }>
 
 type PendingRheaSigningReview =
@@ -1267,6 +1277,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const restoredApprovalId = useRef<string | null>(null)
   const [pendingRheaEvmAfterApproval, setPendingRheaEvmAfterApproval] =
     useState<PendingRheaEvmAfterApproval | null>(null)
+  const combinedSwapConsent = useRef<{
+    readonly scope: string
+    readonly requestKey: string
+    readonly quoteHandle: string
+    readonly estimatedOut: string
+    readonly minAmountOut: string
+    readonly router: RheaSwapReviewView['router']
+    readonly feeLimit: CombinedSwapFeeLimit
+    readonly transaction: RheaSwapEvmCallView
+    readonly owner: string
+  } | null>(null)
   const pendingQuoteTransfer = useRef<PreparedQuoteDepositTransfer | null>(null)
   const pendingRheaSigningQuote = useRef<Readonly<{
     kind: PendingRheaSigningReview['kind']
@@ -2237,6 +2258,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
 
     quoteRequestSequence.current += 1
     initializedPrivateFundingScope.current = null
+    combinedSwapConsent.current = null
     initializedPrivateFundingAmountScope.current = null
     initializedCrossChainSendScope.current = null
     setHydratedCrossChainSendScope(null)
@@ -3752,12 +3774,27 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   }
                 )
               )
+              const approvalSummary = approvalReview.review.summary
+              const combinedFeeLimit =
+                ordinarySwapRequested &&
+                executionSourceMode === 'main' &&
+                !isHardwareWallet &&
+                approvalSummary.schema === 'evm.transaction.v1'
+                  ? getCombinedSwapFeeLimit(
+                      plan.transaction,
+                      approvalSummary.fields,
+                      walletOwnedSource.networkFeeAsset.balance.availableRaw
+                    )
+                  : null
               pendingEvmAfterApproval = {
                 approval: Object.freeze({
                   token: requiredApproval.transaction.to,
                   spender: requiredApproval.spender,
                   amountRaw: requiredApproval.amountRaw
-                })
+                }),
+                ...(combinedFeeLimit
+                  ? { combined: { limit: combinedFeeLimit, transaction: plan.transaction } }
+                  : {})
               }
               prepared = Object.freeze({
                 family: 'evm' as const,
@@ -4060,6 +4097,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       executionSourceMode,
       isHardwareWallet,
       isLedgerWallet,
+      ordinarySwapRequested,
       addRecentRecipientAddress,
       discardPreparedQuoteTransfer,
       swapEventBase,
@@ -4956,6 +4994,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         feeConfirmationInFlight.current = false
       }
     } else if (reviewAction === 'wallet-transfer' && preparedQuoteTransfer) {
+      if (feeConfirmationInFlight.current) return
+      feeConfirmationInFlight.current = true
       const submitBase = swapEventBase()
       if (!pendingRheaEvmAfterApproval) {
         sendAnalyticsEvent(
@@ -4976,6 +5016,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       }
       setIsSending(true)
       try {
+        const requestSequence = quoteRequestSequence.current
         const submission = await quoteDepositTransferClient.approve(preparedQuoteTransfer)
         pendingQuoteTransfer.current = null
         setPreparedQuoteTransfer(null)
@@ -5026,7 +5067,25 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             await quoteDepositTransferClient.reject(preparedQuoteTransfer)
             throw handoffError
           }
-          window.close()
+          if (
+            isLedgerWallet &&
+            submission.family === 'evm' &&
+            pendingRheaEvmAfterApproval &&
+            isSidePanelSurface(window.location.search)
+          ) {
+            setSubmittedApproval({
+              graph: submission.value.graph,
+              owner: preparedQuoteTransfer.source.refundAddress,
+              executionMode: executionSourceMode,
+              awaitingHardwareSignature: true,
+              ...pendingRheaEvmAfterApproval.approval
+            })
+            setApprovalError(null)
+            setPendingRheaEvmAfterApproval(null)
+            setViewStep('approval-pending')
+          } else {
+            window.close()
+          }
           return
         }
         if (pendingRheaEvmAfterApproval) {
@@ -5042,6 +5101,26 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             )
             toast.error('Token approval is signed but still waiting to broadcast')
             return
+          }
+          const combined = pendingRheaEvmAfterApproval.combined
+          if (
+            combined &&
+            rheaReview &&
+            walletSourcesScope &&
+            liveQuoteRequest &&
+            quoteRequestSequence.current === requestSequence
+          ) {
+            combinedSwapConsent.current = {
+              scope: walletSourcesScope,
+              requestKey: liveQuoteRequest.key,
+              quoteHandle: rheaReview.quoteHandle,
+              estimatedOut: rheaReview.estimatedOut,
+              minAmountOut: rheaReview.minAmountOut,
+              router: rheaReview.router,
+              feeLimit: combined.limit,
+              transaction: combined.transaction,
+              owner: preparedQuoteTransfer.source.refundAddress
+            }
           }
           setSubmittedApproval({
             graph: submission.value.graph,
@@ -5110,6 +5189,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         if (lockedAssetFlowRequested) setTransferPreparationError(message)
         toast.error(message)
       } finally {
+        feeConfirmationInFlight.current = false
         setIsSending(false)
       }
     }
@@ -5129,6 +5209,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     swap.tokenOut,
     currentAccount,
     isHardwareWallet,
+    isLedgerWallet,
     feeTier,
     fundingSource,
     navigateToSwapResult,
@@ -5161,6 +5242,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     discardPreparedQuoteTransfer,
     refreshExpiredReview,
     pendingRheaEvmAfterApproval,
+    walletSourcesScope,
     networkFeeTier,
     rheaSigningReview,
     executionSourceMode,
@@ -5199,6 +5281,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     onError: setApprovalError,
     onReady: ({ restoredQuote, reuseApprovedQuote }) => {
       if (!liveQuoteRequest) return
+      if (!reuseApprovedQuote) combinedSwapConsent.current = null
       if (restoredQuote && swap.tokenOut) {
         setQuoteResult(restoredQuote)
         setLiveQuoteKey(liveQuoteRequest.key)
@@ -5214,6 +5297,38 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       if (!reuseApprovedQuote) setQuoteRefreshTick(current => current + 1)
     }
   })
+
+  useEffect(() => {
+    const consent = combinedSwapConsent.current
+    if (!consent || viewStep !== 'review' || isPreparingReview || isSending) return
+    combinedSwapConsent.current = null
+    const summary = preparedQuoteTransfer?.review.review.summary
+    if (
+      consent.scope !== walletSourcesScope ||
+      consent.requestKey !== liveQuoteRequest?.key ||
+      consent.quoteHandle !== rheaReview?.quoteHandle ||
+      consent.estimatedOut !== rheaReview.estimatedOut ||
+      consent.minAmountOut !== rheaReview.minAmountOut ||
+      consent.router !== rheaReview.router ||
+      !rheaQuoteAccepted ||
+      pendingRheaEvmAfterApproval ||
+      summary?.schema !== 'evm.transaction.v1' ||
+      !canContinueCombinedSwap(summary, consent.feeLimit, consent.transaction, consent.owner)
+    )
+      return
+    void handleConfirmSwap()
+  }, [
+    handleConfirmSwap,
+    isPreparingReview,
+    isSending,
+    liveQuoteRequest?.key,
+    pendingRheaEvmAfterApproval,
+    preparedQuoteTransfer,
+    rheaQuoteAccepted,
+    rheaReview,
+    viewStep,
+    walletSourcesScope
+  ])
 
   useEffect(() => {
     if (viewStep === 'review') setApprovalReviewScope(null)
@@ -5866,6 +5981,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   }
 
   const handleReturnToInput = useCallback(() => {
+    if (feeConfirmationInFlight.current) return
+    combinedSwapConsent.current = null
     quoteRequestSequence.current += 1
     resetQuoteReview()
     reviewAfterQuoteRefresh.current = null
@@ -6247,7 +6364,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           error={approvalError}
           loading={isPreparingReview}
           disabled={isPreparingReview || !liveQuoteRequest || walletSourcesLoading}
-          onContinue={() => void handleContinueAfterApproval()}
+          continuingAutomatically={Boolean(combinedSwapConsent.current) && !approvalError}
+          awaitingHardwareSignature={submittedApproval.awaitingHardwareSignature === true}
+          onContinue={() => {
+            combinedSwapConsent.current = null
+            void handleContinueAfterApproval()
+          }}
           onOpenActivity={() =>
             navigate(
               `/?tab=activity&transactionId=${encodeURIComponent(submittedApproval.graph.root.id)}`
@@ -6339,6 +6461,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     }
     const reviewedQuote = quoteResult
     if (viewStep === 'review' && reviewedQuote && rheaReview && swap.tokenIn && swap.tokenOut) {
+      const combinedLimit = pendingRheaEvmAfterApproval?.combined?.limit
+      const combinedNetworkFee =
+        combinedLimit && preparedQuoteTransfer?.family === 'evm'
+          ? {
+              amount: formatBaseUnitAmount(
+                (combinedLimit.approvalFeeWei + combinedLimit.swapFeeWei).toString(),
+                preparedQuoteTransfer.source.networkFeeAsset.metadata.decimals
+              ),
+              symbol: preparedQuoteTransfer.source.networkFeeAsset.metadata.symbol
+            }
+          : undefined
       const refreshingMaximumReview = reviewAfterQuoteRefresh.current !== null
       const minAmountOut = rheaReview.minAmountOut
       const priceImpact = calculateSwapPriceImpact({
@@ -6704,6 +6837,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }}
           fundingSource={swap.isZecSource ? fundingSource : undefined}
           sourceNetworkFee={getPreparedSwapNetworkFee(preparedQuoteTransfer)}
+          combinedNetworkFee={combinedNetworkFee}
           sourceFeeTier={
             walletOwnedSource?.family === 'evm' || walletOwnedSource?.family === 'bitcoin'
               ? networkFeeTier
@@ -6746,7 +6880,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                     pendingRheaEvmAfterApproval.approval.amountRaw,
                     swap.tokenIn.decimals
                   ),
-                  symbol: swap.tokenIn.symbol
+                  symbol: swap.tokenIn.symbol,
+                  signsOrder: rheaReview.execution.kind === 'evm-signature'
                 }
               : undefined
           }

@@ -67,15 +67,24 @@ export function createConfiguredEvmRpcClient(
 export { attestEvmRpcEndpoint, type AttestEvmRpcEndpointInput } from './evm-network-attestation'
 
 export function buildTrackedErc20Assets(config: EvmNetworkConfig) {
-  return config.usdcContract
-    ? Object.freeze([
-        Object.freeze({
-          assetId: `${config.chainId}/erc20:${config.usdcContract.toLowerCase()}`,
-          contract: config.usdcContract.toLowerCase(),
-          decimals: 6
-        })
-      ])
-    : Object.freeze([])
+  return Object.freeze([
+    ...(config.usdcContract
+      ? [
+          Object.freeze({
+            assetId: `${config.chainId}/erc20:${config.usdcContract.toLowerCase()}`,
+            contract: config.usdcContract.toLowerCase(),
+            decimals: 6
+          })
+        ]
+      : []),
+    ...(config.historyErc20Assets ?? []).map(asset =>
+      Object.freeze({
+        assetId: `${config.chainId}/erc20:${asset.contract.toLowerCase()}`,
+        contract: asset.contract.toLowerCase(),
+        decimals: asset.decimals
+      })
+    )
+  ])
 }
 
 function resolveHistoryApiUrl(config: EvmNetworkConfig): string | undefined {

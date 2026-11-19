@@ -70,6 +70,7 @@ interface SwapReviewViewProps {
   onRetryFee?: () => void
   fundingSource?: FundingSource
   sourceNetworkFee?: { readonly amount: string; readonly symbol: string } | null
+  combinedNetworkFee?: { readonly amount: string; readonly symbol: string }
   sourceFeeTier?: NetworkFeeTier
   sourceFeeFamily?: 'evm' | 'bitcoin'
   onSourceFeeTierChange?: (tier: NetworkFeeTier) => void | Promise<void>
@@ -87,6 +88,7 @@ interface SwapReviewViewProps {
     readonly spender: string
     readonly amount: string
     readonly symbol: string
+    readonly signsOrder?: boolean
   }
   hasSigningReview?: boolean
   signingActionLabel?: string
@@ -135,6 +137,7 @@ export function SwapReviewView({
   onRetryFee,
   fundingSource,
   sourceNetworkFee,
+  combinedNetworkFee,
   sourceFeeTier,
   sourceFeeFamily,
   onSourceFeeTierChange,
@@ -160,7 +163,13 @@ export function SwapReviewView({
       : fundingSource === 'transparent'
         ? 'Transparent'
         : undefined)
-  const actionLabel = hasSigningReview ? signingActionLabel : confirmLabel
+  const actionLabel = combinedNetworkFee
+    ? 'Approve & Swap'
+    : hasSigningReview
+      ? signingActionLabel
+      : approvalDetails
+        ? 'Approve token'
+        : confirmLabel
 
   return (
     <>
@@ -246,6 +255,15 @@ export function SwapReviewView({
               />
             )}
           </DetailItem>
+          {combinedNetworkFee && (
+            <DetailItem label="Max network fee">
+              <AmountDisplay
+                value={combinedNetworkFee.amount}
+                symbol={combinedNetworkFee.symbol}
+                profile="fee"
+              />
+            </DetailItem>
+          )}
           {onRefreshQuote && (
             <div className="flex items-center justify-between gap-3 py-2">
               <button
@@ -284,7 +302,7 @@ export function SwapReviewView({
                   </span>
                 </DetailItem>
               )}
-              <DetailItem label="Network fee">
+              <DetailItem label={combinedNetworkFee ? 'Approval fee' : 'Network fee'}>
                 {quoteRefreshing ? (
                   <span className="inline-block h-4 w-24 animate-pulse rounded bg-card" />
                 ) : sourceNetworkFee &&
@@ -381,7 +399,9 @@ export function SwapReviewView({
                   aria-expanded={showApprovalDetails}
                   className="flex w-full items-center justify-between gap-3 py-3 text-sm"
                 >
-                  <span className="shrink-0 text-muted">Step 1 of 2</span>
+                  <span className="shrink-0 text-muted">
+                    {combinedNetworkFee ? 'Token approval' : 'Step 1 of 2'}
+                  </span>
                   <span className="inline-flex min-w-0 items-center gap-1.5 text-right font-medium">
                     <span className="truncate">Approve {formatSymbol(approvalDetails.symbol)}</span>
                     <Icon
@@ -412,7 +432,11 @@ export function SwapReviewView({
                   </div>
                 )}
               </div>
-              <DetailItem label="Step 2 of 2">Sign Swap Order</DetailItem>
+              {!combinedNetworkFee && (
+                <DetailItem label="Step 2 of 2">
+                  {approvalDetails.signsOrder ? 'Sign Swap Order' : 'Swap'}
+                </DetailItem>
+              )}
             </>
           )}
         </div>
@@ -471,7 +495,7 @@ export function SwapReviewView({
             aria-label={
               quoteAcceptanceLabel
                 ? quoteAcceptanceLabel
-                : approvalDetails
+                : approvalDetails && !combinedNetworkFee
                   ? 'Confirm token approval'
                   : actionLabel
             }

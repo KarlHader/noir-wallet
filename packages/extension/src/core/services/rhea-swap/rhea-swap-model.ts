@@ -496,6 +496,7 @@ export interface RheaSwapEvmCallView {
   readonly data: string
   readonly value: string
   readonly from: string | null
+  readonly gasLimit?: string
 }
 
 export interface RheaSwapEvmTransactionPlan {

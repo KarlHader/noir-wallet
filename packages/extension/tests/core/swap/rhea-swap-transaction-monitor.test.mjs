@@ -13,6 +13,7 @@ import {
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 import { getZcashChainId } from '../../../src/core/chains/registry/index.ts'
+import { mapTransactionGraphToActivityItem } from '../../../src/core/activity/activity-read-model.ts'
 import { prepareRheaSwapZcashDestinationCatchUp } from '../../../src/background/rhea-swap-zcash-sync.ts'
 
 const scope = { keyDomainId: 'wallet:near', accountId: 'account:near' }
@@ -188,6 +189,93 @@ test('keeps ordinary same-chain onchain completion independent of backend status
     completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
     origin.evidence.transactionHash
   )
+})
+
+test('tracks a Polygon to BNB Chain swap from confirmed origin to reported destination', async () => {
+  const binding = {
+    ...sameChainBinding(),
+    quoteHandle: 'rhea-quote:polygon-bnb-monitor',
+    executionId: 'execution-polygon-bnb-monitor',
+    isCrossChain: true,
+    origin: {
+      chainId: 'eip155:137',
+      assetId: 'eip155:137/slip44:966',
+      protocolChainId: '137',
+      protocolAssetId: 'native'
+    },
+    destination: {
+      ...sameChainBinding().destination,
+      chainId: 'eip155:56',
+      assetId: 'eip155:56/erc20:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
+      protocolChainId: '56',
+      protocolAssetId: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'
+    }
+  }
+  const initial = createRheaSwapSignedSourceGraph({
+    transactionId: parseTransactionId('tx:rhea:polygon-bnb-monitor'),
+    scope,
+    binding,
+    sourceHash: `0x${'cd'.repeat(32)}`,
+    segmentIds: {
+      origin: parseTransactionSegmentId('segment:rhea:polygon-bnb:origin'),
+      relay: parseTransactionSegmentId('segment:rhea:polygon-bnb:relay'),
+      destination: parseTransactionSegmentId('segment:rhea:polygon-bnb:destination'),
+      refund: parseTransactionSegmentId('segment:rhea:polygon-bnb:refund')
+    },
+    now: 1_000
+  })
+  const repository = new InMemoryTransactionRepository()
+  await repository.create(initial)
+  const origin = initial.segments.find(segment => segment.role === 'origin')
+  const observed = await repository.applySegmentEvent({
+    scope,
+    transactionId: initial.root.id,
+    segmentId: origin.id,
+    event: {
+      id: parseTransactionEventId('event:rhea:polygon-bnb:origin-final'),
+      status: 'final',
+      cause: 'progress',
+      observedAt: 1_001
+    },
+    expectedRootRevision: initial.root.revision,
+    expectedSegmentRevision: origin.revision
+  })
+  assert.equal(observed.status, 'applied')
+  let status = 'pending'
+  const notifications = []
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async recordTransactionSubmission() {},
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return { status, destinationHash: status === 'completed' ? destinationHash : null }
+      },
+      async retireReportedSubmission() {}
+    },
+    {
+      notifyStatus: (_handle, value) => notifications.push(value.status),
+      prepareZcashDestinationCatchUp: async () => {
+        throw new Error('BNB destination must not start Zcash sync')
+      }
+    }
+  )
+  monitor.repository = repository
+
+  assert.equal(await monitor.checkGraph(observed.graph), false)
+  assert.notEqual((await repository.get(scope, initial.root.id)).root.status, 'final')
+  status = 'completed'
+  assert.equal(await monitor.checkGraph(observed.graph), true)
+  const completed = await repository.get(scope, initial.root.id)
+  assert.equal(completed.root.status, 'final')
+  assert.equal(
+    completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
+    destinationHash
+  )
+  assert.equal(
+    mapTransactionGraphToActivityItem(completed).snapshot.recipient.address,
+    binding.destination.recipient
+  )
+  assert.deepEqual(notifications, ['SUCCESS'])
 })
 
 function graph() {

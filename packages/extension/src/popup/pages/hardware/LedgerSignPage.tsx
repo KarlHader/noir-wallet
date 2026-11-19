@@ -137,6 +137,22 @@ export function LedgerSignPage() {
       signing.current = false
     }
   }
+  const continueSwap = async () => {
+    if (!swapApprovalId) return
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CONTINUE_LEDGER_SWAP_IN_PANEL',
+        transactionId: swapApprovalId
+      })
+      if (response?.result === true) {
+        window.close()
+        return
+      }
+    } catch {
+      // The side panel may have been closed while the Ledger tab was active.
+    }
+    navigate(`/swap?resumeApproval=${encodeURIComponent(swapApprovalId)}`)
+  }
   if (step === 'review' && view)
     return (
       <SigningSummaryReview
@@ -211,10 +227,7 @@ export function LedgerSignPage() {
       )}
       <div className="page-footer space-y-2">
         {step === 'success' && swapApprovalId && (
-          <Button
-            className="w-full"
-            onClick={() => navigate(`/swap?resumeApproval=${encodeURIComponent(swapApprovalId)}`)}
-          >
+          <Button className="w-full" onClick={() => void continueSwap()}>
             Continue Swap
           </Button>
         )}

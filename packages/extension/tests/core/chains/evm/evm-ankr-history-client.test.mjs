@@ -2,7 +2,10 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { createEvmAnkrHistoryClient } from '../../../../src/infrastructure/chains/evm/evm-ankr-history-client.ts'
+import { buildTrackedErc20Assets } from '../../../../src/infrastructure/chains/evm/index.ts'
+import { filterTrackedEvmTokenActivity } from '../../../../src/infrastructure/chains/evm/evm-indexed-activity.ts'
 import { createCachedEvmAnkrHistoryBatchSource } from '../../../../src/infrastructure/chains/evm/evm-cached-history-source.ts'
+import { getEvmNetworkConfigs } from '../../../../src/config/networks.ts'
 import {
   buildActivityReadModel,
   parseActivityReadModel
@@ -179,6 +182,59 @@ test('Ankr excludes untracked ERC-20 movements from activity', async () => {
     { chainId: 'eip155:1', scope, address: ADDRESS }
   ])
   expect(result.get('eip155:1')).toMatchObject({ items: [], partial: false })
+})
+
+test('indexes a confirmed BNB Chain USDC receipt for the recipient', async () => {
+  const bnbChain = getEvmNetworkConfigs('mainnet').find(chain => chain.chainId === 'eip155:56')
+  const tracked = buildTrackedErc20Assets(bnbChain)
+  const usdc = tracked.find(
+    asset => asset.contract === '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'
+  )
+  expect(usdc).toMatchObject({ decimals: 18 })
+  const client = createEvmAnkrHistoryClient(
+    'https://history.example/',
+    [
+      {
+        chainId: bnbChain.chainId,
+        nativeAssetId: 'eip155:56/slip44:714',
+        trackedErc20Assets: tracked
+      }
+    ],
+    async (_url, init) =>
+      JSON.parse(init.body).method === 'ankr_getTransactionsByAddress'
+        ? rpc({ transactions: [] })
+        : rpc({
+            transfers: [
+              {
+                blockchain: 'bsc',
+                transactionHash: HASH,
+                blockHeight: 100,
+                fromAddress: OTHER,
+                toAddress: ADDRESS,
+                contractAddress: usdc.contract,
+                tokenDecimals: 18,
+                timestamp: 1_700_000_000,
+                valueRawInteger: '984900000000000000'
+              }
+            ]
+          })
+  )
+  const result = await client.readAddressActivities([
+    { chainId: 'eip155:56', scope, address: ADDRESS }
+  ])
+  const item = result.get('eip155:56').items[0]
+  expect(item.snapshot).toMatchObject({
+    direction: 'incoming',
+    primaryAmount: { assetId: usdc.assetId, amountRaw: '984900000000000000' },
+    recipient: { chainId: 'eip155:56', address: ADDRESS }
+  })
+  expect(item.segments[0].evidence.transactionHash).toBe(HASH)
+  expect(filterTrackedEvmTokenActivity(item, new Set(tracked.map(asset => asset.assetId)))).toBe(
+    item
+  )
+  expect(
+    buildActivityReadModel({ scope, localGraphs: [], supplementalItems: [item] }).items
+  ).toHaveLength(1)
 })
 
 test('discarding an aborted batch also discards responses from a fetch that ignores abort', async () => {
