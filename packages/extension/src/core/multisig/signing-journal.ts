@@ -8,6 +8,7 @@ export type SigningIntentPhase =
   | 'review_ready'
   | 'signing'
   | 'signed'
+  | 'confirmed'
   | 'cancelled'
   | 'expired'
   | 'interrupted'
@@ -49,6 +50,7 @@ const PHASES: readonly SigningIntentPhase[] = [
   'review_ready',
   'signing',
   'signed',
+  'confirmed',
   'cancelled',
   'expired',
   'interrupted'
@@ -181,7 +183,7 @@ export function parseSigningIntent(value: unknown): Readonly<SigningIntent> {
     !PHASES.includes(input.phase as SigningIntentPhase) ||
     !NONCES.includes(input.noncePhase as SigningNoncePhase) ||
     (input.phase === 'review_ready' && input.noncePhase !== 'none') ||
-    (input.phase === 'signed' && input.noncePhase !== 'consumed')
+    ((input.phase === 'signed' || input.phase === 'confirmed') && input.noncePhase !== 'consumed')
   )
     throw new Error(FAIL)
   return Object.freeze({
@@ -193,7 +195,9 @@ export function parseSigningIntent(value: unknown): Readonly<SigningIntent> {
   })
 }
 export function isSigningIntentTerminal(phase: SigningIntentPhase): boolean {
-  return phase === 'cancelled' || phase === 'expired' || phase === 'interrupted'
+  return (
+    phase === 'cancelled' || phase === 'expired' || phase === 'interrupted' || phase === 'confirmed'
+  )
 }
 export function transitionSigningIntent(
   current: SigningIntent,
@@ -213,7 +217,10 @@ export function transitionSigningIntent(
     throw new Error(FAIL)
   const sameNonce = edge.expectedNoncePhase === edge.nextNoncePhase
   const terminating =
-    isSigningIntentTerminal(edge.nextPhase) &&
+    (edge.nextPhase === 'cancelled' ||
+      edge.nextPhase === 'expired' ||
+      edge.nextPhase === 'interrupted') &&
+    edge.expectedPhase !== 'signed' &&
     sameNonce &&
     (edge.nextPhase !== 'expired' || now >= current.expiresAt)
   const starting =

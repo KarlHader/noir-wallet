@@ -227,6 +227,7 @@ export function Home() {
     storageV2Account?.walletSource.kind === 'hardware' ||
     isZcashHardwareKeySource(currentWallet?.keySource)
   const multisigWalletEligible =
+    !isIndependentMultisig &&
     !isHardwareWallet &&
     currentWallet?.keySource !== 'private-key' &&
     storageV2Account?.walletSource.kind !== 'private-key'
@@ -987,7 +988,7 @@ export function Home() {
           data-layout={isTestnet ? 'centered' : 'distributed'}
           className="mb-5 flex justify-evenly gap-[13px] px-4"
         >
-          {(actionDomain === 'public' || (isIndependentMultisig && actionDomain !== 'shield')) && (
+          {(actionDomain === 'public' || isIndependentMultisig) && (
             <>
               <WalletActionButton
                 icon={<WalletActionIcon action="send" />}
@@ -1003,7 +1004,7 @@ export function Home() {
               />
             </>
           )}
-          {showMove && (
+          {!isIndependentMultisig && showMove && (
             <WalletActionButton
               icon={<WalletActionIcon action="move" />}
               label="Move"
@@ -1011,7 +1012,8 @@ export function Home() {
               disabled={!effectiveWalletId || !effectiveAccountId}
             />
           )}
-          {actionDomain === 'shield' &&
+          {!isIndependentMultisig &&
+            actionDomain === 'shield' &&
             (['send', 'receive', 'move'] as const).map(action => (
               <WalletActionButton
                 key={action}
@@ -1024,7 +1026,8 @@ export function Home() {
                 }
               />
             ))}
-          {!isTestnet &&
+          {!isIndependentMultisig &&
+            !isTestnet &&
             supportsSwap &&
             (assetDomain !== 'shield' || shieldActions.providersFor('swap').length > 0) && (
               <WalletActionButton
@@ -1034,13 +1037,15 @@ export function Home() {
                 disabled={assetDomain !== 'all' && assetDomain !== 'shield' && !canOpenSwapSource}
               />
             )}
-          <WalletActionButton
-            icon={<WalletShieldFundsIcon />}
-            label="Shielded"
-            onClick={() =>
-              navigate.navigate(`/shield-funds?mode=${privateMode ? 'private' : 'public'}`)
-            }
-          />
+          {!isIndependentMultisig && (
+            <WalletActionButton
+              icon={<WalletShieldFundsIcon />}
+              label="Shielded"
+              onClick={() =>
+                navigate.navigate(`/shield-funds?mode=${privateMode ? 'private' : 'public'}`)
+              }
+            />
+          )}
         </div>
 
         {/* Tabs */}

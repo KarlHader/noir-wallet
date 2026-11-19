@@ -11,6 +11,7 @@ import {
   readWalletMetadata,
   renameRetainedAccountMetadata,
   renameRetainedWalletMetadata,
+  resetWalletMetadata,
   setAccountNetworkSelection,
   writeWalletMetadata
 } from '../../../src/lib/wallet-metadata-storage.ts'
@@ -174,6 +175,49 @@ test.describe('Wallet metadata persistence', () => {
       expect((await readWalletMetadata()).state.wallets).toEqual([])
       expect(storage.values.wallet_deleted_ids).toContain(wallet.id)
       expect(await getWalletDeletionRecord(wallet.id)).toEqual(['account:0'])
+    } finally {
+      storage.restore()
+    }
+  })
+
+  test('reset deletes protected snapshots under both locks before tombstoning wallets', async () => {
+    const snapshot = { state: { wallets: [wallet], currentWalletId: wallet.id } }
+    const storage = mockStorage({ wallet_state: snapshot })
+    const held = []
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          async request(name, action) {
+            held.push(name)
+            try {
+              return await action()
+            } finally {
+              held.pop()
+            }
+          }
+        }
+      }
+    })
+    try {
+      await expect(
+        resetWalletMetadata(async () => {
+          expect(held).toEqual(['noir-wallet-metadata', 'noir-multisig-storage'])
+          expect(storage.values.wallet_state).toEqual(snapshot)
+          throw new Error('protected snapshot cleanup failed')
+        })
+      ).rejects.toThrow('protected snapshot cleanup failed')
+      expect(storage.values.wallet_state).toEqual(snapshot)
+      expect(storage.values.wallet_deleted_ids).toBeUndefined()
+
+      let deleted = false
+      await resetWalletMetadata(async () => {
+        deleted = true
+        expect(held).toEqual(['noir-wallet-metadata', 'noir-multisig-storage'])
+      })
+      expect(deleted).toBe(true)
+      expect(storage.values.wallet_deleted_ids).toContain(wallet.id)
+      expect(storage.values.wallet_state.state.wallets).toEqual([])
     } finally {
       storage.restore()
     }

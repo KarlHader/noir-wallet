@@ -847,10 +847,48 @@ export class PcztTools {
     alphas: Uint8Array
   ): void
   /**
+   * The signer's own reading of the transaction: every output (recipient, amount, change, memo) and
+   * every spend, with the totals and the fee.
+   *
+   * Returns `[reviewedPcztSha256, outputs, spends, sentTotal, changeTotal, fee, header]` where:
+   *
+   * * `reviewedPcztSha256` — SHA-256 of **the bytes passed in**, so a caller can persist "this is the
+   *   transaction I reviewed" and compare it later. Compute it on the PCZT the user was shown, not on a
+   *   later, proved copy: proving changes the bytes.
+   * * `outputs` — array of `[recipient(43), value, isChange, memoOrNull]`. `memoOrNull` is either the
+   *   exact 512-byte memo (ZIP-302 marker and padding included) or `null` for "could not verify"; the
+   *   two must never be conflated, so a caller that needs a memo must reject `null`.
+   * * `spends` — array of `[actionIndex, nullifier(32), value]`, one per spend that belongs to this
+   *   viewing key. The first element is the position **inside the bundle**, which is what signature
+   *   write-back needs; filler actions shift it, so it is not the position in this array.
+   * * `sentTotal` / `changeTotal` / `fee` — in zats, as JS `Number`s. ZEC has 8 decimals, so every valid
+   *   amount (≤ 21e6 ZEC = 2.1e15 zats) is well inside `Number.MAX_SAFE_INTEGER`; callers should still
+   *   reject anything above that rather than trust the conversion.
+   * * `header` — `{ txVersion, versionGroupId, consensusBranchId, expiryHeight, coinType }`, read from the
+   *   PCZT's global section. `coinType` is the builder's claim (0 mainnet, 1 testnet), not a proof of
+   *   network; compare it with the wallet's configuration.
+   *
+   * Fails wholesale if any check fails: there is no "partially reviewed" result to approve.
+   */
+  static review(bytes: Uint8Array, fvk: Uint8Array): Array<any>
+  /**
    * The shielded sighash, recomputed from the PCZT. Signers must use this value, never one handed
    * to them by the coordinator.
    */
   static shielded_sighash(bytes: Uint8Array): Uint8Array
+  /**
+   * The action indices this signer must produce signatures for, in bundle order.
+   *
+   * A bundle has one spend and one output per action, so a transaction that pays two addresses carries a
+   * zero-value filler spend that belongs to nobody. Those actions must be excluded from signing — their
+   * `rk` is not the group key — while their original `action_index` values are what signature write-back
+   * needs. Signing the position in this array instead of the index is the bug this returns indices to
+   * prevent.
+   *
+   * Fails if an action is neither ours nor a valid filler: a non-zero spend whose `rk` is not
+   * `ak + alpha·G`, or a zero-value one that arrives unsigned.
+   */
+  static signingSet(bytes: Uint8Array, group_verifying_key: Uint8Array): Uint8Array
   /**
    * Drop the zk proof: the transport copy. The coordinator keeps its own proven copy for applying
    * signatures.
@@ -1473,6 +1511,13 @@ export class WebWallet {
    * Returns a UnifiedAddresses object. `transparent` and `address_index` will be null.
    */
   get_next_shielded_address(account_id: number): Promise<any>
+  /**
+   * The raw bytes of a stored transaction, or `undefined` when the wallet has no record of it.
+   *
+   * Lets a caller persist the exact transaction next to its own intent record rather than depending on
+   * the wallet database alone.
+   */
+  get_stored_transaction_bytes(txid: string): Promise<Uint8Array | undefined>
   get_transaction_history(account_id: number): Promise<any>
   /**
    * Get addresses for an account
@@ -1622,6 +1667,16 @@ export class WebWallet {
     expiry_delta_blocks?: number | null
   ): Promise<Pczt>
   /**
+   * Prove an externally signed PCZT **without sending it**.
+   *
+   * Hardware-wallet and vault accounts never hold Sapling notes, so no Sapling proof generation key is
+   * needed.
+   *
+   * # Returns
+   * The proved PCZT, ready for `pczt_store`
+   */
+  pczt_prove(pczt: Pczt): Promise<Pczt>
+  /**
    * Prove and broadcast an externally signed PCZT (hardware wallet flow).
    *
    * Hardware-wallet accounts never hold Sapling notes (Keystone supports
@@ -1637,6 +1692,35 @@ export class WebWallet {
    * ZIP-317 fee tier so hardware shields honor the dynamic-fee tiers too.
    */
   pczt_shield_create(account_id: number, marginal_fee_zats: bigint): Promise<Pczt>
+  /**
+   * Finalize a proved PCZT and store the transaction, **without broadcasting**.
+   *
+   * This is the point where a caller can obtain a stable transaction id and the transaction itself
+   * before anything reaches the network. After it returns, the transaction is in the wallet database
+   * and can be submitted later by txid with `send_authorized_transactions` — including after a restart,
+   * if the database itself survived.
+   *
+   * # Returns
+   * Transaction ID string (lowercase hex, display order — the same order as `txid` on explorers)
+   */
+  pczt_store(pczt: Pczt): Promise<string>
+  /**
+   * Finalize a proved PCZT, store it, and return everything a caller must persist before submitting.
+   *
+   * Returns `{ txId, rawTxSha256, rawTxLen, network }`:
+   *
+   * * `txId` — display-order lowercase hex, the same id explorers show.
+   * * `rawTxSha256` — SHA-256 of the stored transaction bytes, lowercase hex. It identifies *the bytes you
+   *   stored*: finalizing the same PCZT twice yields the same `txId` and different bytes, so this digest
+   *   cannot be compared across two separate finalizations.
+   * * `rawTxLen` — byte length of the stored transaction.
+   * * `network` — the wallet's configured network (`"mainnet"` / `"testnet"`). This is configuration, not a
+   *   proof read out of the transaction.
+   *
+   * The account id is deliberately absent: the PCZT's proposal metadata that records it is private to the
+   * wallet backend, so we cannot read it back. A caller that needs the binding must keep its own record.
+   */
+  pczt_store_detailed(pczt: Pczt): Promise<any>
   /**
    * Journal-aware sync: download + scan one batch, return journal data for persistence.
    * Returns null if fully synced, or Uint8Array with journal entry data.
@@ -2210,6 +2294,7 @@ export interface InitOutput {
   readonly webwallet_get_latest_block: (a: number) => number
   readonly webwallet_get_latest_height: (a: number) => number
   readonly webwallet_get_next_shielded_address: (a: number, b: number) => number
+  readonly webwallet_get_stored_transaction_bytes: (a: number, b: number, c: number) => number
   readonly webwallet_get_transaction_history: (a: number, b: number) => number
   readonly webwallet_get_unified_addresses: (a: number, b: number) => number
   readonly webwallet_get_wallet_summary: (a: number) => number
@@ -2352,8 +2437,11 @@ export interface InitOutput {
     g: bigint,
     h: number
   ) => number
+  readonly webwallet_pczt_prove: (a: number, b: number) => number
   readonly webwallet_pczt_prove_and_send: (a: number, b: number) => number
   readonly webwallet_pczt_shield_create: (a: number, b: number, c: bigint) => number
+  readonly webwallet_pczt_store: (a: number, b: number) => number
+  readonly webwallet_pczt_store_detailed: (a: number, b: number) => number
   readonly webwallet_prepare_sync_batch: (a: number, b: number, c: number) => number
   readonly webwallet_prepare_sync_batch_optimized: (a: number, b: number) => number
   readonly webwallet_replay_journal_entries: (a: number, b: number, c: number) => number
@@ -2584,7 +2672,9 @@ export interface InitOutput {
     f: number,
     g: number
   ) => void
+  readonly pczttools_review: (a: number, b: number, c: number, d: number, e: number) => void
   readonly pczttools_shielded_sighash: (a: number, b: number, c: number) => void
+  readonly pczttools_signingSet: (a: number, b: number, c: number, d: number, e: number) => void
   readonly pczttools_strip_proofs: (a: number, b: number, c: number) => void
   readonly rostermanifest_add_participant: (
     a: number,
@@ -2748,11 +2838,11 @@ export interface InitOutput {
   readonly rustsecp256k1_v0_14_default_illegal_callback_fn: (a: number, b: number) => void
   readonly rustsecp256k1_v0_14_context_create: (a: number) => number
   readonly rustsecp256k1_v0_14_context_destroy: (a: number) => void
-  readonly __wasm_bindgen_func_elem_16663: (a: number, b: number, c: number, d: number) => void
-  readonly __wasm_bindgen_func_elem_16680: (a: number, b: number, c: number, d: number) => void
-  readonly __wasm_bindgen_func_elem_12560: (a: number, b: number, c: number) => void
-  readonly __wasm_bindgen_func_elem_16665: (a: number, b: number, c: number) => void
-  readonly __wasm_bindgen_func_elem_12483: (a: number, b: number) => void
+  readonly __wasm_bindgen_func_elem_16706: (a: number, b: number, c: number, d: number) => void
+  readonly __wasm_bindgen_func_elem_16723: (a: number, b: number, c: number, d: number) => void
+  readonly __wasm_bindgen_func_elem_12600: (a: number, b: number, c: number) => void
+  readonly __wasm_bindgen_func_elem_16708: (a: number, b: number, c: number) => void
+  readonly __wasm_bindgen_func_elem_12523: (a: number, b: number) => void
   readonly memory: WebAssembly.Memory
   readonly __wbindgen_export: (a: number, b: number) => number
   readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number

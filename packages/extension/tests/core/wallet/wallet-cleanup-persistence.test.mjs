@@ -141,6 +141,14 @@ function coordinatorFixture(
     '@/store/account-data-store': { rehydrateAccountDataStore: noop },
     '@/lib/wallet-metadata-storage': walletMetadata,
     '@/lib/indexed-db': { blockWalletRecords: noop, unblockWalletRecords: noop },
+    '@/lib/multisig-group-storage': { withMultisigStorageLock: action => action() },
+    '@/lib/multisig-transaction-guard': {
+      assertNoUnresolvedMultisigTransactionsLocked: noop
+    },
+    '@/lib/multisig-transaction-snapshot': {
+      deleteProtectedMultisigSnapshotsForAccount: noop,
+      deleteProtectedMultisigSnapshotsForWallet: noop
+    },
     '@/lib/multisig-vault-storage': {
       async deleteMultisigDataForAccount(_walletId, accountId) {
         events.push('sealed-delete')

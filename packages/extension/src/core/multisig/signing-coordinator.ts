@@ -5,6 +5,7 @@ import { createEnvelopeSigner, verifyEnvelope, type EnvelopeSigner } from './env
 import { parseIdentityPublicKey, type DeviceIdentity } from './identity'
 import { parseEnvelope, roundOf, type MultisigEnvelope, type MultisigMessageType } from './messages'
 import { parseRosterManifest, type RosterManifest } from './roster'
+import { readSigningActions } from './pczt-review'
 import {
   assertSigningCarrierSize,
   parseSignEnvelopePayload,
@@ -77,6 +78,7 @@ export class SigningCoordinatorSession {
   private readonly transportPczt: Uint8Array
   private readonly sighash: Uint8Array
   private readonly alphas: Uint8Array
+  private readonly signingIndices: Uint8Array
   private readonly sessionId: Uint8Array
   private readonly envelopeSigner: EnvelopeSigner
   private readonly transport: 'qr' | 'ble'
@@ -152,17 +154,16 @@ export class SigningCoordinatorSession {
       if (bytesToHex(sha256(this.pczt)) !== this.binding.pcztDigest) throw new Error(FAIL)
       wasm.PcztTools.check(this.pczt)
       this.sighash = wasm.PcztTools.shielded_sighash(this.pczt)
-      this.alphas = wasm.PcztTools.action_alphas(this.pczt)
+      const actions = readSigningActions(wasm.PcztTools, this.pczt, this.ak)
+      this.signingIndices = actions.indices
+      this.alphas = actions.selectedAlphas
       const rks = wasm.PcztTools.action_rks(this.pczt)
       if (
         this.sighash.length !== 32 ||
-        !this.alphas.length ||
-        this.alphas.length % 32 !== 0 ||
-        this.alphas.length > 256 * 32 ||
-        rks.length !== this.alphas.length
+        !(rks instanceof Uint8Array) ||
+        rks.length !== actions.actionAlphas.length
       )
         throw new Error(FAIL)
-      wasm.PcztTools.check_action_bindings(this.pczt, this.ak, this.alphas)
       this.transportPczt = wasm.PcztTools.strip_proofs(this.pczt)
       if (
         bytesToBase64(this.transportPczt).length > SIGN_PCZT_BASE64_LIMIT ||
@@ -170,7 +171,12 @@ export class SigningCoordinatorSession {
       )
         throw new Error(FAIL)
       wasm.PcztTools.check(this.transportPczt)
-      wasm.PcztTools.check_action_bindings(this.transportPczt, this.ak, this.alphas)
+      const transported = readSigningActions(wasm.PcztTools, this.transportPczt, this.ak)
+      if (
+        !equal(this.signingIndices, transported.indices) ||
+        !equal(this.alphas, transported.selectedAlphas)
+      )
+        throw new Error(FAIL)
       this.envelopeSigner = createEnvelopeSigner({
         groupId: this.binding.groupId,
         sessionId: this.binding.sessionId,
@@ -382,7 +388,9 @@ export class SigningCoordinatorSession {
     )
       throw new Error(FAIL)
     this.wasm.PcztTools.check(this.pczt)
-    this.wasm.PcztTools.check_action_bindings(this.pczt, this.ak, this.alphas)
+    const current = readSigningActions(this.wasm.PcztTools, this.pczt, this.ak)
+    if (!equal(this.signingIndices, current.indices) || !equal(this.alphas, current.selectedAlphas))
+      throw new Error(FAIL)
     if (bytesToHex(sha256(this.pczt)) !== this.binding.pcztDigest) throw new Error(FAIL)
     // Validate every actual signed carrier (including Noise overhead) before consuming our nonce.
     const outbound: MultisigEnvelope[] = []
@@ -409,11 +417,7 @@ export class SigningCoordinatorSession {
         this.sighash,
         signatures.subarray(i * 64, (i + 1) * 64)
       )
-    const signed = this.wasm.PcztTools.apply_signatures(
-      this.pczt,
-      Uint8Array.from({ length: count }, (_, index) => index),
-      signatures
-    )
+    const signed = this.wasm.PcztTools.apply_signatures(this.pczt, this.signingIndices, signatures)
     this.wasm.PcztTools.check(signed)
     if (!equal(this.sighash, this.wasm.PcztTools.shielded_sighash(signed))) throw new Error(FAIL)
     this.signedPczt = signed

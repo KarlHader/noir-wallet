@@ -1,6 +1,11 @@
 import { deleteMultisigIdentity } from '@/lib/multisig-identity-storage'
 import type { MultisigDevice, MultisigGroupRecord } from '@/core/multisig/types'
 import { storageJsonEquals } from './storage-json-equality'
+import {
+  assertNoUnresolvedMultisigTransactionsLocked,
+  MULTISIG_FINALIZATION_RECOVERY_STORAGE_KEY,
+  MULTISIG_TRANSACTION_STORAGE_KEY
+} from './multisig-transaction-guard'
 
 export const MULTISIG_GROUPS_STORAGE_KEY = 'multisig_groups_v1'
 export const MULTISIG_BANNER_STORAGE_KEY = 'multisig_banner_dismissed_v1'
@@ -159,12 +164,15 @@ export async function dismissMultisigBanner(scope: MultisigGroupScope): Promise<
 
 export async function clearMultisigData(): Promise<void> {
   await withMultisigStorageLock(async () => {
+    await assertNoUnresolvedMultisigTransactionsLocked(() => true)
     await chrome.storage.local.remove([
       MULTISIG_GROUPS_STORAGE_KEY,
       MULTISIG_BANNER_STORAGE_KEY,
       MULTISIG_VAULT_RECORDS_STORAGE_KEY,
       MULTISIG_CREATION_STORAGE_KEY,
-      MULTISIG_SIGNING_STORAGE_KEY
+      MULTISIG_SIGNING_STORAGE_KEY,
+      MULTISIG_TRANSACTION_STORAGE_KEY,
+      MULTISIG_FINALIZATION_RECOVERY_STORAGE_KEY
     ])
     await deleteMultisigIdentity()
   })

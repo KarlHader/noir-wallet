@@ -2220,6 +2220,22 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
   await waitForBackgroundWalletInitialization(popup)
   const background = context.serviceWorkers()[0]
   const verifyUi = process.env.FROST_MULTISIG_UI === '1'
+  await context.route('https://zcash-wallet-history.deltarpc.com/**', async route => {
+    const request = route.request().postDataJSON() as { method?: string } | null
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        result:
+          request?.method === 'getblockchaininfo' ? { chain: 'test', blocks: 4_500_000 } : null,
+        error:
+          request?.method === 'getblockchaininfo'
+            ? null
+            : { code: -5, message: 'Unknown fixture transaction' }
+      })
+    })
+  })
   let walletId = `key-domain:frost-mv3-${crypto.randomUUID()}`
   let accountId = `frost-account-${crypto.randomUUID()}`
   let groupId = crypto.randomUUID()
@@ -2273,9 +2289,17 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       response.writeHead(204).end()
       return
     }
+    // This account fixture has no compact-block chain for a complete payment sync.
+    if (request.url?.endsWith('/GetBlockRange')) {
+      response.writeHead(503).end()
+      return
+    }
     // Empty server streams contain no protobuf message. An empty DATA frame
-    // would instead supply an invalid default subtree root or compact block.
-    if (request.url?.endsWith('/GetSubtreeRoots') || request.url?.endsWith('/GetBlockRange')) {
+    // would instead supply an invalid default subtree root or UTXO.
+    if (
+      request.url?.endsWith('/GetSubtreeRoots') ||
+      request.url?.endsWith('/GetAddressUtxosStream')
+    ) {
       response.writeHead(200, { 'content-type': 'application/grpc-web+proto' })
       response.end(Buffer.concat([trailerFrame, trailers]))
       return
@@ -2446,15 +2470,35 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       await init()
       await unlock()
     }
-    const identities = await Promise.all([generateDeviceIdentity(), generateDeviceIdentity()])
+    // Use the persisted browser identity that the real signing Worker authenticates.
+    // Its private keys stay non-extractable in the extension's IndexedDB.
+    const identityPage = await context.newPage()
+    let extensionIdentityPublicKey: number[]
+    try {
+      await identityPage.goto(
+        `chrome-extension://${extensionId}/tests/extension/credential-repository-integration.html`
+      )
+      await identityPage.waitForFunction(() => 'credentialRepositoryIntegration' in window)
+      extensionIdentityPublicKey = await identityPage.evaluate(() =>
+        (
+          window as unknown as {
+            credentialRepositoryIntegration: { multisigIdentityPublicKey(): Promise<number[]> }
+          }
+        ).credentialRepositoryIntegration.multisigIdentityPublicKey()
+      )
+    } finally {
+      await identityPage.close()
+    }
+    const phoneIdentity = await generateDeviceIdentity()
+    const identityPublicKeys = [new Uint8Array(extensionIdentityPublicKey), phoneIdentity.publicKey]
     const outerSessionId = crypto.randomUUID()
     const roster = buildRoster({
       groupId,
       threshold: 2,
       identities: new Map(
-        identities.map((identity, slot) => [
+        identityPublicKeys.map((publicKey, slot) => [
           slot,
-          Buffer.from(identity.publicKey).toString('base64')
+          Buffer.from(publicKey).toString('base64')
         ])
       )
     })
@@ -2478,28 +2522,28 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
     const handler: VaultDkgRpcHandler = { handle: rpc, sessionCount: 1 }
     const wasm = await loadVaultWasm()
     const phone = new Phone(wasm, open, 1, sessionId)
-    const signers = identities.map((identity, slot) =>
-      createEnvelopeSigner({
-        groupId,
-        sessionId: outerSessionId,
-        senderId: `device-${slot + 1}`,
-        signingKey: identity.signingKeys.privateKey
-      })
-    )
+    const phoneSigner = createEnvelopeSigner({
+      groupId,
+      sessionId: outerSessionId,
+      senderId: 'device-2',
+      signingKey: phoneIdentity.signingKeys.privateKey
+    })
     const complete = await runRounds(
       wasm,
       handler,
       open,
       sessionId,
       [phone],
-      (slot, type, payload) =>
-        signers[slot].next(type, 'device-1', payload as Record<string, unknown>)
+      (slot, type, payload) => {
+        expect(slot).toBe(1)
+        return phoneSigner.next(type, 'device-1', payload as Record<string, unknown>)
+      }
     )
     expect(complete.record.version).toBe(2)
     expect(phone.finish(complete.inboxes['1'], complete.sealedQsk['1'], true)).toBe(
       complete.fingerprint
     )
-    const confirmation = await signers[1].next('DKG_FINAL', 'device-1', {
+    const confirmation = await phoneSigner.next('DKG_FINAL', 'device-1', {
       fingerprint: complete.fingerprint
     })
     const summary = await rpc<{ address: string; authenticated: { creationConfirmed: boolean } }>(
@@ -2607,17 +2651,13 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
         amount: '1',
         memo: '',
         marginalFeeZats: 5_000,
-        feeQuoteId: 'unavailable-review-fixture'
+        feeQuoteId: 'untrusted-review-fixture'
       },
       selectedSlots: [0, 1],
       transport: 'qr'
     }
-    // This package has no verified payment-review export. The real Worker must
-    // return no review authority, even with a genuine sealed independent account.
-    expect(await rpc('vault.sign.worker.prepare', signingPrepare)).toEqual({
-      available: false,
-      reason: 'pczt_review_unavailable'
-    })
+    // A caller-supplied fee ID cannot authorize preparation, even with a valid destination UA.
+    await expect(rpc('vault.sign.worker.prepare', signingPrepare)).rejects.toThrow()
     for (const changedScope of [
       { ...signingPrepare.scope, accountId: `${accountId}-other` },
       { ...signingPrepare.scope, walletId: `${walletId}-other` },
@@ -2645,6 +2685,10 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
     )
     expect(deniedSigning.error).toBeTruthy()
     if (verifyUi) {
+      const actions = popup.getByTestId('home-actions')
+      for (const name of ['Swap', 'Move', 'Shielded']) {
+        await expect(actions.getByRole('button', { name, exact: true })).toHaveCount(0)
+      }
       await popup.getByRole('button', { name: 'Receive', exact: true }).click()
       const receiveAddresses = popup.getByRole('region', { name: 'Account network addresses' })
       await expect(receiveAddresses.getByTitle(summary.address, { exact: true })).toBeVisible()
@@ -2666,10 +2710,14 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       await sendPage.getByRole('textbox', { name: 'Amount in ZEC' }).fill('0.00000001')
       await sendPage.getByRole('button', { name: 'Prepare transfer', exact: true }).click()
       await expect(
-        sendPage.getByText('Multisig sending is unavailable in this wallet version.')
+        sendPage.getByText(
+          'Unable to prepare this transfer. Check that the wallet is unlocked and try again.'
+        )
       ).toBeVisible({ timeout: 50_000 })
+      // This unfunded chain fixture cannot complete preparation's full sync.
+      // Rejection must leave no review or signing authority; enabled signing is separate acceptance.
       await sendPage.screenshot({
-        path: '../../e2e-output/multisig/send-unavailable.png',
+        path: '../../e2e-output/multisig/send-prepare-rejected.png',
         animations: 'disabled'
       })
       await expect(sendPage.getByRole('button', { name: /sign|approve|broadcast/i })).toHaveCount(0)
@@ -2703,6 +2751,126 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
         }
       )
       expect(genericSend.error).toBe('Operation is unavailable for this FROST account')
+      // Seed only public journal metadata to exercise real extension reload/recovery UI.
+      // This fixture has no signed PCZT, stored raw transaction or submission authority.
+      const recoveryFixture = await popup.evaluate(
+        async ({ walletId, accountId, groupId, recipient }) => {
+          const saved = await chrome.storage.local.get([
+            'multisig_signing_v1',
+            'multisig_transactions_v1'
+          ])
+          const createdAt = Date.now()
+          const binding = {
+            network: 'mainnet',
+            walletId,
+            accountId,
+            groupId,
+            rosterVersion: 1,
+            reviewId: 'mv3-recovery-fixture',
+            pcztDigest: 'ab'.repeat(32),
+            sessionId: btoa(String.fromCharCode(...new Uint8Array(16).fill(7))),
+            threshold: '2-of-2',
+            selectedSlots: [0, 1],
+            transport: 'qr',
+            createdAt,
+            expiresAt: createdAt + 300_000
+          }
+          const key = JSON.stringify(['mainnet', walletId, accountId])
+          await chrome.storage.local.set({
+            multisig_signing_v1: {
+              ...saved.multisig_signing_v1,
+              [key]: {
+                version: 1,
+                activeSessionId: binding.sessionId,
+                tombstones: [],
+                records: [
+                  {
+                    ...binding,
+                    version: 1,
+                    phase: 'signed',
+                    noncePhase: 'consumed',
+                    updatedAt: createdAt
+                  }
+                ]
+              }
+            },
+            multisig_transactions_v1: {
+              ...saved.multisig_transactions_v1,
+              [key]: [
+                {
+                  version: 2,
+                  binding,
+                  txId: '13'.repeat(32),
+                  rawTxSha256: '24'.repeat(32),
+                  rawTxLen: 1234,
+                  snapshotSha256: '35'.repeat(32),
+                  phase: 'submission_unknown',
+                  updatedAt: createdAt,
+                  review: {
+                    recipient,
+                    amount: '1',
+                    memo: '',
+                    fee: '10000',
+                    marginalFeeZats: 5000,
+                    feeQuoteId: 'mv3-recovery-fixture'
+                  }
+                }
+              ]
+            }
+          })
+          return {
+            saved,
+            key,
+            authority: { walletId, reviewId: binding.reviewId, sessionId: binding.sessionId }
+          }
+        },
+        { walletId, accountId, groupId, recipient: summary.address }
+      )
+      try {
+        await sendPage.reload()
+        await expect(sendPage.getByText('Submission status unknown', { exact: true })).toBeVisible()
+        await expect(sendPage.getByText('13'.repeat(32), { exact: true })).toBeVisible()
+        await expect(
+          sendPage.getByRole('button', { name: 'Prepare transfer', exact: true })
+        ).toHaveCount(0)
+        const recoveredSubmit = await popup.evaluate(
+          payload =>
+            chrome.runtime.sendMessage({
+              type: 'WORKER_RPC',
+              method: 'vault.send.submit',
+              payload
+            }),
+          recoveryFixture.authority
+        )
+        expect(recoveredSubmit.error).toBeTruthy()
+        await sendPage.screenshot({
+          path: '../../e2e-output/multisig/submission-unknown.png',
+          animations: 'disabled'
+        })
+        await popup.evaluate(async key => {
+          const saved = await chrome.storage.local.get('multisig_transactions_v1')
+          delete saved.multisig_transactions_v1[key]
+          await chrome.storage.local.set(saved)
+        }, recoveryFixture.key)
+        await sendPage.reload()
+        await expect(
+          sendPage.getByText(
+            'A signed transfer needs recovery. Check this account before starting another payment.'
+          )
+        ).toBeVisible()
+        await expect(
+          sendPage.getByRole('button', { name: 'Prepare transfer', exact: true })
+        ).toHaveCount(0)
+        await sendPage.screenshot({
+          path: '../../e2e-output/multisig/signed-recovery.png',
+          animations: 'disabled'
+        })
+      } finally {
+        await popup.evaluate(async saved => {
+          await chrome.storage.local.remove(['multisig_signing_v1', 'multisig_transactions_v1'])
+          await chrome.storage.local.set(saved)
+        }, recoveryFixture.saved)
+      }
       expect(
         await popup.evaluate(
           input => chrome.runtime.sendMessage({ type: 'SWITCH_ACCOUNT', ...input }),
@@ -2742,10 +2910,7 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
     }
     if (!verifyUi) expect(await rpc('wallet.persistDb', { walletId, key: dbKey })).toBe(true)
     await rpc('worker.recreate', {})
-    expect(await rpc('vault.sign.worker.prepare', signingPrepare)).toEqual({
-      available: false,
-      reason: 'pczt_review_unavailable'
-    })
+    await expect(rpc('vault.sign.worker.prepare', signingPrepare)).rejects.toThrow()
     await expect(rpc('vault.sign.worker.start', absentReview)).rejects.toThrow()
     if (!verifyUi) await init()
     await unlock()
@@ -2756,14 +2921,57 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
     expect(await rpc('wallet.getUnifiedAddresses', { walletId, accountId: reloadedId })).toEqual(
       addresses
     )
-    expect(await rpc('vault.sign.worker.prepare', signingPrepare)).toEqual({
-      available: false,
-      reason: 'pczt_review_unavailable'
-    })
+    await expect(rpc('vault.sign.worker.prepare', signingPrepare)).rejects.toThrow()
     await expect(rpc('vault.sign.worker.start', absentReview)).rejects.toThrow()
     if (verifyUi) expect(treeStateRequests).toBeGreaterThanOrEqual(1)
     else expect(treeStateRequests).toBe(1)
     expect(submissionRequests).toBe(0)
+    // Restart the actual Offscreen document with a synthetic pre-mutation marker on disk.
+    // The new document must reject ordinary wallet RPCs before restoring a stale DB.
+    const barrierKey = `noir_multisig_finalization_barrier_v1:mainnet:${walletId}`
+    await popup.evaluate(
+      async ({ key, walletId, accountId }) => {
+        await chrome.storage.local.set({
+          [key]: {
+            version: 1,
+            network: 'mainnet',
+            walletId,
+            accountId,
+            token: 'mv3-interrupted-finalization'
+          }
+        })
+      },
+      { key: barrierKey, walletId, accountId }
+    )
+    try {
+      await background.evaluate(async () => {
+        await chrome.offscreen.closeDocument()
+        await chrome.offscreen.createDocument({
+          url: chrome.runtime.getURL('src/offscreen/index.html'),
+          reasons: [chrome.offscreen.Reason.WORKERS],
+          justification: 'Verify interrupted multisig finalization recovery in isolation'
+        })
+      })
+      await expect
+        .poll(async () => {
+          try {
+            await rpc('wallet.getBalance', { walletId, accountId: id })
+            return 'Unexpected wallet access'
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error)
+          }
+        })
+        .toContain('Multisig wallet requires verified recovery')
+      expect(
+        await popup.evaluate(
+          async key => Boolean((await chrome.storage.local.get(key))[key]),
+          barrierKey
+        )
+      ).toBe(true)
+      expect(submissionRequests).toBe(0)
+    } finally {
+      await popup.evaluate(key => chrome.storage.local.remove(key), barrierKey)
+    }
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close(error => (error ? reject(error) : resolve()))

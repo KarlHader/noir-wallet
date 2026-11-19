@@ -19,6 +19,8 @@ import {
 } from './multisig-group-storage'
 import { withUndeletedWalletAccountMetadata } from './wallet-metadata-storage'
 import { storageJsonEquals } from './storage-json-equality'
+import { MULTISIG_TRANSACTION_STORAGE_KEY } from './multisig-transaction-guard'
+import { parseMultisigTransactionRecord } from '@/core/multisig/transaction-journal'
 
 // Compact only expired terminal records. Replay IDs and highest nonce phases survive until deletion.
 const PER_ACCOUNT_LIMIT = 128
@@ -271,6 +273,69 @@ export function createSigningJournal() {
           })
       )
     },
+    async settleConfirmedSigningIntent(
+      input: SigningIntentBinding,
+      txId: string,
+      now: number
+    ): Promise<Readonly<SigningIntent>> {
+      const binding = parseSigningIntentBinding(input)
+      if (!/^[0-9a-f]{64}$/.test(txId) || !Number.isSafeInteger(now) || now < 0)
+        throw new Error(FAIL)
+      return withUndeletedWalletAccountMetadata(
+        binding.walletId,
+        binding.accountId,
+        binding.network,
+        () =>
+          withMultisigStorageLock(async () => {
+            const journals = await readStored()
+            const key = signingJournalScopeKey(binding)
+            const account = journals[key]
+            const index =
+              account?.records.findIndex(record => record.sessionId === binding.sessionId) ?? -1
+            const current = account?.records[index]
+            if (
+              !current ||
+              !sameBinding(current, binding) ||
+              (current.phase !== 'signed' && current.phase !== 'confirmed') ||
+              current.noncePhase !== 'consumed' ||
+              now < current.updatedAt
+            )
+              throw new Error(FAIL)
+            const rawTransactions: unknown = (
+              await chrome.storage.local.get(MULTISIG_TRANSACTION_STORAGE_KEY)
+            )[MULTISIG_TRANSACTION_STORAGE_KEY]
+            if (
+              !rawTransactions ||
+              typeof rawTransactions !== 'object' ||
+              Array.isArray(rawTransactions)
+            )
+              throw new Error(FAIL)
+            const rows: unknown = (rawTransactions as Record<string, unknown>)[key]
+            if (!Array.isArray(rows)) throw new Error(FAIL)
+            const confirmed = rows
+              .map(parseMultisigTransactionRecord)
+              .filter(
+                record =>
+                  record.txId === txId &&
+                  record.phase === 'confirmed' &&
+                  storageJsonEquals(record.binding, binding)
+              )
+            if (confirmed.length !== 1) throw new Error(FAIL)
+            if (current.phase === 'confirmed') return current
+            const next = parseSigningIntent({
+              ...current,
+              phase: 'confirmed',
+              noncePhase: 'consumed',
+              updatedAt: now
+            })
+            account.records[index] = next
+            account.activeSessionId = null
+            await saveVerified(journals)
+            owned.delete(binding.sessionId)
+            return next
+          })
+      )
+    },
     async interruptSigningIntents(
       scope: MultisigGroupScope | undefined,
       now: number
@@ -283,7 +348,7 @@ export function createSigningJournal() {
         for (const [key, account] of Object.entries(journals)) {
           if (target !== undefined && key !== target) continue
           account.records = account.records.map(intent => {
-            if (isSigningIntentTerminal(intent.phase)) return intent
+            if (isSigningIntentTerminal(intent.phase) || intent.phase === 'signed') return intent
             changed = true
             return transitionSigningIntent(
               intent,
@@ -296,7 +361,9 @@ export function createSigningJournal() {
               Math.max(now, intent.updatedAt)
             )
           })
-          account.activeSessionId = null
+          account.activeSessionId =
+            account.records.find(intent => !isSigningIntentTerminal(intent.phase))?.sessionId ??
+            null
         }
         if (changed) await saveVerified(journals)
         for (const account of Object.values(journals))

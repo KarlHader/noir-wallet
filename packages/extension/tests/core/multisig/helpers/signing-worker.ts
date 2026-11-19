@@ -88,6 +88,7 @@ export function createProtocolOnlySigningWasm(wasm: WalletWasmModule): WalletWas
       shielded_sighash: () => new Uint8Array(32).fill(7),
       action_alphas: () => new Uint8Array(32).fill(1),
       action_rks: () => new Uint8Array(32),
+      signingSet: () => Uint8Array.of(0),
       check_action_bindings() {},
       strip_proofs: bytes => bytes.slice(),
       apply_signatures: bytes => bytes.slice()

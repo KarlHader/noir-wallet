@@ -56,7 +56,12 @@ import {
   deleteMultisigDataForAccount,
   deleteMultisigDataForWallet
 } from '@/lib/multisig-vault-storage'
-import { clearMultisigData } from '@/lib/multisig-group-storage'
+import { clearMultisigData, withMultisigStorageLock } from '@/lib/multisig-group-storage'
+import { assertNoUnresolvedMultisigTransactionsLocked } from '@/lib/multisig-transaction-guard'
+import {
+  deleteProtectedMultisigSnapshotsForAccount,
+  deleteProtectedMultisigSnapshotsForWallet
+} from '@/lib/multisig-transaction-snapshot'
 import { dappHandler } from './dapp-handler'
 import { syncScheduler } from './sync-scheduler'
 import { transactionMonitor } from './transaction-monitor'
@@ -326,6 +331,12 @@ export class WalletCleanupCoordinator {
   private async resumeLegacyWalletRemoval(walletId: string): Promise<void> {
     await this.enqueue(async () => {
       await this.hydrateStores()
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          transactionWalletId => transactionWalletId === walletId,
+          [walletId]
+        )
+      )
       await blockWalletWrites(walletId)
       await syncScheduler.prepareWalletRemoval(walletId)
       await backgroundZcashWalletRuntime.removeWalletAuthoritatively(walletId, [])
@@ -361,6 +372,14 @@ export class WalletCleanupCoordinator {
   ): Promise<void> {
     await this.enqueue(async () => {
       await this.hydrateStores()
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          (transactionWalletId, transactionAccountId) =>
+            transactionWalletId === walletId &&
+            accounts.some(account => account.accountId === transactionAccountId),
+          [walletId]
+        )
+      )
       const previous = this.getActiveAccount()
       await syncScheduler.prepareAccountRemoval(walletId)
       await blockWalletWrites(walletId)
@@ -399,6 +418,13 @@ export class WalletCleanupCoordinator {
   ): Promise<void> {
     return this.enqueue(async () => {
       await this.hydrateStores()
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          (transactionWalletId, transactionAccountId) =>
+            transactionWalletId === walletId && transactionAccountId === accountId,
+          [walletId]
+        )
+      )
       const previous = this.getActiveAccount()
       const wallet = useWalletStore.getState().getWallet(walletId)
       const account = wallet?.accounts.find(candidate => candidate.id === accountId)
@@ -582,6 +608,12 @@ export class WalletCleanupCoordinator {
   removeWallet(walletId: string, verification?: WalletBackupVerification): Promise<void> {
     return this.enqueue(async () => {
       await this.hydrateStores()
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          transactionWalletId => transactionWalletId === walletId,
+          [walletId]
+        )
+      )
       const previous = this.getActiveAccount()
       const wallet = useWalletStore.getState().getWallet(walletId)
       if (!wallet) {
@@ -773,13 +805,26 @@ export class WalletCleanupCoordinator {
     return this.enqueue(async () => {
       await this.hydrateStores()
       const wallets = useWalletStore.getState().wallets
-      await accountContextTransition.runActiveOperation(async () => {
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          () => true,
+          wallets.map(wallet => wallet.id)
+        )
+      )
+      const scopes = wallets.flatMap(wallet =>
+        wallet.accounts.map(account => ({ walletId: wallet.id, accountId: account.id }))
+      )
+      await accountContextTransition.runScopedMutation(scopes, async () => {
+        await credentialSession.lock()
         for (const wallet of wallets) {
           await syncScheduler.prepareWalletRemoval(wallet.id)
           await blockWalletWrites(wallet.id)
         }
-        await credentialSession.lock()
-        await resetWalletMetadata()
+        await resetWalletMetadata(async () => {
+          for (const wallet of wallets)
+            for (const network of ['mainnet', 'testnet'] as const)
+              await deleteProtectedMultisigSnapshotsForWallet({ network, walletId: wallet.id })
+        })
         await this.clearPendingMultichainTransfers()
         await Promise.all([
           transactionMonitor.clear(),
@@ -852,10 +897,14 @@ export class WalletCleanupCoordinator {
 
   // Feature flags cannot retain credentials or account state after authoritative removal.
   private async removeMultisigAccountData(walletId: string, accountId: string): Promise<void> {
+    for (const network of ['mainnet', 'testnet'] as const)
+      await deleteProtectedMultisigSnapshotsForAccount({ network, walletId, accountId })
     await deleteMultisigDataForAccount(walletId, accountId)
   }
 
   private async removeMultisigWalletData(walletId: string): Promise<void> {
+    for (const network of ['mainnet', 'testnet'] as const)
+      await deleteProtectedMultisigSnapshotsForWallet({ network, walletId })
     await deleteMultisigDataForWallet(walletId)
   }
 

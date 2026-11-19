@@ -2,8 +2,16 @@ import { parseDisplayUnitAmount } from '@/lib/number-format'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { thresholdDeviceCount } from '@/core/multisig/types'
 import { parseVaultGroupScope } from '@/core/multisig/vault-group-rpc'
+import { parseSigningIntentBinding } from '@/core/multisig/signing-journal'
 import type { AccountSource } from '@/core/accounts/domain'
 import type { DeviceSlot, MultisigGroupRecord } from '@/core/multisig/types'
+import type {
+  VaultSendAuthority,
+  VaultSendPrepareRequest,
+  VaultSendPrepareResponse,
+  VaultSendReview,
+  VaultSendTransaction
+} from '@/core/multisig/send-rpc'
 import type { MultisigGroupScope } from '@/lib/multisig-group-storage'
 
 interface ActiveSendAccount {
@@ -103,4 +111,109 @@ export function parseMultisigSendAmount(amount: string): string | null {
   } catch {
     return null
   }
+}
+
+/** Accept only an actual review of this draft; request fields cannot substitute for PCZT review. */
+export function validateMultisigSendReview(
+  review: VaultSendReview,
+  draft: Omit<VaultSendPrepareRequest, 'feeQuoteId' | 'marginalFeeZats'>,
+  now: number = Date.now()
+): void {
+  const binding = review?.binding
+  // The journal parser owns the canonical session, digest, account and slot shape checks.
+  const parsed = parseSigningIntentBinding({
+    ...binding,
+    threshold: draft.selectedSlots.length === 3 ? '3-of-3' : '2-of-3',
+    transport: draft.transport,
+    createdAt: 0
+  })
+  const summary = review.summary
+  if (
+    !Number.isSafeInteger(now) ||
+    parsed.walletId !== draft.scope.walletId ||
+    parsed.accountId !== draft.scope.accountId ||
+    parsed.network !== draft.scope.network ||
+    parsed.groupId !== draft.groupId ||
+    parsed.rosterVersion !== draft.rosterVersion ||
+    parsed.expiresAt <= now ||
+    JSON.stringify(parsed.selectedSlots) !== JSON.stringify(draft.selectedSlots) ||
+    !summary ||
+    summary.recipient !== draft.to ||
+    summary.amount !== draft.amountZats ||
+    summary.memo !== (draft.memo ?? '') ||
+    typeof summary.fee !== 'string' ||
+    !/^(0|[1-9][0-9]{0,15})$/.test(summary.fee) ||
+    BigInt(summary.fee) > 2_100_000_000_000_000n
+  ) {
+    throw new Error('Multisig review does not match this transfer')
+  }
+}
+
+/** A late review still reserves signing authority until Background cancels it. */
+export async function settleMultisigSendReview(
+  response: VaultSendPrepareResponse,
+  draft: Omit<VaultSendPrepareRequest, 'feeQuoteId' | 'marginalFeeZats'>,
+  assertCurrent: () => void,
+  cancel: (authority: VaultSendAuthority) => Promise<unknown>
+): Promise<VaultSendPrepareResponse> {
+  if (response.available) {
+    try {
+      assertCurrent()
+      validateMultisigSendReview(response, draft)
+      return response
+    } catch (error) {
+      const binding = response.binding
+      await cancel({
+        walletId: binding.walletId,
+        reviewId: binding.reviewId,
+        sessionId: binding.sessionId
+      }).catch(() => {})
+      throw error
+    }
+  }
+  assertCurrent()
+  if (!['pczt_review_unavailable', 'fee_quote_unavailable'].includes(response.reason)) {
+    throw new Error('Invalid multisig preparation response')
+  }
+  return response
+}
+
+const TRANSACTION_PHASE_RANK = {
+  finalized: 0,
+  submission_unknown: 1,
+  broadcast: 2,
+  confirmed: 3
+} as const
+
+/** An older storage read must not turn a confirmed or broadcast payment back into pending. */
+export function mergeMultisigSendTransactions(
+  current: readonly VaultSendTransaction[],
+  incoming: readonly VaultSendTransaction[],
+  scope: MultisigGroupScope
+): VaultSendTransaction[] {
+  const byReview = new Map<string, VaultSendTransaction>()
+  for (const transaction of [...current, ...incoming]) {
+    if (
+      transaction.binding.network !== scope.network ||
+      transaction.binding.walletId !== scope.walletId ||
+      transaction.binding.accountId !== scope.accountId ||
+      !/^[0-9a-f]{64}$/.test(transaction.txId)
+    )
+      throw new Error('Invalid multisig transaction scope')
+    const previous = byReview.get(transaction.binding.reviewId)
+    if (previous && previous.txId !== transaction.txId)
+      throw new Error('Conflicting multisig transaction identity')
+    if (
+      !previous ||
+      TRANSACTION_PHASE_RANK[transaction.phase] > TRANSACTION_PHASE_RANK[previous.phase]
+    )
+      byReview.set(transaction.binding.reviewId, transaction)
+  }
+  return [...byReview.values()]
+}
+
+export function getUnresolvedMultisigTransactions(
+  transactions: readonly VaultSendTransaction[]
+): VaultSendTransaction[] {
+  return transactions.filter(transaction => transaction.phase !== 'confirmed')
 }

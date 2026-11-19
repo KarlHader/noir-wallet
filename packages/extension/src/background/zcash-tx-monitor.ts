@@ -4,6 +4,7 @@ import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { lookupTransaction, getBlockCount, type TxLookup } from '@/lib/zcash-node-rpc'
 import {
   decideMonitorSignal,
+  isJournalOwnedMultisigActivityId,
   isExpiredAtTip,
   shouldRestoreZcashOriginMonitor,
   type MonitorAction
@@ -140,6 +141,9 @@ export class ZcashTxMonitor {
     tx: Omit<PendingZcashTx, 'startTime'>,
     options?: { checkImmediately?: boolean }
   ) {
+    if (isJournalOwnedMultisigActivityId(tx.transactionId)) {
+      throw new Error('Multisig Activity is monitored by its transaction journal')
+    }
     const accountScope = resolveAccountScope(tx, [])
     if (!accountScope) {
       throw new Error('Pending Zcash transaction requires a valid wallet and account identity')
@@ -249,6 +253,11 @@ export class ZcashTxMonitor {
             typeof tx.startTime !== 'number'
           ) {
             hasUnresolvedRecords = true
+            continue
+          }
+
+          if (isJournalOwnedMultisigActivityId(tx.transactionId)) {
+            migrated = true
             continue
           }
 

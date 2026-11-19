@@ -1505,6 +1505,21 @@ export async function deleteWalletRecords(network: string, walletId: string): Pr
   })
 }
 
+/** Delete only protected multisig snapshots; callers must first resolve pending transactions. */
+export async function deleteWalletDbPrefix(prefix: string): Promise<void> {
+  if (!/^(mainnet|testnet)_[^\u0000-\u001f]+_multisig\./.test(prefix))
+    throw new Error('Invalid multisig snapshot prefix')
+  const db = await getConnection()
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite')
+    transaction.objectStore(STORE_NAME).delete(IDBKeyRange.bound(prefix, `${prefix}\uffff`))
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error)
+    transaction.onabort = () =>
+      reject(transaction.error ?? new Error('Multisig snapshot deletion aborted'))
+  })
+}
+
 export async function deleteVotingStatesForWallet(
   network: string,
   walletId: string

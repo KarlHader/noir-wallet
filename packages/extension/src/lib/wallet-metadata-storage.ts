@@ -1,4 +1,6 @@
 import type { Network, WalletItem } from '@/types'
+import { withMultisigStorageLock } from './multisig-group-storage'
+import { assertNoUnresolvedMultisigTransactionsLocked } from './multisig-transaction-guard'
 import {
   isDerivedAccount,
   isFrostAccount,
@@ -611,6 +613,12 @@ export function commitWalletMetadataDeletion(
   accountIds?: readonly string[]
 ): Promise<void> {
   return withMetadataLock(async () => {
+    await withMultisigStorageLock(() =>
+      assertNoUnresolvedMultisigTransactionsLocked(
+        transactionWalletId => transactionWalletId === walletId,
+        [walletId]
+      )
+    )
     const saved = await chrome.storage.local.get([
       WALLET_STATE_KEY,
       DELETED_WALLETS_KEY,
@@ -652,6 +660,13 @@ export function commitAccountMetadataDeletion(
     }
   }
   return withMetadataLock(async () => {
+    await withMultisigStorageLock(() =>
+      assertNoUnresolvedMultisigTransactionsLocked(
+        (transactionWalletId, transactionAccountId) =>
+          transactionWalletId === walletId && transactionAccountId === accountId,
+        [walletId]
+      )
+    )
     const saved = await chrome.storage.local.get([
       WALLET_STATE_KEY,
       DELETED_WALLETS_KEY,
@@ -1026,25 +1041,32 @@ export function completeWalletMetadataDeletion(walletId: string): Promise<void> 
   })
 }
 
-export function resetWalletMetadata(): Promise<void> {
+export function resetWalletMetadata(deleteProtectedSnapshots?: () => Promise<void>): Promise<void> {
   return withMetadataLock(async () => {
-    const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
-    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
-    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
-    for (const wallet of snapshot?.state.wallets ?? []) deleted.add(wallet.id)
-    await chrome.storage.local.set({
-      [DELETED_WALLETS_KEY]: [...deleted],
-      [WALLET_STATE_KEY]: {
-        version: snapshot?.version ?? 0,
-        state: {
-          ...snapshot?.state,
-          wallets: [],
-          currentWalletId: null,
-          currentAccountId: null,
-          accountDisplayNames: {},
-          zecPrice: 0
+    await withMultisigStorageLock(async () => {
+      const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
+      const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+      await assertNoUnresolvedMultisigTransactionsLocked(
+        () => true,
+        snapshot?.state.wallets.map(wallet => wallet.id) ?? []
+      )
+      const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+      for (const wallet of snapshot?.state.wallets ?? []) deleted.add(wallet.id)
+      await deleteProtectedSnapshots?.()
+      await chrome.storage.local.set({
+        [DELETED_WALLETS_KEY]: [...deleted],
+        [WALLET_STATE_KEY]: {
+          version: snapshot?.version ?? 0,
+          state: {
+            ...snapshot?.state,
+            wallets: [],
+            currentWalletId: null,
+            currentAccountId: null,
+            accountDisplayNames: {},
+            zecPrice: 0
+          }
         }
-      }
+      })
     })
   })
 }

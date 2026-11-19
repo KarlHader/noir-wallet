@@ -365,7 +365,7 @@ test('more than 128 expired terminal sessions compact without losing nonce or re
   )
 })
 
-test('restart cannot resume a nonce round and interruption retains consumed history without broadcast claims', async () => {
+test('restart preserves a signed spend intent and cannot reopen its account or claim broadcast', async () => {
   const journal = createSigningJournal()
   await journal.reserveSigningIntent(BINDING, NOW)
   for (const [index, edge] of [START, CREATED, COMMITTED, CONSUMED].entries())
@@ -402,14 +402,26 @@ test('restart cannot resume a nonce round and interruption retains consumed hist
   )
   await restarted.interruptSigningIntents(undefined, NOW + 6)
   const previous = await restarted.readSigningIntent(BINDING)
-  assert.equal(previous?.phase, 'interrupted')
+  assert.equal(previous?.phase, 'signed')
   assert.equal(previous?.noncePhase, 'consumed')
   assert.equal(Object.hasOwn(previous!, 'txid'), false)
   await assert.rejects(restarted.reserveSigningIntent(BINDING, NOW + 7))
   await assert.rejects(
     restarted.reserveSigningIntent({ ...nextBinding(2), reviewId: BINDING.reviewId }, NOW + 7)
   )
-  await restarted.reserveSigningIntent(nextBinding(2), NOW + 7)
+  await assert.rejects(restarted.reserveSigningIntent(nextBinding(2), NOW + 7))
+  await assert.rejects(
+    journal.advanceSigningIntent(
+      BINDING,
+      {
+        expectedPhase: 'signed',
+        expectedNoncePhase: 'consumed',
+        nextPhase: 'expired',
+        nextNoncePhase: 'consumed'
+      },
+      BINDING.expiresAt
+    )
+  )
 })
 
 test('cancellation preserves nonce use and expiry cannot produce signed state', async () => {

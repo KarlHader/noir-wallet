@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from '@iconify/react'
 import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
@@ -17,7 +17,11 @@ import {
   SendNetworkFeeCard,
   SendRecipientInputCard
 } from '@/popup/components/transaction/SendInputCards'
-import { prepareMultisigSend } from '@/popup/services/multisig-send-client'
+import {
+  authorityFromReview,
+  cancelMultisigSend,
+  prepareMultisigSend
+} from '@/popup/services/multisig-send-client'
 import {
   getMultisigSendSlots,
   parseMultisigSendAmount,
@@ -26,6 +30,12 @@ import {
 } from './send-model'
 import type { MultisigSendContext } from './send-model'
 import type { DeviceSlot } from '@/core/multisig/types'
+import type { VaultSendReview } from '@/core/multisig/send-rpc'
+import { SendReview } from './SendReview'
+import { SendSigning } from './SendSigning'
+import { SendPendingTransactions } from './SendPendingTransactions'
+import { useMultisigSendTransactions } from './useMultisigSendTransactions'
+import { getUnresolvedMultisigTransactions } from './send-model'
 
 function SendLayout({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
   return (
@@ -106,15 +116,26 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
   const contextKey = JSON.stringify(context)
   const balance = useAccountDataStore(state => state.getCurrentBalance())
   const priceUsd = useWalletStore(state => state.zecPrice)
+  const transactionHistory = useMultisigSendTransactions(scope)
+  const unresolvedTransactions = getUnresolvedMultisigTransactions(transactionHistory.transactions)
   const [recipient, setRecipient] = useState('')
   const [amount, setAmount] = useState('')
   const [memo, setMemo] = useState('')
   const [selectedPhone, setSelectedPhone] = useState<DeviceSlot | null>(null)
   const [isPreparing, setIsPreparing] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [review, setReview] = useState<VaultSendReview | null>(null)
+  const [isApproved, setIsApproved] = useState(false)
   const [isInvalidated, setIsInvalidated] = useState(false)
   const invalidated = useRef(false)
   const attempt = useRef<AbortController | null>(null)
+  const activeReview = useRef<VaultSendReview | null>(null)
+  const closeReview = useCallback(() => {
+    const current = activeReview.current
+    if (current) void cancelMultisigSend(authorityFromReview(current)).catch(() => {})
+    activeReview.current = null
+  }, [])
   useEffect(() => {
     const invalidateChangedContext = () => {
       const active = useWalletStore.getState()
@@ -132,6 +153,7 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
         // Observe even a switch away and back inside one React render batch.
         invalidated.current = true
         attempt.current?.abort()
+        closeReview()
         setIsInvalidated(true)
       }
     }
@@ -142,8 +164,17 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
       unsubscribeWallet()
       unsubscribeGroup()
       attempt.current?.abort()
+      closeReview()
     }
-  }, [contextKey, scope])
+  }, [closeReview, contextKey, scope])
+
+  const handleSessionClosed = useCallback(() => {
+    activeReview.current = null
+  }, [])
+
+  const handleSigned = useCallback(() => {
+    activeReview.current = null
+  }, [])
 
   const selectedSlots = getMultisigSendSlots(group, selectedPhone)
   const amountZats = parseMultisigSendAmount(amount)
@@ -151,7 +182,13 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
   const isRecipientDraftValid = recipientAddress.length > 0 && recipientAddress.length <= 2048
   const memoBytes = new TextEncoder().encode(memo).length
   const canPrepare =
-    isRecipientDraftValid && amountZats !== null && memoBytes <= 512 && selectedSlots !== null
+    transactionHistory.status === 'ready' &&
+    !transactionHistory.hasSignedWithoutTransaction &&
+    unresolvedTransactions.length === 0 &&
+    isRecipientDraftValid &&
+    amountZats !== null &&
+    memoBytes <= 512 &&
+    selectedSlots !== null
 
   const cancelPreparation = () => {
     attempt.current?.abort()
@@ -205,11 +242,16 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
         'Multisig preparation'
       )
       assertCurrent()
-      setFeedback(
-        result.reason === 'fee_quote_unavailable'
-          ? 'The network fee quote is unavailable. Please try again.'
-          : 'Multisig sending is unavailable in this wallet version.'
-      )
+      if (result.available) {
+        activeReview.current = result
+        setReview(result)
+      } else {
+        setFeedback(
+          result.reason === 'fee_quote_unavailable'
+            ? 'The network fee quote is unavailable. Please try again.'
+            : 'Multisig sending is unavailable in this wallet version.'
+        )
+      }
     } catch {
       if (!controller.signal.aborted) {
         setFeedback(
@@ -226,6 +268,21 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
   }
   const clearFeedback = () => setFeedback(null)
 
+  const cancelReview = async () => {
+    if (!review || isCancelling) return
+    setIsCancelling(true)
+    try {
+      await cancelMultisigSend(authorityFromReview(review))
+      activeReview.current = null
+      setReview(null)
+      setFeedback(null)
+    } catch {
+      setFeedback('Unable to close this review. Please try again or wait for it to expire.')
+    } finally {
+      setIsCancelling(false)
+    }
+  }
+
   if (isInvalidated) {
     return (
       <SendLayout
@@ -240,11 +297,78 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
     )
   }
 
+  if (review && isApproved) {
+    return (
+      <SendSigning
+        review={review}
+        group={group}
+        onClose={() => window.close()}
+        onSessionClosed={handleSessionClosed}
+        onSigned={handleSigned}
+      />
+    )
+  }
+
+  if (review) {
+    return (
+      <SendReview
+        review={review}
+        group={group}
+        isCancelling={isCancelling}
+        feedback={feedback}
+        onApprove={() => {
+          if (Date.now() >= review.binding.expiresAt || invalidated.current) {
+            void cancelReview()
+            return
+          }
+          setFeedback(null)
+          setIsApproved(true)
+        }}
+        onCancel={() => void cancelReview()}
+      />
+    )
+  }
+
+  if (transactionHistory.hasSignedWithoutTransaction) {
+    return (
+      <SendLayout
+        footer={
+          <FlowButton variant="outline" onClick={transactionHistory.refresh}>
+            Check status
+          </FlowButton>
+        }
+      >
+        <InlineError message="A signed transfer needs recovery. Check this account before starting another payment." />
+      </SendLayout>
+    )
+  }
+
+  if (unresolvedTransactions.length) {
+    return (
+      <SendPendingTransactions
+        transactions={unresolvedTransactions}
+        hasRefreshFailed={transactionHistory.status === 'error'}
+        onRefresh={transactionHistory.refresh}
+      />
+    )
+  }
+
   return (
     <SendLayout
       footer={
         <div className="space-y-3">
           {feedback && <InlineError message={feedback} />}
+          {transactionHistory.status === 'loading' && (
+            <div role="status" className="text-sm text-muted">
+              Checking saved transfers…
+            </div>
+          )}
+          {transactionHistory.status === 'error' && (
+            <InlineError
+              message="Unable to read saved transfers. Check status before preparing another payment."
+              onRetry={transactionHistory.refresh}
+            />
+          )}
           <FlowButton
             disabled={!canPrepare || isPreparing}
             aria-busy={isPreparing}

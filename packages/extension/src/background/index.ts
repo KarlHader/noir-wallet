@@ -169,6 +169,26 @@ import { createMultisigSendHandler } from './multisig-send'
 import { forwardPageWorkerRpcWithAccountAuthority } from './page-worker-account-authority'
 import { assertAccountOperationAllowed } from '@/core/accounts/application/account-capability-policy'
 import { createSigningJournal } from '@/lib/multisig-signing-storage'
+import {
+  createMultisigTransactionJournal,
+  listFinalizationRecovery,
+  recordDurableFinalization,
+  recordFinalizationReceipt,
+  recordProtectedSnapshotVerified
+} from '@/lib/multisig-transaction-storage'
+import {
+  assertFinalizationBarrierOwned,
+  beginFinalizationBarrier,
+  clearFinalizationBarrier,
+  hasFinalizationBarrier
+} from '@/lib/multisig-finalization-barrier'
+import {
+  handleMultisigFinalizationBridge,
+  MULTISIG_FINALIZATION_BRIDGE_TYPE
+} from './multisig-finalization-bridge'
+import { verifyMultisigSnapshot } from '@/lib/multisig-transaction-snapshot'
+import { lookupTransaction as lookupMultisigTransaction } from '@/lib/zcash-node-rpc'
+import { persistMultisigActivity } from './multisig-activity'
 import { FrostAccountMetadataCoordinator } from '@/infrastructure/keyring/frost-account-metadata-coordinator'
 import {
   IndexedDbCredentialRepository,
@@ -2237,6 +2257,14 @@ chrome.alarms.onAlarm.addListener(alarm => {
       if (alarm.name === 'zcash-tx-monitor-alarm') {
         zcashTxMonitor.handleAlarm().catch(console.warn)
       }
+      if (alarm.name === 'multisig-tx-monitor-alarm') {
+        void multisigSend
+          .reconcileTransactions()
+          .then(hasPending => {
+            if (!hasPending) void chrome.alarms.clear('multisig-tx-monitor-alarm')
+          })
+          .catch(() => {})
+      }
       if (alarm.name === EVM_TRANSACTION_MONITOR_ALARM) {
         evmTransactionMonitor?.handleAlarm().catch(error => {
           console.warn('[EVM Transaction Monitor] Poll failed:', error)
@@ -3019,6 +3047,28 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   // Internal Background-to-Offscreen route; handled only by the Offscreen Document.
   if (message.type === 'KEYRING_WORKER_RPC') {
     return false
+  }
+
+  if (message.type === MULTISIG_FINALIZATION_BRIDGE_TYPE) {
+    void handleMultisigFinalizationBridge(
+      message,
+      getOwnExtensionSenderContext(sender, chrome.runtime.id),
+      {
+        listRecovery: listFinalizationRecovery,
+        hasBarrier: hasFinalizationBarrier,
+        beginBarrier: beginFinalizationBarrier,
+        assertBarrierOwned: assertFinalizationBarrierOwned,
+        clearBarrier: clearFinalizationBarrier,
+        recordReceipt: recordFinalizationReceipt,
+        recordProtected: recordProtectedSnapshotVerified,
+        recordDurable: recordDurableFinalization,
+        randomToken: () => crypto.randomUUID(),
+        now: () => Date.now()
+      }
+    )
+      .then(result => sendResponse({ result }))
+      .catch(() => sendResponse({ error: 'Multisig finalization persistence unavailable' }))
+    return true
   }
 
   if (message.type === 'ZCASH_TRANSACTION_OUTCOME') {
@@ -6107,6 +6157,21 @@ void multisigVault.resumePending().catch(() => {})
 
 const multisigSend = createMultisigSendHandler({
   journal: createSigningJournal(),
+  transactions: createMultisigTransactionJournal(),
+  verifyFinalizationSnapshot: verifyMultisigSnapshot,
+  scheduleMonitor: () => {
+    void chrome.alarms.create('multisig-tx-monitor-alarm', { periodInMinutes: 1 })
+  },
+  onTransaction: async record => {
+    const binding = record.binding
+    const account = useWalletStore.getState().getAccount(binding.walletId, binding.accountId)
+    const addresses = account?.networkAddresses?.[binding.network] ?? account?.addresses
+    await persistMultisigActivity(record, addresses?.shielded ?? '')
+  },
+  confirmations: async (network, txId) => {
+    const result = await lookupMultisigTransaction(getNetworkConfig(network).nodeRpcUrl, txId)
+    return result.status === 'confirmed' ? result.confirmations : null
+  },
   withScope: (scope, operation) =>
     withUndeletedWalletAccountMetadata(
       scope.walletId,

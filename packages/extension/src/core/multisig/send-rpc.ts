@@ -7,6 +7,8 @@ import { isVaultGroupId } from './vault-record'
 import { parseEnvelope, type MultisigEnvelope } from './messages'
 import type { SigningIntentPhase, SigningNoncePhase } from './signing-journal'
 import type { SigningReviewBinding, SigningStatus } from './signing-coordinator'
+import type { RosterManifest } from './roster'
+import type { MultisigTransactionPhase } from './transaction-journal'
 
 export interface VaultSendPrepareRequest {
   scope: MultisigGroupScope
@@ -43,6 +45,13 @@ export interface VaultSendProgress {
   status: SigningStatus | null
   outbound: MultisigEnvelope[]
 }
+export interface VaultSendTransaction {
+  binding: SigningReviewBinding
+  phase: MultisigTransactionPhase
+  txId: string
+  outbound: MultisigEnvelope[]
+  summary?: { recipient: string; amount: string; memo: string; fee: string }
+}
 export interface VaultSendSchema {
   'vault.send.prepare': { request: VaultSendPrepareRequest; response: VaultSendPrepareResponse }
   'vault.send.start': { request: VaultSendAuthority; response: VaultSendProgress }
@@ -51,7 +60,20 @@ export interface VaultSendSchema {
     response: VaultSendProgress
   }
   'vault.send.status': { request: VaultSendAuthority; response: VaultSendProgress }
+  'vault.send.roster': { request: VaultSendAuthority; response: RosterManifest }
   'vault.send.cancel': { request: VaultSendAuthority; response: true }
+  'vault.send.close': { request: VaultSendAuthority; response: true }
+  'vault.send.finalize': { request: VaultSendAuthority; response: VaultSendTransaction }
+  'vault.send.submit': { request: VaultSendAuthority; response: VaultSendTransaction }
+  'vault.send.execute': { request: VaultSendAuthority; response: VaultSendTransaction }
+  'vault.send.transactions': {
+    request: { scope: MultisigGroupScope }
+    response: VaultSendTransaction[]
+  }
+  'vault.send.recovery': {
+    request: { scope: MultisigGroupScope }
+    response: { signedWithoutTransaction: boolean }
+  }
 }
 export type VaultSendMethod = keyof VaultSendSchema
 export function isVaultSendMethod(method: string): method is VaultSendMethod {
@@ -60,7 +82,14 @@ export function isVaultSendMethod(method: string): method is VaultSendMethod {
     'vault.send.start',
     'vault.send.ingest',
     'vault.send.status',
-    'vault.send.cancel'
+    'vault.send.roster',
+    'vault.send.cancel',
+    'vault.send.close',
+    'vault.send.finalize',
+    'vault.send.submit',
+    'vault.send.execute',
+    'vault.send.transactions',
+    'vault.send.recovery'
   ].includes(method)
 }
 const FAIL = 'Invalid multisig send request'

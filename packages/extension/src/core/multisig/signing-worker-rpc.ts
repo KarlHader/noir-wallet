@@ -7,6 +7,7 @@ import { parseKeyDomainId } from '../keyring/domain/key-domain'
 import { isDkgSessionIdText } from './dkg-protocol'
 import { parseEnvelope, type MultisigEnvelope } from './messages'
 import type { DeviceIdentity } from './identity'
+import type { RosterManifest } from './roster'
 import { parseIdentityPublicKey } from './identity'
 import {
   openVaultRecord,
@@ -27,6 +28,8 @@ import {
   type NoncePersistenceAcknowledgement,
   type SigningCheckpointProgress
 } from './nonce-checkpoint'
+import type { StoredMultisigTransaction } from './worker-transaction'
+import type { ReviewedMultisigChainPolicy } from './production-review'
 
 export interface SigningWorkerReference {
   walletId: string
@@ -79,6 +82,20 @@ export interface SigningWorkerSchema {
     response: SigningWorkerProgress
   }
   'vault.sign.worker.status': { request: SigningWorkerReference; response: SigningWorkerProgress }
+  'vault.sign.worker.roster': { request: SigningWorkerReference; response: RosterManifest }
+  'vault.sign.worker.finalize': {
+    request: SigningWorkerReference & { accountId: string }
+    response: StoredMultisigTransaction & { accountId: string }
+  }
+  'vault.sign.worker.submit': {
+    request: SigningWorkerReference &
+      StoredMultisigTransaction & { accountId: string; snapshotSha256: string }
+    response: {
+      phase: 'broadcast' | 'submission_unknown'
+      txId: string
+      outbound: MultisigEnvelope[]
+    }
+  }
   'vault.sign.worker.close': { request: SigningWorkerReference; response: true }
   'vault.sign.worker.invalidate': { request: { walletId?: string }; response: true }
 }
@@ -101,13 +118,38 @@ export type TrustedSigningReviewProvider =
         source: AccountSource
         header: VaultRecordHeader
         intent: SigningTransferIntent
-      }): Promise<{ pczt: Uint8Array; summary: SigningReviewSummary }>
+        assertAuthorized: () => void
+      }): Promise<{
+        pczt: Uint8Array
+        summary: SigningReviewSummary
+        reviewedChainPolicy: ReviewedMultisigChainPolicy
+      }>
     }
 export interface SigningWorkerDependencies {
   credential(walletId: string): SigningWorkerCredential | null | undefined
   network(walletId: string): 'mainnet' | 'testnet' | undefined
   identity(): Promise<DeviceIdentity | null>
   reviewProvider: TrustedSigningReviewProvider
+  finalize?(input: {
+    binding: SigningReviewBinding
+    source: AccountSource
+    header: VaultRecordHeader
+    signedPczt: Uint8Array
+    reviewedChainPolicy: ReviewedMultisigChainPolicy
+    reviewedSummary: SigningReviewSummary
+    assertAuthorized: () => void
+  }): Promise<StoredMultisigTransaction>
+  submit?(input: {
+    receipt: StoredMultisigTransaction
+    binding: SigningReviewBinding
+    source: AccountSource
+    header: VaultRecordHeader
+    reviewedChainPolicy: ReviewedMultisigChainPolicy
+    assertAuthorized: () => void
+  }): Promise<{
+    status: 'broadcast' | 'submission_unknown'
+    txId: string
+  }>
   now?: () => number
   schedule?: (callback: () => void, delay: number) => () => void
 }
@@ -127,6 +169,9 @@ const METHODS: readonly SigningWorkerMethod[] = [
   'vault.sign.worker.ingest',
   'vault.sign.worker.advance',
   'vault.sign.worker.status',
+  'vault.sign.worker.roster',
+  'vault.sign.worker.finalize',
+  'vault.sign.worker.submit',
   'vault.sign.worker.close',
   'vault.sign.worker.invalidate'
 ]
@@ -245,12 +290,18 @@ interface Entry {
   threshold: MultisigThreshold
   createdAt: number
   summary: SigningReviewSummary
+  roster: RosterManifest
+  header: VaultRecordHeader
+  reviewedChainPolicy: Readonly<ReviewedMultisigChainPolicy>
   authority: Authority
   pczt: Uint8Array
   engine: SigningCoordinatorSession | null
   checkpoint: SigningNonceCheckpoint | null
   opening: Promise<SigningWorkerProgress> | null
   aborted: boolean
+  finalized: StoredMultisigTransaction | null
+  finalizing: Promise<StoredMultisigTransaction> | null
+  submissionAttempted: boolean
   disarm: () => void
 }
 const bindingCopy = (binding: SigningReviewBinding): SigningReviewBinding => ({
@@ -414,15 +465,22 @@ export function createSigningWorkerRpcHandler(
     const createdAt = now()
     let bytes: Uint8Array | null = null
     let participants: 2 | 3 = 2
+    let roster: RosterManifest
     try {
       const opened = await openVaultRecord(request.sealedRecord, authority.credential.mnemonic, {
         ...request.scope,
         ownerWalletId: request.scope.walletId
       })
-      let prepared: { pczt: Uint8Array; summary: SigningReviewSummary }
+      let prepared: {
+        pczt: Uint8Array
+        summary: SigningReviewSummary
+        reviewedChainPolicy: ReviewedMultisigChainPolicy
+      }
       try {
         check(authority)
         keyset(opened.header, opened.share, request)
+        if (opened.header.version !== 2) throw new Error(FAIL)
+        roster = structuredClone(opened.header.roster)
         participants = opened.header.participants
         await identity(authority, opened.header)
         check(authority)
@@ -430,10 +488,12 @@ export function createSigningWorkerRpcHandler(
           scope: { ...request.scope },
           source: request.source,
           header: opened.header,
-          intent: { ...request.intent }
+          intent: { ...request.intent },
+          assertAuthorized: () => check(authority)
         })
         if (!(prepared.pczt instanceof Uint8Array)) throw new Error(FAIL)
         bytes = prepared.pczt.slice()
+        prepared.pczt.fill(0)
         check(authority)
         if (
           !fields(prepared.summary, ['recipient', 'amount', 'memo', 'fee']) ||
@@ -441,6 +501,13 @@ export function createSigningWorkerRpcHandler(
           prepared.summary.amount !== request.intent.amount ||
           prepared.summary.memo !== request.intent.memo ||
           !units(prepared.summary.fee) ||
+          !prepared.reviewedChainPolicy ||
+          !Number.isSafeInteger(prepared.reviewedChainPolicy.expiryHeight) ||
+          prepared.reviewedChainPolicy.expiryHeight <= 0 ||
+          prepared.reviewedChainPolicy.expiryHeight > 0xffffffff ||
+          !Number.isSafeInteger(prepared.reviewedChainPolicy.consensusBranchId) ||
+          prepared.reviewedChainPolicy.consensusBranchId <= 0 ||
+          prepared.reviewedChainPolicy.consensusBranchId > 0xffffffff ||
           now() >= createdAt + 300000
         )
           throw new Error(FAIL)
@@ -469,12 +536,18 @@ export function createSigningWorkerRpcHandler(
         threshold,
         createdAt,
         summary: { ...prepared.summary },
+        roster,
+        header: structuredClone(opened.header),
+        reviewedChainPolicy: Object.freeze({ ...prepared.reviewedChainPolicy }),
         authority,
         pczt: bytes,
         engine: null,
         checkpoint: null,
         opening: null,
         aborted: false,
+        finalized: null,
+        finalizing: null,
+        submissionAttempted: false,
         disarm: () => {}
       }
       entries.set(binding.reviewId, entry)
@@ -601,6 +674,100 @@ export function createSigningWorkerRpcHandler(
       entry.opening = null
     }
   }
+  async function finalize(entry: Entry): Promise<StoredMultisigTransaction> {
+    if (entry.finalized) return { ...entry.finalized }
+    if (entry.finalizing) return { ...(await entry.finalizing) }
+    if (!deps.finalize || entry.engine?.status().phase !== 'signed') throw new Error(FAIL)
+    const signedPczt = entry.engine.takeSignedPczt()
+    if (!signedPczt) throw new Error(FAIL)
+    const finalizing = (async () => {
+      try {
+        check(entry.authority)
+        const receipt = await deps.finalize!({
+          binding: bindingCopy(entry.binding),
+          source: entry.request.source,
+          header: structuredClone(entry.header),
+          signedPczt,
+          reviewedChainPolicy: { ...entry.reviewedChainPolicy },
+          reviewedSummary: { ...entry.summary },
+          assertAuthorized: () => {
+            if (entry.aborted) throw new Error(FAIL)
+            check(entry.authority)
+          }
+        })
+        check(entry.authority)
+        if (
+          entry.aborted ||
+          !/^[0-9a-f]{64}$/.test(receipt.txId) ||
+          !/^[0-9a-f]{64}$/.test(receipt.rawTxSha256) ||
+          !Number.isSafeInteger(receipt.rawTxLen) ||
+          receipt.rawTxLen < 1 ||
+          receipt.network !== entry.binding.network
+        )
+          throw new Error(FAIL)
+        entry.finalized = Object.freeze({ ...receipt })
+        return entry.finalized
+      } catch {
+        abort(entry)
+        throw new Error(FAIL)
+      } finally {
+        signedPczt.fill(0)
+      }
+    })()
+    entry.finalizing = finalizing
+    try {
+      return { ...(await finalizing) }
+    } finally {
+      entry.finalizing = null
+    }
+  }
+  async function submit(
+    entry: Entry,
+    input: SigningWorkerReference & Record<string, unknown>
+  ): Promise<SigningWorkerSchema['vault.sign.worker.submit']['response']> {
+    const receipt = entry.finalized
+    const engine = entry.engine
+    if (
+      !deps.submit ||
+      !receipt ||
+      entry.submissionAttempted ||
+      input.txId !== receipt.txId ||
+      input.accountId !== entry.binding.accountId ||
+      input.rawTxSha256 !== receipt.rawTxSha256 ||
+      input.rawTxLen !== receipt.rawTxLen ||
+      input.network !== receipt.network ||
+      !/^[0-9a-f]{64}$/.test(String(input.snapshotSha256)) ||
+      engine?.status().phase !== 'signed'
+    )
+      throw new Error(FAIL)
+    entry.submissionAttempted = true
+    try {
+      check(entry.authority)
+      const result = await deps.submit({
+        receipt,
+        binding: bindingCopy(entry.binding),
+        source: entry.request.source,
+        header: structuredClone(entry.header),
+        reviewedChainPolicy: { ...entry.reviewedChainPolicy },
+        assertAuthorized: () => {
+          if (entry.aborted) throw new Error(FAIL)
+          check(entry.authority)
+        }
+      })
+      check(entry.authority)
+      if (result.status !== 'broadcast' || result.txId !== receipt.txId)
+        return { phase: 'submission_unknown', txId: receipt.txId, outbound: [] }
+      let outbound: MultisigEnvelope[] = []
+      try {
+        outbound = await engine.reportResult('broadcast', hexToBytes(receipt.txId).reverse())
+      } catch {
+        // A phone-result delivery failure cannot turn an accepted network submission into a retry.
+      }
+      return { phase: 'broadcast', txId: receipt.txId, outbound }
+    } catch {
+      return { phase: 'submission_unknown', txId: receipt.txId, outbound: [] }
+    }
+  }
   async function dispatch(method: SigningWorkerMethod, raw: unknown): Promise<unknown> {
     if (method === 'vault.sign.worker.prepare') return prepare(raw)
     if (method === 'vault.sign.worker.invalidate') {
@@ -614,7 +781,11 @@ export function createSigningWorkerRpcHandler(
         ? ['envelope']
         : method === 'vault.sign.worker.advance'
           ? ['acknowledgement']
-          : []
+          : method === 'vault.sign.worker.finalize'
+            ? ['accountId']
+            : method === 'vault.sign.worker.submit'
+              ? ['accountId', 'txId', 'rawTxSha256', 'rawTxLen', 'network', 'snapshotSha256']
+              : []
     )
     if (method === 'vault.sign.worker.close') {
       const entry = entries.get(ref.reviewId)
@@ -627,6 +798,12 @@ export function createSigningWorkerRpcHandler(
       return true
     }
     const entry = get(ref)
+    if (method === 'vault.sign.worker.roster') return structuredClone(entry.roster)
+    if (method === 'vault.sign.worker.finalize') {
+      if (ref.accountId !== entry.binding.accountId) throw new Error(FAIL)
+      return { ...(await finalize(entry)), accountId: entry.binding.accountId }
+    }
+    if (method === 'vault.sign.worker.submit') return submit(entry, ref)
     if (method === 'vault.sign.worker.start') return start(entry)
     if (method === 'vault.sign.worker.status')
       return progress(

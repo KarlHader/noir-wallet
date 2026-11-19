@@ -12,6 +12,7 @@ import { buildRoster } from '../../../src/core/multisig/roster'
 import { createEnvelopeSigner, verifyEnvelope } from '../../../src/core/multisig/envelope-signing'
 import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from '../../../src/lib/bytes'
 import * as signing from '../../../src/core/multisig/signing-coordinator'
+import { readSigningActions } from '../../../src/core/multisig/pczt-review'
 import {
   parseSignPayload,
   parseSignEnvelopePayload
@@ -165,6 +166,43 @@ test('the real PCZT fixture is admitted and its sighash stays pinned', () => {
     bytesToHex(wasm.PcztTools.shielded_sighash(fixture)),
     '4b61072777d3c452120cceaa472a2e82d28a0387b4dd49e17f06dd606f6d1f9c'
   )
+})
+
+test('filler actions retain their original slots while only real spends receive FROST signatures', async () => {
+  const r = await rig()
+  const alphaByAction = new Uint8Array(96)
+  alphaByAction[0] = 1
+  alphaByAction[32] = 2
+  alphaByAction[64] = 3
+  let appliedIndices: number[] | null = null
+  let appliedSignatures = 0
+  r.cryptoBoundaryWasm.PcztTools = {
+    ...r.cryptoBoundaryWasm.PcztTools,
+    action_alphas: () => alphaByAction.slice(),
+    action_rks: () => new Uint8Array(96),
+    signingSet: () => Uint8Array.of(0, 2),
+    apply_signatures: (bytes, indices, signatures) => {
+      appliedIndices = [...indices]
+      appliedSignatures = signatures.length
+      return bytes.slice()
+    }
+  } as typeof wasm.PcztTools
+  assert.deepEqual(
+    [
+      ...readSigningActions(r.cryptoBoundaryWasm.PcztTools, fixture, r.options.groupVerifyingKey)
+        .indices
+    ],
+    [0, 2]
+  )
+  const session = await signing.SigningCoordinatorSession.open(r.cryptoBoundaryWasm, r.options)
+  let step = await session.start()
+  for (const reply of await r.commitments(step.outbound)) step = await session.ingest(reply)
+  for (const reply of await r.shares(step.outbound)) step = await session.ingest(reply)
+  assert.equal(step.status.phase, 'signed')
+  assert.deepEqual(appliedIndices, [0, 2])
+  assert.equal(appliedSignatures, 128)
+  assert(session.takeSignedPczt() instanceof Uint8Array)
+  session.cancel()
 })
 
 for (const [participants, threshold, selected] of [

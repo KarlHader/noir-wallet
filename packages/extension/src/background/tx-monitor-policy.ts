@@ -2,6 +2,10 @@ import type { TxLookup } from '@/lib/zcash-node-rpc'
 import { isRecoverableZcashFailure } from '@/lib/transaction-status'
 import type { Transaction } from '@/types/wallet'
 
+export function isJournalOwnedMultisigActivityId(transactionId: string): boolean {
+  return transactionId.startsWith('multisig_')
+}
+
 export function shouldRestoreZcashOriginMonitor(
   transaction: Pick<Transaction, 'id' | 'type' | 'status' | 'txHash'>
 ): boolean {
@@ -13,6 +17,7 @@ export function shouldRestoreZcashOriginMonitor(
     transaction.type === 'swap'
   return (
     !transaction.id.startsWith('wasm_') &&
+    !isJournalOwnedMultisigActivityId(transaction.id) &&
     ((activeOriginType &&
       (transaction.status === 'pending' || transaction.status === 'confirming')) ||
       isRecoverableZcashFailure(transaction)) &&

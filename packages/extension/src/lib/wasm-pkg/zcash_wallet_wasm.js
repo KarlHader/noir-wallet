@@ -2565,6 +2565,52 @@ export class PcztTools {
     }
   }
   /**
+   * The signer's own reading of the transaction: every output (recipient, amount, change, memo) and
+   * every spend, with the totals and the fee.
+   *
+   * Returns `[reviewedPcztSha256, outputs, spends, sentTotal, changeTotal, fee, header]` where:
+   *
+   * * `reviewedPcztSha256` — SHA-256 of **the bytes passed in**, so a caller can persist "this is the
+   *   transaction I reviewed" and compare it later. Compute it on the PCZT the user was shown, not on a
+   *   later, proved copy: proving changes the bytes.
+   * * `outputs` — array of `[recipient(43), value, isChange, memoOrNull]`. `memoOrNull` is either the
+   *   exact 512-byte memo (ZIP-302 marker and padding included) or `null` for "could not verify"; the
+   *   two must never be conflated, so a caller that needs a memo must reject `null`.
+   * * `spends` — array of `[actionIndex, nullifier(32), value]`, one per spend that belongs to this
+   *   viewing key. The first element is the position **inside the bundle**, which is what signature
+   *   write-back needs; filler actions shift it, so it is not the position in this array.
+   * * `sentTotal` / `changeTotal` / `fee` — in zats, as JS `Number`s. ZEC has 8 decimals, so every valid
+   *   amount (≤ 21e6 ZEC = 2.1e15 zats) is well inside `Number.MAX_SAFE_INTEGER`; callers should still
+   *   reject anything above that rather than trust the conversion.
+   * * `header` — `{ txVersion, versionGroupId, consensusBranchId, expiryHeight, coinType }`, read from the
+   *   PCZT's global section. `coinType` is the builder's claim (0 mainnet, 1 testnet), not a proof of
+   *   network; compare it with the wallet's configuration.
+   *
+   * Fails wholesale if any check fails: there is no "partially reviewed" result to approve.
+   * @param {Uint8Array} bytes
+   * @param {Uint8Array} fvk
+   * @returns {Array<any>}
+   */
+  static review(bytes, fvk) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passArray8ToWasm0(fvk, wasm.__wbindgen_export)
+      const len1 = WASM_VECTOR_LEN
+      wasm.pczttools_review(retptr, ptr0, len0, ptr1, len1)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
    * The shielded sighash, recomputed from the PCZT. Signers must use this value, never one handed
    * to them by the coordinator.
    * @param {Uint8Array} bytes
@@ -2576,6 +2622,40 @@ export class PcztTools {
       const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export)
       const len0 = WASM_VECTOR_LEN
       wasm.pczttools_shielded_sighash(retptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * The action indices this signer must produce signatures for, in bundle order.
+   *
+   * A bundle has one spend and one output per action, so a transaction that pays two addresses carries a
+   * zero-value filler spend that belongs to nobody. Those actions must be excluded from signing — their
+   * `rk` is not the group key — while their original `action_index` values are what signature write-back
+   * needs. Signing the position in this array instead of the index is the bug this returns indices to
+   * prevent.
+   *
+   * Fails if an action is neither ours nor a valid filler: a non-zero spend whose `rk` is not
+   * `ak + alpha·G`, or a zero-value one that arrives unsigned.
+   * @param {Uint8Array} bytes
+   * @param {Uint8Array} group_verifying_key
+   * @returns {Uint8Array}
+   */
+  static signingSet(bytes, group_verifying_key) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passArray8ToWasm0(group_verifying_key, wasm.__wbindgen_export)
+      const len1 = WASM_VECTOR_LEN
+      wasm.pczttools_signingSet(retptr, ptr0, len0, ptr1, len1)
       var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
       var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
       var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
@@ -4761,6 +4841,20 @@ export class WebWallet {
     return takeObject(ret)
   }
   /**
+   * The raw bytes of a stored transaction, or `undefined` when the wallet has no record of it.
+   *
+   * Lets a caller persist the exact transaction next to its own intent record rather than depending on
+   * the wallet database alone.
+   * @param {string} txid
+   * @returns {Promise<Uint8Array | undefined>}
+   */
+  get_stored_transaction_bytes(txid) {
+    const ptr0 = passStringToWasm0(txid, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+    const len0 = WASM_VECTOR_LEN
+    const ret = wasm.webwallet_get_stored_transaction_bytes(this.__wbg_ptr, ptr0, len0)
+    return takeObject(ret)
+  }
+  /**
    * @param {number} account_id
    * @returns {Promise<any>}
    */
@@ -5297,6 +5391,23 @@ export class WebWallet {
     return takeObject(ret)
   }
   /**
+   * Prove an externally signed PCZT **without sending it**.
+   *
+   * Hardware-wallet and vault accounts never hold Sapling notes, so no Sapling proof generation key is
+   * needed.
+   *
+   * # Returns
+   * The proved PCZT, ready for `pczt_store`
+   * @param {Pczt} pczt
+   * @returns {Promise<Pczt>}
+   */
+  pczt_prove(pczt) {
+    _assertClass(pczt, Pczt)
+    var ptr0 = pczt.__destroy_into_raw()
+    const ret = wasm.webwallet_pczt_prove(this.__wbg_ptr, ptr0)
+    return takeObject(ret)
+  }
+  /**
    * Prove and broadcast an externally signed PCZT (hardware wallet flow).
    *
    * Hardware-wallet accounts never hold Sapling notes (Keystone supports
@@ -5323,6 +5434,49 @@ export class WebWallet {
    */
   pczt_shield_create(account_id, marginal_fee_zats) {
     const ret = wasm.webwallet_pczt_shield_create(this.__wbg_ptr, account_id, marginal_fee_zats)
+    return takeObject(ret)
+  }
+  /**
+   * Finalize a proved PCZT and store the transaction, **without broadcasting**.
+   *
+   * This is the point where a caller can obtain a stable transaction id and the transaction itself
+   * before anything reaches the network. After it returns, the transaction is in the wallet database
+   * and can be submitted later by txid with `send_authorized_transactions` — including after a restart,
+   * if the database itself survived.
+   *
+   * # Returns
+   * Transaction ID string (lowercase hex, display order — the same order as `txid` on explorers)
+   * @param {Pczt} pczt
+   * @returns {Promise<string>}
+   */
+  pczt_store(pczt) {
+    _assertClass(pczt, Pczt)
+    var ptr0 = pczt.__destroy_into_raw()
+    const ret = wasm.webwallet_pczt_store(this.__wbg_ptr, ptr0)
+    return takeObject(ret)
+  }
+  /**
+   * Finalize a proved PCZT, store it, and return everything a caller must persist before submitting.
+   *
+   * Returns `{ txId, rawTxSha256, rawTxLen, network }`:
+   *
+   * * `txId` — display-order lowercase hex, the same id explorers show.
+   * * `rawTxSha256` — SHA-256 of the stored transaction bytes, lowercase hex. It identifies *the bytes you
+   *   stored*: finalizing the same PCZT twice yields the same `txId` and different bytes, so this digest
+   *   cannot be compared across two separate finalizations.
+   * * `rawTxLen` — byte length of the stored transaction.
+   * * `network` — the wallet's configured network (`"mainnet"` / `"testnet"`). This is configuration, not a
+   *   proof read out of the transaction.
+   *
+   * The account id is deliberately absent: the PCZT's proposal metadata that records it is private to the
+   * wallet backend, so we cannot read it back. A caller that needs the binding must keep its own record.
+   * @param {Pczt} pczt
+   * @returns {Promise<any>}
+   */
+  pczt_store_detailed(pczt) {
+    _assertClass(pczt, Pczt)
+    var ptr0 = pczt.__destroy_into_raw()
+    const ret = wasm.webwallet_pczt_store_detailed(this.__wbg_ptr, ptr0)
     return takeObject(ret)
   }
   /**
@@ -6479,7 +6633,7 @@ function __wbg_get_imports(memory) {
           const a = state0.a
           state0.a = 0
           try {
-            return __wasm_bindgen_func_elem_16680(a, state0.b, arg0, arg1)
+            return __wasm_bindgen_func_elem_16723(a, state0.b, arg0, arg1)
           } finally {
             state0.a = a
           }
@@ -6519,7 +6673,7 @@ function __wbg_get_imports(memory) {
           const a = state0.a
           state0.a = 0
           try {
-            return __wasm_bindgen_func_elem_16680(a, state0.b, arg0, arg1)
+            return __wasm_bindgen_func_elem_16723(a, state0.b, arg0, arg1)
           } finally {
             state0.a = a
           }
@@ -6826,23 +6980,23 @@ function __wbg_get_imports(memory) {
       console.warn(getObject(arg0), getObject(arg1), getObject(arg2), getObject(arg3))
     },
     __wbindgen_cast_0000000000000001: function (arg0, arg1) {
-      // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 4216, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12560)
+      // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 4237, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12600)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000002: function (arg0, arg1) {
-      // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 5432, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16663)
+      // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 5453, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16706)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000003: function (arg0, arg1) {
-      // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 5434, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16665)
+      // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 5455, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16708)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000004: function (arg0, arg1) {
-      // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 4187, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12483)
+      // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 4208, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12523)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000005: function (arg0) {
@@ -6909,22 +7063,22 @@ function __wbg_get_imports(memory) {
   }
 }
 
-function __wasm_bindgen_func_elem_12483(arg0, arg1) {
-  wasm.__wasm_bindgen_func_elem_12483(arg0, arg1)
+function __wasm_bindgen_func_elem_12523(arg0, arg1) {
+  wasm.__wasm_bindgen_func_elem_12523(arg0, arg1)
 }
 
-function __wasm_bindgen_func_elem_12560(arg0, arg1, arg2) {
-  wasm.__wasm_bindgen_func_elem_12560(arg0, arg1, addHeapObject(arg2))
+function __wasm_bindgen_func_elem_12600(arg0, arg1, arg2) {
+  wasm.__wasm_bindgen_func_elem_12600(arg0, arg1, addHeapObject(arg2))
 }
 
-function __wasm_bindgen_func_elem_16665(arg0, arg1, arg2) {
-  wasm.__wasm_bindgen_func_elem_16665(arg0, arg1, addHeapObject(arg2))
+function __wasm_bindgen_func_elem_16708(arg0, arg1, arg2) {
+  wasm.__wasm_bindgen_func_elem_16708(arg0, arg1, addHeapObject(arg2))
 }
 
-function __wasm_bindgen_func_elem_16663(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_16706(arg0, arg1, arg2) {
   try {
     const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    wasm.__wasm_bindgen_func_elem_16663(retptr, arg0, arg1, addHeapObject(arg2))
+    wasm.__wasm_bindgen_func_elem_16706(retptr, arg0, arg1, addHeapObject(arg2))
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
     if (r1) {
@@ -6935,8 +7089,8 @@ function __wasm_bindgen_func_elem_16663(arg0, arg1, arg2) {
   }
 }
 
-function __wasm_bindgen_func_elem_16680(arg0, arg1, arg2, arg3) {
-  wasm.__wasm_bindgen_func_elem_16680(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3))
+function __wasm_bindgen_func_elem_16723(arg0, arg1, arg2, arg3) {
+  wasm.__wasm_bindgen_func_elem_16723(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3))
 }
 
 const __wbindgen_enum_ReadableStreamType = ['bytes']

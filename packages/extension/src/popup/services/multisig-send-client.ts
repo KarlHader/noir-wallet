@@ -1,17 +1,26 @@
 import { requestVaultSend } from '@/core/worker/client'
 import { withTimeout } from '@/lib/async-utils'
 import { zcashWalletRuntimeClient } from './zcash-wallet-runtime-client'
-import type { VaultSendPrepareRequest, VaultSendPrepareResponse } from '@/core/multisig/send-rpc'
+import type {
+  VaultSendAuthority,
+  VaultSendPrepareRequest,
+  VaultSendPrepareResponse,
+  VaultSendProgress,
+  VaultSendReview,
+  VaultSendTransaction
+} from '@/core/multisig/send-rpc'
+import type { MultisigEnvelope } from '@/core/multisig/messages'
+import type { RosterManifest } from '@/core/multisig/roster'
 import type { FeeQuote } from '@/config/fee'
+import type { MultisigGroupScope } from '@/lib/multisig-group-storage'
+import { settleMultisigSendReview } from '@/popup/pages/multisig/send-model'
 
 type SendDraft = Omit<VaultSendPrepareRequest, 'feeQuoteId' | 'marginalFeeZats'>
-type UnavailableSend = Extract<VaultSendPrepareResponse, { available: false }>
-
-/** No signing authority or transaction bytes are exposed to the form. */
+/** The page receives a review authority and public summary, never transaction bytes. */
 export async function prepareMultisigSend(
   draft: SendDraft,
   assertCurrent: () => void
-): Promise<UnavailableSend> {
+): Promise<VaultSendPrepareResponse> {
   assertCurrent()
   let quote: FeeQuote
   try {
@@ -27,22 +36,56 @@ export async function prepareMultisigSend(
     feeQuoteId: quote.id,
     marginalFeeZats: quote.standardMarginalFeeZats
   })
-  // A future Background may support reviews before this form supports displaying them.
-  // Release any resulting authority rather than letting an undisplayed review remain live.
-  if (response.available === true) {
-    await requestVaultSend('vault.send.cancel', {
-      walletId: response.binding.walletId,
-      reviewId: response.binding.reviewId,
-      sessionId: response.binding.sessionId
-    })
-    throw new Error('Multisig review is unavailable in this page')
+  return settleMultisigSendReview(response, draft, assertCurrent, cancelMultisigSend)
+}
+
+export function authorityFromReview(review: VaultSendReview): VaultSendAuthority {
+  return {
+    walletId: review.binding.walletId,
+    reviewId: review.binding.reviewId,
+    sessionId: review.binding.sessionId
   }
-  assertCurrent()
-  if (
-    response.available !== false ||
-    !['pczt_review_unavailable', 'fee_quote_unavailable'].includes(response.reason)
-  ) {
-    throw new Error('Invalid multisig preparation response')
-  }
-  return response
+}
+
+export function startMultisigSend(authority: VaultSendAuthority): Promise<VaultSendProgress> {
+  return requestVaultSend('vault.send.start', authority)
+}
+
+export function getMultisigSendRoster(authority: VaultSendAuthority): Promise<RosterManifest> {
+  return requestVaultSend('vault.send.roster', authority)
+}
+
+export function ingestMultisigSend(
+  authority: VaultSendAuthority,
+  envelope: MultisigEnvelope
+): Promise<VaultSendProgress> {
+  return requestVaultSend('vault.send.ingest', { ...authority, envelope })
+}
+
+export function statusMultisigSend(authority: VaultSendAuthority): Promise<VaultSendProgress> {
+  return requestVaultSend('vault.send.status', authority)
+}
+
+export function cancelMultisigSend(authority: VaultSendAuthority): Promise<true> {
+  return requestVaultSend('vault.send.cancel', authority)
+}
+
+export function closeMultisigSend(authority: VaultSendAuthority): Promise<true> {
+  return requestVaultSend('vault.send.close', authority)
+}
+
+export function executeMultisigSend(authority: VaultSendAuthority): Promise<VaultSendTransaction> {
+  return requestVaultSend('vault.send.execute', authority)
+}
+
+export function listMultisigSendTransactions(
+  scope: MultisigGroupScope
+): Promise<VaultSendTransaction[]> {
+  return requestVaultSend('vault.send.transactions', { scope })
+}
+
+export function readMultisigSendRecovery(
+  scope: MultisigGroupScope
+): Promise<{ signedWithoutTransaction: boolean }> {
+  return requestVaultSend('vault.send.recovery', { scope })
 }

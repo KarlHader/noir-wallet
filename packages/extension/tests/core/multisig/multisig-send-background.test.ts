@@ -5,6 +5,13 @@ import {
   type MultisigSendDeps
 } from '../../../src/background/multisig-send'
 import { createSigningJournal } from '../../../src/lib/multisig-signing-storage'
+import {
+  createMultisigTransactionJournal,
+  recordFinalizationReceipt,
+  recordProtectedSnapshotVerified,
+  recordDurableFinalization
+} from '../../../src/lib/multisig-transaction-storage'
+import { signingIntentBinding } from '../../../src/core/multisig/signing-journal'
 import { installStorageEnv } from './helpers/storage-env'
 import { createEnvelopeFactory } from '../../../src/core/multisig/messages'
 import type { SealedVaultRecord } from '../../../src/core/multisig/vault-record'
@@ -17,6 +24,10 @@ import { realReviewFixture, createProtocolOnlySigningWasm } from './helpers/sign
 import { base64ToBytes, bytesToBase64 } from '../../../src/lib/bytes'
 import { createEnvelopeSigner } from '../../../src/core/multisig/envelope-signing'
 import { parseSignEnvelopePayload } from '../../../src/core/multisig/sign-protocol'
+import { buildRoster } from '../../../src/core/multisig/roster'
+import { generateDeviceIdentity } from '../../../src/core/multisig/identity'
+import { createMultisigTransactionController } from '../../../src/background/multisig-transaction'
+import { projectMultisigActivity } from '../../../src/background/multisig-activity'
 
 const NOW = 1_800_000_000_000
 const scope = { walletId: 'w', accountId: 'a', network: 'testnet' as const }
@@ -112,6 +123,7 @@ function setup() {
   const deps: MultisigSendDeps = {
     now: () => now,
     journal,
+    transactions: createMultisigTransactionJournal(),
     withScope: async (_scope, run) => run(),
     readWalletState: async () => ({
       network: state.network as 'testnet',
@@ -329,7 +341,38 @@ test('a page cannot mint a fee quote or alter a trusted prepared binding', async
     await assert.rejects(s.handler.handle('vault.send.start', { ...authority, ...patch }))
 })
 
-test('Worker yield acknowledgements follow each durable nonce edge and cancellation preserves consumed nonce', async () => {
+test('public signing roster requires live review authority and never survives a rejected unlock check', async () => {
+  const s = setup()
+  s.setAvailable()
+  const identities = await Promise.all([
+    generateDeviceIdentity(),
+    generateDeviceIdentity(),
+    generateDeviceIdentity()
+  ])
+  const expectedRoster = buildRoster({
+    groupId: 'group',
+    threshold: 2,
+    identities: new Map(
+      identities.map((identity, slot) => [slot, bytesToBase64(identity.publicKey)])
+    )
+  })
+  const forward = s.deps.forwardToWorker
+  s.deps.forwardToWorker = (method, payload) =>
+    method === 'vault.sign.worker.roster'
+      ? Promise.resolve(expectedRoster)
+      : forward(method, payload)
+  await s.handler.handle('vault.send.prepare', draft)
+  const roster = await s.handler.handle('vault.send.roster', authority)
+  assert.deepEqual(roster, expectedRoster)
+  assert.equal('sealed_share' in roster, false)
+  s.state.unlocked = false
+  await assert.rejects(s.handler.handle('vault.send.roster', authority))
+  s.state.unlocked = true
+  // A rejected operation invalidates this review; never reuse it after unlocking.
+  await assert.rejects(s.handler.handle('vault.send.roster', authority))
+})
+
+test('nonce acknowledgement and cancellation preserve consumed markers', async () => {
   const s = setup()
   s.setAvailable()
   await s.handler.handle('vault.send.prepare', draft)
@@ -384,7 +427,8 @@ test('real credential host attestation preserves one bound Worker session throug
           amount: intent.amount,
           memo: intent.memo,
           fee: '10000'
-        }
+        },
+        reviewedChainPolicy: { expiryHeight: 4_134_041, consensusBranchId: 0x37a5165b }
       })
     }
   })
@@ -536,6 +580,19 @@ test('real credential host attestation preserves one bound Worker session throug
     reviewId: reviewed.binding.reviewId,
     sessionId: reviewed.binding.sessionId
   }
+  const authenticatedRoster = await handler.handle('vault.send.roster', reference)
+  assert.deepEqual(
+    authenticatedRoster.participants.map(participant => participant.identityPublicKey),
+    rig.identities.map(identity => bytesToBase64(identity.publicKey))
+  )
+  assert.deepEqual(Object.keys(authenticatedRoster).sort(), [
+    'ciphersuite',
+    'groupId',
+    'participants',
+    'protocolVersion',
+    'rosterHash',
+    'threshold'
+  ])
   const started = await handler.handle('vault.send.start', reference)
   assert.deepEqual(acknowledgements, ['created', 'committed'])
   const phone = new rig.wasm.Signer(
@@ -567,6 +624,7 @@ test('real credential host attestation preserves one bound Worker session throug
     await assert.rejects(
       worker.handle('vault.sign.worker.advance', { ...reference, acknowledgement: lastAck! })
     )
+    await assert.rejects(worker.handle('vault.sign.worker.roster', reference))
     await assert.rejects(handler.handle('vault.send.start', reference))
     assert.equal(binds, 2)
     const intent = (await journal.listSigningIntents())[0]
@@ -716,4 +774,441 @@ test('expired or changed sealed authority cannot create nonces, and restart expo
     t.calls.some(method => method.endsWith('.start')),
     false
   )
+})
+
+test('a signed spend survives expiry, cancellation and restart without closing as an expired draft', async () => {
+  const s = setup()
+  s.setAvailable()
+  let expire!: () => void
+  const originalSetTimeout = globalThis.setTimeout
+  globalThis.setTimeout = ((callback: () => void, delay: number) => {
+    expire = callback
+    return originalSetTimeout(callback, delay)
+  }) as typeof setTimeout
+  try {
+    await s.handler.handle('vault.send.prepare', draft)
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+  }
+  await s.handler.handle('vault.send.start', authority)
+  const forward = s.deps.forwardToWorker
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method !== 'vault.sign.worker.status') return forward(method, payload)
+    s.calls.push(method)
+    return {
+      binding,
+      status: {
+        sessionId: binding.sessionId,
+        phase: 'signed',
+        selectedSlots: [0, 2],
+        committedSlots: [0, 2],
+        sharedSlots: [0, 2]
+      },
+      outbound: []
+    }
+  }
+  assert.equal((await s.handler.handle('vault.send.status', authority)).phase, 'signed')
+  s.setTime(binding.expiresAt)
+  expire()
+  assert.equal((await s.handler.handle('vault.send.status', authority)).phase, 'signed')
+  await assert.rejects(s.handler.handle('vault.send.cancel', authority))
+  await assert.rejects(s.handler.handle('vault.send.start', authority))
+  await assert.rejects(
+    s.handler.handle('vault.send.ingest', {
+      ...authority,
+      envelope: createEnvelopeFactory({
+        groupId: 'group',
+        sessionId: binding.sessionId,
+        senderId: 'device-3'
+      })('SIGN_COMMITMENTS', 'device-1', {})
+    })
+  )
+  assert.equal(s.calls.includes('vault.sign.worker.close'), false)
+  assert.equal(s.calls.filter(method => method === 'vault.sign.worker.start').length, 1)
+  await s.handler.invalidate()
+  assert.equal(
+    (
+      await s.journal.readSigningIntent({
+        ...binding,
+        threshold: '2-of-3',
+        transport: 'qr',
+        createdAt: NOW
+      })
+    )?.phase,
+    'signed'
+  )
+  const restarted = createMultisigSendHandler({ ...s.deps, journal: createSigningJournal() })
+  await restarted.recoverPending()
+  assert.equal((await restarted.handle('vault.send.status', authority)).phase, 'signed')
+  await assert.rejects(restarted.handle('vault.send.cancel', authority))
+  await assert.rejects(restarted.handle('vault.send.prepare', draft))
+})
+
+const finalizedReceipt = {
+  txId: '13'.repeat(32),
+  rawTxSha256: '24'.repeat(32),
+  rawTxLen: 1234,
+  network: 'testnet',
+  accountId: 'a',
+  snapshotSha256: '35'.repeat(32)
+}
+
+async function prepareSignedTransfer() {
+  const s = setup()
+  s.setAvailable()
+  await s.handler.handle('vault.send.prepare', draft)
+  await s.handler.handle('vault.send.start', authority)
+  const intent = (await s.journal.listSigningIntents())[0]
+  await s.journal.advanceSigningIntent(
+    signingIntentBinding(intent),
+    {
+      expectedPhase: 'signing',
+      expectedNoncePhase: 'consumed',
+      nextPhase: 'signed',
+      nextNoncePhase: 'consumed'
+    },
+    NOW
+  )
+  return s
+}
+
+// The Worker transport stub must acknowledge the same durable metadata as production Offscreen.
+async function persistFinalizationReceipt() {
+  const recoveryScope = {
+    ...scope,
+    reviewId: binding.reviewId,
+    sessionId: binding.sessionId
+  }
+  await recordFinalizationReceipt(
+    {
+      ...recoveryScope,
+      txId: finalizedReceipt.txId,
+      rawTxSha256: finalizedReceipt.rawTxSha256,
+      rawTxLen: finalizedReceipt.rawTxLen
+    },
+    NOW
+  )
+  const snapshot = {
+    ...recoveryScope,
+    txId: finalizedReceipt.txId,
+    snapshotSha256: finalizedReceipt.snapshotSha256
+  }
+  await recordProtectedSnapshotVerified(snapshot, NOW)
+  await recordDurableFinalization(snapshot, NOW)
+  return finalizedReceipt
+}
+
+test('finalization persists the verified receipt and submission uncertainty precedes the network', async () => {
+  const s = await prepareSignedTransfer()
+  const forward = s.deps.forwardToWorker
+  let finalizations = 0,
+    submissions = 0
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method === 'vault.sign.worker.finalize') {
+      finalizations++
+      return persistFinalizationReceipt()
+    }
+    if (method === 'vault.sign.worker.submit') {
+      assert.equal(payload.network, scope.network)
+      submissions++
+      const stored = (await s.deps.transactions.listTransactions())[0]
+      assert.equal(stored.phase, 'submission_unknown')
+      assert.equal(stored.rawTxSha256, finalizedReceipt.rawTxSha256)
+      assert.equal(payload.snapshotSha256, finalizedReceipt.snapshotSha256)
+      return { phase: 'broadcast', txId: finalizedReceipt.txId, outbound: [] }
+    }
+    return forward(method, payload)
+  }
+  assert.equal((await s.handler.handle('vault.send.finalize', authority)).phase, 'finalized')
+  assert.equal((await s.handler.handle('vault.send.finalize', authority)).phase, 'finalized')
+  assert.deepEqual(await s.handler.handle('vault.send.recovery', { scope }), {
+    signedWithoutTransaction: false
+  })
+  assert.equal(finalizations, 1)
+  assert.equal((await s.handler.handle('vault.send.submit', authority)).phase, 'broadcast')
+  assert.equal((await s.handler.handle('vault.send.submit', authority)).phase, 'broadcast')
+  assert.equal(submissions, 1)
+})
+
+test('finalization cannot mutate the Worker before reviewed recovery metadata is durable', async () => {
+  const s = await prepareSignedTransfer()
+  const originalSet = chrome.storage.local.set
+  let finalizations = 0
+  const forward = s.deps.forwardToWorker
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method === 'vault.sign.worker.finalize') {
+      finalizations++
+      return finalizedReceipt
+    }
+    return forward(method, payload)
+  }
+  chrome.storage.local.set = async () => {
+    throw new Error('Storage unavailable before finalization')
+  }
+  try {
+    await assert.rejects(s.handler.handle('vault.send.finalize', authority))
+    assert.equal(finalizations, 0)
+  } finally {
+    chrome.storage.local.set = originalSet
+  }
+  assert.equal((await s.journal.listSigningIntents())[0].phase, 'signed')
+  assert.equal((await s.deps.transactions.listTransactions()).length, 0)
+})
+
+test('restart repairs a verified durable receipt without restoring submission authority', async () => {
+  const s = await prepareSignedTransfer()
+  const signed = signingIntentBinding((await s.journal.listSigningIntents())[0])
+  const recoveryScope = {
+    ...scope,
+    reviewId: signed.reviewId,
+    sessionId: signed.sessionId
+  }
+  const forward = s.deps.forwardToWorker
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method !== 'vault.sign.worker.finalize') return forward(method, payload)
+    await recordFinalizationReceipt(
+      {
+        ...recoveryScope,
+        txId: finalizedReceipt.txId,
+        rawTxSha256: finalizedReceipt.rawTxSha256,
+        rawTxLen: finalizedReceipt.rawTxLen
+      },
+      NOW
+    )
+    const snapshot = {
+      ...recoveryScope,
+      txId: finalizedReceipt.txId,
+      snapshotSha256: finalizedReceipt.snapshotSha256
+    }
+    await recordProtectedSnapshotVerified(snapshot, NOW)
+    await recordDurableFinalization(snapshot, NOW)
+    return finalizedReceipt
+  }
+  s.deps.transactions.recordFinalized = async () => {
+    throw new Error('Background transaction journal write failed')
+  }
+  await assert.rejects(s.handler.handle('vault.send.finalize', authority))
+  assert.equal((await s.deps.transactions.listTransactions()).length, 0)
+  const unverified = createMultisigSendHandler({
+    ...s.deps,
+    transactions: createMultisigTransactionJournal(),
+    verifyFinalizationSnapshot: async () => {
+      throw new Error('Protected snapshot does not match')
+    }
+  })
+  assert.deepEqual(await unverified.handle('vault.send.transactions', { scope }), [])
+  assert.deepEqual(await unverified.handle('vault.send.recovery', { scope }), {
+    signedWithoutTransaction: true
+  })
+  const restartedTransactions = createMultisigTransactionJournal()
+  let verified = 0
+  const restarted = createMultisigSendHandler({
+    ...s.deps,
+    transactions: restartedTransactions,
+    verifyFinalizationSnapshot: async input => {
+      verified++
+      assert.equal(input.snapshotSha256, finalizedReceipt.snapshotSha256)
+      assert.equal(input.accountId, scope.accountId)
+    },
+    forwardToWorker: async () => {
+      throw new Error('A metadata repair must not ask the Worker to send')
+    }
+  })
+  const recovered = await restarted.handle('vault.send.transactions', { scope })
+  assert.equal(verified, 1)
+  assert.equal(recovered[0].phase, 'finalized')
+  assert.equal(recovered[0].txId, finalizedReceipt.txId)
+  assert.equal(recovered[0].summary?.recipient, draft.to)
+  await assert.rejects(restartedTransactions.beginSubmission(signed, finalizedReceipt.txId, NOW))
+  await assert.rejects(restarted.handle('vault.send.submit', authority))
+})
+
+test('a lost submission response remains unknown across restart without an automatic resend', async () => {
+  const s = await prepareSignedTransfer()
+  const forward = s.deps.forwardToWorker
+  let submissions = 0
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method === 'vault.sign.worker.finalize') return persistFinalizationReceipt()
+    if (method === 'vault.sign.worker.submit') {
+      submissions++
+      throw new Error('response lost')
+    }
+    return forward(method, payload)
+  }
+  await s.handler.handle('vault.send.finalize', authority)
+  assert.equal((await s.handler.handle('vault.send.submit', authority)).phase, 'submission_unknown')
+  assert.equal((await s.handler.handle('vault.send.submit', authority)).phase, 'submission_unknown')
+  const restarted = createMultisigSendHandler({
+    ...s.deps,
+    transactions: createMultisigTransactionJournal()
+  })
+  const recovered = await restarted.handle('vault.send.transactions', { scope })
+  assert.equal(recovered.length, 1)
+  assert.equal(recovered[0].phase, 'submission_unknown')
+  assert.equal(recovered[0].txId, finalizedReceipt.txId)
+  await assert.rejects(restarted.handle('vault.send.submit', authority))
+  assert.equal(submissions, 1)
+})
+
+test('a mismatched finalized receipt never authorizes submission or another finalization', async () => {
+  const s = await prepareSignedTransfer()
+  const forward = s.deps.forwardToWorker
+  let finalizations = 0
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method === 'vault.sign.worker.finalize') {
+      finalizations++
+      return { ...finalizedReceipt, network: 'mainnet' }
+    }
+    return forward(method, payload)
+  }
+  await assert.rejects(s.handler.handle('vault.send.finalize', authority))
+  await assert.rejects(s.handler.handle('vault.send.finalize', authority))
+  await assert.rejects(s.handler.handle('vault.send.submit', authority))
+  assert.equal(finalizations, 1)
+  assert.deepEqual(await s.deps.transactions.listTransactions(), [])
+  assert.equal((await s.journal.listSigningIntents())[0].phase, 'signed')
+})
+
+test('account changes during finalization retain the signed intent and block submission', async () => {
+  const s = await prepareSignedTransfer()
+  const forward = s.deps.forwardToWorker
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method === 'vault.sign.worker.finalize') {
+      s.state.activeAccountId = 'other-account'
+      return finalizedReceipt
+    }
+    return forward(method, payload)
+  }
+  await assert.rejects(s.handler.handle('vault.send.finalize', authority))
+  assert.deepEqual(await s.deps.transactions.listTransactions(), [])
+  assert.equal((await s.journal.listSigningIntents())[0].phase, 'signed')
+})
+
+test('local transaction queries do not wait for Worker initialization or network readiness', async () => {
+  const s = setup()
+  s.deps.forwardToWorker = async () => {
+    throw new Error('Worker is not ready')
+  }
+  assert.deepEqual(await s.handler.handle('vault.send.transactions', { scope }), [])
+})
+
+test('only a sufficient chain confirmation settles a signed intent and releases its active slot', async () => {
+  const s = await prepareSignedTransfer()
+  const forward = s.deps.forwardToWorker
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method === 'vault.sign.worker.finalize') return persistFinalizationReceipt()
+    if (method === 'vault.sign.worker.submit') throw new Error('response lost')
+    return forward(method, payload)
+  }
+  await s.handler.handle('vault.send.finalize', authority)
+  await s.handler.handle('vault.send.submit', authority)
+  s.deps.confirmations = async () => null
+  await s.handler.reconcileTransactions()
+  assert.equal((await s.deps.transactions.listTransactions())[0].phase, 'submission_unknown')
+  assert.equal((await s.journal.listSigningIntents())[0].phase, 'signed')
+  s.deps.confirmations = async () => 100
+  await s.handler.reconcileTransactions()
+  assert.equal((await s.deps.transactions.listTransactions())[0].phase, 'confirmed')
+  assert.equal((await s.journal.listSigningIntents())[0].phase, 'confirmed')
+})
+
+test('a confirmed transaction is never downgraded by a cached broadcast response', async () => {
+  const s = await prepareSignedTransfer()
+  const signed = signingIntentBinding((await s.journal.listSigningIntents())[0])
+  const controller = createMultisigTransactionController({
+    journal: s.journal,
+    transactions: s.deps.transactions,
+    authorize: async () => {},
+    now: () => NOW,
+    forwardToWorker: async method =>
+      method === 'vault.sign.worker.finalize'
+        ? persistFinalizationReceipt()
+        : { phase: 'broadcast', txId: finalizedReceipt.txId, outbound: [] }
+  })
+  await controller.finalize(signed, {
+    recipient: draft.to,
+    amount: draft.amountZats,
+    memo: draft.memo,
+    fee: '10000',
+    marginalFeeZats: draft.marginalFeeZats,
+    feeQuoteId: draft.feeQuoteId
+  })
+  assert.equal((await controller.submit(signed)).phase, 'broadcast')
+  await s.deps.transactions.recordConfirmed(signed, finalizedReceipt.txId, NOW + 1)
+  assert.equal((await controller.submit(signed)).phase, 'confirmed')
+  const stored = (await s.deps.transactions.listTransactions())[0]
+  const projected = projectMultisigActivity(stored, 'shielded-test-sender')!
+  assert.equal(projected.status, 'success')
+  assert.equal(projected.txHash, finalizedReceipt.txId)
+  assert.equal(projected.amount, '0.00001')
+  assert.equal(projected.fee, '0.0001')
+  assert.equal(projected.to, draft.to)
+  assert.equal(projected.memo, draft.memo)
+  assert.equal(projected.network, 'testnet')
+  assert.equal(projectMultisigActivity({ ...stored, phase: 'finalized' }, 'sender'), null)
+  assert.equal(
+    projectMultisigActivity({ ...stored, version: 1, review: undefined }, 'sender'),
+    null
+  )
+  assert.equal(
+    projectMultisigActivity({ ...stored, phase: 'submission_unknown' }, 'sender')?.status,
+    'pending'
+  )
+})
+
+test('signed intents without transaction receipts remain visible after restart without a Worker', async () => {
+  const s = await prepareSignedTransfer()
+  const restarted = createMultisigSendHandler({
+    ...s.deps,
+    forwardToWorker: async () => {
+      throw new Error('Worker unavailable')
+    }
+  })
+  assert.deepEqual(await restarted.handle('vault.send.recovery', { scope }), {
+    signedWithoutTransaction: true
+  })
+  await assert.rejects(
+    restarted.handle('vault.send.recovery', { scope: { ...scope, accountId: 'other' } })
+  )
+})
+
+test('Background finishes the authorized send when its page closes during finalization', async () => {
+  const s = await prepareSignedTransfer()
+  const forward = s.deps.forwardToWorker
+  let enter!: () => void, release!: () => void
+  const entered = new Promise<void>(resolve => {
+    enter = resolve
+  })
+  const released = new Promise<void>(resolve => {
+    release = resolve
+  })
+  let submissions = 0
+  s.deps.forwardToWorker = async (method, payload) => {
+    if (method === 'vault.sign.worker.finalize') {
+      enter()
+      await released
+      return persistFinalizationReceipt()
+    }
+    if (method === 'vault.sign.worker.submit') {
+      submissions++
+      return { phase: 'broadcast', txId: finalizedReceipt.txId, outbound: [] }
+    }
+    return forward(method, payload)
+  }
+  const sending = s.handler.handle('vault.send.execute', authority)
+  // A bounded race also makes an absent execute implementation fail promptly.
+  await Promise.race([
+    entered,
+    sending.then(() => {
+      throw new Error('finalization not entered')
+    })
+  ])
+  const closing = s.handler.handle('vault.send.close', authority)
+  release()
+  assert.equal((await sending).phase, 'broadcast')
+  assert.equal(await closing, true)
+  assert.equal(submissions, 1)
+  assert.equal((await s.deps.transactions.listTransactions())[0].phase, 'broadcast')
+  await assert.rejects(s.handler.handle('vault.send.execute', authority))
+  assert.equal(submissions, 1)
 })

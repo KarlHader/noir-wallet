@@ -17,6 +17,11 @@ import {
   parseSigningJournalScopeKey,
   type SigningJournalScope
 } from '@/core/multisig/signing-journal'
+import {
+  assertNoUnresolvedMultisigTransactionsLocked,
+  deleteResolvedFinalizationRecoveryLocked,
+  MULTISIG_TRANSACTION_STORAGE_KEY
+} from './multisig-transaction-guard'
 
 const NETWORKS = ['mainnet', 'testnet'] as const
 
@@ -100,20 +105,29 @@ export function saveVaultRecordVerified(
 // Removes matching entries from all three maps in one lock; a map with no match is not rewritten.
 async function deleteMatching(
   matches: (key: string) => boolean,
-  matchesSigningScope: (scope: SigningJournalScope) => boolean
+  matchesSigningScope: (scope: SigningJournalScope) => boolean,
+  matchesTransaction: (walletId: string, accountId: string) => boolean,
+  walletId: string
 ): Promise<void> {
   await withMultisigStorageLock(async () => {
+    await assertNoUnresolvedMultisigTransactionsLocked(matchesTransaction, [walletId])
+    await deleteResolvedFinalizationRecoveryLocked(matchesTransaction)
     for (const storageKey of [
       MULTISIG_VAULT_RECORDS_STORAGE_KEY,
       MULTISIG_GROUPS_STORAGE_KEY,
       MULTISIG_BANNER_STORAGE_KEY,
       MULTISIG_CREATION_STORAGE_KEY,
-      MULTISIG_SIGNING_STORAGE_KEY
+      MULTISIG_SIGNING_STORAGE_KEY,
+      MULTISIG_TRANSACTION_STORAGE_KEY
     ]) {
       const stored = await readRawMap(storageKey)
       const entries = Object.entries(stored)
       const kept = entries.filter(([key]) => {
-        if (storageKey !== MULTISIG_SIGNING_STORAGE_KEY) return !matches(key)
+        if (
+          storageKey !== MULTISIG_SIGNING_STORAGE_KEY &&
+          storageKey !== MULTISIG_TRANSACTION_STORAGE_KEY
+        )
+          return !matches(key)
         const scope = parseSigningJournalScopeKey(key)
         return !scope || !matchesSigningScope(scope)
       })
@@ -132,7 +146,10 @@ export async function deleteMultisigDataForAccount(
   )
   await deleteMatching(
     key => targets.has(key),
-    scope => scope.walletId === walletId && scope.accountId === accountId
+    scope => scope.walletId === walletId && scope.accountId === accountId,
+    (transactionWalletId, transactionAccountId) =>
+      transactionWalletId === walletId && transactionAccountId === accountId,
+    walletId
   )
 }
 
@@ -140,6 +157,8 @@ export async function deleteMultisigDataForWallet(walletId: string): Promise<voi
   const prefixes = NETWORKS.map(network => `${network}:${walletId}:`)
   await deleteMatching(
     key => prefixes.some(prefix => key.startsWith(prefix)),
-    scope => scope.walletId === walletId
+    scope => scope.walletId === walletId,
+    transactionWalletId => transactionWalletId === walletId,
+    walletId
   )
 }

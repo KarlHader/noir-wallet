@@ -1,8 +1,11 @@
-import { realReviewFixture } from './helpers/signing-worker'
+import { createProtocolOnlySigningWasm, realReviewFixture } from './helpers/signing-worker'
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { SigningNonceCheckpoint } from '../../../src/core/multisig/nonce-checkpoint'
-import { createSigningWorkerRpcHandler } from '../../../src/core/multisig/signing-worker-rpc'
+import {
+  createSigningWorkerRpcHandler,
+  isSigningWorkerMethod
+} from '../../../src/core/multisig/signing-worker-rpc'
 import type { SigningStatus } from '../../../src/core/multisig/signing-coordinator'
 import { loadWalletWasm } from './helpers/vault-wasm'
 import { bytesToBase64 } from '../../../src/lib/bytes'
@@ -77,6 +80,8 @@ test('wrong or failed durable ACK and cancellation cannot release next-stage mat
 })
 
 test('production unavailable prepare cannot decrypt a share or create a startable review', async () => {
+  expect(isSigningWorkerMethod('vault.sign.worker.finalize')).toBe(true)
+  expect(isSigningWorkerMethod('vault.sign.worker.submit')).toBe(true)
   const wasm = await loadWalletWasm()
   let credentialReads = 0
   const handler = createSigningWorkerRpcHandler(wasm, {
@@ -133,15 +138,26 @@ test('production unavailable prepare cannot decrypt a share or create a startabl
     'vault.sign.worker.start',
     'vault.sign.worker.ingest',
     'vault.sign.worker.advance',
-    'vault.sign.worker.status'
+    'vault.sign.worker.status',
+    'vault.sign.worker.finalize',
+    'vault.sign.worker.submit'
   ] as const) {
     await expect(
       handler.handle(method, {
         ...reference,
         ...(method.endsWith('ingest') ? { envelope: {} } : {}),
+        ...(method.endsWith('finalize') ? { accountId: 'account:1' } : {}),
         ...(method.endsWith('advance')
           ? { acknowledgement: { ackId: 'invented', phase: 'created', persisted: true } }
-          : {})
+          : method.endsWith('submit')
+            ? {
+                accountId: 'account:1',
+                txId: 'a'.repeat(64),
+                rawTxSha256: 'b'.repeat(64),
+                rawTxLen: 1,
+                snapshotSha256: 'c'.repeat(64)
+              }
+            : {})
       })
     ).rejects.toThrow()
   }
@@ -246,13 +262,14 @@ test('a real PCZT for another group cannot create a Worker approval authority', 
       prepare: async () => {
         calls++
         return {
-          pczt: fixture,
+          pczt: fixture.slice(),
           summary: {
             recipient: request.intent.recipient,
             amount: request.intent.amount,
             memo: request.intent.memo,
             fee: '10000'
-          }
+          },
+          reviewedChainPolicy: { expiryHeight: 4_134_041, consensusBranchId: 0x37a5165b }
         }
       }
     }
@@ -262,4 +279,33 @@ test('a real PCZT for another group cannot create a Worker approval authority', 
   )
   expect(calls).toBe(1)
   expect(fixture.some(byte => byte !== 0)).toBe(true)
+})
+
+test('a prepared review cannot start without a valid immutable chain policy', async () => {
+  const { wasm, identities, request, credential } = await realReviewFixture()
+  const native = createProtocolOnlySigningWasm(wasm)
+  const hex = (
+    await readFile(new URL('./fixtures/ironwood_1action.hex', import.meta.url), 'utf8')
+  ).trim()
+  const handler = createSigningWorkerRpcHandler(native, {
+    credential: () => credential,
+    network: () => 'testnet',
+    identity: async () => identities[0],
+    reviewProvider: {
+      available: true,
+      prepare: async () => ({
+        pczt: Uint8Array.from(Buffer.from(hex, 'hex')),
+        summary: {
+          recipient: request.intent.recipient,
+          amount: request.intent.amount,
+          memo: request.intent.memo,
+          fee: '10000'
+        },
+        reviewedChainPolicy: { expiryHeight: 0, consensusBranchId: 0 }
+      })
+    }
+  })
+  await expect(handler.handle('vault.sign.worker.prepare', request)).rejects.toThrow(
+    'Signing session is unavailable'
+  )
 })
