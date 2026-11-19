@@ -5,6 +5,15 @@
  */
 import { Buffer } from 'buffer'
 
+// Vite's dev prebundling leaves the browser build of randombytes reading `global.crypto`.
+if (import.meta.env.DEV && typeof global === 'undefined') {
+  Object.defineProperty(globalThis, 'global', {
+    configurable: true,
+    writable: true,
+    value: globalThis
+  })
+}
+
 // Force our single `buffer` build onto the global. The UR libraries read the
 // global `Buffer` and check values with `instanceof`; a conditional assignment
 // would let another bundled `buffer` copy win the global first and reintroduce
