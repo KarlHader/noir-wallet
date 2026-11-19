@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
-import { Button } from '../ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
-import { TokenIcon } from '../tokens/TokenIcon'
 import { FeeTierPicker } from './FeeTierPicker'
+import {
+  TransactionActionReview,
+  TransactionActionRow,
+  TransactionActionRows
+} from './TransactionActionReview'
+import { SendRecipientAddress } from './SendInputCards'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useMaxTransferEstimate } from '../../hooks/useMaxTransferEstimate'
 import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-policy'
 import type { FeeTier } from '@/config/fee'
-import { formatSortAddress } from '@/lib/format'
 import { AmountDisplay } from '../common/AmountDisplay'
 import type { Transaction } from '@/types/wallet'
 import { resolveSpeedUpAmount } from '@/lib/transaction-replacement'
@@ -69,7 +72,6 @@ export function SpeedUpConfirmSheet({
     feeAlreadyReservedZats: fundingSource === 'transparent' ? 0 : undefined
   }).amount
   const retryAmount = resolveSpeedUpAmount(tx?.amount ?? '0', spendable)
-  const amountAdjusted = !!tx && retryAmount !== tx.amount
   const usesMaxTransfer = !!maxTransfer.maxAmount && safeBig(retryAmount).eq(maxTransfer.maxAmount)
 
   const estimate = useFeeEstimate({
@@ -93,7 +95,28 @@ export function SpeedUpConfirmSheet({
     selectedQuote.expiresAt > Date.now() &&
     feeByTier[tier] !== null &&
     !loading &&
-    !(usesMaxTransfer ? maxTransfer.error : estimate.error)
+    !maxTransfer.error &&
+    (usesMaxTransfer || !estimate.error)
+  const amountAdjusted = !!tx && feeReady && !unavailable && !safeBig(retryAmount).eq(tx.amount)
+  const displayedAmount = amountAdjusted ? retryAmount : tx?.amount
+  const confirm = () => {
+    if (
+      !feeReady ||
+      unavailable ||
+      isConfirming ||
+      !selectedQuote ||
+      selectedQuote.expiresAt <= Date.now()
+    )
+      return
+    onConfirm({
+      amount: retryAmount,
+      fee: usesMaxTransfer && maxTransfer.fee ? maxTransfer.fee : selectedFee,
+      marginalFeeZats: marginalFeeForTier(tier, selectedQuote.standardMarginalFeeZats),
+      feeQuoteId: selectedQuote.id,
+      feeTier: tier,
+      usesMaxTransfer
+    })
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -103,66 +126,61 @@ export function SpeedUpConfirmSheet({
         className="p-0 gap-0"
         style={open ? { animation: 'none' } : undefined}
       >
-        <DialogHeader className="px-5 pt-5 pb-4">
+        <DialogHeader className="px-5 pt-5 pb-5">
           <DialogTitle className="text-center">Speed Up</DialogTitle>
           <DialogDescription className="sr-only">
-            Resend this transaction at a higher fee
+            Review a new transaction to the same recipient
           </DialogDescription>
         </DialogHeader>
-
-        <div className="flex flex-col items-center pb-4">
-          <div className="mb-3">
-            <TokenIcon symbol="ZEC" nativeChain="zcash" size="xl" />
-          </div>
-          <div className="max-w-full text-center text-2xl font-bold">
-            <AmountDisplay value={retryAmount} symbol="ZEC" />
-          </div>
-          {tx?.to && <p className="text-sm text-muted mt-0.5">To {formatSortAddress(tx.to)}</p>}
-          <div className="mt-2 min-h-12 px-8 text-center text-xs text-muted">
-            {amountAdjusted && (
-              <>
-                Amount reduced from <AmountDisplay value={tx.amount} symbol="ZEC" /> to cover the
-                higher network fee.
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className="mx-5 bg-card rounded-xl p-4">
-          <FeeTierPicker
-            tier={tier}
-            onTierChange={next => {
-              if (!isConfirming) setTier(next)
-            }}
-            feeByTier={feeByTier}
-            loadingByTier={loadingByTier}
-            loading={loading}
-            allowFallback={false}
-          />
-        </div>
-
-        <div className="p-5 flex gap-3">
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1 h-[45px]">
-            Cancel
-          </Button>
-          <Button
+        <div className="px-5 pb-5">
+          <TransactionActionReview
+            backLabel="Cancel"
+            onBack={() => onOpenChange(false)}
+            backDisabled={isConfirming}
+            confirmLabel="Speed Up"
+            onConfirm={confirm}
             disabled={!feeReady || unavailable || isConfirming}
-            onClick={() =>
-              selectedQuote &&
-              onConfirm({
-                amount: retryAmount,
-                fee: usesMaxTransfer && maxTransfer.fee ? maxTransfer.fee : selectedFee,
-                marginalFeeZats: marginalFeeForTier(tier, selectedQuote.standardMarginalFeeZats),
-                feeQuoteId: selectedQuote.id,
-                feeTier: tier,
-                usesMaxTransfer
-              })
+            loading={isConfirming}
+            notice={
+              <div className="grid">
+                <span
+                  className={`col-start-1 row-start-1 ${amountAdjusted ? 'invisible' : ''}`}
+                  aria-hidden={amountAdjusted}
+                >
+                  This sends a new transaction.
+                </span>
+                <span
+                  className={`col-start-1 row-start-1 ${amountAdjusted ? '' : 'invisible'}`}
+                  aria-hidden={!amountAdjusted}
+                >
+                  Amount reduced from <AmountDisplay value={tx?.amount} symbol="ZEC" /> to cover the
+                  fee. This sends a new transaction.
+                </span>
+              </div>
             }
-            isLoading={isConfirming}
-            className="flex-1 h-[45px]"
           >
-            Speed Up
-          </Button>
+            <TransactionActionRows>
+              <TransactionActionRow label="Recipient">
+                {tx?.to && <SendRecipientAddress address={tx.to} />}
+              </TransactionActionRow>
+              <TransactionActionRow label="Amount">
+                <AmountDisplay value={displayedAmount} symbol="ZEC" />
+              </TransactionActionRow>
+              <TransactionActionRow label="Network Fee">
+                <FeeTierPicker
+                  tier={tier}
+                  onTierChange={next => {
+                    if (!isConfirming) setTier(next)
+                  }}
+                  feeByTier={feeByTier}
+                  loadingByTier={loadingByTier}
+                  loading={loading}
+                  allowFallback={false}
+                  hideLabel
+                />
+              </TransactionActionRow>
+            </TransactionActionRows>
+          </TransactionActionReview>
         </div>
       </DialogContent>
     </Dialog>

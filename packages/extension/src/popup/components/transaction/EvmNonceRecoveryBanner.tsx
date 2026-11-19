@@ -23,6 +23,12 @@ import {
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
 import { getEvmNonceRecoveryPresentation } from './evm-nonce-recovery-presentation'
+import {
+  TransactionActionDetails,
+  TransactionActionReview,
+  TransactionActionRow,
+  TransactionActionRows
+} from './TransactionActionReview'
 
 type RecoveryState = NonNullable<Awaited<ReturnType<typeof evmWalletClient.getNonceRecovery>>>
 const RECOVERY_CHECK_INTERVAL_MS = 30_000
@@ -149,57 +155,59 @@ export function EvmNonceRecoveryBanner({
         title: 'Review recovery transaction',
         showCloseButton: false,
         body: resolve => (
-          <div className="space-y-4 pb-2">
-            <p className="text-sm leading-5 text-muted">
-              This sends a zero-value transaction to your own address and costs a network fee. Later
-              queued transactions, including token approvals, may go through. It does not cancel
-              them.
-            </p>
-            <div className="space-y-2 border-y border-border/60 py-3 text-xs">
-              <div className="flex justify-between gap-3">
-                <span className="text-muted">Nonce</span>
-                <span className="font-mono">{summary.fields.nonce}</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted">Maximum network fee</span>
-                <span className="font-sans tabular-nums">
-                  <AmountDisplay
-                    value={formatBaseUnitAmount(summary.fields.maximumFeeWei, feeDecimals)}
-                    symbol={feeSymbol}
-                    profile="fee"
-                  />
-                </span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted">Max fee per gas</span>
-                <span className="font-sans tabular-nums">
-                  <AmountDisplay
-                    value={formatEvmWeiAsGwei(summary.fields.maxFeePerGasWei ?? '0')}
-                    symbol="GWEI"
-                    profile="fee"
-                  />
-                </span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted">Priority fee</span>
-                <span className="font-sans tabular-nums">
-                  <AmountDisplay
-                    value={formatEvmWeiAsGwei(summary.fields.maxPriorityFeePerGasWei ?? '0')}
-                    symbol="GWEI"
-                    profile="fee"
-                  />
-                </span>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={() => resolve(false)}>
-                Back
-              </Button>
-              <Button className="flex-1" onClick={() => resolve(true)}>
-                Confirm
-              </Button>
-            </div>
-          </div>
+          <TransactionActionReview
+            notice="Filling this nonce may allow later queued transactions, including token approvals, to go through. It does not cancel them."
+            onBack={() => resolve(false)}
+            confirmLabel="Confirm recovery"
+            onConfirm={() => resolve(true)}
+          >
+            <TransactionActionRows>
+              <TransactionActionRow label="Maximum network fee">
+                <AmountDisplay
+                  value={formatBaseUnitAmount(summary.fields.maximumFeeWei, feeDecimals)}
+                  symbol={feeSymbol}
+                  profile="fee"
+                />
+              </TransactionActionRow>
+              <TransactionActionRow label="Effect">Unblock send queue</TransactionActionRow>
+            </TransactionActionRows>
+            <TransactionActionDetails label="Advanced">
+              <TransactionActionRows>
+                <TransactionActionRow label="Nonce">
+                  <span className="font-mono">{summary.fields.nonce}</span>
+                </TransactionActionRow>
+                <TransactionActionRow label="Gas limit">
+                  <span className="font-mono">{summary.fields.gasLimit}</span>
+                </TransactionActionRow>
+                {summary.fields.gasPriceWei ? (
+                  <TransactionActionRow label="Gas price">
+                    <AmountDisplay
+                      value={formatEvmWeiAsGwei(summary.fields.gasPriceWei)}
+                      symbol="GWEI"
+                      profile="fee"
+                    />
+                  </TransactionActionRow>
+                ) : (
+                  <>
+                    <TransactionActionRow label="Max fee per gas">
+                      <AmountDisplay
+                        value={formatEvmWeiAsGwei(summary.fields.maxFeePerGasWei ?? '0')}
+                        symbol="GWEI"
+                        profile="fee"
+                      />
+                    </TransactionActionRow>
+                    <TransactionActionRow label="Priority fee per gas">
+                      <AmountDisplay
+                        value={formatEvmWeiAsGwei(summary.fields.maxPriorityFeePerGasWei ?? '0')}
+                        symbol="GWEI"
+                        profile="fee"
+                      />
+                    </TransactionActionRow>
+                  </>
+                )}
+              </TransactionActionRows>
+            </TransactionActionDetails>
+          </TransactionActionReview>
         )
       })
       if (!approved) {

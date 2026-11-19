@@ -55,11 +55,7 @@ import { ExecutionAccountIcon } from '@/popup/components/account/ExecutionAccoun
 import nearLogo from '@/images/figma-near-confidential.svg'
 import { Button } from '@/popup/components/ui/button'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
-import {
-  areEvmFeeSelectionsEqual,
-  formatEvmWeiAsGwei,
-  type EvmFeeSelection
-} from '@/infrastructure/chains/evm'
+import { areEvmFeeSelectionsEqual, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import {
   Dialog,
@@ -74,7 +70,10 @@ import type { SwapToken } from '@/core/services/intents-api'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { listMoveAssetPickerRows } from '@/popup/services/move-asset-picker'
-import { confidentialFundingClient } from '@/popup/services/confidential-funding-client'
+import {
+  confidentialFundingClient,
+  previewClusterNetworkFeeTiers
+} from '@/popup/services/confidential-funding-client'
 import type {
   ConfidentialFundingPlan,
   ConfidentialFundingReview
@@ -1201,7 +1200,7 @@ function TransferForm() {
       })
   })
   const clusterEstimateKey = `${methodEstimateKey}:${shieldConnection}:${managedAsset?.protocolAssetId ?? ''}`
-  const buildClusterPreviewRequest = () =>
+  const buildClusterPreviewRequest = (amountRaw = estimateAmountRaw!) =>
     buildShieldTransferRequest({
       network: currentNetwork,
       keyDomainId: effective!.walletId,
@@ -1209,7 +1208,7 @@ function TransferForm() {
       from,
       to,
       method: 'cluster',
-      amountRaw: estimateAmountRaw!,
+      amountRaw,
       asset: selected!.asset,
       chain: selected!.chain,
       managed: managedAsset!
@@ -1765,6 +1764,21 @@ function TransferForm() {
         />
       ) : null
     const networkFee = activeShieldReview.sourceNetworkFee
+    const previewAmount = shieldAmountState?.amountRaw
+    const loadTierPreviews =
+      activeShieldReview.operation === 'cluster' &&
+      from !== 'shield' &&
+      effective &&
+      managedAsset &&
+      previewAmount
+        ? () =>
+            scopeStillCurrent()
+              ? previewClusterNetworkFeeTiers(
+                  buildClusterPreviewRequest(previewAmount),
+                  evmMoveFee.kind === 'tier' ? evmMoveFee.tier : undefined
+                )
+              : Promise.resolve({})
+        : undefined
     return (
       <div className="page-container">
         <TransactionReviewView
@@ -1861,6 +1875,7 @@ function TransferForm() {
                         }}
                         amount={formatBaseUnitAmount(networkFee.raw, networkFee.decimals)}
                         symbol={formatSymbol(networkFee.symbol)}
+                        loadTierPreviews={loadTierPreviews}
                         onTierChange={tier => changeShieldFee({ kind: 'tier', tier })}
                         onSelectionChange={changeShieldFee}
                         disabled={
@@ -1868,46 +1883,6 @@ function TransferForm() {
                           confirmingShield ||
                           confirmUncertain ||
                           preparingShield
-                        }
-                        details={
-                          <div className="space-y-2 border-t border-border/60 pt-3 text-xs">
-                            <div className="flex justify-between gap-3">
-                              <span className="text-muted">Gas limit</span>
-                              <span>{activeShieldReview.sourceEvmFee.gasLimit}</span>
-                            </div>
-                            {activeShieldReview.sourceEvmFee.transactionType === 'legacy' ? (
-                              <div className="flex justify-between gap-3">
-                                <span className="text-muted">Gas price</span>
-                                <span>
-                                  {formatEvmWeiAsGwei(
-                                    activeShieldReview.sourceEvmFee.gasPriceWei ?? '0'
-                                  )}{' '}
-                                  GWEI
-                                </span>
-                              </div>
-                            ) : (
-                              <>
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-muted">Max fee per gas</span>
-                                  <span>
-                                    {formatEvmWeiAsGwei(
-                                      activeShieldReview.sourceEvmFee.maxFeePerGasWei ?? '0'
-                                    )}{' '}
-                                    GWEI
-                                  </span>
-                                </div>
-                                <div className="flex justify-between gap-3">
-                                  <span className="text-muted">Priority fee per gas</span>
-                                  <span>
-                                    {formatEvmWeiAsGwei(
-                                      activeShieldReview.sourceEvmFee.maxPriorityFeePerGasWei ?? '0'
-                                    )}{' '}
-                                    GWEI
-                                  </span>
-                                </div>
-                              </>
-                            )}
-                          </div>
                         }
                       />
                     ) : (

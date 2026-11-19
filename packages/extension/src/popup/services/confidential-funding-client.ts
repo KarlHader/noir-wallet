@@ -10,10 +10,13 @@ import type {
   ExternalShieldDepositScope
 } from '@/core/services/confidential-funding'
 import type { SwapStatus } from '@/core/services/intents-api'
-import type { NetworkFeeTier } from '@/core/transactions/domain'
+import { NETWORK_FEE_TIERS, type NetworkFeeTier } from '@/core/transactions/domain'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { Network } from '@/types'
 import { parseZcashAddress } from '@/core/address-book/address-book'
+import { formatBaseUnitAmount } from '@/lib/number-format'
+import { formatSymbol } from '@/lib/format'
+import type { NetworkFeePreviews } from './network-fee-presentation'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
 export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
@@ -469,3 +472,25 @@ export function createExternalShieldDepositClient(
 export const externalShieldDepositClient = createExternalShieldDepositClient()
 
 export const confidentialFundingClient = createConfidentialFundingClient()
+
+export async function previewClusterNetworkFeeTiers(
+  request: PrepareConfidentialFundingRequest,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const previews: NetworkFeePreviews = {}
+  await Promise.allSettled(
+    NETWORK_FEE_TIERS.filter(tier => tier !== reviewedTier).map(async tier => {
+      const fee = await confidentialFundingClient.previewClusterNetworkFee({
+        ...request,
+        feeSelection: { kind: 'tier', tier }
+      })
+      if (fee)
+        previews[tier] = {
+          amount: formatBaseUnitAmount(fee.raw, fee.decimals),
+          symbol: formatSymbol(fee.symbol),
+          approximate: true
+        }
+    })
+  )
+  return previews
+}

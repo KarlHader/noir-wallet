@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { Icon } from '@iconify/react'
 import type { ActivityItem } from '@/core/activity'
 import { parseTransactionId } from '@/core/transactions/domain'
 import { formatSortAddress } from '@/lib/format'
@@ -18,6 +17,12 @@ import { toast } from '@/store/toast-store'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { Button } from '../ui/button'
 import { NetworkFeeTierPicker } from './NetworkFeeTierPicker'
+import {
+  TransactionActionDetails,
+  TransactionActionReview,
+  TransactionActionRow,
+  TransactionActionRows
+} from './TransactionActionReview'
 import {
   canCancelEvmActivity,
   canSpeedUpEvmActivity,
@@ -72,7 +77,6 @@ function ReplacementReviewContent({
   const [selection, setSelection] = useState<EvmFeeSelection>({ kind: 'tier', tier: 'standard' })
   const [updating, setUpdating] = useState(false)
   const [ready, setReady] = useState(true)
-  const [advanced, setAdvanced] = useState(false)
   const summary = displayReview.review.summary
   if (summary.schema !== 'evm.transaction.v1') return null
   const fields = summary.fields
@@ -97,118 +101,96 @@ function ReplacementReviewContent({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-2 border-b border-border/60 pb-3 text-sm">
-        <div className="flex justify-between gap-3">
-          <span className="text-muted">Original transaction</span>
-          <span className="text-right font-medium">
-            {originalAmount ?? (action === 'cancel' ? 'Pending transaction' : 'Speed up')}
-          </span>
-        </div>
+    <TransactionActionReview
+      notice={
+        action === 'cancel'
+          ? 'This replaces the pending transaction. The network fee is spent if it confirms.'
+          : undefined
+      }
+      onBack={() => resolve(false)}
+      confirmLabel={action === 'cancel' ? 'Confirm cancel' : 'Confirm speed up'}
+      onConfirm={() => resolve(true)}
+      disabled={!ready || updating}
+      loading={updating}
+      destructive={action === 'cancel'}
+    >
+      <TransactionActionRows>
+        {originalAmount && (
+          <TransactionActionRow
+            label={action === 'cancel' ? 'Original value' : 'Transaction value'}
+          >
+            {originalAmount}
+          </TransactionActionRow>
+        )}
+        <TransactionActionRow label="Maximum network fee">
+          <NetworkFeeTierPicker
+            chainFamily="evm"
+            tier={selection.kind === 'tier' ? selection.tier : 'standard'}
+            selection={selection}
+            amount={formatBaseUnitAmount(fields.maximumFeeWei, feeDecimals)}
+            symbol={feeSymbol}
+            onTierChange={tier => changeFee({ kind: 'tier', tier })}
+            onSelectionChange={changeFee}
+            disabled={updating}
+            feeModel={fields.transactionType === 'legacy' ? 'legacy' : 'eip1559'}
+            customDefaults={{
+              gasLimit: fields.gasLimit,
+              maxFeePerGasWei: fields.maxFeePerGasWei ?? '0',
+              maxPriorityFeePerGasWei: fields.maxPriorityFeePerGasWei ?? '0',
+              gasPriceWei: fields.gasPriceWei
+            }}
+          />
+        </TransactionActionRow>
         {action === 'speed-up' && recipient && (
-          <div className="flex justify-between gap-3">
-            <span className="text-muted">To</span>
+          <TransactionActionRow label="To">
             <span className="font-mono" title={recipient}>
               {formatSortAddress(recipient)}
             </span>
-          </div>
+          </TransactionActionRow>
         )}
-      </div>
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="font-medium">Maximum network fee</span>
-        <NetworkFeeTierPicker
-          chainFamily="evm"
-          tier={selection.kind === 'tier' ? selection.tier : 'standard'}
-          selection={selection}
-          amount={formatBaseUnitAmount(fields.maximumFeeWei, feeDecimals)}
-          symbol={feeSymbol}
-          onTierChange={tier => changeFee({ kind: 'tier', tier })}
-          onSelectionChange={changeFee}
-          disabled={updating}
-          feeModel={fields.transactionType === 'legacy' ? 'legacy' : 'eip1559'}
-          customDefaults={{
-            gasLimit: fields.gasLimit,
-            maxFeePerGasWei: fields.maxFeePerGasWei ?? '0',
-            maxPriorityFeePerGasWei: fields.maxPriorityFeePerGasWei ?? '0',
-            gasPriceWei: fields.gasPriceWei
-          }}
-        />
-      </div>
-      <div>
-        <button
-          type="button"
-          className="flex items-center gap-1 text-xs text-muted"
-          onClick={() => setAdvanced(value => !value)}
-          aria-expanded={advanced}
-        >
-          Advanced{' '}
-          <Icon
-            icon={advanced ? 'lucide:chevron-up' : 'lucide:chevron-down'}
-            width={14}
-            height={14}
-          />
-        </button>
-        {advanced && (
-          <div className="mt-2 space-y-1 border-t border-border/60 pt-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-muted">Nonce</span>
-              <span className="font-mono">{fields.nonce}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Gas limit</span>
-              <span className="font-mono">{fields.gasLimit}</span>
-            </div>
-            {fields.gasPriceWei ? (
-              <div className="flex justify-between">
-                <span className="text-muted">Gas price</span>
+      </TransactionActionRows>
+      <TransactionActionDetails label="Advanced">
+        <TransactionActionRows>
+          <TransactionActionRow label="Nonce">
+            <span className="font-mono">{fields.nonce}</span>
+          </TransactionActionRow>
+          <TransactionActionRow label="Gas limit">
+            <span className="font-mono">{fields.gasLimit}</span>
+          </TransactionActionRow>
+          {fields.gasPriceWei ? (
+            <TransactionActionRow label="Gas price">
+              <AmountDisplay
+                value={formatEvmWeiAsGwei(fields.gasPriceWei)}
+                symbol="GWEI"
+                profile="fee"
+              />
+            </TransactionActionRow>
+          ) : (
+            <>
+              <TransactionActionRow label="Max fee per gas">
                 <AmountDisplay
-                  value={formatEvmWeiAsGwei(fields.gasPriceWei)}
+                  value={formatEvmWeiAsGwei(fields.maxFeePerGasWei ?? '0')}
                   symbol="GWEI"
                   profile="fee"
                 />
-              </div>
-            ) : (
-              <>
-                <div className="flex justify-between">
-                  <span className="text-muted">Max fee per gas</span>
-                  <AmountDisplay
-                    value={formatEvmWeiAsGwei(fields.maxFeePerGasWei ?? '0')}
-                    symbol="GWEI"
-                    profile="fee"
-                  />
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted">Priority fee per gas</span>
-                  <AmountDisplay
-                    value={formatEvmWeiAsGwei(fields.maxPriorityFeePerGasWei ?? '0')}
-                    symbol="GWEI"
-                    profile="fee"
-                  />
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
+              </TransactionActionRow>
+              <TransactionActionRow label="Priority fee per gas">
+                <AmountDisplay
+                  value={formatEvmWeiAsGwei(fields.maxPriorityFeePerGasWei ?? '0')}
+                  symbol="GWEI"
+                  profile="fee"
+                />
+              </TransactionActionRow>
+            </>
+          )}
+        </TransactionActionRows>
+      </TransactionActionDetails>
       {!ready && !updating && (
         <p role="status" className="text-xs text-muted">
           Select a network fee to continue.
         </p>
       )}
-      <div className="flex gap-3">
-        <Button variant="outline" className="flex-1" onClick={() => resolve(false)}>
-          Back
-        </Button>
-        <Button
-          className="flex-1"
-          disabled={!ready || updating}
-          isLoading={updating}
-          onClick={() => resolve(true)}
-        >
-          {action === 'cancel' ? 'Confirm cancel' : 'Confirm speed up'}
-        </Button>
-      </div>
-    </div>
+    </TransactionActionReview>
   )
 }
 

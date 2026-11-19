@@ -2,6 +2,7 @@ import { Icon } from '@iconify/react'
 import { useState } from 'react'
 import { DetailRow } from '../common/DetailRow'
 import { FeeTierSelector } from './FeeTierSelector'
+import { TransactionActionReview } from './TransactionActionReview'
 import { getFeeTierLabel, type FeeTier } from '@/config/fee'
 import { staticFeeFallbackZats } from '@/core/zcash/fee-policy'
 import {
@@ -60,6 +61,7 @@ export function FeeTierPicker({
   hideLabel
 }: FeeTierPickerProps) {
   const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(tier)
   const selectedFeeZats = feeByTier[tier] ?? (allowFallback ? staticFeeFallbackZats(tier) : null)
   const selectedFeeZec =
     selectedFeeZats === null
@@ -138,27 +140,37 @@ export function FeeTierPicker({
     )
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={next => {
+        if (next) setDraft(tier)
+        setOpen(next)
+      }}
+    >
       {trigger}
       <DialogContent position="bottom">
         <DialogHeader>
           <DialogTitle>Network Fee</DialogTitle>
           <DialogDescription className="sr-only">Select a network fee</DialogDescription>
         </DialogHeader>
-        <div className="pt-1 pb-4 space-y-3">
+        <TransactionActionReview
+          backLabel="Cancel"
+          onBack={() => setOpen(false)}
+          confirmLabel="Apply"
+          onConfirm={() => {
+            if (draft !== tier) onTierChange(draft)
+            setOpen(false)
+          }}
+        >
           <FeeTierSelector
-            value={tier}
-            onChange={next => {
-              onTierChange(next)
-              setOpen(false)
-            }}
+            value={draft}
+            onChange={setDraft}
             feeByTier={sheetFeeByTier}
             loading={loading}
             loadingByTier={loadingByTier}
-            hideLabel
           />
           {isApproximate && <p className="text-xs text-muted">Approximate fee</p>}
-        </div>
+        </TransactionActionReview>
       </DialogContent>
     </Dialog>
   )
