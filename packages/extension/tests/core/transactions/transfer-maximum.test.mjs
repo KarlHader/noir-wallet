@@ -101,7 +101,8 @@ test('uses one fee-adjusted amount for display, Max and validation without deduc
 
 test('routed Max retains its chain-specific fallback without a usable USD price', () => {
   const cases = [
-    { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 3_000_000_000_000_000n },
+    { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 300_000_000_000_000n },
+    { family: 'evm', chainId: 'eip155:11155111', decimals: 18, reserve: 300_000_000_000_000n },
     { family: 'evm', chainId: 'eip155:8453', decimals: 18, reserve: 300_000_000_000_000n },
     { family: 'zcash', decimals: 8, reserve: 50_000n }
   ]

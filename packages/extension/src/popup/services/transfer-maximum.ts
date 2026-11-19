@@ -16,12 +16,14 @@ import { rheaSwapClient } from './rhea-swap-client'
 import { EvmWalletClientError } from './evm-wallet-client'
 import { parseDisplayUnitAmount } from '@/lib/number-format'
 
+const ETH_ROUTE_FALLBACK_RESERVE = '0.0003'
+
 const evmRouteReserves: Readonly<Record<string, string>> = {
-  'eip155:1': '0.003',
+  'eip155:1': ETH_ROUTE_FALLBACK_RESERVE,
   'eip155:56': '0.001',
-  'eip155:42161': '0.0003',
-  'eip155:8453': '0.0003',
-  'eip155:10': '0.0003',
+  'eip155:42161': ETH_ROUTE_FALLBACK_RESERVE,
+  'eip155:8453': ETH_ROUTE_FALLBACK_RESERVE,
+  'eip155:10': ETH_ROUTE_FALLBACK_RESERVE,
   'eip155:137': '0.1',
   'eip155:43114': '0.02',
   'eip155:143': '0.1',
@@ -29,11 +31,11 @@ const evmRouteReserves: Readonly<Record<string, string>> = {
   'eip155:9745': '0.05',
   'eip155:196': '0.01',
   'eip155:80094': '0.05',
-  'eip155:11155111': '0.003',
+  'eip155:11155111': ETH_ROUTE_FALLBACK_RESERVE,
   'eip155:97': '0.001',
-  'eip155:421614': '0.0003',
-  'eip155:84532': '0.0003',
-  'eip155:11155420': '0.0003',
+  'eip155:421614': ETH_ROUTE_FALLBACK_RESERVE,
+  'eip155:84532': ETH_ROUTE_FALLBACK_RESERVE,
+  'eip155:11155420': ETH_ROUTE_FALLBACK_RESERVE,
   'eip155:80002': '0.1',
   'eip155:43113': '0.02'
 }
