@@ -182,7 +182,11 @@ import { createDebugRequestId, logDebugTiming, traceDebugStage } from '@/lib/deb
 import { logger } from '@/lib/logger'
 import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { resolveSelectedSwapMaximum } from '@/popup/services/swap-maximum'
-import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
+import {
+  estimateBitcoinRouteMaximum,
+  resolveNativeRouteMaximum
+} from '@/popup/services/transfer-maximum'
+import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {
   createRheaSwapBinding,
   listWalletSwapSourceTokens,
@@ -2810,6 +2814,42 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     selectedFeeZats,
     standardFeeZats
   })
+  const bitcoinSource = walletOwnedSource?.family === 'bitcoin' ? walletOwnedSource : null
+  const bitcoinPriceUsd = bitcoinSource
+    ? findAssetPrice(cachedAssetPrices, bitcoinSource.asset.asset.id)?.priceUsd
+    : undefined
+  const bitcoinAvailableRaw = bitcoinSource?.asset.balance.availableRaw ?? '0'
+  const bitcoinMaximum = useTransferMaximum({
+    enabled: bitcoinSource !== null && bitcoinAvailableRaw !== '0',
+    requestKey: JSON.stringify([
+      bitcoinSource?.sourceAssetId,
+      bitcoinSource?.refundAddress,
+      bitcoinSource?.bitcoinAddressType,
+      bitcoinAvailableRaw,
+      networkFeeTier
+    ]),
+    estimate: () => {
+      if (!bitcoinSource) throw new Error('The selected source asset is unavailable')
+      return estimateBitcoinRouteMaximum({
+        source: bitcoinSource,
+        feeTier: networkFeeTier,
+        priceUsd: bitcoinPriceUsd
+      })
+    }
+  })
+  const bitcoinMaximumLoading = maxSelected && bitcoinMaximum.loading
+  const bitcoinMaximumUnavailable =
+    bitcoinSource !== null &&
+    (bitcoinMaximum.error !== null || bitcoinMaximum.value?.amountRaw === '0')
+  useEffect(() => {
+    if (!maxSelected || !bitcoinMaximumUnavailable) return
+    setMaxSelected(false)
+    toast.error(
+      bitcoinMaximum.value?.amountRaw === '0'
+        ? 'Insufficient BTC for the network fee'
+        : classifyError(bitcoinMaximum.error).userMessage
+    )
+  }, [maxSelected, bitcoinMaximumUnavailable, bitcoinMaximum.value, bitcoinMaximum.error])
   const nativeMaximum = swap.isZecSource
     ? formatBaseUnitDecimalAmount(
         resolveNativeRouteMaximum({
@@ -2820,18 +2860,26 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         }),
         ZEC_DECIMALS
       )
-    : walletOwnedSource?.asset.asset.kind === 'native'
-      ? formatBaseUnitDecimalAmount(
-          resolveNativeRouteMaximum({
-            family: walletOwnedSource.family,
-            chainId: walletOwnedSource.chain.chain.id,
-            availableRaw: walletOwnedSource.asset.balance.availableRaw,
-            decimals: walletOwnedSource.asset.metadata.decimals,
-            priceUsd: findAssetPrice(cachedAssetPrices, walletOwnedSource.asset.asset.id)?.priceUsd
-          }),
-          walletOwnedSource.asset.metadata.decimals
-        )
-      : null
+    : bitcoinSource
+      ? bitcoinMaximum.value && !bitcoinMaximumUnavailable
+        ? formatBaseUnitDecimalAmount(
+            bitcoinMaximum.value.amountRaw,
+            bitcoinSource.asset.metadata.decimals
+          )
+        : null
+      : walletOwnedSource?.asset.asset.kind === 'native'
+        ? formatBaseUnitDecimalAmount(
+            resolveNativeRouteMaximum({
+              family: walletOwnedSource.family,
+              chainId: walletOwnedSource.chain.chain.id,
+              availableRaw: walletOwnedSource.asset.balance.availableRaw,
+              decimals: walletOwnedSource.asset.metadata.decimals,
+              priceUsd: findAssetPrice(cachedAssetPrices, walletOwnedSource.asset.asset.id)
+                ?.priceUsd
+            }),
+            walletOwnedSource.asset.metadata.decimals
+          )
+        : null
   const walletAvailability = walletOwnedSource
     ? resolvePortfolioTransferAvailability({
         balanceRaw: walletOwnedSource.asset.balance.availableRaw,
@@ -2841,7 +2889,16 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       })
     : null
   const walletSpendableBalance = walletAvailability?.display ?? '0'
+  const maximumButtonAmount = bitcoinSource
+    ? walletSpendableBalance
+    : (nativeMaximum ?? walletSpendableBalance)
   const applyMaximum = () => {
+    if (bitcoinSource) {
+      reviewAfterQuoteRefresh.current = null
+      setMaxSelected(true)
+      void bitcoinMaximum.request()
+      return
+    }
     const maximum = nativeMaximum ?? walletSpendableBalance
     if (safeBig(maximum).lte(0)) return
     reviewAfterQuoteRefresh.current = null
@@ -3368,7 +3425,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         }
         return
       }
-      if (hasInsufficientFunds || preparingReview.current) return
+      if (hasInsufficientFunds || bitcoinMaximumLoading || preparingReview.current) return
       let resultToReview = quoteResult
       const previousQuote = viewStep === 'review' ? quoteResult : null
       let newlyQuoted = false
@@ -3583,6 +3640,39 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               throw new Error('RHEA Swap Bitcoin build does not match the quoted source amount')
             }
             const depositAddress = review.execution.target
+            if (maxSelected) {
+              const maximum = await measure('bitcoin-route-maximum', () =>
+                estimateBitcoinRouteMaximum({
+                  source: walletOwnedSource,
+                  depositAddress,
+                  feeTier: feeTierOverride ?? networkFeeTier
+                })
+              )
+              if (requestSequence !== quoteRequestSequence.current) return
+              if (maximum.amountRaw === '0') throw new Error('Insufficient BTC for the network fee')
+              if (BigInt(review.amountIn) > BigInt(maximum.amountRaw)) {
+                bitcoinMaximum.update(maximum)
+                reviewAfterQuoteRefresh.current = null
+                setQuoteResult(null)
+                setLiveQuoteKey(null)
+                setQuoteReceivedAt(null)
+                setRheaReview(null)
+                swap.setAmountOut('')
+                swap.setDepositAddress('')
+                swap.updateAmountIn(
+                  formatBaseUnitDecimalAmount(
+                    maximum.amountRaw,
+                    walletOwnedSource.asset.metadata.decimals
+                  )
+                )
+                setViewStep('input')
+                void rheaSwapClient.discard(result.quoteHandle).catch(() => {})
+                if (previousQuote && previousQuote.quoteHandle !== result.quoteHandle) {
+                  void rheaSwapClient.discard(previousQuote.quoteHandle).catch(() => {})
+                }
+                return
+              }
+            }
             prepared = await measure('bitcoin-prepare-deposit', () =>
               quoteDepositTransferClient.prepare({
                 source: walletOwnedSource,
@@ -3924,6 +4014,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       quoteReceivedAt,
       viewStep,
       hasInsufficientFunds,
+      bitcoinMaximumLoading,
+      bitcoinMaximum.update,
+      maxSelected,
       swap,
       walletOwnedSource,
       portfolio,
@@ -6821,11 +6914,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           insufficientMessage={
             swap.tokenIn ? `Insufficient ${swap.tokenIn.symbol} balance` : undefined
           }
-          maxLoading={false}
+          maxLoading={bitcoinMaximumLoading}
           maxDisabled={
-            !resolvedRecipientAddress ||
-            !walletOwnedSource ||
-            safeBig(nativeMaximum ?? walletSpendableBalance).lte(0)
+            !resolvedRecipientAddress || !walletOwnedSource || safeBig(maximumButtonAmount).lte(0)
           }
           maxDisabledReason={
             walletOwnedSource && BigInt(walletOwnedSource.asset.balance.availableRaw) === 0n
@@ -6834,8 +6925,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 ? 'Enter a destination address to use Max'
                 : 'Max is unavailable for this route'
           }
-          canGetQuote={canGetQuote}
-          actionLoading={isPreparingReview || feeLoading}
+          canGetQuote={canGetQuote && !bitcoinMaximumLoading}
+          actionLoading={isPreparingReview || feeLoading || bitcoinMaximumLoading}
           providerName={activeQuote?.router}
           slippage={swap.slippage}
           onAmountChange={value => {
@@ -7013,9 +7104,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 )
             : undefined
         }
-        maxDisabled={safeBig(nativeMaximum ?? walletSpendableBalance).lte(0)}
+        maxLoading={bitcoinMaximumLoading}
+        maxDisabled={safeBig(maximumButtonAmount).lte(0)}
         maxDisabledReason={
-          safeBig(nativeMaximum ?? walletSpendableBalance).lte(0)
+          safeBig(maximumButtonAmount).lte(0)
             ? 'No available balance'
             : ordinarySwapRequested && !shieldNativeZecSwap && !resolvedRecipientAddress
               ? 'Receive account unavailable'
@@ -7034,6 +7126,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         }
         canGetQuote={
           canGetQuote &&
+          !bitcoinMaximumLoading &&
           !(
             isPrivateFunding &&
             quoteResult &&
@@ -7151,7 +7244,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 ? 'Review Send'
                 : 'Swap'
         }
-        actionLoading={isPrivateFundingSubmitting || isPreparingReview || feeLoading}
+        actionLoading={
+          isPrivateFundingSubmitting || isPreparingReview || feeLoading || bitcoinMaximumLoading
+        }
       />
     )
   }

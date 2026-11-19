@@ -14,6 +14,7 @@ import {
 } from './quote-deposit-transfer-client'
 import { rheaSwapClient } from './rhea-swap-client'
 import { EvmWalletClientError } from './evm-wallet-client'
+import { BitcoinWalletClientError } from './bitcoin-wallet-client'
 import { parseDisplayUnitAmount } from '@/lib/number-format'
 
 const ETH_ROUTE_FALLBACK_RESERVE = '0.0003'
@@ -51,7 +52,11 @@ const nativeRouteReserves = {
 const USD_PRICE_DECIMALS = 18
 const NATIVE_ROUTE_RESERVE_USD = 1n
 
-function resolvePricedNativeRouteReserve(priceUsd: string | null | undefined, decimals: number) {
+function resolvePricedNativeRouteReserve(
+  priceUsd: string | null | undefined,
+  decimals: number,
+  reserveUsd: bigint
+) {
   if (!priceUsd) return null
   let price: bigint
   try {
@@ -60,7 +65,7 @@ function resolvePricedNativeRouteReserve(priceUsd: string | null | undefined, de
     return null
   }
   if (price === 0n) return null
-  const budget = NATIVE_ROUTE_RESERVE_USD * 10n ** BigInt(decimals + USD_PRICE_DECIMALS)
+  const budget = reserveUsd * 10n ** BigInt(decimals + USD_PRICE_DECIMALS)
   // Round the reserve up to a whole base unit so Max never rounds it away.
   return (budget + price - 1n) / price
 }
@@ -73,7 +78,7 @@ export function resolveNativeRouteMaximum(input: {
   readonly priceUsd?: string | null
 }): string {
   const reserve =
-    resolvePricedNativeRouteReserve(input.priceUsd, input.decimals) ??
+    resolvePricedNativeRouteReserve(input.priceUsd, input.decimals, NATIVE_ROUTE_RESERVE_USD) ??
     BigInt(
       parseDisplayUnitAmount(
         (input.family === 'evm' && input.chainId && evmRouteReserves[input.chainId]) ||
@@ -83,6 +88,53 @@ export function resolveNativeRouteMaximum(input: {
     )
   const available = BigInt(input.availableRaw)
   return available > reserve ? (available - reserve).toString() : '0'
+}
+
+export async function estimateBitcoinRouteMaximum(
+  input: {
+    readonly source: Extract<WalletOwnedQuoteAsset, { family: 'bitcoin' }>
+    readonly feeTier: 'low' | 'standard' | 'fast'
+    readonly depositAddress?: string
+    readonly priceUsd?: string | null
+  },
+  client: Pick<typeof quoteDepositTransferClient, 'estimateMaximum'> = quoteDepositTransferClient
+): Promise<QuoteDepositMaximum> {
+  const { source, feeTier, depositAddress, priceUsd } = input
+  const available = BigInt(source.asset.balance.availableRaw)
+  const estimate = await client
+    .estimateMaximum({
+      source,
+      // Before the quote exists, use the wallet's address as a size proxy only.
+      depositAddress: depositAddress ?? source.refundAddress,
+      feeTier
+    })
+    .catch(error => {
+      if (
+        depositAddress !== undefined ||
+        !(error instanceof BitcoinWalletClientError) ||
+        error.code !== 'network-unavailable'
+      )
+        throw error
+      return null
+    })
+  if (!estimate) {
+    const decimals = source.asset.metadata.decimals
+    const reserve =
+      resolvePricedNativeRouteReserve(priceUsd, decimals, 2n) ??
+      BigInt(parseDisplayUnitAmount(nativeRouteReserves.bitcoin, decimals))
+    return {
+      amountRaw: (available > reserve ? available - reserve : 0n).toString(),
+      networkFeeRaw: reserve.toString(),
+      networkFeeSymbol: source.networkFeeAsset.metadata.symbol,
+      networkFeeDecimals: source.networkFeeAsset.metadata.decimals
+    }
+  }
+  const fee = BigInt(estimate.networkFeeRaw)
+  const spendableWithFee = BigInt(estimate.amountRaw)
+  // The estimator already deducted one fee; subtract the remaining half in whole sats.
+  const spendable = spendableWithFee < available - fee ? spendableWithFee : available - fee
+  const amount = spendable - (fee + 1n) / 2n
+  return { ...estimate, amountRaw: (amount > 0n ? amount : 0n).toString() }
 }
 
 export function createNativeTransferSource(input: {

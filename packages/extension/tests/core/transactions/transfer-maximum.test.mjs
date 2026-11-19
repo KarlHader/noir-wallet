@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import {
+  estimateBitcoinRouteMaximum,
   estimateRheaRouteMaximum,
   fallbackTransferMaximum,
   resolveNativeRouteMaximum,
@@ -8,6 +9,7 @@ import {
   isTransferAmountSpendable
 } from '../../../src/popup/services/transfer-maximum.ts'
 import { EvmWalletClientError } from '../../../src/popup/services/evm-wallet-client.ts'
+import { BitcoinWalletClientError } from '../../../src/popup/services/bitcoin-wallet-client.ts'
 import { TransferMaximumEstimateCache } from '../../../src/popup/services/transfer-maximum-cache.ts'
 
 const maximum = amountRaw => ({
@@ -136,6 +138,50 @@ test('routed Max reserves about one dollar at the native asset price, rounded up
   const zcash = { family: 'zcash', decimals: 8, availableRaw: '250000', priceUsd: '900' }
   expect(resolveNativeRouteMaximum(zcash)).toBe('138888')
   expect(resolveNativeRouteMaximum({ ...zcash, availableRaw: '111111' })).toBe('0')
+})
+
+const bitcoinRouteSource = {
+  family: 'bitcoin',
+  bitcoinAddressType: 'p2wpkh',
+  refundAddress: 'wallet-address',
+  asset: { balance: { availableRaw: '10000' }, metadata: { decimals: 8 } },
+  networkFeeAsset: { metadata: { decimals: 8, symbol: 'BTC' } }
+}
+
+test('BTC routed Max reserves 1.5 fees rounded up, using the actual deposit estimate when available', async () => {
+  const client = {
+    estimateMaximum: async ({ depositAddress, feeTier }) => {
+      expect(feeTier).toBe('fast')
+      return depositAddress === bitcoinRouteSource.refundAddress
+        ? { ...maximum('9899'), networkFeeRaw: '101' }
+        : { ...maximum('9300'), networkFeeRaw: '201' }
+    }
+  }
+  const input = { source: bitcoinRouteSource, feeTier: 'fast', priceUsd: '100000' }
+  await expect(estimateBitcoinRouteMaximum(input, client)).resolves.toMatchObject({
+    amountRaw: '9848',
+    networkFeeRaw: '101'
+  })
+  await expect(
+    estimateBitcoinRouteMaximum({ ...input, depositAddress: 'provider-address' }, client)
+  ).resolves.toMatchObject({ amountRaw: '9199', networkFeeRaw: '201' })
+})
+
+test('BTC routed Max can fall back to a priced reserve only before the deposit address is known', async () => {
+  const error = new BitcoinWalletClientError('network-unavailable', 'No fee estimate')
+  const client = {
+    estimateMaximum: async () => {
+      throw error
+    }
+  }
+  const input = { source: bitcoinRouteSource, feeTier: 'standard', priceUsd: '100000' }
+  await expect(estimateBitcoinRouteMaximum(input, client)).resolves.toMatchObject({
+    amountRaw: '8000',
+    networkFeeRaw: '2000'
+  })
+  await expect(
+    estimateBitcoinRouteMaximum({ ...input, depositAddress: 'provider-address' }, client)
+  ).rejects.toBe(error)
 })
 
 test('fee-estimate failure leaves a positive native proposal with a fee reserve on each family', () => {
