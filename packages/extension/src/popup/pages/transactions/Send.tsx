@@ -1107,29 +1107,19 @@ function SendAssetFlow({
   }, [replace, requestedSourceMode, selection])
 
   const leaveOnchainResult = useCallback(
-    (path: string, shouldOffer: boolean) => {
+    (activityPath: string | null, submitted: boolean) => {
       const graph = submission?.value.graph
       const recipient = graph?.root.intent?.recipient
       const sender = graph?.root.intent?.sender
       const chain = selection?.chain.chain
-      if (path === '/send') {
-        setSubmission(null)
-        setAssetPickerOpen(false)
-        navigate(
-          originPath ??
-            (selection
-              ? `/send?${new URLSearchParams({
-                  assetId: selection.asset.asset.id,
-                  sourceMode: 'main'
-                })}`
-              : '/send'),
-          { replace: true }
-        )
-      } else {
-        navigate(path)
-      }
+      const retryPath = selection
+        ? `/send?${new URLSearchParams({ assetId: selection.asset.asset.id, sourceMode: 'main' })}`
+        : '/send'
+      setSubmission(null)
+      if (!activityPath && canReturnToOriginHistory) goBack()
+      else navigate(activityPath ?? originPath ?? (submitted ? '/' : retryPath), { replace: true })
       if (
-        !shouldOffer ||
+        !submitted ||
         !recipient ||
         !chain ||
         (chain.family !== 'evm' && chain.family !== 'bitcoin') ||
@@ -1150,7 +1140,7 @@ function SendAssetFlow({
             sender.chainId === recipient.chainId)
       })
     },
-    [navigate, originPath, selection, submission]
+    [canReturnToOriginHistory, goBack, navigate, originPath, selection, submission]
   )
 
   useEffect(() => {
@@ -1247,7 +1237,7 @@ function SendAssetFlow({
         asset={selection.asset}
         chain={selection.chain}
         submission={submission.value}
-        onDone={outcome => leaveOnchainResult('/send', outcome !== 'failed')}
+        onDone={outcome => leaveOnchainResult(null, outcome !== 'failed')}
         onViewActivity={transactionId =>
           leaveOnchainResult(
             `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
@@ -1264,7 +1254,7 @@ function SendAssetFlow({
         asset={selection.asset}
         chain={selection.chain}
         submission={submission.value}
-        onDone={outcome => leaveOnchainResult('/send', outcome !== 'failed')}
+        onDone={outcome => leaveOnchainResult(null, outcome !== 'failed')}
         onViewActivity={transactionId =>
           leaveOnchainResult(
             `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
@@ -1281,7 +1271,7 @@ function SendAssetFlow({
         asset={selection.asset}
         chain={selection.chain}
         submission={submission.value}
-        onDone={outcome => leaveOnchainResult('/send', outcome !== 'failed')}
+        onDone={outcome => leaveOnchainResult(null, outcome !== 'failed')}
         onViewActivity={transactionId =>
           leaveOnchainResult(
             `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
@@ -1298,7 +1288,7 @@ function SendAssetFlow({
         asset={selection.asset}
         chain={selection.chain}
         submission={submission.value}
-        onDone={outcome => leaveOnchainResult('/send', outcome !== 'failed')}
+        onDone={outcome => leaveOnchainResult(null, outcome !== 'failed')}
         onViewActivity={transactionId =>
           leaveOnchainResult(
             `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
@@ -1333,6 +1323,8 @@ function SendAssetFlow({
   const preparingRequestedAsset = Boolean(
     !assetPickerOpen && requestedAssetId && !selection && loadStatus === 'loading'
   )
+  const showPublicAssetPicker =
+    !shieldActive && (assetPickerOpen || (!selection && !preparingRequestedAsset))
   const switchSource = (
     sourceMode: 'main' | 'shield',
     assetId: string | null,
@@ -1378,7 +1370,7 @@ function SendAssetFlow({
     <div className="page-container" data-wallet-mode={walletMode}>
       {!(nearActive && shieldReviewing) && (
         <PageHeader
-          title={sourcePicker ? 'Select Token' : 'Send'}
+          title={sourcePicker || showPublicAssetPicker ? 'Select Token' : 'Send'}
           showBack
           onBack={
             sourcePicker
@@ -1752,7 +1744,7 @@ function SendAssetFlow({
           ) : null}
         </div>
       )}
-      {!shieldActive && (assetPickerOpen || (!selection && !preparingRequestedAsset)) && (
+      {showPublicAssetPicker && (
         <AssetSelection
           key={sendEntryKey}
           accountScope={effectiveAccount}

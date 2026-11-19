@@ -314,7 +314,8 @@ export function ZcashTransfer({
       mode: walletMode
     }
   )}`
-  const resultReturnPath = originPath ?? (fundingSource === 'shielded' ? '/shield-funds' : '/')
+  const resultReturnPath =
+    originPath ?? (isSelfMove && fundingSource === 'shielded' ? '/shield-funds' : '/')
   const resultNavigationState = canReturnToOriginHistory
     ? {
         sendOriginHistory: {
@@ -960,7 +961,10 @@ export function ZcashTransfer({
               resultReturnPath,
               retrySend
             )
-            navigate('/transaction-result', { state: resultNavigationState })
+            navigate('/transaction-result', {
+              replace: !isSelfMove && !resultNavigationState,
+              state: resultNavigationState
+            })
           } else if (result.status === 'timeout') {
             toast.error('Hardware signing timed out', 'The transaction form has been restored.')
           }
@@ -1004,7 +1008,10 @@ export function ZcashTransfer({
             })
       } as const
       setResult(pendingResult, resultReturnPath, retrySend)
-      navigate('/transaction-result', { state: resultNavigationState })
+      navigate('/transaction-result', {
+        replace: !isSelfMove && !resultNavigationState,
+        state: resultNavigationState
+      })
 
       const result = await sendTransaction({
         to: effectiveToAddress,

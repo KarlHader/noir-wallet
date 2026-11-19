@@ -279,11 +279,11 @@ function MethodCard({
       )}
     >
       {recommended && (
-        <span className="absolute -top-2.5 left-3 rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground">
+        <span className="absolute -top-2.5 left-3 rounded-full bg-primary px-2 py-0.5 text-primary-foreground">
           Recommended
         </span>
       )}
-      <span className="flex items-center justify-between gap-1 text-sm font-medium leading-[18px]">
+      <span className="flex items-center justify-between gap-1 font-medium leading-[18px]">
         <span>{title}</span>
         <Icon
           icon={selected ? 'lucide:circle-check' : 'lucide:circle'}
@@ -298,7 +298,7 @@ function MethodCard({
         <span>{title === 'Cluster' ? 'Strong' : 'Standard'}</span>
       </span>
       <span className="mt-2 flex min-h-8 justify-between gap-2">
-        <span className="shrink-0 text-muted">Time (est.)</span>
+        <span className="shrink-0 text-muted">Time</span>
         <span className="min-w-0 text-right">
           {loading ? (
             <Skeleton className="ml-auto h-4 w-12 max-w-full" />
@@ -308,14 +308,14 @@ function MethodCard({
         </span>
       </span>
       <span className="mt-2 flex justify-between gap-2">
-        <span className="shrink-0 text-muted">Fee (est.)</span>
+        <span className="shrink-0 text-muted">Fee</span>
         <span className="min-w-0 break-words text-right">
           {loading ? (
             <Skeleton className="ml-auto h-4 w-full max-w-24" />
           ) : (
             <>
               <span className="block">{fee.value}</span>
-              {fee.detail && <span className="block text-[10px] text-muted">{fee.detail}</span>}
+              {fee.detail && <span className="block text-muted">{fee.detail}</span>}
             </>
           )}
         </span>
@@ -1227,12 +1227,7 @@ function TransferForm() {
     canEstimateMethods && managedAsset && shieldConnection === 'connected' && clusterEstimate.value
   )
   const clusterNetworkFee = useMoveMethodEstimate({
-    enabled:
-      clusterSelected &&
-      clusterQuoted &&
-      from !== 'shield' &&
-      Boolean(shieldAmountState?.amountRaw) &&
-      !preparingShield,
+    enabled: clusterQuoted && Boolean(amountState?.amountRaw) && !preparingShield,
     requestKey: `${clusterEstimateKey}:${JSON.stringify(evmMoveFee)}`,
     estimate: () =>
       confidentialFundingClient.previewClusterNetworkFee({

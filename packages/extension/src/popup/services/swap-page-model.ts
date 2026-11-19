@@ -77,10 +77,8 @@ export function resolveSwapResultReturnPaths(input: {
   let resultReturnPath: string
   if (input.privateFundingRequestId) {
     resultReturnPath = `/approval?requestId=${encodeURIComponent(input.privateFundingRequestId)}`
-  } else if (input.crossChainSend) {
-    resultReturnPath = crossChainOriginPath ?? sendPath('main')
-  } else if (input.publicPrivacySend) {
-    resultReturnPath = sendPath('main')
+  } else if (input.crossChainSend || input.publicPrivacySend) {
+    resultReturnPath = crossChainOriginPath ?? '/'
   } else if (input.privateBalanceTransfer) {
     const from = input.privateTransfer ? 'private' : 'public'
     const to = input.privateTransfer ? 'public' : 'private'

@@ -2925,9 +2925,16 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     }
     const maximum = nativeMaximum ?? walletSpendableBalance
     if (safeBig(maximum).lte(0)) return
-    reviewAfterQuoteRefresh.current = null
     setMaxSelected(true)
-    swap.updateAmountIn(maximum)
+    const amount = resolveSelectedSwapMaximum({
+      selected: true,
+      currentAmount: swap.amountIn,
+      maximumAmount: maximum
+    })
+    if (amount !== null) {
+      reviewAfterQuoteRefresh.current = null
+      swap.updateAmountIn(amount)
+    }
   }
   const mainWalletSpendableBalance = mainWalletOwnedSource
     ? resolvePortfolioTransferAvailability({
@@ -4217,7 +4224,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         },
         resultReturnPath
       )
-      navigate('/transaction-result', { replace: crossChainSendRequested })
+      navigate('/transaction-result', {
+        replace: crossChainSendRequested || publicPrivacySendRequested
+      })
     },
     [
       swap,
@@ -4230,6 +4239,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       privateTransferRequested,
       isPrivateFunding,
       crossChainSendRequested,
+      publicPrivacySendRequested,
       privateFundingRequestId,
       resultReturnPath,
       executionSourceMode

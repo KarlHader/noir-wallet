@@ -852,7 +852,8 @@ export function useEvmSendTransfer({
               network: networkMode
             }),
             { ...rheaQuoteTerms(privatePreview.quote), sourceAmount: amountRaw }
-          )
+          ),
+          { replace: true }
         )
         return
       }

@@ -2,7 +2,11 @@ import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
 import { preferWalletEvmQuoteToken } from './token-address-discovery'
 import type { ConfidentialFundingPreview } from '@/core/services/confidential-funding'
-import { formatBaseUnitDecimalAmount, formatFeeAmount } from '@/lib/number-format'
+import {
+  formatBaseUnitDecimalAmount,
+  formatDecimalAmount,
+  formatFeeAmount
+} from '@/lib/number-format'
 import { evmWalletClient, type EvmFeeEstimate } from './evm-wallet-client'
 import { rheaSwapClient } from './rhea-swap-client'
 import { requiredRheaEvmApproval } from './rhea-evm-approval'
@@ -155,17 +159,24 @@ export function formatMoveMethodFee(
 ): { value: string; detail: string | null } {
   if (!estimate || !asset || estimate.routeFeeRaw === null) return { value: '—', detail: null }
   const gas = estimate.sourceNetworkFee
-  const format = (raw: string, decimals: number) => {
+  const format = (raw: string, decimals: number, native = false) => {
     const value = BigInt(raw)
-    return `${value < 0n ? '-' : ''}${formatFeeAmount(formatBaseUnitDecimalAmount(value < 0n ? -value : value, decimals))}`
+    const amount = formatBaseUnitDecimalAmount(value < 0n ? -value : value, decimals)
+    const display = native
+      ? formatDecimalAmount(amount, { maximumFractionDigits: 5 })
+      : formatFeeAmount(amount)
+    return `${display.startsWith('<') ? '' : '~'}${value < 0n ? '-' : ''}${display}`
   }
   if (gas && asset.asset.kind === 'native')
     return {
-      value: `~${format((BigInt(estimate.routeFeeRaw) + BigInt(gas.raw)).toString(), asset.metadata.decimals)} ${asset.metadata.symbol}`,
+      value: `${format((BigInt(estimate.routeFeeRaw) + BigInt(gas.raw)).toString(), asset.metadata.decimals, true)} ${asset.metadata.symbol}`,
       detail: null
     }
   return {
-    value: `~${format(estimate.routeFeeRaw, asset.metadata.decimals)} ${asset.metadata.symbol}`,
-    detail: gas ? `+\u00a0~${format(gas.raw, gas.decimals)} ${gas.symbol}` : '+ network fee'
+    value:
+      asset.asset.kind === 'native'
+        ? `${format(estimate.routeFeeRaw, asset.metadata.decimals, true)} ${asset.metadata.symbol}`
+        : format(estimate.routeFeeRaw, asset.metadata.decimals),
+    detail: gas ? `${format(gas.raw, gas.decimals, true)} ${gas.symbol}` : null
   }
 }
