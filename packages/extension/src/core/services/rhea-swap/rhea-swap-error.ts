@@ -3,6 +3,32 @@ const MINIMUM_SWAP_AMOUNT_PATTERN =
 const BRIDGE_MINIMUM_MESSAGE =
   'Amount is below the route minimum. Increase the amount and try again.'
 
+export type RheaSwapErrorStage = 'quote' | 'build' | 'submit' | 'report' | 'status' | 'tokens'
+export type RheaSwapErrorCode =
+  | 'REQUEST_ABORTED'
+  | 'REQUEST_TIMEOUT'
+  | 'ROUTE_NOT_FOUND'
+  | 'AUTH_FAILED'
+  | 'RATE_LIMITED'
+  | 'QUOTE_EXPIRED'
+  | 'HTTP_ERROR'
+  | 'API_ERROR'
+  | 'INVALID_API_RESPONSE'
+  | 'INVALID_REQUEST'
+
+export class RheaSwapHttpError extends Error {
+  readonly name = 'RheaSwapHttpError'
+
+  constructor(
+    readonly code: RheaSwapErrorCode,
+    readonly stage: RheaSwapErrorStage,
+    message: string,
+    readonly retryable = false
+  ) {
+    super(message)
+  }
+}
+
 export function getRheaSwapMinimumAmountMessage(message: string): string | null {
   if (message === BRIDGE_MINIMUM_MESSAGE || /\bamount is too low for bridge\b/i.test(message)) {
     return BRIDGE_MINIMUM_MESSAGE

@@ -35,6 +35,7 @@ import {
   getSafeRheaSwapRuntimeErrorMessage
 } from '../../../src/core/services/rhea-swap/rhea-swap-error.ts'
 import { createRheaSwapFetch } from '../../../src/core/services/rhea-swap/rhea-swap-fetch.ts'
+import { RheaSwapApi } from '../../../src/core/services/rhea-swap/rhea-swap-api.ts'
 import { classifyError } from '../../../src/lib/errors.ts'
 import { selectSwapFeeEstimate } from '../../../src/lib/swap-fee.ts'
 import {
@@ -526,6 +527,78 @@ it('keeps a quote timeout retryable when a successful HTTP response also mention
     assert.equal(classifyError(popupError).retryable, true)
     return true
   })
+})
+
+it('uses the native RHEA paths and retries quote reads without replaying writes', async () => {
+  const requests = []
+  let quoteCalls = 0
+  const api = new RheaSwapApi({
+    baseUrl: 'https://api.rhea.finance/',
+    apiKey: 'test-key',
+    retry: { maxRetries: 1, baseDelayMs: 0, maxDelayMs: 0, jitter: false },
+    fetch: async (url, init) => {
+      requests.push({
+        url: new URL(url),
+        method: init.method,
+        auth: init.headers.Authorization,
+        body: init.body && JSON.parse(init.body)
+      })
+      const path = new URL(url).pathname
+      if (path === '/crosschain/swap/quote' && ++quoteCalls === 1) {
+        return new Response(
+          JSON.stringify({ code: -1, msg: 'provider details', errorCode: 'QUOTE_TIMEOUT' })
+        )
+      }
+      if (path === '/crosschain/swap/report') {
+        return new Response('<html>provider private error</html>', { status: 503 })
+      }
+      if (path === '/api/swap/order-submit') {
+        return new Response(JSON.stringify({ code: 500, msg: 'provider private error' }), {
+          status: 503
+        })
+      }
+      return new Response(JSON.stringify({ code: 0, msg: 'success', data: {} }))
+    }
+  })
+
+  await api.quote({ fromChain: '1' })
+  await api.build({ router: 'route' })
+  await api.fromTokens(1)
+  await api.crossChainToTokens(1)
+  await api.orderStatus({ recordId: '123' })
+  await assert.rejects(api.submitOrder({ signature: 'test' }), error => {
+    assert.equal(error.message, 'RHEA Swap HTTP 503')
+    return true
+  })
+  await assert.rejects(api.report({ from_hash: 'hash' }), error => {
+    assert.equal(error.message, 'RHEA Swap HTTP 503')
+    return true
+  })
+  assert.deepEqual(
+    requests.map(request => request.url.pathname),
+    [
+      '/crosschain/swap/quote',
+      '/crosschain/swap/quote',
+      '/crosschain/swap/swap',
+      '/get_chain_prices',
+      '/api/swap/supported_to_tokens',
+      '/api/swap/order-status',
+      '/api/swap/order-submit',
+      '/crosschain/swap/report'
+    ]
+  )
+  assert.equal(requests[3].url.searchParams.get('chain'), '1')
+  assert.equal(requests[5].url.searchParams.get('recordId'), '123')
+  assert.equal(requests[2].body.router, 'route')
+  assert.ok(requests.every(request => request.auth === 'Bearer test-key'))
+  assert.equal(
+    requests.filter(request => request.url.pathname === '/api/swap/order-submit').length,
+    1
+  )
+  assert.equal(
+    requests.filter(request => request.url.pathname === '/crosschain/swap/report').length,
+    1
+  )
 })
 
 it('keeps provider minimums from multiple route failures without returning provider metadata', () => {

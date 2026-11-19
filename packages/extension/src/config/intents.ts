@@ -1,5 +1,7 @@
 import type { Network } from '@/types'
 
+export const RHEA_TOKEN_ICONS_API = 'https://api.rhea.finance/get_multichain_lending_tokens_data'
+
 export interface ConfidentialFundingNetworkConfig {
   readonly oneClickApiUrl: string
   readonly oneClickDirectApiUrl: string

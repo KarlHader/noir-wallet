@@ -1,18 +1,19 @@
 import {
   normalizeBuild,
   normalizeQuote,
+  parseStoredSwapBuildRequest,
+  readRheaSwapReportRecordId,
   type QuoteRequest,
   type SwapBuildDataRaw,
-  type SwapBuildRequestRaw,
   type SwapReportRequestRaw,
   type SwapQuoteDataRaw
-} from '@rhea-finance/cross-chain-aggregation-dex'
+} from '@/core/services/rhea-swap/rhea-swap-protocol'
 import { RheaSwapCatalogClient } from '@/core/services/rhea-swap/rhea-swap-catalog-client'
 import {
   RheaSwapService,
   RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
   parseRheaSwapQuoteRequest,
-  toSdkQuoteRequest,
+  toRheaSwapProtocolRequest,
   type RheaSwapQuoteSessionRecord,
   type RheaSwapQuoteSessionStore,
   type RheaSwapToken,
@@ -146,7 +147,7 @@ function parseStoredRequest(value: unknown): QuoteRequest {
   })
   // Existing quotes retain their timing budgets when defaults change.
   const normalized = Object.freeze({
-    ...toSdkQuoteRequest(parsed),
+    ...toRheaSwapProtocolRequest(parsed),
     quoteWaitingTimeMs: readStoredQuoteTiming(value.quoteWaitingTimeMs),
     sameChainTimeoutMs: readStoredQuoteTiming(value.sameChainTimeoutMs),
     crossChainTimeoutMs: readStoredQuoteTiming(value.crossChainTimeoutMs)
@@ -238,7 +239,7 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
     ) {
       throw new Error('Stored RHEA Swap build metadata is invalid')
     }
-    const buildRequest = value.build.request as SwapBuildRequestRaw
+    const buildRequest = parseStoredSwapBuildRequest(value.build.request)
     const buildRaw = value.build.raw as SwapBuildDataRaw
     normalizeBuild(buildRaw, value.build.executionId, buildRequest)
     build = Object.freeze({
@@ -261,10 +262,13 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
       'reportRequest',
       'reportStatus'
     ]
+    const recordId = readRheaSwapReportRecordId(value.submission.recordId)
     if (
-      (keys.length !== expected.length &&
-        !(keys.length === expected.length + 1 && keys.includes('disposeAfterReport'))) ||
+      keys.some(
+        key => !expected.includes(key) && key !== 'disposeAfterReport' && key !== 'recordId'
+      ) ||
       expected.some(key => !keys.includes(key)) ||
+      (value.submission.recordId !== undefined && recordId !== value.submission.recordId) ||
       (value.submission.disposeAfterReport !== undefined &&
         typeof value.submission.disposeAfterReport !== 'boolean') ||
       (value.submission.orderId !== null && typeof value.submission.orderId !== 'string') ||
@@ -297,6 +301,7 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
             ),
       reportRequest: parseStoredReportRequest(value.submission.reportRequest),
       reportStatus: value.submission.reportStatus,
+      ...(recordId === undefined ? {} : { recordId }),
       ...(value.submission.disposeAfterReport === undefined
         ? {}
         : { disposeAfterReport: value.submission.disposeAfterReport })
@@ -423,7 +428,6 @@ export function createBackgroundRheaSwapService(): RheaSwapService | null {
     baseUrl: 'https://api.rhea.finance',
     apiKey: accessToken,
     timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-    reportMode: 'manual',
     tokenListCacheTtlMs: RHEA_SWAP_TOKEN_CATALOG_TTL_MS
   })
   service = new RheaSwapService(client, new ChromeRheaSwapQuoteStore())

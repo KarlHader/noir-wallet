@@ -57,6 +57,8 @@ import { accountContextTransition } from './account-context-transition'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { isStoredAccountNetworkEnabled } from '@/lib/wallet-metadata-storage'
 import { getZcashChainId } from '@/core/chains/registry'
+import { getActiveChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
+import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import { Caip25ProviderError } from '@/core/dapp/caip25'
 import {
   activeDAppSessionAccountMatches,
@@ -66,6 +68,7 @@ import {
 } from './dapp-session-accounts'
 import { dappExecutionModeRequestGate } from './dapp-execution-mode'
 import { parseEvmFeeSelection, type EvmFeeSelection } from '@/infrastructure/chains/evm'
+import { createConfiguredNearRpcClient } from '@/infrastructure/chains/near/near-configured-rpc-client'
 
 type DAppTabInfo = {
   readonly title?: string
@@ -1831,6 +1834,7 @@ export class DAppHandler {
 
   private async checkLendingMcaAccount(origin: string) {
     const bound = await this.ensurePermission(origin)
+    if (DEFAULT_NETWORK !== 'mainnet') return null
     return this.runBoundZcashOperation(bound.walletId, bound.accountId, async () => {
       await this.ensureApprovedAccountContext(
         origin,
@@ -1838,8 +1842,15 @@ export class DAppHandler {
         bound.accountId,
         bound.revision
       )
-      return checkZcashMcaAccount(bound.walletId, bound.accountId, mode =>
-        this.resolveLendingPublicKey(bound.walletId, bound.accountId, mode)
+      const network = resolveNearRuntimeNetworkConfig(
+        DEFAULT_NETWORK,
+        getActiveChainEndpointSettings()
+      )
+      return checkZcashMcaAccount(
+        bound.walletId,
+        bound.accountId,
+        mode => this.resolveLendingPublicKey(bound.walletId, bound.accountId, mode),
+        createConfiguredNearRpcClient(network)
       )
     })
   }

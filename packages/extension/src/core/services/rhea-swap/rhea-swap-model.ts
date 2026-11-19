@@ -7,7 +7,7 @@ import type {
   SwapBuild,
   SwapExecution,
   SwapTokenListItem
-} from '@rhea-finance/cross-chain-aggregation-dex'
+} from './rhea-swap-protocol'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { SigningSummary } from '@/core/keyring/domain'
 import type { TransactionGraph } from '@/core/transactions/domain'
@@ -557,6 +557,8 @@ export interface RheaSwapNearTransactionBatchPlan {
   readonly quoteHandle: string
   readonly executionId: string
   readonly chain: string
+  readonly tokenIn: string
+  readonly amountIn: string
   readonly transactions: readonly Readonly<{
     readonly signerId: string | null
     readonly receiverId: string
@@ -591,7 +593,7 @@ export interface RheaSwapSubmissionView {
 
 export interface RheaSwapOrderStatusView {
   readonly quoteHandle: string
-  readonly orderId: string
+  readonly orderId: string | null
   readonly router: string
   readonly status: OrderStatus
   readonly destinationHash: string | null
@@ -721,13 +723,13 @@ export function parseRheaSwapQuoteRequest(value: unknown): RheaSwapQuoteRequest 
   })
 }
 
-export function toSdkQuoteRequest(value: RheaSwapQuoteRequest): QuoteRequest {
+export function toRheaSwapProtocolRequest(value: RheaSwapQuoteRequest): QuoteRequest {
   const { quoteMode, ...quoteFields } = value
   const fast = quoteMode === 'fast'
   return Object.freeze({
     ...quoteFields,
-    tokenIn: toSdkQuoteAsset(value.tokenIn),
-    tokenOut: toSdkQuoteAsset(value.tokenOut),
+    tokenIn: toRheaSwapProtocolAsset(value.tokenIn),
+    tokenOut: toRheaSwapProtocolAsset(value.tokenOut),
     extensions: Object.freeze({ referral: NOIR_SWAP_REFERRAL }),
     quoteWaitingTimeMs: fast ? 1_500 : 6_000,
     sameChainTimeoutMs: fast ? 500 : 1_500,
@@ -735,7 +737,7 @@ export function toSdkQuoteRequest(value: RheaSwapQuoteRequest): QuoteRequest {
   })
 }
 
-function toSdkQuoteAsset(asset: AssetRef): AssetRef {
+function toRheaSwapProtocolAsset(asset: AssetRef): AssetRef {
   // Retained catalog values must not leak a catalog-only identifier into the quote API.
   const alias = RHEA_NATIVE_CATALOG_ALIASES.get(`${asset.chain}:${asset.address}`)
   return alias ? Object.freeze({ ...asset, address: alias.quoteAddress, isNative: true }) : asset

@@ -7,7 +7,6 @@ import { getResponseErrorMessage } from '@/lib/errors'
 import type { Network } from '@/types'
 import { DEFAULT_FEE_TIER, type FeeTier } from '@/config/fee'
 import { createWalletSettingsPersistStorage } from '@/lib/wallet-settings-persist-storage'
-import { applyRheaSdkEnv, setNearRpcUrl } from '@/core/services/rhea-sdk-init'
 import {
   DEFAULT_BLOCK_EXPLORER_PREFERENCES,
   type BlockExplorerChain,
@@ -119,7 +118,6 @@ interface SettingsStore {
   networkMode: 'mainnet' | 'testnet'
   chainEndpointSettingsByNetwork: Partial<Record<Network, ChainEndpointSettings>>
   autoLockMs: AutoLockMs
-  nearRpcUrl: string
   blockExplorerPreferences: BlockExplorerPreferences
   rpcEndpointPreferences: RpcEndpointPreferences
   chainEndpointSettings: ChainEndpointSettings
@@ -134,7 +132,6 @@ interface SettingsStore {
   isSidePanelModeLoaded: boolean
   isLoaded: boolean
   setAutoLockMs: (ms: AutoLockMs) => void
-  setNearRpcUrl: (url: string) => void
   setBlockExplorerPreference: (chain: BlockExplorerChain, explorerId: BlockExplorerId) => void
   setRpcEndpointPreference: (chain: RpcEndpointChain, endpointId: RpcEndpointId) => void
   setChainEndpointSettings: (settings: ChainEndpointSettings) => void
@@ -155,7 +152,6 @@ export const useSettingsStore = create<SettingsStore>()(
       autoLockMs: WALLET_CONFIG.SECURITY.AUTO_LOCK.DEFAULT_MS,
       networkMode: DEFAULT_NETWORK,
       chainEndpointSettingsByNetwork: {},
-      nearRpcUrl: '',
       blockExplorerPreferences: DEFAULT_BLOCK_EXPLORER_PREFERENCES,
       rpcEndpointPreferences: DEFAULT_RPC_ENDPOINT_PREFERENCES,
       chainEndpointSettings: DEFAULT_CHAIN_ENDPOINT_SETTINGS,
@@ -172,13 +168,6 @@ export const useSettingsStore = create<SettingsStore>()(
 
       setAutoLockMs: ms => {
         set({ autoLockMs: ms })
-      },
-
-      setNearRpcUrl: url => {
-        set({ nearRpcUrl: url })
-        if (url) {
-          setNearRpcUrl(url)
-        }
       },
 
       setFeeTier: tier => {
@@ -290,16 +279,7 @@ export const useSettingsStore = create<SettingsStore>()(
       loadSettings: async () => {
         await ensureSettingsStoreHydrated()
         if (get().isLoaded) return
-        const {
-          nearRpcUrl,
-          blockExplorerPreferences,
-          rpcEndpointPreferences,
-          chainEndpointSettings
-        } = get()
-        if (nearRpcUrl) {
-          setNearRpcUrl(nearRpcUrl)
-        }
-        applyRheaSdkEnv('prd')
+        const { blockExplorerPreferences, rpcEndpointPreferences, chainEndpointSettings } = get()
         setActiveBlockExplorerPreferences(blockExplorerPreferences)
         setActiveRpcEndpointPreferences(rpcEndpointPreferences)
         setActiveChainEndpointSettings(chainEndpointSettings)
@@ -384,7 +364,6 @@ export const useSettingsStore = create<SettingsStore>()(
         networkMode: state.networkMode,
         chainEndpointSettingsByNetwork: state.chainEndpointSettingsByNetwork,
         autoLockMs: state.autoLockMs,
-        nearRpcUrl: state.nearRpcUrl,
         blockExplorerPreferences: state.blockExplorerPreferences,
         rpcEndpointPreferences: state.rpcEndpointPreferences,
         chainEndpointSettings: state.chainEndpointSettings,

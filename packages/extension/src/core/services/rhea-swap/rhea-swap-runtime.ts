@@ -1,4 +1,4 @@
-import type { AssetRef, ChainRef } from '@rhea-finance/cross-chain-aggregation-dex'
+import type { AssetRef, ChainRef } from './rhea-swap-protocol'
 import { parseSigningSummary } from '@/core/keyring/domain'
 import { parseTransactionGraph } from '@/core/transactions/domain'
 import { parseChainId } from '@/core/chains/registry'
@@ -674,7 +674,7 @@ export function parseRheaSwapOrderStatusView(value: unknown): RheaSwapOrderStatu
   }
   return Object.freeze({
     quoteHandle: readString(value.quoteHandle, 'RHEA Swap quote handle', 160),
-    orderId: readString(value.orderId, 'RHEA Swap order ID', 256),
+    orderId: value.orderId === null ? null : readString(value.orderId, 'RHEA Swap order ID', 256),
     router: readString(value.router, 'RHEA Swap order router', 128),
     status: value.status as RheaSwapOrderStatusView['status'],
     destinationHash:

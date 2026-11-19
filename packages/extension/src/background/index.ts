@@ -1,3 +1,4 @@
+import '@/lib/buffer-polyfill'
 import {
   initializeAnalyticsReporting,
   handleAnalyticsAlarm,
@@ -6,7 +7,6 @@ import {
   handleAnalyticsMessage,
   trackEvent
 } from '@/background/analytics/reporter'
-import '@/lib/buffer-polyfill'
 import { lookupTokenContractIcon } from './token-contract-icon'
 import { openTokenManager } from './token-manager-window'
 import { handleEvmWalletChoiceMessage } from './evm-wallet-choice'
@@ -29,7 +29,6 @@ import { parseLedgerPcztSignatures } from '@/lib/ledger/signature'
 import { safeBig } from '@/lib/big'
 import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
 import type { LedgerSigningPayload } from '@/core/worker/types'
-import '@/core/services/rhea-sdk-init'
 import { resolveEvmAddressRole } from '@/core/accounts/evm-address-role'
 import { parseEvmTransferIntent } from '@/infrastructure/chains/evm'
 
@@ -189,7 +188,7 @@ import {
   assertPrivateQuoteRoute,
   RHEA_SWAP_CHAIN_CATALOG,
   parseRheaSwapQuoteRequest,
-  toSdkQuoteRequest,
+  toRheaSwapProtocolRequest,
   type PrivateQuotePurpose
 } from '@/core/services/rhea-swap/rhea-swap-model'
 import {
@@ -3008,8 +3007,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   requestKey.length !== 4 ||
                   requestKey[0] !== record.sourceAssetId ||
                   requestKey[1] !== record.destinationAssetId ||
-                  JSON.stringify(toSdkQuoteRequest(parseRheaSwapQuoteRequest(requestKey[3]))) !==
-                    JSON.stringify(request)
+                  JSON.stringify(
+                    toRheaSwapProtocolRequest(parseRheaSwapQuoteRequest(requestKey[3]))
+                  ) !== JSON.stringify(request)
                 )
                   return null
                 const source = parseAssetId(record.sourceAssetId)

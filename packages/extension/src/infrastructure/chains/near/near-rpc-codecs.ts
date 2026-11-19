@@ -290,45 +290,42 @@ function decodeViewResult(value: unknown): string {
   }
 }
 
+export function parseNearFunctionCallResult(value: unknown): {
+  value: unknown
+  blockHash: string
+  blockHeight: number
+} {
+  if (!isRecord(value) || !hasExactKeys(value, ['block_hash', 'block_height', 'logs', 'result'])) {
+    throw invalid('NEAR contract view response')
+  }
+  readLogs(value.logs, 'NEAR contract view logs')
+  const blockHash = readNearHash(value.block_hash, 'NEAR contract view block hash')
+  const blockHeight = readSafeUnsignedInteger(value.block_height, 'NEAR contract view block height')
+  const decoded = decodeViewResult(value.result)
+  try {
+    return { value: JSON.parse(decoded), blockHash, blockHeight }
+  } catch {
+    throw invalid('NEAR contract view result JSON')
+  }
+}
+
 export function parseNearFungibleTokenBalance(
   value: unknown,
   contractId: string,
   accountId: string
 ): NearFungibleTokenBalanceSnapshot {
-  if (!isRecord(value) || !hasExactKeys(value, ['block_hash', 'block_height', 'logs', 'result'])) {
-    throw invalid('NEAR fungible token balance response')
-  }
-  readLogs(value.logs, 'NEAR fungible token balance logs')
-  let decoded: unknown
-  try {
-    decoded = JSON.parse(decodeViewResult(value.result))
-  } catch (error) {
-    if (error instanceof NearRpcError) throw error
-    throw invalid('NEAR fungible token balance value')
-  }
+  const result = parseNearFunctionCallResult(value)
   return Object.freeze({
     contractId,
     accountId,
-    amountRaw: readU128(decoded, 'NEAR fungible token balance'),
-    blockHash: readNearHash(value.block_hash, 'NEAR fungible token block hash'),
-    blockHeight: readSafeUnsignedInteger(value.block_height, 'NEAR fungible token block height')
+    amountRaw: readU128(result.value, 'NEAR fungible token balance'),
+    blockHash: result.blockHash,
+    blockHeight: result.blockHeight
   })
 }
 
 export function parseNearFungibleTokenRegistration(value: unknown): boolean {
-  if (!isRecord(value) || !hasExactKeys(value, ['block_hash', 'block_height', 'logs', 'result'])) {
-    throw invalid('NEAR fungible token registration response')
-  }
-  readNearHash(value.block_hash, 'NEAR fungible token registration block hash')
-  readSafeUnsignedInteger(value.block_height, 'NEAR fungible token registration block height')
-  readLogs(value.logs, 'NEAR fungible token registration logs')
-  let decoded: unknown
-  try {
-    decoded = JSON.parse(decodeViewResult(value.result))
-  } catch (error) {
-    if (error instanceof NearRpcError) throw error
-    throw invalid('NEAR fungible token registration value')
-  }
+  const { value: decoded } = parseNearFunctionCallResult(value)
   if (decoded === null) return false
   if (!isRecord(decoded)) throw invalid('NEAR fungible token registration value')
   return true

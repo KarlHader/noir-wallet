@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
-import { normalizeFromTokenList } from '@rhea-finance/cross-chain-aggregation-dex'
 import {
   MemoryRheaSwapQuoteSessionStore,
   RheaSwapService,
   RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
   toRheaSwapToken
 } from '../../../src/core/services/rhea-swap/index.ts'
-import { RheaSwapCatalogClient } from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
+import {
+  RheaSwapCatalogClient,
+  normalizeFromTokenList
+} from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
 import {
   findSwapTokenInCatalog,
   mergeSelectedSwapSourceCatalog

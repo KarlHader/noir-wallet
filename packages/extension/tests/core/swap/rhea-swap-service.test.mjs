@@ -1,6 +1,11 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { normalizeQuote, serializeQuoteRequest } from '@rhea-finance/cross-chain-aggregation-dex'
+import {
+  createSwapBuildRequest,
+  normalizeBuild,
+  normalizeQuote,
+  serializeQuoteRequest
+} from '../../../src/core/services/rhea-swap/rhea-swap-protocol.ts'
 import { getZcashChainId } from '../../../src/core/chains/registry/index.ts'
 import { parseTrustedExtensionRuntimeMessage } from '../../../src/lib/runtime-message-security.ts'
 import { readRheaDestinationHash } from '../../../src/core/services/rhea-swap/rhea-order-status.ts'
@@ -11,7 +16,7 @@ import {
   RheaSwapService,
   assertPrivateQuoteRoute,
   parseRheaSwapQuoteRequest,
-  toSdkQuoteRequest,
+  toRheaSwapProtocolRequest,
   toRheaSwapToken
 } from '../../../src/core/services/rhea-swap/index.ts'
 
@@ -99,6 +104,7 @@ test('alternative routes bind a fresh quote to the same account and selected bui
       amountOut: '2500',
       minAmountOut: '2400',
       expiresAt: 31_000,
+      bridgeProvider: 'primary-bridge',
       preSwap: null,
       bridge: null
     },
@@ -108,14 +114,21 @@ test('alternative routes bind a fresh quote to the same account and selected bui
         amountOut: '2300',
         minAmountOut: '2200',
         expiresAt: 20_000,
+        bridgeProvider: 'alternate-bridge',
         preSwap: null,
         bridge: null
+      },
+      {
+        router: 'two-step',
+        amountOut: '3000',
+        minAmountOut: '2900',
+        requiresDestinationSwap: true
       }
     ]
   }
   let now = 2_000
   let nextHandle = 0
-  let builtRouter = null
+  let buildRequest = null
   const sessions = new MemoryRheaSwapQuoteSessionStore()
   const service = new RheaSwapService(
     {
@@ -123,7 +136,7 @@ test('alternative routes bind a fresh quote to the same account and selected bui
         return normalizeQuote(request, raw, 1_000)
       },
       async buildSwap({ quote }) {
-        builtRouter = quote.buildContext.router
+        buildRequest = createSwapBuildRequest(quote)
         return {
           executionId: 'selected-route',
           isCrossChain: true,
@@ -142,14 +155,7 @@ test('alternative routes bind a fresh quote to the same account and selected bui
             depositAddress: 't1deposit',
             decimals: 8
           },
-          request: {
-            ...quote.buildContext.request,
-            router: quote.buildContext.router,
-            expectedOut: quote.buildContext.expectedOut,
-            minAmountOut: quote.buildContext.minAmountOut,
-            preSwap: quote.buildContext.preSwap,
-            bridge: quote.buildContext.bridge
-          },
+          request: buildRequest,
           raw: {}
         }
       }
@@ -203,7 +209,11 @@ test('alternative routes bind a fresh quote to the same account and selected bui
       alternatives: [{ ...review.alternatives[0], index: 0 }]
     })
   ).toThrow(/alternative index/)
-  expect(builtRouter).toBe('alternate')
+  expect(buildRequest).toMatchObject({
+    router: 'alternate',
+    bridgeProvider: 'alternate-bridge',
+    enableDestinationSwap: false
+  })
   now = 20_001
   await expect(service.readQuoteView(selected.quoteHandle)).rejects.toThrow(/expired/)
   await expect(service.prepare(selected.quoteHandle)).rejects.toThrow(/expired/)
@@ -595,7 +605,7 @@ test('Private Swap quote remains bound to the same Account and its managed desti
 })
 
 test('RHEA Swap quote sends the Noir Swap referral', () => {
-  const request = toSdkQuoteRequest(parseRheaSwapQuoteRequest(quoteRequest))
+  const request = toRheaSwapProtocolRequest(parseRheaSwapQuoteRequest(quoteRequest))
   expect(serializeQuoteRequest(request)).toMatchObject({ referral: 'noir_swap' })
 })
 
@@ -892,7 +902,7 @@ test('prepared BNB swaps accept native address aliases while binding the custom 
   const sessions = new MemoryRheaSwapQuoteSessionStore()
   const quoteHandle = 'rhea-quote:bnb-custom-token'
   const tokenOut = `0x${'a'.repeat(40)}`
-  const request = toSdkQuoteRequest(
+  const request = toRheaSwapProtocolRequest(
     parseRheaSwapQuoteRequest({
       fromChain: '56',
       toChain: '56',
@@ -1373,12 +1383,14 @@ test('quote and build remain bound across a session-store reload', async () => {
     sourceHash: 'source-hash',
     reportStatus: 'reported'
   })
-  await expect(restored.getOrderStatus(quoteView.quoteHandle)).resolves.toMatchObject({
+  const afterReportRestart = new RheaSwapService(client, sessions, { now: () => 40_000 })
+  await expect(afterReportRestart.getOrderStatus(quoteView.quoteHandle)).resolves.toMatchObject({
     orderId: 'order-1',
     status: 'completed',
     destinationHash: `0x${'ab'.repeat(32)}`
   })
   expect(calls.map(([stage]) => stage)).toEqual(['report', 'report', 'status'])
+  expect(calls[2][1]).toEqual({ recordId: '1' })
   expect(calls[0][1]).toMatchObject({
     from_hash: 'source-hash',
     from_chain: 'zcash',
@@ -1405,6 +1417,53 @@ test('quote and build remain bound across a session-store reload', async () => {
   await expect(publicRouteService.quote(confidentialQuoteRequest)).rejects.toThrow(
     'confidential quote did not use the Near Intents route'
   )
+})
+
+test('Solana v1 payloads are rejected before a signing plan is returned', async () => {
+  const sessions = new MemoryRheaSwapQuoteSessionStore()
+  const request = {
+    ...quoteRequest,
+    fromChain: 'solana',
+    tokenIn: { chain: 'solana', address: '11111111111111111111111111111111', decimals: 9 },
+    sender: '11111111111111111111111111111111'
+  }
+  const quote = normalizeQuote(
+    request,
+    {
+      bestQuote: { router: 'nearintents', amountOut: '1000', minAmountOut: '900' }
+    },
+    1_000
+  )
+  const quoteHandle = 'rhea-quote:solana-v1'
+  const service = new RheaSwapService({}, sessions, { now: () => 2_000 })
+  for (const tx of [{ version: 'v1', transaction: 'AQAA' }, { transaction: 'gQAA' }]) {
+    await sessions.put({
+      schemaVersion: 1,
+      quoteHandle,
+      request,
+      quoteRaw: quote.raw,
+      receivedAt: 1_000,
+      expiresAt: null,
+      build: {
+        executionId: 'solana-v1',
+        request: createSwapBuildRequest(quote),
+        raw: {
+          isCrossChain: true,
+          chainType: 'solana',
+          fromChain: request.fromChain,
+          toChain: request.toChain,
+          tokenIn: { ...request.tokenIn, symbol: 'SOL' },
+          tokenOut: request.tokenOut,
+          router: 'nearintents',
+          amountIn: request.amountIn,
+          estimatedOut: '1000',
+          minAmountOut: '900',
+          tx: { format: 'base64', ...tx }
+        }
+      }
+    })
+    await expect(service.readSolanaTransactionPlan(quoteHandle)).rejects.toThrow(/Solana v1/)
+  }
 })
 
 test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap transaction', async () => {
@@ -1483,6 +1542,16 @@ test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap 
     build: { executionId: 'execution-evm', request, raw }
   })
   const service = new RheaSwapService({}, sessions, { now: () => 2_000 })
+  expect(() =>
+    normalizeBuild(
+      {
+        ...raw,
+        requiresDestinationSwap: true
+      },
+      'two-step',
+      request
+    )
+  ).toThrow(/second transaction/)
   await expect(service.readEvmTransactionPlan('rhea-quote:evm')).resolves.toMatchObject({
     transaction: { chainId: 1, to: router, value: '0' },
     approval: { spender, amountRaw: amount.toString() }
@@ -1505,17 +1574,22 @@ test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap 
   await sessions.put(boundSession)
 
   await sessions.put({
-    ...(await sessions.get('rhea-quote:evm')),
+    ...boundSession,
+    quoteRaw: {
+      ...boundSession.quoteRaw,
+      bestQuote: { ...boundSession.quoteRaw.bestQuote, router: 'cow', quoteId: 'quote-evm' }
+    },
     build: {
       executionId: 'execution-evm',
-      request,
+      request: { ...request, router: 'cow', quoteId: 'quote-evm', enableDestinationSwap: false },
       raw: {
         ...raw,
+        router: 'cow',
         executionType: 'signature',
         tx: null,
         signingRequest: {
-          type: 'order',
-          router: 'odos',
+          type: 'eip712',
+          router: 'cow',
           quoteId: 'quote-evm',
           chainId: 1,
           signingScheme: 'eip712',
@@ -1534,14 +1608,36 @@ test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap 
     sender,
     approval: { spender, amountRaw: amount.toString() }
   })
+  const cowRecord = await sessions.get('rhea-quote:evm')
+  for (const signingRequest of [
+    { ...cowRecord.build.raw.signingRequest, quoteId: 'other-quote' },
+    {
+      ...cowRecord.build.raw.signingRequest,
+      typedData: { ...cowRecord.build.raw.signingRequest.typedData, domain: { chainId: 56 } }
+    }
+  ]) {
+    await sessions.put({
+      ...cowRecord,
+      build: { ...cowRecord.build, raw: { ...cowRecord.build.raw, signingRequest } }
+    })
+    await expect(service.readEvmSignaturePlan('rhea-quote:evm')).rejects.toThrow(
+      /does not match its quote/
+    )
+  }
+  await sessions.put(cowRecord)
 
   let submittedOrders = 0
   const submissionService = new RheaSwapService(
     {
-      async submitOrderRaw() {
+      async submitOrderRaw(input) {
+        expect(input).toMatchObject({
+          router: 'cow',
+          quoteId: 'quote-evm',
+          signingScheme: 'eip712'
+        })
         submittedOrders += 1
         await Promise.resolve()
-        return { orderId: 'order-evm', router: 'odos', chainId: 1 }
+        return { orderId: 'order-evm', router: 'cow', chainId: 1 }
       }
     },
     sessions,
@@ -1556,7 +1652,7 @@ test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap 
   expect(submissions[0]).toEqual(submissions[1])
 
   await sessions.put({
-    ...(await sessions.get('rhea-quote:evm')),
+    ...boundSession,
     build: {
       executionId: 'execution-evm',
       request,

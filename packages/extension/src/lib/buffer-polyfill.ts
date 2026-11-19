@@ -10,3 +10,18 @@ import { Buffer } from 'buffer'
 // would let another bundled `buffer` copy win the global first and reintroduce
 // cross-copy `instanceof` mismatches.
 globalThis.Buffer = Buffer
+
+if (typeof globalThis.process === 'undefined') {
+  Object.defineProperty(globalThis, 'process', {
+    configurable: true,
+    writable: true,
+    value: {
+      browser: true,
+      env: {},
+      version: '',
+      nextTick<Args extends unknown[]>(callback: (...args: Args) => void, ...args: Args) {
+        queueMicrotask(() => callback(...args))
+      }
+    }
+  })
+}

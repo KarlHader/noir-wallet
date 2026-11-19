@@ -621,10 +621,14 @@ export class RheaSwapTransactionMonitor {
   }
 
   private async checkGraph(graph: TransactionGraph): Promise<boolean> {
+    const latest = await this.repository.get(graph.root.scope, graph.root.id)
+    if (!latest || latest.root.status === 'final' || latest.root.status === 'failed') return true
+    graph = latest
     const binding = graph.root.intent?.protocol
     if (!binding || binding.provider !== 'rhea-cross-chain-dex') return true
     const origins = graph.segments.filter(segment => segment.role === 'origin')
     if (origins.length === 0) return false
+    const isSignedOrder = origins.every(origin => origin.target.kind !== 'onchain')
     const pendingOnchainOrigin = origins.some(
       origin =>
         origin.target.kind === 'onchain' &&
@@ -648,7 +652,7 @@ export class RheaSwapTransactionMonitor {
       // A persisted submission retries independently of graph finality.
     }
 
-    if (!binding.isCrossChain) {
+    if (!binding.isCrossChain && !isSignedOrder) {
       if (origins.some(origin => origin.target.kind === 'onchain' && origin.status !== 'final')) {
         return false
       }
@@ -702,8 +706,21 @@ export class RheaSwapTransactionMonitor {
       return false
     }
     if (status === 'completed') {
+      if (
+        isSignedOrder &&
+        !binding.isCrossChain &&
+        !orderStatus.destinationHash &&
+        !graph.segments.some(
+          segment => segment.role === 'destination' && segment.evidence?.transactionHash
+        )
+      ) {
+        return false
+      }
       if (binding.destination.chainId === getZcashChainId('mainnet')) {
         await this.options.prepareZcashDestinationCatchUp?.(graph.root.scope)
+      }
+      if (isSignedOrder && !binding.isCrossChain) {
+        await this.applyGraphSegment(graph.root.scope, graph.root.id, 'origin', 'final')
       }
       await this.applyGraphSegment(graph.root.scope, graph.root.id, 'relay', 'final', {
         externalReference: binding.quoteHandle
@@ -744,10 +761,28 @@ export class RheaSwapTransactionMonitor {
         externalReference: binding.quoteHandle
       })
     }
-    await this.applyGraphSegment(graph.root.scope, graph.root.id, 'relay', 'failed', undefined, {
+    const failure: NonNullable<TransactionSegmentEvent['failure']> = {
       code: status === 'refunded' ? 'refunded' : status === 'expired' ? 'expired' : 'relay-failed',
       occurredAt: Date.now()
-    })
+    }
+    await this.applyGraphSegment(
+      graph.root.scope,
+      graph.root.id,
+      'relay',
+      'failed',
+      undefined,
+      failure
+    )
+    if (isSignedOrder && !binding.isCrossChain) {
+      await this.applyGraphSegment(
+        graph.root.scope,
+        graph.root.id,
+        'destination',
+        'failed',
+        undefined,
+        failure
+      )
+    }
     await this.notifyStatus(graph, status === 'refunded' ? 'REFUNDED' : 'FAILED')
     await this.service.retireReportedSubmission(binding.quoteHandle)
     return true

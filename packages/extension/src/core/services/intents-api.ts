@@ -2,10 +2,10 @@
  * NEAR Intents API service for cross-chain swap quotes and status tracking
  */
 
-import { config_near } from '@rhea-finance/cross-chain-sdk'
 import {
   ZEC_ZCASH_ASSET,
   WNEAR_NEAR_ASSET,
+  RHEA_TOKEN_ICONS_API,
   NOIR_SWAP_APP_FEES,
   NOIR_SWAP_REFERRAL
 } from '@/config/intents'
@@ -23,7 +23,6 @@ import type { QuoteBinding } from '@/types/wallet'
 const INTENTS_API_BASE = 'https://api.rhea.finance/api/1click'
 const ONECLICK_TOKENS_API = 'https://1click.chaindefuser.com/v0/tokens'
 const ONECLICK_STATUS_API = 'https://1click.chaindefuser.com/v0/status'
-const TOKEN_ICONS_API = `${config_near.indexUrl}/get_multichain_lending_tokens_data`
 const COINGECKO_MARKETS_API = 'https://api.coingecko.com/api/v3/coins/markets'
 const WALLET_TOKEN_BLOCKCHAINS = new Set(['sol', 'near'])
 
@@ -515,7 +514,7 @@ async function ensureRheaIconsLoaded(tokens: SwapToken[]): Promise<void> {
       while (next < chainsToLoad.length) {
         const chain = chainsToLoad[next++]!
         try {
-          const url = new URL(TOKEN_ICONS_API)
+          const url = new URL(RHEA_TOKEN_ICONS_API)
           url.searchParams.set('chains', chain)
           const response = await fetchWithTimeout(url, { timeoutMs: 8_000 })
           const icons = parseRheaIconCatalogResponse(await response.json())

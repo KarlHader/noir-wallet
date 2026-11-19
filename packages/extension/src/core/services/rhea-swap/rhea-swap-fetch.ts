@@ -1,6 +1,5 @@
-import { SwapSdkError } from '@rhea-finance/cross-chain-aggregation-dex'
 import { readBoundedResponseText } from '@/lib/fetch-utils'
-import { getRheaSwapMinimumAmountMessage } from './rhea-swap-error'
+import { getRheaSwapMinimumAmountMessage, RheaSwapHttpError } from './rhea-swap-error'
 
 const MAXIMUM_QUOTE_ERROR_BYTES = 64 * 1024
 
@@ -31,13 +30,14 @@ function readQuoteFailure(value: unknown, depth = 0): 'timeout' | 'no-route' | n
   return failure
 }
 
-/** Preserve quote failure categories before SDK 2.0.6 discards envelope metadata. */
+/** Preserve the provider's fixed quote failure categories without exposing its payload. */
 export function createRheaSwapFetch(fetchImplementation: typeof fetch): typeof fetch {
   return async (input, init) => {
     const response = await fetchImplementation(input, init)
     const url = input instanceof Request ? input.url : String(input)
+    const pathname = new URL(url).pathname
     if (
-      new URL(url).pathname !== '/api/swap/quote' ||
+      (pathname !== '/crosschain/swap/quote' && pathname !== '/api/swap/quote') ||
       response.status === 401 ||
       response.status === 403 ||
       response.status === 429
@@ -66,10 +66,11 @@ export function createRheaSwapFetch(fetchImplementation: typeof fetch): typeof f
     if (!failure) return response
     // Only fixed categories cross the error boundary; provider payloads remain private.
     void response.body?.cancel().catch(() => {})
-    throw new SwapSdkError(
+    throw new RheaSwapHttpError(
       failure === 'timeout' ? 'REQUEST_TIMEOUT' : 'ROUTE_NOT_FOUND',
       'quote',
-      failure === 'timeout' ? 'quote_timeout' : 'no route'
+      failure === 'timeout' ? 'quote_timeout' : 'no route',
+      failure === 'timeout'
     )
   }
 }
