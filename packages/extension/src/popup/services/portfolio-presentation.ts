@@ -3,24 +3,44 @@ import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from 
 import { type AssetPriceReadModel, findAssetPrice } from '@/core/prices'
 import Big from '@/lib/big'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
-import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfolio-prices'
+import {
+  getPortfolioAssetUsdValue,
+  LOW_VALUE_USD_THRESHOLD,
+  withConfidentialAssetPrices
+} from '@/popup/components/portfolio/portfolio-prices'
 import { isAssetVisibleInAssetView } from '@/popup/components/portfolio/portfolio-asset-visibility'
-import { getNearConfidentialChainId } from './near-confidential-holdings'
+import {
+  addNearConfidentialZecFiat,
+  getNearConfidentialChainId,
+  listStandaloneNearConfidentialHoldings,
+  resolveNearConfidentialZecRow,
+  sumNearConfidentialChainFiat,
+  type StandaloneNearConfidentialHolding,
+  type NearConfidentialZecRow
+} from './near-confidential-holdings'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
+import type { Network } from '@/types'
 import { isSelectableChainFamily } from './chain-selection-availability'
 import { getAssetDomainRaw, type AssetDomain } from './asset-domains'
 
 const ASSET_FALLBACK_ORDER = ['USDC', 'USDT', 'ZEC', 'BTC', 'ETH', 'SOL', 'NEAR'] as const
+
+function listSelectablePortfolioChains(
+  chains: readonly PortfolioChainView[],
+  enabledFlags: readonly ChainFeatureFlagValue[]
+): readonly PortfolioChainView[] {
+  return chains.filter(({ chain }) => isSelectableChainFamily(chain.family, enabledFlags))
+}
 
 export function resolvePortfolioChainSelection(
   model: PortfolioReadModel | null,
   persistedSelection: readonly string[] | null | undefined,
   enabledFlags: readonly ChainFeatureFlagValue[]
 ): readonly string[] {
-  const available: readonly string[] =
-    model?.chains
-      .filter(chain => isSelectableChainFamily(chain.chain.family, enabledFlags))
-      .map(chain => chain.chain.id) ?? []
+  const available: readonly string[] = listSelectablePortfolioChains(
+    model?.chains ?? [],
+    enabledFlags
+  ).map(({ chain }) => chain.id)
   const selected = persistedSelection?.filter(chainId => available.includes(chainId))
   return selected?.length === 1 ? selected : available
 }
@@ -206,15 +226,21 @@ export function getPortfolioChainUsdValue(
 
 export function sortPortfolioChains(
   chains: readonly PortfolioChainView[],
-  prices: AssetPriceReadModel | null
+  prices: AssetPriceReadModel | null,
+  confidentialZec: NearConfidentialZecRow | null = null
 ): readonly PortfolioChainView[] {
+  const zecFor = (chain: PortfolioChainView) =>
+    confidentialZec?.chainId === chain.chain.id ? confidentialZec : null
+  const hasBalance = (chain: PortfolioChainView) =>
+    Boolean(zecFor(chain)?.mergedHolding) ||
+    chain.assets.some(asset => BigInt(asset.balance.totalRaw) !== 0n)
   return [...chains].sort((left, right) => {
-    const leftHasBalance = left.assets.some(asset => BigInt(asset.balance.totalRaw) !== 0n)
-    const rightHasBalance = right.assets.some(asset => BigInt(asset.balance.totalRaw) !== 0n)
+    const leftHasBalance = hasBalance(left)
+    const rightHasBalance = hasBalance(right)
     if (leftHasBalance !== rightHasBalance) return leftHasBalance ? -1 : 1
     const valueComparison = compareUsdValues(
-      getPortfolioChainUsdValue(left, prices),
-      getPortfolioChainUsdValue(right, prices)
+      addNearConfidentialZecFiat(getPortfolioChainUsdValue(left, prices), zecFor(left)),
+      addNearConfidentialZecFiat(getPortfolioChainUsdValue(right, prices), zecFor(right))
     )
     if (valueComparison !== 0) return valueComparison
     const rankComparison = getChainFallbackRank(left) - getChainFallbackRank(right)
@@ -288,8 +314,17 @@ export function getAvailablePortfolioAssetGroupUsdValue(
 export function buildPortfolioAssetGroups(
   chains: readonly PortfolioChainView[],
   prices: AssetPriceReadModel | null,
-  options: { readonly includeZeroBalanceNativeAssets?: boolean } = {}
+  options: {
+    readonly includeZeroBalanceNativeAssets?: boolean
+    readonly confidentialZec?: NearConfidentialZecRow | null
+  } = {}
 ): readonly PortfolioAssetGroup[] {
+  const { confidentialZec } = options
+  const groupValue = (group: PortfolioAssetGroup) =>
+    addNearConfidentialZecFiat(
+      getCompletePortfolioAssetGroupUsdValue(group, prices),
+      group.representativeAssetId === confidentialZec?.assetId ? confidentialZec : null
+    )
   const groups = new Map<
     string,
     {
@@ -339,10 +374,7 @@ export function buildPortfolioAssetGroups(
         })
       })
       .sort((left, right) => {
-        const valueComparison = compareUsdValues(
-          getCompletePortfolioAssetGroupUsdValue(left, prices),
-          getCompletePortfolioAssetGroupUsdValue(right, prices)
-        )
+        const valueComparison = compareUsdValues(groupValue(left), groupValue(right))
         return valueComparison || compareFallbackOrder(left.symbol, right.symbol)
       })
   )
@@ -375,4 +407,99 @@ export function partitionPortfolioAssetGroups(
     primaryAssetGroups: Object.freeze(primaryAssetGroups),
     lowValueAssetGroups: Object.freeze(lowValueAssetGroups)
   })
+}
+
+export function buildPortfolioDisplay({
+  model,
+  sourceModel,
+  network,
+  domain,
+  sourcePrices,
+  selectedChainIds: requestedChainIds,
+  enabledFlags
+}: {
+  readonly model: PortfolioReadModel
+  readonly sourceModel: PortfolioReadModel
+  readonly network: Network
+  readonly domain: AssetDomain
+  readonly sourcePrices: AssetPriceReadModel | null
+  readonly selectedChainIds: readonly string[] | null
+  readonly enabledFlags: readonly ChainFeatureFlagValue[]
+}) {
+  const prices = withConfidentialAssetPrices(sourceModel, sourcePrices)
+  const standalone =
+    domain === 'all' || domain === 'shield'
+      ? listStandaloneNearConfidentialHoldings(model, sourceModel, prices)
+      : []
+  const confidentialZec =
+    domain === 'all' ? resolveNearConfidentialZecRow(model, sourceModel, network, standalone) : null
+  const displayAsset = confidentialZec?.displayAsset
+  const selectableChains = listSelectablePortfolioChains(model.chains, enabledFlags).map(chain =>
+    displayAsset && chain.chain.id === confidentialZec.chainId
+      ? { ...chain, assets: [...chain.assets, displayAsset] }
+      : chain
+  )
+  const availableChainIds = new Set<string>(selectableChains.map(({ chain }) => chain.id))
+  const selectedChainIds = (requestedChainIds ?? [...availableChainIds]).filter(id =>
+    availableChainIds.has(id)
+  )
+  const selected = new Set(selectedChainIds)
+  const visibleConfidential = standalone.filter(({ chain }) =>
+    chain ? selected.has(chain.chain.id) : selectedChainIds.length === availableChainIds.size
+  )
+  const separateConfidential = visibleConfidential.filter(
+    entry => entry !== confidentialZec?.mergedHolding
+  )
+  const standaloneChainIds = new Set(visibleConfidential.map(({ chain }) => chain?.chain.id))
+  const visibleChains = selectableChains.filter(
+    chain =>
+      selected.has(chain.chain.id) &&
+      (domain === 'all' ||
+        chain.assets.length > 0 ||
+        standaloneChainIds.has(chain.chain.id) ||
+        getPortfolioChainBalanceStatus(chain) !== 'ready')
+  )
+  const assetGroups = buildPortfolioAssetGroups(visibleChains, prices, {
+    includeZeroBalanceNativeAssets: visibleChains.length === 1,
+    confidentialZec
+  })
+
+  return {
+    prices,
+    confidentialZec,
+    selectedChainIds,
+    visibleConfidential,
+    separateConfidential,
+    ...partitionPortfolioAssetGroups(assetGroups, prices, LOW_VALUE_USD_THRESHOLD),
+    sortedChains: sortPortfolioChains(visibleChains, prices, confidentialZec),
+    networkOptions: sortPortfolioChains(selectableChains, prices, confidentialZec).map(
+      ({ chain }) => chain
+    ),
+    unavailableChains: visibleChains.filter(
+      chain => chain.assets.length === 0 && getPortfolioChainBalanceStatus(chain) === 'unavailable'
+    ),
+    hasPendingBalances: visibleChains.some(
+      chain => getPortfolioChainBalanceStatus(chain) === 'loading'
+    )
+  }
+}
+
+export function getPortfolioChainSection(
+  chain: PortfolioChainView,
+  prices: AssetPriceReadModel | null,
+  visibleConfidential: readonly StandaloneNearConfidentialHolding[],
+  confidentialZec: NearConfidentialZecRow | null
+) {
+  const holdings = visibleConfidential.filter(item => item.chain?.chain.id === chain.chain.id)
+  return {
+    balanceStatus: getPortfolioChainBalanceStatus(chain),
+    chainFiat: sumNearConfidentialChainFiat(getPortfolioChainUsdValue(chain, prices), holdings),
+    hasNativeBalance: chain.assets.some(asset => asset !== confidentialZec?.displayAsset),
+    separateHoldings: holdings.filter(item => item !== confidentialZec?.mergedHolding),
+    ...partitionPortfolioAssets(
+      sortPortfolioAssets(chain.assets, prices),
+      prices,
+      LOW_VALUE_USD_THRESHOLD
+    )
+  }
 }

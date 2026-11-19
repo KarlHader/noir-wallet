@@ -32,7 +32,10 @@ import {
   type PortfolioAssetGroupEntry
 } from '@/popup/services/portfolio-presentation'
 import type { AssetDomain } from '@/popup/services/asset-domains'
-import type { NearConfidentialZecRow } from '@/popup/services/near-confidential-holdings'
+import {
+  addNearConfidentialZecFiat,
+  type NearConfidentialZecRow
+} from '@/popup/services/near-confidential-holdings'
 import { ZcashFundingBadge } from '@/popup/components/account/ZcashFundingBadge'
 import { Tooltip } from '@/popup/components/ui/tooltip'
 
@@ -117,14 +120,6 @@ function assetPendingAmount(asset: PortfolioAssetView): Big {
   return new Big(formatBaseUnitDecimalAmount(asset.balance.pendingRaw, asset.metadata.decimals))
 }
 
-function addConfidentialZecFiat(
-  fiat: string | null,
-  zec: NearConfidentialZecRow | null
-): string | null {
-  if (!zec?.mergedHolding || zec.fiat === null) return fiat
-  return new Big(fiat ?? '0').plus(zec.fiat).toFixed()
-}
-
 function PortfolioAssetQuantity({
   entries,
   domain,
@@ -144,7 +139,9 @@ function PortfolioAssetQuantity({
 }) {
   if (balancesHidden) return <p className="mt-0.5 break-all text-xs text-muted">••••</p>
 
-  const domainBalances = getPortfolioAssetDomainBalances(entries, domain, prices)
+  const domainBalances = confidentialZec?.displayAsset
+    ? []
+    : getPortfolioAssetDomainBalances(entries, domain, prices)
   const isZcash = entries.every(entry => entry.chain.chain.family === 'zcash')
   const balances = confidentialZec
     ? [...domainBalances, { ...confidentialZec, domain: 'near-confidential' as const }]
@@ -263,7 +260,7 @@ function PortfolioAssetBalanceRow({
   const amount = assetAmount(entry.asset)
   const pendingAmount = assetPendingAmount(entry.asset)
   const zec = confidentialZec?.assetId === entry.asset.asset.id ? confidentialZec : null
-  const fiat = addConfidentialZecFiat(getPortfolioAssetUsdValue(entry.asset, prices), zec)
+  const fiat = addNearConfidentialZecFiat(getPortfolioAssetUsdValue(entry.asset, prices), zec)
   const quote = findAssetPrice(prices, entry.asset.asset.id)
   const chainAlias = resolveChainIconAlias(
     entry.chain.chain.family,
@@ -310,7 +307,7 @@ function PortfolioAssetBalanceRow({
           </div>
           {showUnitPrice && (
             <UnitPrice
-              price={quote?.priceUsd ?? null}
+              price={quote?.priceUsd ?? zec?.mergedHolding?.entry.priceUsd ?? null}
               percent24h={quote?.marketChange?.percent24h}
               changeFreshness={quote?.marketChange?.freshness}
               loading={pricesLoading}
@@ -376,7 +373,10 @@ export function PortfolioAssetGroupCard({
     new Big(0)
   )
   const zec = group.representativeAssetId === confidentialZec?.assetId ? confidentialZec : null
-  const fiat = addConfidentialZecFiat(getAvailablePortfolioAssetGroupUsdValue(group, prices), zec)
+  const fiat = addNearConfidentialZecFiat(
+    getAvailablePortfolioAssetGroupUsdValue(group, prices),
+    zec
+  )
   const unitQuote = getPortfolioAssetGroupUnitQuote(group, prices)
   const representativeAsset = group.entries[0]?.asset
   const chainBadge =
@@ -438,7 +438,7 @@ export function PortfolioAssetGroupCard({
           }
           subtitle={
             <UnitPrice
-              price={unitQuote?.priceUsd ?? null}
+              price={unitQuote?.priceUsd ?? zec?.mergedHolding?.entry.priceUsd ?? null}
               percent24h={unitQuote?.percent24h}
               changeFreshness={unitQuote?.changeFreshness}
               loading={pricesLoading}

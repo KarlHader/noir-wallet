@@ -5,6 +5,7 @@ import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { AccountNetworksView } from '@/popup/services/account-networks-client'
 import { PortfolioShell } from './PortfolioShell'
 import { resolvePortfolioChainSelection } from '@/popup/services/portfolio-presentation'
+import { withNearConfidentialZecChain } from '@/popup/services/near-confidential-holdings'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { ListSkeleton } from '../ui/skeleton'
 import { useSettingsStore } from '@/store/settings-store'
@@ -115,11 +116,14 @@ export function MultichainPortfolioPanel({
     activeAccount?.walletId === walletId && activeAccount?.accountId === accountId
       ? activeAccount
       : null
-  const domainModel = visibleModel
-    ? projectPortfolioForDomain(visibleModel, domain, {
-        evmPrivateAvailable: supportsEvmPrivateExecution(scopedAccount?.walletSource)
-      })
-    : null
+  const domainModel =
+    domain === 'all'
+      ? withNearConfidentialZecChain(visibleModel, network)
+      : visibleModel
+        ? projectPortfolioForDomain(visibleModel, domain, {
+            evmPrivateAvailable: supportsEvmPrivateExecution(scopedAccount?.walletSource)
+          })
+        : null
   const availableChainIds = resolvePortfolioChainSelection(
     domainModel,
     null,

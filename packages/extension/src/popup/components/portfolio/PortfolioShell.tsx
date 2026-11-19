@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { SwapToken } from '@/core/services/intents-api'
-import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
+import { useMemo, useState } from 'react'
+import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { Icon } from '@iconify/react'
 import { formatFiatAmount } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
@@ -21,9 +20,7 @@ import {
   DropdownMenuTrigger
 } from '@/popup/components/ui/dropdown-menu'
 import { NetworkFilter } from '@/popup/components/common/NetworkFilter'
-import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
 import type { AssetDomain } from '@/popup/services/asset-domains'
-import { LOW_VALUE_USD_THRESHOLD, withConfidentialAssetPrices } from './portfolio-prices'
 import {
   PortfolioAssetGroupCard,
   PortfolioChainAssetRow,
@@ -32,18 +29,9 @@ import {
 } from './PortfolioAssetGroupCard'
 import { NearConfidentialHoldingRow } from './NearConfidentialHoldingRow'
 import {
-  listStandaloneNearConfidentialHoldings,
-  resolveNearConfidentialZecRow,
-  sumNearConfidentialChainFiat
-} from '@/popup/services/near-confidential-holdings'
-import {
-  buildPortfolioAssetGroups,
-  getPortfolioChainUsdValue,
+  buildPortfolioDisplay,
   getPortfolioChainBalanceStatus,
-  partitionPortfolioAssetGroups,
-  partitionPortfolioAssets,
-  sortPortfolioAssets,
-  sortPortfolioChains,
+  getPortfolioChainSection,
   type PortfolioAssetGroup
 } from '@/popup/services/portfolio-presentation'
 
@@ -266,127 +254,51 @@ export function PortfolioShell({
   const [localView, setLocalView] = useState<PortfolioViewMode>(initialView)
   const view = controlledView ?? localView
   const setView = onViewChange ?? setLocalView
-  const displayModel = model
-  const prices = useMemo(
-    () => withConfidentialAssetPrices(sourceModel ?? model, sourcePrices),
-    [model, sourceModel, sourcePrices]
-  )
-  const standaloneConfidential = useMemo(
+  const [localSelectedChainIds, setLocalSelectedChainIds] = useState<readonly string[] | null>(null)
+  const requestedChainIds = controlledSelectedChainIds ?? localSelectedChainIds
+  const {
+    prices,
+    confidentialZec,
+    selectedChainIds,
+    visibleConfidential,
+    separateConfidential,
+    primaryAssetGroups,
+    lowValueAssetGroups,
+    sortedChains,
+    networkOptions,
+    unavailableChains,
+    hasPendingBalances
+  } = useMemo(
     () =>
-      domain === 'all' || domain === 'shield'
-        ? listStandaloneNearConfidentialHoldings(model, sourceModel ?? model, prices)
-        : [],
-    [domain, model, sourceModel, prices]
+      buildPortfolioDisplay({
+        model,
+        sourceModel: sourceModel ?? model,
+        network,
+        domain,
+        sourcePrices,
+        selectedChainIds: requestedChainIds,
+        enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
+      }),
+    [domain, model, network, requestedChainIds, sourceModel, sourcePrices]
   )
-  const confidentialZec = useMemo(
-    () =>
-      domain === 'all'
-        ? resolveNearConfidentialZecRow(
-            model,
-            sourceModel ?? model,
-            network,
-            standaloneConfidential
-          )
-        : null,
-    [domain, model, sourceModel, network, standaloneConfidential]
-  )
-  const [localSelectedChainIds, setLocalSelectedChainIds] = useState<readonly string[]>(() =>
-    displayModel.chains
-      .filter(chain => isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__))
-      .map(chain => chain.chain.id)
-  )
-  const selectableChains = useMemo(
-    () =>
-      displayModel.chains.filter(chain =>
-        isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__)
-      ),
-    [displayModel.chains]
-  )
-  const availableChainIds = useMemo(
-    () => selectableChains.map(chain => chain.chain.id),
-    [selectableChains]
-  )
-  const availableChainIdSet = useMemo(() => new Set<string>(availableChainIds), [availableChainIds])
-  const selectedChainIds = (controlledSelectedChainIds ?? localSelectedChainIds).filter(chainId =>
-    availableChainIdSet.has(chainId)
-  )
-  const setSelectedChainIds = onSelectedChainIdsChange ?? setLocalSelectedChainIds
-  const visibleConfidential = standaloneConfidential.filter(
-    item =>
-      (item.chain && selectedChainIds.includes(item.chain.chain.id)) ||
-      (!item.chain && selectedChainIds.length === availableChainIds.length)
-  )
-  const separateConfidential = visibleConfidential.filter(
-    item => item !== confidentialZec?.mergedHolding
-  )
-  const standaloneChainIds = new Set(
-    visibleConfidential.flatMap(item => (item.chain ? [item.chain.chain.id] : []))
-  )
-  const [expandedChainIds, setExpandedChainIds] = useState<ReadonlySet<string>>(() => new Set())
-  const [swapCatalog, setSwapCatalog] = useState<readonly SwapToken[]>([])
-  useEffect(() => {
-    let cancelled = false
-    void swapTokenCatalogClient
-      .readCached()
-      .then(tokens => {
-        if (!cancelled) setSwapCatalog(tokens)
-      })
-      .catch(() => {})
-    void swapTokenCatalogClient
-      .refresh()
-      .then(tokens => {
-        if (!cancelled) setSwapCatalog(tokens)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
+  const selectAsset = (assetId: string) => {
+    if (confidentialZec?.displayAsset && assetId === confidentialZec.assetId) {
+      const tokenId = confidentialZec.mergedHolding?.entry.asset.tokenId
+      if (tokenId) onSelectConfidentialAsset?.(tokenId)
+    } else {
+      onSelectAsset?.(assetId)
     }
-  }, [])
+  }
+  const setSelectedChainIds = onSelectedChainIdsChange ?? setLocalSelectedChainIds
+  const [expandedChainIds, setExpandedChainIds] = useState<ReadonlySet<string>>(() => new Set())
+  const swapCatalog = useSwapTokenCatalog() ?? undefined
   const [lowValueExpanded, setLowValueExpanded] = useState(false)
   const [expandedLowValueChainIds, setExpandedLowValueChainIds] = useState<ReadonlySet<string>>(
     () => new Set()
   )
 
-  const filteredChains = useMemo(
-    () => selectableChains.filter(chain => selectedChainIds.includes(chain.chain.id)),
-    [selectableChains, selectedChainIds]
-  )
-  const visibleChains =
-    domain === 'all'
-      ? filteredChains
-      : filteredChains.filter(
-          chain =>
-            chain.assets.length > 0 ||
-            standaloneChainIds.has(chain.chain.id) ||
-            getPortfolioChainBalanceStatus(chain) !== 'ready'
-        )
-  const assetGroups = useMemo(
-    () =>
-      buildPortfolioAssetGroups(visibleChains, prices, {
-        includeZeroBalanceNativeAssets: visibleChains.length === 1
-      }),
-    [prices, visibleChains]
-  )
-  const { primaryAssetGroups, lowValueAssetGroups } = useMemo(
-    () => partitionPortfolioAssetGroups(assetGroups, prices, LOW_VALUE_USD_THRESHOLD),
-    [assetGroups, prices]
-  )
-  const sortedChains = useMemo(
-    () => sortPortfolioChains(visibleChains, prices),
-    [prices, visibleChains]
-  )
   const displayedChains = chainListExpanded ? sortedChains : sortedChains.slice(0, 3)
-  const sortedNetworkOptions = useMemo(
-    () => sortPortfolioChains(selectableChains, prices),
-    [selectableChains, prices]
-  )
   const showContent = model.status === 'ready' || model.status === 'partial'
-  const unavailableChains = visibleChains.filter(
-    chain => chain.assets.length === 0 && getPortfolioChainBalanceStatus(chain) === 'unavailable'
-  )
-  const hasPendingBalances = visibleChains.some(
-    chain => getPortfolioChainBalanceStatus(chain) === 'loading'
-  )
   // Balances arrive from cache before prices resolve; show price/fiat skeletons
   // instead of a bare em dash until the first price model lands.
   const pricesLoading = priceStatus === 'loading'
@@ -407,7 +319,7 @@ export function PortfolioShell({
           balancesHidden={balancesHidden}
           expanded={false}
           pricesLoading={pricesLoading}
-          onSelectAsset={onSelectAsset}
+          onSelectAsset={selectAsset}
           directAsset
           swapCatalog={swapCatalog}
         />
@@ -415,7 +327,7 @@ export function PortfolioShell({
           <div className="px-4 pb-2 pl-16">
             <BalanceReadError
               chain={unavailableZcash}
-              hasBalance
+              hasBalance={!confidentialZec?.displayAsset}
               onRetry={onRefresh}
               disabled={refreshDisabled}
             />
@@ -435,7 +347,7 @@ export function PortfolioShell({
         <div className="flex h-[46px] shrink-0 items-center justify-between px-4 pb-1 pt-2.5">
           <NetworkFilter
             ariaLabelPrefix="Filter portfolio by network"
-            options={sortedNetworkOptions.map(chain => chain.chain)}
+            options={networkOptions}
             selectedIds={selectedChainIds}
             onSelectionChange={setSelectedChainIds}
           />
@@ -504,13 +416,15 @@ export function PortfolioShell({
       <div className="min-h-0 flex-1 pb-4">
         {model.status === 'loading' && visibleConfidential.length === 0 ? (
           <LoadingPanel />
-        ) : model.status === 'error' && unavailableChains.length === 0 ? (
+        ) : model.status === 'error' &&
+          unavailableChains.length === 0 &&
+          visibleConfidential.length === 0 ? (
           <StatePanel
             icon="lucide:wifi-off"
             title="Unable to load portfolio"
             description="Noir Wallet is reconnecting automatically."
           />
-        ) : model.status === 'empty' ? (
+        ) : model.status === 'empty' && visibleConfidential.length === 0 ? (
           <StatePanel
             icon="lucide:layers"
             title={domain === 'all' ? 'No networks available' : 'No assets found'}
@@ -519,7 +433,8 @@ export function PortfolioShell({
           <StatePanel icon="lucide:network" title="No network selected" />
         ) : showContent &&
           view === 'assets' &&
-          assetGroups.length === 0 &&
+          primaryAssetGroups.length === 0 &&
+          lowValueAssetGroups.length === 0 &&
           visibleConfidential.length === 0 &&
           unavailableChains.length === 0 &&
           !hasPendingBalances ? (
@@ -535,7 +450,7 @@ export function PortfolioShell({
                 key={entry.asset.tokenId}
                 entry={entry}
                 chain={chain?.chain}
-                showProvider
+                showProvider={domain !== 'all'}
                 balancesHidden={balancesHidden}
                 pricesLoading={pricesLoading}
                 onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
@@ -586,20 +501,14 @@ export function PortfolioShell({
           <div className="divide-y divide-white/[0.08] pb-2">
             {displayedChains.map(chain => {
               const expanded = expandedChainIds.has(chain.chain.id)
-              const balanceStatus = getPortfolioChainBalanceStatus(chain)
-              const confidentialEntries = visibleConfidential.filter(
-                item => item.chain?.chain.id === chain.chain.id
-              )
-              const chainFiat = sumNearConfidentialChainFiat(
-                getPortfolioChainUsdValue(chain, prices),
-                confidentialEntries
-              )
-              const sortedAssets = sortPortfolioAssets(chain.assets, prices)
-              const { primaryAssets, lowValueAssets } = partitionPortfolioAssets(
-                sortedAssets,
-                prices,
-                LOW_VALUE_USD_THRESHOLD
-              )
+              const {
+                balanceStatus,
+                chainFiat,
+                hasNativeBalance,
+                separateHoldings,
+                primaryAssets,
+                lowValueAssets
+              } = getPortfolioChainSection(chain, prices, visibleConfidential, confidentialZec)
               const chainLowValueExpanded = expandedLowValueChainIds.has(chain.chain.id)
               return (
                 <section
@@ -662,7 +571,7 @@ export function PortfolioShell({
                     <div className="px-4 pb-2 pl-16">
                       <BalanceReadError
                         chain={chain}
-                        hasBalance={chain.assets.length > 0}
+                        hasBalance={hasNativeBalance}
                         onRetry={onRefresh}
                         disabled={refreshDisabled}
                       />
@@ -679,7 +588,7 @@ export function PortfolioShell({
                         disabled={refreshDisabled}
                       />
                     )}
-                  {expanded && (chain.assets.length > 0 || confidentialEntries.length > 0) && (
+                  {expanded && (chain.assets.length > 0 || separateHoldings.length > 0) && (
                     <div
                       role="region"
                       aria-label={`${chain.chain.displayName} token balances`}
@@ -694,23 +603,21 @@ export function PortfolioShell({
                           confidentialZec={confidentialZec}
                           balancesHidden={balancesHidden}
                           pricesLoading={pricesLoading}
-                          onSelectAsset={onSelectAsset}
+                          onSelectAsset={selectAsset}
                           swapCatalog={swapCatalog}
                         />
                       ))}
-                      {confidentialEntries
-                        .filter(item => item !== confidentialZec?.mergedHolding)
-                        .map(({ entry }) => (
-                          <NearConfidentialHoldingRow
-                            key={entry.asset.tokenId}
-                            entry={entry}
-                            chain={chain.chain}
-                            showProvider
-                            balancesHidden={balancesHidden}
-                            pricesLoading={pricesLoading}
-                            onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
-                          />
-                        ))}
+                      {separateHoldings.map(({ entry }) => (
+                        <NearConfidentialHoldingRow
+                          key={entry.asset.tokenId}
+                          entry={entry}
+                          chain={chain.chain}
+                          showProvider={domain !== 'all'}
+                          balancesHidden={balancesHidden}
+                          pricesLoading={pricesLoading}
+                          onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
+                        />
+                      ))}
                       {lowValueAssets.length > 0 && (
                         <>
                           <button
@@ -748,7 +655,7 @@ export function PortfolioShell({
                                 confidentialZec={confidentialZec}
                                 balancesHidden={balancesHidden}
                                 pricesLoading={pricesLoading}
-                                onSelectAsset={onSelectAsset}
+                                onSelectAsset={selectAsset}
                                 swapCatalog={swapCatalog}
                               />
                             ))}
@@ -765,7 +672,7 @@ export function PortfolioShell({
                 <NearConfidentialHoldingRow
                   key={entry.asset.tokenId}
                   entry={entry}
-                  showProvider
+                  showProvider={domain !== 'all'}
                   balancesHidden={balancesHidden}
                   pricesLoading={pricesLoading}
                   onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}

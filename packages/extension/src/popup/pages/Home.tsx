@@ -31,7 +31,10 @@ import {
 import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { MultichainPortfolioPanel } from '../components/portfolio/MultichainPortfolioPanel'
-import { resolveConfidentialDetailAssetId } from '../services/near-confidential-holdings'
+import {
+  resolveConfidentialDetailAssetId,
+  withNearConfidentialZecChain
+} from '../services/near-confidential-holdings'
 import { getHomeZcashSyncIssue } from '../services/home-zcash-sync-issue'
 import { MultichainActivityPanel } from '../components/transaction/MultichainActivityPanel'
 import { Skeleton } from '../components/ui/skeleton'
@@ -534,14 +537,18 @@ export function Home() {
     [multichainPortfolio, assetPrices]
   )
   const multichainTotalUsd = multichainFiat.totalUsd
+  const selectablePortfolio =
+    assetDomain === 'all'
+      ? withNearConfidentialZecChain(multichainPortfolio, network)
+      : multichainPortfolio
   const displayedChainSelection = resolvePortfolioChainSelection(
-    multichainPortfolio,
+    selectablePortfolio,
     persistedChainSelection,
     __ENABLED_CHAIN_FEATURE_FLAGS__
   )
-  const displayedPortfolio = projectPortfolioForChains(multichainPortfolio, displayedChainSelection)
+  const displayedPortfolio = projectPortfolioForChains(selectablePortfolio, displayedChainSelection)
   const filteredByNetwork =
-    displayedPortfolio !== null && displayedPortfolio !== multichainPortfolio
+    displayedPortfolio !== null && displayedPortfolio !== selectablePortfolio
   const displayedFiat = filteredByNetwork
     ? summarizePortfolioFiat(displayedPortfolio, assetPrices)
     : multichainFiat

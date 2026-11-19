@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import type { ActivityItem } from '@/core/activity'
-import type { SwapToken } from '@/core/services/intents-api'
 import { formatFiatAmount } from '@/lib/number-format'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { useWalletStore } from '@/store/wallet-store'
@@ -16,13 +15,16 @@ import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-act
 import { useNavigate } from '@/popup/provider/Router'
 import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
-import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
+import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-manager-client'
 import {
   availableDepositTokens,
   depositSourceNetworks
 } from '@/popup/services/shield-deposit-options'
-import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
+import {
+  getConfidentialWalletDetailAssetId,
+  summarizeNearConfidentialHoldings
+} from '@/popup/services/near-confidential-holdings'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { buildShieldProviderGroups, type ShieldProvider } from '@/popup/services/asset-domains'
 import { NearConfidentialHoldingRow } from '@/popup/components/portfolio/NearConfidentialHoldingRow'
@@ -98,7 +100,7 @@ function ShieldProviderContent() {
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [prices, setPrices] = useState<AssetPriceReadModel | null>(null)
   const [pricesLoading, setPricesLoading] = useState(true)
-  const [directoryTokens, setDirectoryTokens] = useState<readonly SwapToken[] | null>(null)
+  const directoryTokens = useSwapTokenCatalog(provider === 'near-confidential')
   const [detailTab, setDetailTab] = useState<'assets' | 'activity'>('assets')
   const appliedAssetSelection = useRef<string | null>(null)
   const currentWallet = useWalletStore(state =>
@@ -151,26 +153,6 @@ function ShieldProviderContent() {
     }
   }, [])
 
-  useEffect(() => {
-    if (provider !== 'near-confidential') return
-    let active = true
-    void swapTokenCatalogClient
-      .readCached()
-      .then(tokens => {
-        if (active && tokens.length > 0) setDirectoryTokens(tokens)
-      })
-      .catch(() => {})
-    void swapTokenCatalogClient
-      .refresh()
-      .then(tokens => {
-        if (active) setDirectoryTokens(tokens)
-      })
-      .catch(() => {})
-    return () => {
-      active = false
-    }
-  }, [provider])
-
   const near = useMemo(() => summarizeNearConfidentialHoldings(model, prices), [model, prices])
   const managedAssets = useMemo(
     () => resolveManagedIntentsCatalog(directoryTokens ?? []),
@@ -210,10 +192,11 @@ function ShieldProviderContent() {
       holding =>
         holding.asset.tokenId === requestedAssetId || holding.asset.assetId === requestedAssetId
     )
-    if (!entry) return
+    const assetId = entry && getConfidentialWalletDetailAssetId(model, entry.asset)
+    if (!assetId) return
     appliedAssetSelection.current = selectionKey
-    openAssetDetail(entry.asset.assetId ?? entry.asset.tokenId, true)
-  }, [near.entries, openAssetDetail, provider, requestedAssetId, scopeKey])
+    openAssetDetail(assetId, true)
+  }, [model, near.entries, openAssetDetail, provider, requestedAssetId, scopeKey])
   const nearBalanceEmpty =
     provider === 'near-confidential' &&
     near.status === 'ready' &&
@@ -601,6 +584,11 @@ function ShieldProviderContent() {
                         asset.protocolAssetId === entry.asset.protocolAssetId &&
                         (!entry.asset.assetId || asset.assetId === entry.asset.assetId)
                     )
+                    const assetId = getConfidentialWalletDetailAssetId(
+                      model,
+                      entry.asset,
+                      matchedAsset?.assetId
+                    )
                     return (
                       <NearConfidentialHoldingRow
                         key={entry.asset.tokenId}
@@ -608,11 +596,7 @@ function ShieldProviderContent() {
                         iconChain={matchedAsset?.blockchain}
                         balancesHidden={balancesHidden}
                         showQuantitySymbol={false}
-                        onClick={() =>
-                          openAssetDetail(
-                            entry.asset.assetId ?? matchedAsset?.assetId ?? entry.asset.tokenId
-                          )
-                        }
+                        onClick={assetId ? () => openAssetDetail(assetId) : undefined}
                       />
                     )
                   })}

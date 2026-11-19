@@ -1,4 +1,4 @@
-import type { PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
+import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
 import {
   createAssetRegistry,
   createInitialProductChainRegistry,
@@ -18,6 +18,7 @@ import { excludeDeprecatedConfidentialAssets } from '@/core/services/confidentia
 type ConfidentialAsset = NonNullable<PortfolioReadModel['confidential']>['assets'][number]
 
 const mainnetChains = createInitialProductChainRegistry('mainnet')
+const mainnetZcashChain = mainnetChains.resolve(getZcashChainId('mainnet'))
 const mainnetAssets = createAssetRegistry(
   mainnetChains,
   getBundledInitialProductAssetDefinitions('mainnet')
@@ -44,16 +45,18 @@ export interface NearConfidentialSummary {
   readonly fiat: string | null
 }
 
-interface StandaloneNearConfidentialHolding {
+export interface StandaloneNearConfidentialHolding {
   readonly entry: NearConfidentialHolding
   readonly chain: PortfolioChainView | undefined
 }
 
 export interface NearConfidentialZecRow {
   readonly assetId: string
+  readonly chainId: string
   readonly amount: string
   readonly fiat: string | null
   readonly mergedHolding: StandaloneNearConfidentialHolding | undefined
+  readonly displayAsset?: PortfolioAssetView
 }
 
 interface NearConfidentialZecHolding {
@@ -140,6 +143,15 @@ export function resolveConfidentialDetailAssetId(
     : null
 }
 
+export function getConfidentialWalletDetailAssetId(
+  model: PortfolioReadModel | null,
+  asset: ConfidentialAsset,
+  catalogAssetId?: string
+): string | null {
+  const candidate = asset.assetId ?? catalogAssetId ?? asset.tokenId
+  return model?.assets.some(item => item.asset.id === candidate) ? candidate : null
+}
+
 export function getNearConfidentialChainId(asset: ConfidentialAsset): string | null {
   const mapped = protocolChainIds.get(asset.protocolAssetId)
   if (mapped) return mapped
@@ -161,6 +173,28 @@ export function getNearConfidentialIconChain(asset: ConfidentialAsset): string |
   return chain?.family === 'bitcoin' ? 'btc' : chain?.family === 'near' ? 'near' : undefined
 }
 
+export function withNearConfidentialZecChain(
+  model: PortfolioReadModel | null,
+  network: Network
+): PortfolioReadModel | null {
+  if (!model || model.chains.some(({ chain }) => chain.id === mainnetZcashChain.id)) return model
+  const holding = resolveNearConfidentialZecHolding({
+    model,
+    network,
+    walletId: model.scope.keyDomainId,
+    accountId: model.scope.accountId
+  })
+  if (!holding || holding.availableRaw === '0') return model
+  // Network selection only; this does not give the account a native Zcash position.
+  return {
+    ...model,
+    chains: [
+      ...model.chains,
+      { chain: mainnetZcashChain, status: 'ready', assets: [], errorCodes: [] }
+    ]
+  }
+}
+
 export function listStandaloneNearConfidentialHoldings(
   displayedModel: PortfolioReadModel,
   sourceModel: PortfolioReadModel,
@@ -174,7 +208,7 @@ export function listStandaloneNearConfidentialHoldings(
     )
   )
   const chains = new Map<string, PortfolioChainView>(
-    sourceModel.chains.map(chain => [chain.chain.id, chain])
+    [...sourceModel.chains, ...displayedModel.chains].map(chain => [chain.chain.id, chain])
   )
   return summarizeNearConfidentialHoldings(sourceModel, prices).entries.flatMap(entry => {
     if (entry.asset.assetId && mergedAssets.get(entry.asset.assetId) === entry.asset.availableRaw) {
@@ -198,30 +232,46 @@ export function resolveNearConfidentialZecRow(
     walletId: model.scope.keyDomainId,
     accountId: model.scope.accountId
   })
-  if (
-    !holding ||
-    !model.chains.some(
-      chain =>
-        chain.chain.family === 'zcash' &&
-        chain.assets.some(
-          asset => asset.asset.kind === 'native' && asset.asset.id === holding.assetId
-        )
-    )
-  )
-    return null
+  if (!holding) return null
+  const chain = model.chains.find(({ chain }) => chain.id === mainnetZcashChain.id)
+  if (!chain) return null
+  const hasNativeRow = chain.assets.some(asset => asset.asset.id === holding.assetId)
 
   const mergedHolding = standalone.find(
     ({ entry }) =>
       entry.asset.protocolAssetId === holding.protocolAssetId &&
       entry.asset.availableRaw === holding.availableRaw
   )
-  if (!mergedHolding && holding.availableRaw !== '0') return null
+  if (holding.availableRaw === '0' ? !hasNativeRow : !mergedHolding) return null
+  const registeredAsset = mainnetAssets.get(holding.assetId)
+  if (!registeredAsset) return null
   return {
     assetId: holding.assetId,
+    chainId: chain.chain.id,
     amount: holding.amount,
     fiat: mergedHolding ? mergedHolding.entry.fiat : '0',
-    mergedHolding
+    mergedHolding,
+    ...(hasNativeRow
+      ? {}
+      : {
+          // A row for presentation only. Its Confidential amount is rendered separately.
+          displayAsset: {
+            ...registeredAsset,
+            balance: { totalRaw: '0', spendableRaw: '0', availableRaw: '0', pendingRaw: '0' },
+            chainAccountIds: [],
+            freshness: sourceModel.confidential?.freshness === 'fresh' ? 'fresh' : 'stale',
+            updatedAt: sourceModel.confidential?.updatedAt ?? 0
+          }
+        })
   }
+}
+
+export function addNearConfidentialZecFiat(
+  fiat: string | null,
+  zec: NearConfidentialZecRow | null
+): string | null {
+  if (!zec?.mergedHolding || zec.fiat === null) return fiat
+  return new Big(fiat ?? '0').plus(zec.fiat).toFixed()
 }
 
 export function sumNearConfidentialChainFiat(
