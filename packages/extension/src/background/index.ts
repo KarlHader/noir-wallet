@@ -1251,29 +1251,21 @@ async function reloadMultichainRuntime(
     ? createBackgroundEvmPortfolioCoordinator(activeEvm)
     : null
   portfolioCoordinator?.dispose()
-  portfolioCoordinator =
-    evmFeatureRuntimePolicy.newOperationsEnabled ||
-    bitcoinFeatureRuntimePolicy.newOperationsEnabled ||
-    solanaBetaEnabled ||
-    nearBetaEnabled
-      ? createBackgroundPortfolioCoordinator(
-          catalog,
-          customEvmNetworks,
-          userAssets.definitions,
-          intentsProtocolAssets,
-          settings,
-          async (model, refresh) => {
-            try {
-              return (
-                (await confidentialFundingCoordinator?.enrichPortfolio(model, refresh)) ?? model
-              )
-            } catch (error) {
-              logger.warn('Confidential balance projection failed', undefined, undefined, error)
-              return model
-            }
-          }
-        )
-      : null
+  portfolioCoordinator = createBackgroundPortfolioCoordinator(
+    catalog,
+    customEvmNetworks,
+    userAssets.definitions,
+    intentsProtocolAssets,
+    settings,
+    async (model, refresh) => {
+      try {
+        return (await confidentialFundingCoordinator?.enrichPortfolio(model, refresh)) ?? model
+      } catch (error) {
+        logger.warn('Confidential balance projection failed', undefined, undefined, error)
+        return model
+      }
+    }
+  )
   activityCoordinator = createBackgroundActivityCoordinator(bitcoinRpcUrl, settings)
   additionalReceiveTargetsCoordinator =
     createBackgroundAdditionalReceiveTargetsCoordinator(customEvmNetworks)
@@ -5457,40 +5449,28 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'ESTIMATE_ZCASH_MAX_TRANSFER' ||
     message.type === 'ESTIMATE_ZCASH_SHIELD_FEE'
   ) {
+    const activeWalletId = useWalletStore.getState().currentWalletId || undefined
     const debugRequestId =
       typeof message.debugRequestId === 'string' ? message.debugRequestId : undefined
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     measure('background-account-transition', () =>
-      accountContextTransition.runActiveOperation(async () => {
-        await rehydrateWalletStore()
-        const activeWalletId = useWalletStore.getState().currentWalletId || undefined
-        return withTxSyncPause(activeWalletId, async () => {
-          await measure('background-prepare-wallet-core', prepareWalletCoreForTx)
-          if (message.type === 'ESTIMATE_ZCASH_SHIELD_FEE') {
-            return measure('background-estimate-shield-fee', () =>
-              backgroundZcashWalletRuntime.estimateShieldFee(
-                message.marginalFeeZats,
-                message.feeQuoteId
-              )
+      withSelectedZcashAccountOperation(activeWalletId, async (walletId, accountId) => {
+        await measure('background-prepare-wallet-core', () =>
+          prepareWalletCoreForTx(walletId, accountId)
+        )
+        if (message.type === 'ESTIMATE_ZCASH_SHIELD_FEE') {
+          return measure('background-estimate-shield-fee', () =>
+            backgroundZcashWalletRuntime.estimateShieldFee(
+              message.marginalFeeZats,
+              message.feeQuoteId
             )
-          }
-          if (message.type === 'ESTIMATE_ZCASH_MAX_TRANSFER') {
-            return measure('background-estimate-maximum', () =>
-              backgroundZcashWalletRuntime.estimateMaxTransfer(
-                message.to,
-                message.memo,
-                message.marginalFeeZats,
-                message.fundingSource,
-                debugRequestId,
-                message.feeQuoteId
-              )
-            )
-          }
-          return measure('background-estimate-fee', () =>
-            backgroundZcashWalletRuntime.estimateTransferFee(
+          )
+        }
+        if (message.type === 'ESTIMATE_ZCASH_MAX_TRANSFER') {
+          return measure('background-estimate-maximum', () =>
+            backgroundZcashWalletRuntime.estimateMaxTransfer(
               message.to,
-              message.amount,
               message.memo,
               message.marginalFeeZats,
               message.fundingSource,
@@ -5498,7 +5478,18 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               message.feeQuoteId
             )
           )
-        })
+        }
+        return measure('background-estimate-fee', () =>
+          backgroundZcashWalletRuntime.estimateTransferFee(
+            message.to,
+            message.amount,
+            message.memo,
+            message.marginalFeeZats,
+            message.fundingSource,
+            debugRequestId,
+            message.feeQuoteId
+          )
+        )
       })
     )
       .then(result => sendResponse({ success: true, ...result }))
@@ -5511,13 +5502,10 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   }
 
   if (message.type === 'GET_ZCASH_FEE_QUOTE') {
-    accountContextTransition
-      .runActiveOperation(() =>
-        withTxSyncPause(useWalletStore.getState().currentWalletId || undefined, async () => {
-          const core = await prepareWalletCoreForTx()
-          return core.getFeeQuote()
-        })
-      )
+    withSelectedZcashAccountOperation(undefined, async (walletId, accountId) => {
+      const core = await prepareWalletCoreForTx(walletId, accountId)
+      return core.getFeeQuote()
+    })
       .then(feeQuote => sendResponse({ success: true, feeQuote }))
       .catch(error =>
         sendResponse({ error: error instanceof Error ? error.message : String(error) })
@@ -6022,9 +6010,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (message.type === 'BACKGROUND_ZCASH_TX') {
     // Execute Zcash on-chain tx in background - survives popup close
-    accountContextTransition
-      .runActiveOperation(() => handleBackgroundZcashTx(message))
-      .catch(console.warn)
+    void handleBackgroundZcashTx(message).catch(console.warn)
     sendResponse({ success: true })
     return true
   }
@@ -7156,6 +7142,33 @@ async function withTxSyncPause<T>(walletId: string | undefined, fn: () => Promis
   }
 }
 
+function withZcashAccountOperation<T>(walletId: string, operation: () => Promise<T>): Promise<T> {
+  return accountContextTransition.runActiveOperationWhenReady(
+    whenReady => withTxSyncPause(walletId, whenReady),
+    operation
+  )
+}
+
+async function withSelectedZcashAccountOperation<T>(
+  expectedWalletId: string | undefined,
+  operation: (walletId: string, accountId: string) => Promise<T>
+): Promise<T> {
+  await rehydrateWalletStore()
+  const { currentWalletId, currentAccountId, currentNetwork } = useWalletStore.getState()
+  if (
+    !currentWalletId ||
+    !currentAccountId ||
+    (expectedWalletId && expectedWalletId !== currentWalletId)
+  ) {
+    throw new Error('Active account changed. Review this action again.')
+  }
+  const accountKey = buildAccountKey(currentNetwork, currentWalletId, currentAccountId)
+  return withZcashAccountOperation(currentWalletId, async () => {
+    await assertActiveBackgroundAccountScope(currentWalletId, currentAccountId, accountKey)
+    return operation(currentWalletId, currentAccountId)
+  })
+}
+
 async function ensureZcashAccountProvisioningSession(): Promise<void> {
   await rehydrateWalletStore()
   await backgroundZcashWalletRuntime.initialize()
@@ -7731,10 +7744,11 @@ async function handleBackgroundZcashTx(params: {
 
   try {
     await assertActiveBackgroundAccountScope(walletId, accountId, accountKey)
-    const approvedAccount = useWalletStore.getState().getAccount(walletId, accountId)
-    if (!approvedAccount) throw new Error('Approved Zcash account is unavailable')
-    const approvedAccountIndex = approvedAccount.derivationIndex
-    await withTxSyncPause(walletId, async () => {
+    await withZcashAccountOperation(walletId, async () => {
+      await assertActiveBackgroundAccountScope(walletId, accountId, accountKey)
+      const approvedAccount = useWalletStore.getState().getAccount(walletId, accountId)
+      if (!approvedAccount) throw new Error('Approved Zcash account is unavailable')
+      const approvedAccountIndex = approvedAccount.derivationIndex
       const pendingRecord = (await loadTransactions(accountKey)).find(tx => tx.id === transactionId)
       if (!pendingRecord || pendingRecord.status !== 'pending' || pendingRecord.txHash) {
         throw new Error('Transaction record is unavailable or already submitted')

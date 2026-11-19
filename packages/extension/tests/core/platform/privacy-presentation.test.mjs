@@ -536,22 +536,10 @@ test('home asset domains count each EVM and Zcash balance once', () => {
       { assetId: zcashAsset.asset.id, priceUsd: '3', freshness: 'fresh' }
     ]
   }
-  const multichainFiat = {
-    totalUsd: '230',
-    mainUsd: '112',
-    privateUsd: '118',
-    pricedAssetCount: 2,
-    missingAssetCount: 0,
-    staleAssetCount: 0
-  }
   const input = {
-    multichainEnabled: true,
-    liveMultichainTotal: true,
-    multichainFiat,
+    livePortfolioTotal: true,
     portfolio: model,
-    prices,
-    zcashBalance: null,
-    zecPrice: 0
+    prices
   }
   expect(getHomeAssetBreakdown(input)).toEqual({
     publicUsd: '112',
@@ -693,7 +681,7 @@ test('home asset domains count each EVM and Zcash balance once', () => {
   })
   const zcash = projectPortfolioForChains(chainScoped, [zcashAsset.asset.chainId])
   expect(summarizePortfolioFiat(zcash, prices).totalUsd).toBe('36')
-  expect(summarizeAssetDomainsUsd(zcash, prices)).toEqual({
+  expect(getHomeAssetBreakdown({ ...input, portfolio: zcash })).toEqual({
     publicUsd: '12',
     publicUsdPartial: false,
     shieldUsd: '24',
@@ -720,8 +708,7 @@ test('home asset domains count each EVM and Zcash balance once', () => {
   expect(
     getHomeAssetBreakdown({
       ...input,
-      portfolio: independent,
-      multichainFiat: summarizePortfolioFiat(independent, prices)
+      portfolio: independent
     })
   ).toMatchObject({ shieldUsd: '108' })
   const unavailable = { ...independent, confidential: { status: 'unavailable', assets: [] } }
@@ -820,22 +807,7 @@ test('home asset domains count each EVM and Zcash balance once', () => {
     privateUsdPartial: false
   })
   expect(getAssetDomainRaw({ ...evmAsset, balance: { totalRaw: '100' } }, 'public')).toBeNull()
-  expect(getHomeAssetBreakdown({ ...input, liveMultichainTotal: false })).toBeNull()
-  expect(
-    getHomeAssetBreakdown({
-      ...input,
-      multichainEnabled: false,
-      zcashBalance: { transparent: '2', shielded: '3', total: '5' },
-      zecPrice: 4
-    })
-  ).toEqual({
-    publicUsd: '8',
-    publicUsdPartial: false,
-    shieldUsd: '12',
-    shieldUsdPartial: false,
-    privateUsd: '0',
-    privateUsdPartial: false
-  })
+  expect(getHomeAssetBreakdown({ ...input, livePortfolioTotal: false })).toBeNull()
 })
 
 test('asset detail uses a unique Confidential identity without adding it to the Home row total', () => {

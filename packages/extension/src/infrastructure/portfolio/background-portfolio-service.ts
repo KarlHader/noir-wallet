@@ -1,6 +1,7 @@
 import {
   PORTFOLIO_AUTOMATIC_REFRESH_MAX_AGE_MS,
   portfolioChainIdsForAutomaticRefresh,
+  type PortfolioChainView,
   type PortfolioReadModel
 } from '@/core/portfolio'
 import type { StorageV2GenerationId } from '@/ports/repositories'
@@ -53,6 +54,11 @@ export interface BackgroundPortfolioServiceOptions {
 interface InFlightChainRefresh {
   readonly promise: Promise<boolean>
   readonly markerRevision: number
+}
+
+interface ScheduledChainRefresh extends InFlightChainRefresh {
+  readonly resolve: (succeeded: boolean) => void
+  owner?: symbol
 }
 
 function scopeKey(scope: BackgroundPortfolioScope): string {
@@ -138,7 +144,7 @@ function applyInvalidationFreshness(
 
 export class BackgroundPortfolioService {
   private disposed = false
-  private readonly inFlight = new Map<string, InFlightChainRefresh>()
+  private readonly inFlight = new Map<string, ScheduledChainRefresh>()
   private readonly failedAt = new Map<string, number>()
   private readonly emptyRefreshedAt = new Map<string, number>()
   private readonly published = new Map<string, string>()
@@ -237,7 +243,8 @@ export class BackgroundPortfolioService {
         ]
       : requested
     const selected = candidates.filter(chainId => knownChains.has(chainId))
-    const newChains: string[] = []
+    const batchId = Symbol()
+    const scheduled = new Map<string, ScheduledChainRefresh>()
     const markerRevision = (chainId: string) =>
       invalidated.reduce(
         (revision, marker) =>
@@ -246,10 +253,16 @@ export class BackgroundPortfolioService {
             : revision,
         0
       )
-    const attempts = selected.map(chainId => {
+    const tracked: InFlightChainRefresh[] = selected.map(chainId => {
       const key = `${scopeKey(scope)}:${chainId}`
       const pending = this.inFlight.get(key)
-      if (pending) return pending
+      if (pending) {
+        if (chainIds && !pending.owner) {
+          pending.owner = batchId
+          scheduled.set(chainId, pending)
+        }
+        return pending
+      }
       const failedAt = this.failedAt.get(key)
       if (
         options.automatic &&
@@ -259,34 +272,31 @@ export class BackgroundPortfolioService {
       ) {
         return { promise: Promise.resolve(false), markerRevision: markerRevision(chainId) }
       }
-      newChains.push(chainId)
-      return null
+      let resolve!: ScheduledChainRefresh['resolve']
+      const promise = new Promise<boolean>(complete => {
+        resolve = complete
+      })
+      const entry: ScheduledChainRefresh = {
+        promise,
+        resolve,
+        markerRevision: markerRevision(chainId),
+        owner: chainIds ? batchId : undefined
+      }
+      this.inFlight.set(key, entry)
+      scheduled.set(chainId, entry)
+      return entry
     })
-    if (newChains.length > 0) {
-      const awaitBitcoin = newChains.some(
+    if (scheduled.size > 0) {
+      const awaitBitcoin = [...scheduled.keys()].some(
         chainId =>
           invalidated.some(marker => marker.domain === 'chain' && marker.chainId === chainId) &&
           before.chains.some(
             chain => chain.chain.id === chainId && chain.chain.family === 'bitcoin'
           )
       )
-      const batch = this.refreshBatch(scope, newChains, awaitBitcoin)
-      for (const chainId of newChains) {
-        const key = `${scopeKey(scope)}:${chainId}`
-        const perChain = batch.then(results => results.get(chainId) ?? false)
-        const entry = { promise: perChain, markerRevision: markerRevision(chainId) }
-        this.inFlight.set(key, entry)
-        void perChain.finally(() => {
-          if (this.inFlight.get(key) === entry) this.inFlight.delete(key)
-        })
-      }
+      void this.refreshBatch(scope, batchId, scheduled, awaitBitcoin)
     }
-    const tracked = attempts.map(
-      (pending, index) => pending ?? this.inFlight.get(`${scopeKey(scope)}:${selected[index]}`)
-    )
-    const results = await Promise.all(
-      tracked.map(entry => entry?.promise ?? Promise.resolve(false))
-    )
+    const results = await Promise.all(tracked.map(entry => entry.promise))
     if (!(await this.isCurrent(scope))) return null
     const current = await this.options.coordinator.readCachedActive()
     if (!matchesModel(current, scope) || !(await this.isCurrent(scope))) return null
@@ -311,7 +321,9 @@ export class BackgroundPortfolioService {
       )
     )
     const newerConfidential = latestInvalidations.flatMap(marker => {
-      if (marker.domain !== 'confidential') return []
+      if (marker.domain !== 'confidential' || (chainIds && !chainIds.includes(marker.chainId))) {
+        return []
+      }
       const previousMarker = invalidated.find(
         item => item.domain === 'confidential' && item.chainId === marker.chainId
       )
@@ -389,38 +401,56 @@ export class BackgroundPortfolioService {
 
   private async refreshBatch(
     scope: BackgroundPortfolioScope,
-    chainIds: readonly string[],
+    batchId: symbol,
+    scheduled: ReadonlyMap<string, ScheduledChainRefresh>,
     awaitBitcoin = false
-  ): Promise<ReadonlyMap<string, boolean>> {
-    const results = new Map<string, boolean>()
-    try {
-      const model = await this.options.coordinator.refreshActive(chainIds, {
-        awaitBitcoin,
-        requireNewBitcoinScan: awaitBitcoin
-      })
-      if (!matchesModel(model, scope) || !(await this.isCurrent(scope))) return results
-      for (const chainId of chainIds) {
-        const chain = model.chains.find(item => item.chain.id === chainId)
-        const succeeded = chain?.status === 'ready'
-        results.set(chainId, succeeded)
-        const key = `${scopeKey(scope)}:${chainId}`
+  ): Promise<void> {
+    const complete = (chainId: string, chain?: PortfolioChainView, current = true) => {
+      const entry = scheduled.get(chainId)
+      const key = `${scopeKey(scope)}:${chainId}`
+      if (!entry || (entry.owner && entry.owner !== batchId) || this.inFlight.get(key) !== entry) {
+        return
+      }
+      this.inFlight.delete(key)
+      const succeeded = current && chain?.status === 'ready'
+      if (current) {
         if (succeeded) {
           this.failedAt.delete(key)
-          if (chain?.status === 'ready' && chain.assets.length === 0) {
-            this.emptyRefreshedAt.set(key, this.now())
-          } else {
-            this.emptyRefreshedAt.delete(key)
-          }
+          if (chain.assets.length === 0) this.emptyRefreshedAt.set(key, this.now())
+          else this.emptyRefreshedAt.delete(key)
         } else {
           this.failedAt.set(key, this.now())
         }
       }
-    } catch {
-      for (const chainId of chainIds) {
-        this.failedAt.set(`${scopeKey(scope)}:${chainId}`, this.now())
-      }
+      entry.resolve(succeeded)
     }
-    return results
+    try {
+      const model = await this.options.coordinator.refreshActive([...scheduled.keys()], {
+        awaitBitcoin,
+        requireNewBitcoinScan: awaitBitcoin,
+        claimChainRefresh: chainId => {
+          const entry = scheduled.get(chainId)
+          if (!entry || (entry.owner && entry.owner !== batchId)) return false
+          entry.owner = batchId
+          return true
+        },
+        onChainRefreshed: (chainId, chain) => {
+          void this.isCurrent(scope)
+            .then(current => complete(chainId, chain, current))
+            .catch(() => complete(chainId, undefined, false))
+        }
+      })
+      const current = matchesModel(model, scope) && (await this.isCurrent(scope))
+      for (const chainId of scheduled.keys()) {
+        complete(
+          chainId,
+          model?.chains.find(item => item.chain.id === chainId),
+          current
+        )
+      }
+    } catch {
+      for (const chainId of scheduled.keys()) complete(chainId)
+    }
   }
 
   private async isCurrent(expected: BackgroundPortfolioScope): Promise<boolean> {

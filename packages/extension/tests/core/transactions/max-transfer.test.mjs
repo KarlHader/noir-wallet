@@ -1,8 +1,13 @@
 import { test as it } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { resolveZcashSwapMaximumAdjustment } from '../../../src/popup/services/swap-maximum.ts'
+import {
+  resolveZcashSwapMaximumAdjustment,
+  resolveZcashSwapRequoteMaximum
+} from '../../../src/popup/services/swap-maximum.ts'
 import { MaxTransferEstimateCache } from '../../../src/popup/services/max-transfer-estimate-cache.ts'
+import { getFundingAmountError } from '../../../src/core/wallet/funding-balance.ts'
+import { resolveZcashFundingAvailability } from '../../../src/popup/services/transfer-availability.ts'
 import { selectSwapFeeEstimate } from '../../../src/lib/swap-fee.ts'
 
 const describe = it.describe
@@ -306,6 +311,34 @@ describe('dynamic maximum transfer regressions', () => {
     )
   })
 
+  it('allows the adjusted transparent ZEC Max to re-quote before the new deposit address is known', () => {
+    const funding = { available: '0.00195', pending: '0' }
+    const requote = {
+      maxSelected: true,
+      scope: 'route-a',
+      target: { scope: 'route-a', address: 'deposit-a', amount: '0.00185' },
+      amount: '0.00185',
+      depositAddress: ''
+    }
+    const amountError = (input, exactMaximum = null) => {
+      const { amount: maximum } = resolveZcashFundingAvailability({
+        balance: { confirmed: { transparent: funding.available } },
+        fundingSource: 'transparent',
+        selectedFeeZats: 15_000,
+        standardFeeZats: 15_000,
+        maximumAmount: exactMaximum ?? resolveZcashSwapRequoteMaximum(input)
+      })
+      return getFundingAmountError(input.amount, funding, maximum)
+    }
+
+    assert.equal(amountError(requote), null)
+    assert.equal(amountError({ ...requote, maxSelected: false }), 'fee')
+    assert.equal(amountError({ ...requote, scope: 'route-b' }), 'fee')
+    assert.equal(amountError({ ...requote, amount: '0.00186' }), 'fee')
+    assert.equal(amountError({ ...requote, depositAddress: 'deposit-b' }), 'fee')
+    assert.equal(amountError(requote, '0.0018'), 'fee')
+  })
+
   it('does not attach shielded memos to transparent protocol deposit transfers', () => {
     const swap = readSource('src/popup/pages/swap/Swap.tsx')
 
@@ -333,10 +366,6 @@ describe('dynamic maximum transfer regressions', () => {
     assert.match(
       resultPage,
       /if \(!data && !leavingResultRef\.current\)[\s\S]*?navigate\('\/', \{ replace: true \}\)[\s\S]*?\[data, navigate\]/
-    )
-    assert.match(
-      background,
-      /accountContextTransition[\s\S]*?\.runActiveOperation\(\(\) => handleBackgroundZcashTx\(message\)\)/
     )
     assert.match(
       background,

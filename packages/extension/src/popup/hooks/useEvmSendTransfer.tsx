@@ -25,7 +25,7 @@ import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {
   createNativeTransferSource,
   estimateNativeTransferMaximum,
-  estimateConfidentialTransferMaximum,
+  resolveNativeRouteMaximum,
   fallbackTransferMaximum,
   isTransferAmountSpendable
 } from '@/popup/services/transfer-maximum'
@@ -408,13 +408,22 @@ export function useEvmSendTransfer({
       if (pending) void evmWalletClient.rejectTransfer(pending.graph.root.id).catch(() => {})
     }
   }, [intentKey, review])
+  const confidentialMaximumRaw =
+    route === 'confidential' && asset.asset.kind === 'native'
+      ? resolveNativeRouteMaximum({
+          family: 'evm',
+          chainId: chain.chain.id,
+          availableRaw,
+          decimals: asset.metadata.decimals
+        })
+      : null
   const maximumRequestKey = `${accountContextKey}:${asset.asset.id}:${recipient}:${availableRaw}:${JSON.stringify(feeSelection)}:${route}`
   const maximum = useTransferMaximum({
     prefetch: true,
     refreshOnExpiry: false,
     enabled:
       active &&
-      route !== 'pending' &&
+      route === 'onchain' &&
       asset.asset.kind === 'native' &&
       validRecipient &&
       Boolean(sourceAddress) &&
@@ -433,27 +442,17 @@ export function useEvmSendTransfer({
               })
             ),
     estimate: () =>
-      route === 'confidential'
-        ? estimateConfidentialTransferMaximum({
-            asset,
-            chain,
-            availableRaw,
-            sender: sourceAddress ?? '',
-            recipient,
-            executionMode: sourceMode,
-            purpose: 'public-private-send'
-          })
-        : estimateNativeTransferMaximum({
-            source: createNativeTransferSource({
-              asset,
-              chain,
-              availableRaw,
-              sender: sourceAddress ?? ''
-            }),
-            recipient,
-            feeSelection,
-            executionMode: sourceMode
-          })
+      estimateNativeTransferMaximum({
+        source: createNativeTransferSource({
+          asset,
+          chain,
+          availableRaw,
+          sender: sourceAddress ?? ''
+        }),
+        recipient,
+        feeSelection,
+        executionMode: sourceMode
+      })
   })
   const lastMaximumRequestKey = useRef<string | null>(null)
   const requestMaximum = () => {
@@ -650,14 +649,17 @@ export function useEvmSendTransfer({
     }
   }, [privatePreviewKey, privatePreviewRetry])
   const maximumPending =
-    maxSelected && asset.asset.kind === 'native' && (maximum.loading || !maximum.value)
+    maxSelected &&
+    route === 'onchain' &&
+    asset.asset.kind === 'native' &&
+    (maximum.loading || !maximum.value)
   useEffect(() => {
     if (
       active &&
       maxSelected &&
       !review &&
       asset.asset.kind === 'native' &&
-      route !== 'pending' &&
+      route === 'onchain' &&
       validRecipient &&
       sourceAddress &&
       lastMaximumRequestKey.current !== maximumRequestKey
@@ -674,9 +676,10 @@ export function useEvmSendTransfer({
     sourceAddress
   ])
   useEffect(() => {
-    if (active && maxSelected && !review && maximum.value)
-      setAmount(formatBaseUnitDecimalAmount(maximum.value.amountRaw, asset.metadata.decimals))
-  }, [active, maxSelected, review, maximum.value, asset.metadata.decimals])
+    const maximumRaw = confidentialMaximumRaw ?? maximum.value?.amountRaw
+    if (active && maxSelected && !review && maximumRaw !== undefined)
+      setAmount(formatBaseUnitDecimalAmount(maximumRaw, asset.metadata.decimals))
+  }, [active, maxSelected, review, confidentialMaximumRaw, maximum.value, asset.metadata.decimals])
 
   const rejectPrepared = async (value: EvmTransferReview) => {
     if (pendingReview.current?.graph.root.id === value.graph.root.id) pendingReview.current = null
@@ -712,6 +715,12 @@ export function useEvmSendTransfer({
   const handleMaximum = () => {
     if (!validRecipient || route === 'pending' || !sourceAddress) return
     setError(null)
+    if (confidentialMaximumRaw !== null) {
+      if (confidentialMaximumRaw === '0') return
+      setMaxSelected(true)
+      setAmount(formatBaseUnitDecimalAmount(confidentialMaximumRaw, asset.metadata.decimals))
+      return
+    }
     setAmount('')
     setMaxSelected(true)
     requestMaximum()

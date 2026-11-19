@@ -1,4 +1,4 @@
-import type { ChainAccountId } from '@/core/accounts/domain'
+import type { ChainAccount, ChainAccountId } from '@/core/accounts/domain'
 import type { PortfolioScope, PortfolioSourceSnapshot } from '@/core/portfolio'
 import type { StorageV2GenerationId } from './storage-v2-types'
 
@@ -12,6 +12,10 @@ export interface PortfolioCacheRepository {
   get(
     generationId: StorageV2GenerationId,
     chainAccountId: ChainAccountId
+  ): Promise<PortfolioCacheRecord | null>
+  getForActiveChainAccount(
+    generationId: StorageV2GenerationId,
+    chainAccount: ChainAccount
   ): Promise<PortfolioCacheRecord | null>
   list(
     generationId: StorageV2GenerationId,

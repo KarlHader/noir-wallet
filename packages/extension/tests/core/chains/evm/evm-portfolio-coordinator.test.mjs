@@ -65,9 +65,11 @@ function storage(overrides = {}) {
 
 function cache() {
   const values = new Map()
+  const get = async (generationId, chainAccountId) =>
+    values.get(JSON.stringify([generationId, chainAccountId])) ?? null
   return {
-    get: async (generationId, chainAccountId) =>
-      values.get(JSON.stringify([generationId, chainAccountId])) ?? null,
+    get,
+    getForActiveChainAccount: (generationId, chainAccount) => get(generationId, chainAccount.id),
     list: async () => [],
     put: async record => {
       values.set(JSON.stringify([record.generationId, record.source.chainAccount.id]), record)

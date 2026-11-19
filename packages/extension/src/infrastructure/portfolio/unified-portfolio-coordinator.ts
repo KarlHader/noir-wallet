@@ -5,6 +5,7 @@ import type { KeyDomainId } from '@/core/keyring/domain'
 import {
   buildPortfolioReadModel,
   type PortfolioReadErrorCode,
+  type PortfolioChainView,
   type PortfolioReadModel,
   type PortfolioSourceSnapshot,
   type PortfolioSourceStatus
@@ -22,7 +23,14 @@ type UnifiedPortfolioStorageRepository = Pick<
   'getActivePointer' | 'getSnapshot'
 >
 
-const EVM_PORTFOLIO_SOURCE_CONCURRENCY = 8
+const PORTFOLIO_SOURCE_CONCURRENCY = 8
+
+interface PortfolioRefreshOptions {
+  readonly awaitBitcoin?: boolean
+  readonly requireNewBitcoinScan?: boolean
+  readonly claimChainRefresh?: (chainId: string) => boolean
+  readonly onChainRefreshed?: (chainId: string, chain?: PortfolioChainView) => void
+}
 
 export interface ZcashPortfolioRuntimeState {
   readonly balance: ZcashBalance | null
@@ -180,7 +188,7 @@ export class UnifiedPortfolioCoordinator {
 
   refreshActive(
     chainIds?: readonly string[],
-    options: Readonly<{ awaitBitcoin?: boolean; requireNewBitcoinScan?: boolean }> = {}
+    options: PortfolioRefreshOptions = {}
   ): Promise<PortfolioReadModel | null> {
     return this.readActive('refresh', chainIds, options)
   }
@@ -188,7 +196,7 @@ export class UnifiedPortfolioCoordinator {
   private async readActive(
     action: 'read' | 'refresh',
     chainIds?: readonly string[],
-    options: Readonly<{ awaitBitcoin?: boolean; requireNewBitcoinScan?: boolean }> = {}
+    options: PortfolioRefreshOptions = {}
   ): Promise<PortfolioReadModel | null> {
     const active = await atStage('active-wallet', () =>
       loadActiveReceiveWalletSet({
@@ -238,124 +246,79 @@ export class UnifiedPortfolioCoordinator {
       )
     }
 
-    const evmAccounts = availableChainAccounts.filter(item => item.chain.family === 'evm')
-    if (evmAccounts.length > 0) {
-      const registrations = new Map<string, EvmPortfolioSourceReader>()
+    const registrations = new Map<string, EvmPortfolioSourceReader>()
+    if (availableChainAccounts.some(item => item.chain.family === 'evm')) {
       for (const registration of this.options.evmPortfolios ?? []) {
         if (registrations.has(registration.chainId)) {
           throw new Error('Enabled EVM Portfolio source is duplicated')
         }
         registrations.set(registration.chainId, registration.portfolio)
       }
-      const evmSources = await atStage('evm-source', () =>
-        mapWithConcurrency(evmAccounts, EVM_PORTFOLIO_SOURCE_CONCURRENCY, async evmAccount => {
-          const evmPortfolio = registrations.get(evmAccount.chain.id)
-          if (!evmPortfolio) throw new Error('Enabled EVM Portfolio source is unavailable')
-          const source = shouldRefreshChain(evmAccount.chain.id)
-            ? await evmPortfolio.refreshActiveSource()
-            : await evmPortfolio.readCachedActiveSource()
-          return Object.freeze({ evmAccount, source })
-        })
-      )
-      for (const { evmAccount, source } of evmSources) {
-        if (!source) {
-          if (action !== 'read') return null
-          sources.push(uncachedSource(evmAccount.chainAccount))
-          continue
-        }
-        if (!sameActiveScope(source, active.generationId, scope.keyDomainId, scope.accountId)) {
-          return null
-        }
-        if (source.chainAccount.id !== evmAccount.chainAccount.id) {
-          throw new Error('EVM Portfolio source does not match the active ChainAccount')
-        }
-        sources.push(source.source)
-      }
     }
 
-    const bitcoinAccount = availableChainAccounts.find(item => item.chain.family === 'bitcoin')
-    if (bitcoinAccount) {
+    const readBitcoin = (refresh: boolean) => {
       const bitcoinPortfolio = this.options.bitcoinPortfolio
       if (!bitcoinPortfolio) {
         throw new Error('Enabled Bitcoin Portfolio source is unavailable')
       }
-      const bitcoinSource = await atStage('bitcoin-source', () =>
-        shouldRefreshChain(bitcoinAccount.chain.id)
-          ? options.awaitBitcoin
-            ? bitcoinPortfolio.refreshActiveSource({
-                requireNewScan: options.requireNewBitcoinScan
-              })
-            : this.refreshBitcoinInBackground(bitcoinPortfolio)
-          : this.readBitcoinSource(bitcoinPortfolio)
-      )
-      if (!bitcoinSource) {
-        if (action !== 'read') return null
-        sources.push(uncachedSource(bitcoinAccount.chainAccount))
-      } else {
-        if (
-          !sameActiveScope(bitcoinSource, active.generationId, scope.keyDomainId, scope.accountId)
-        ) {
-          return null
-        }
-        if (bitcoinSource.chainAccount.id !== bitcoinAccount.chainAccount.id) {
-          throw new Error('Bitcoin Portfolio source does not match the active ChainAccount')
-        }
-        sources.push(bitcoinSource.source)
-      }
+      if (!refresh) return this.readBitcoinSource(bitcoinPortfolio)
+      return options.awaitBitcoin
+        ? bitcoinPortfolio.refreshActiveSource({ requireNewScan: options.requireNewBitcoinScan })
+        : this.refreshBitcoinInBackground(bitcoinPortfolio)
     }
 
-    const solanaAccount = availableChainAccounts.find(item => item.chain.family === 'solana')
-    const nearAccount = availableChainAccounts.find(item => item.chain.family === 'near')
-    const [solanaSource, nearSource] = await Promise.all([
-      solanaAccount
-        ? atStage('solana-source', () => {
-            const portfolio = this.options.solanaPortfolio
-            if (!portfolio) throw new Error('Enabled Solana Portfolio source is unavailable')
-            return shouldRefreshChain(solanaAccount.chain.id)
-              ? portfolio.refreshActiveSource()
-              : portfolio.readCachedActiveSource()
+    const otherAccounts = availableChainAccounts.filter(({ chain }) => chain.family !== 'zcash')
+    const otherSources = await mapWithConcurrency(
+      otherAccounts,
+      PORTFOLIO_SOURCE_CONCURRENCY,
+      async ({ chain, chainAccount }) => {
+        const family = chain.family
+        if (family !== 'evm' && family !== 'bitcoin' && family !== 'solana' && family !== 'near')
+          return undefined
+        const refresh =
+          shouldRefreshChain(chain.id) && (options.claimChainRefresh?.(chain.id) ?? true)
+        const readSource = async () => {
+          const source = await atStage(`${family}-source`, () => {
+            if (family === 'bitcoin') return readBitcoin(refresh)
+            const portfolio =
+              family === 'evm'
+                ? registrations.get(chain.id)
+                : family === 'solana'
+                  ? this.options.solanaPortfolio
+                  : this.options.nearPortfolio
+            if (!portfolio) throw new Error(`Enabled ${family} Portfolio source is unavailable`)
+            return refresh ? portfolio.refreshActiveSource() : portfolio.readCachedActiveSource()
           })
-        : undefined,
-      nearAccount
-        ? atStage('near-source', () => {
-            const portfolio = this.options.nearPortfolio
-            if (!portfolio) throw new Error('Enabled NEAR Portfolio source is unavailable')
-            return shouldRefreshChain(nearAccount.chain.id)
-              ? portfolio.refreshActiveSource()
-              : portfolio.readCachedActiveSource()
-          })
-        : undefined
-    ])
-    if (solanaAccount) {
-      if (!solanaSource) {
-        if (action !== 'read') return null
-        sources.push(uncachedSource(solanaAccount.chainAccount))
-      } else {
-        if (
-          !sameActiveScope(solanaSource, active.generationId, scope.keyDomainId, scope.accountId)
-        ) {
+          if (!source) return action === 'read' ? uncachedSource(chainAccount) : null
+          if (!sameActiveScope(source, active.generationId, scope.keyDomainId, scope.accountId)) {
+            return null
+          }
+          if (source.chainAccount.id !== chainAccount.id) {
+            throw new Error(`${family} Portfolio source does not match the active ChainAccount`)
+          }
+          if (refresh && options.onChainRefreshed) {
+            const [result] = buildPortfolioReadModel(
+              scope,
+              [source.source],
+              this.options.chains,
+              this.options.assets
+            ).chains
+            options.onChainRefreshed(chain.id, result)
+          }
+          return source.source
+        }
+        try {
+          return await readSource()
+        } catch (error) {
+          if (!options.onChainRefreshed) throw error
+          if (refresh) options.onChainRefreshed(chain.id)
           return null
         }
-        if (solanaSource.chainAccount.id !== solanaAccount.chainAccount.id) {
-          throw new Error('Solana Portfolio source does not match the active ChainAccount')
-        }
-        sources.push(solanaSource.source)
       }
-    }
-
-    if (nearAccount) {
-      if (!nearSource) {
-        if (action !== 'read') return null
-        sources.push(uncachedSource(nearAccount.chainAccount))
-      } else {
-        if (!sameActiveScope(nearSource, active.generationId, scope.keyDomainId, scope.accountId)) {
-          return null
-        }
-        if (nearSource.chainAccount.id !== nearAccount.chainAccount.id) {
-          throw new Error('NEAR Portfolio source does not match the active ChainAccount')
-        }
-        sources.push(nearSource.source)
-      }
+    )
+    for (const source of otherSources) {
+      if (source === null) return null
+      if (source) sources.push(source)
     }
 
     return atSynchronousStage('read-model', () =>

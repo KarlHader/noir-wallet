@@ -1,4 +1,4 @@
-import type { ChainAccount } from '@/core/accounts/domain'
+import { chainAccountsEqual, type ChainAccount } from '@/core/accounts/domain'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import type { AssetRegistry, ChainRegistry } from '@/core/chains/registry'
@@ -92,20 +92,6 @@ export async function loadActiveEvmPortfolioContext(
   })
 }
 
-function chainAccountsEqual(left: ChainAccount, right: ChainAccount): boolean {
-  return (
-    left.id === right.id &&
-    left.scope.keyDomainId === right.scope.keyDomainId &&
-    left.scope.accountId === right.scope.accountId &&
-    left.scope.chainId === right.scope.chainId &&
-    left.derivation.scheme === right.derivation.scheme &&
-    left.derivation.path === right.derivation.path &&
-    left.identity.kind === right.identity.kind &&
-    left.identity.value === right.identity.value &&
-    left.createdAt === right.createdAt
-  )
-}
-
 function preserveCachedBalances(
   refreshed: PortfolioSourceSnapshot,
   cached: PortfolioSourceSnapshot | undefined
@@ -141,13 +127,10 @@ export class EvmPortfolioCoordinator {
   async readCachedActiveSource(): Promise<ActiveEvmPortfolioSource | null> {
     const context = await this.loadActiveContext()
     if (!context) return null
-    const cached = await this.options.cacheRepository.get(
+    const cached = await this.options.cacheRepository.getForActiveChainAccount(
       context.generationId,
-      context.chainAccount.id
+      context.chainAccount
     )
-    if (cached && !chainAccountsEqual(cached.source.chainAccount, context.chainAccount)) {
-      throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
-    }
     const source = cached
       ? this.requiresPrivateBalanceRefresh(context, cached.source)
         ? {
@@ -206,13 +189,10 @@ export class EvmPortfolioCoordinator {
   private async refresh(
     context: ActiveEvmPortfolioContext
   ): Promise<ActiveEvmPortfolioSource | null> {
-    const previous = await this.options.cacheRepository.get(
+    const previous = await this.options.cacheRepository.getForActiveChainAccount(
       context.generationId,
-      context.chainAccount.id
+      context.chainAccount
     )
-    if (previous && !chainAccountsEqual(previous.source.chainAccount, context.chainAccount)) {
-      throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
-    }
     const refreshedAt = Math.max((this.options.now ?? Date.now)(), (previous?.cachedAt ?? -1) + 1)
     if (!Number.isSafeInteger(refreshedAt) || refreshedAt < 0) {
       throw new Error('Invalid EVM Portfolio refresh timestamp')
@@ -242,11 +222,11 @@ export class EvmPortfolioCoordinator {
           })
     const cached =
       refreshedSource.status === 'error'
-        ? await this.options.cacheRepository.get(context.generationId, context.chainAccount.id)
+        ? await this.options.cacheRepository.getForActiveChainAccount(
+            context.generationId,
+            context.chainAccount
+          )
         : null
-    if (cached && !chainAccountsEqual(cached.source.chainAccount, context.chainAccount)) {
-      throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
-    }
     const source = preserveCachedBalances(
       refreshedSource,
       cached && !supportsEvmPrivateExecution(context.keyDomainSource)

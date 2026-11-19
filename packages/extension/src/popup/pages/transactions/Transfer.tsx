@@ -5,6 +5,7 @@ import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import {
   formatBaseUnitAmount,
+  formatBaseUnitDecimalAmount,
   formatTokenQuantity,
   formatFiatAmount,
   parseDisplayUnitAmount
@@ -27,7 +28,6 @@ import { useSettingsStore } from '@/store/settings-store'
 import { useNavigate } from '@/popup/provider/Router'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
-import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import { useMoveMethodEstimate } from '@/popup/hooks/useMoveMethodEstimate'
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import {
@@ -100,11 +100,7 @@ import {
 } from '@/popup/services/shield-transfer'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
-import {
-  createNativeTransferSource,
-  estimateConfidentialTransferMaximum,
-  fallbackTransferMaximum
-} from '@/popup/services/transfer-maximum'
+import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
 import {
   normalizePrivateBalanceTransferInput,
   getPrivateTransferChainIds,
@@ -1108,71 +1104,25 @@ function TransferForm() {
       : 'unsupported'
   const methodAvailable = supportedPair && routeState === 'supported'
 
-  const nativeMaximumEnabled = Boolean(
-    selected &&
+  const maximumRaw =
+    selected?.asset.asset.kind === 'native' &&
+    selected.chain.chain.family === 'evm' &&
     source &&
-    eligible &&
-    (clusterSelected
-      ? Boolean(managedAsset)
-      : supportedPair
-        ? routeState === 'supported'
-        : fundingRoute && from !== 'shield' && Boolean(managedAsset)) &&
-    (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
-    selected.asset.asset.kind === 'native' &&
-    BigInt(source.availableRaw) > 0n
-  )
-  const nativeMaximumRequired =
-    maxSelected && selected?.asset.asset.kind === 'native' && from !== 'shield'
-  const maximum = useTransferMaximum({
-    prefetch: selected?.chain.chain.family === 'evm',
-    refreshOnExpiry: false,
-    enabled: nativeMaximumEnabled,
-    requestKey: `${scopeKey}:${selected?.asset.asset.id ?? ''}:${direction}:${source?.availableRaw ?? '0'}`,
-    fallback: () =>
-      fallbackTransferMaximum(
-        createNativeTransferSource({
-          asset: selected!.asset,
-          chain: selected!.chain,
-          availableRaw: source!.availableRaw,
-          sender: source!.sender
+    from !== 'shield'
+      ? resolveNativeRouteMaximum({
+          family: 'evm',
+          chainId: selected.chain.chain.id,
+          availableRaw: source.availableRaw,
+          decimals: selected.asset.metadata.decimals
         })
-      ),
-    estimate: () =>
-      estimateConfidentialTransferMaximum({
-        asset: selected!.asset,
-        chain: selected!.chain,
-        availableRaw: source!.availableRaw,
-        sender: source!.sender,
-        recipient: source!.recipient,
-        executionMode: source!.executionMode,
-        purpose: source!.executionMode === 'private' ? 'private-transfer' : 'confidential-funding'
-      })
-  })
-  useEffect(() => {
-    if (
-      nativeMaximumRequired &&
-      nativeMaximumEnabled &&
-      !maximum.value &&
-      !maximum.loading &&
-      !maximum.error
-    )
-      void maximum.request()
-  }, [
-    nativeMaximumRequired,
-    nativeMaximumEnabled,
-    maximum.value,
-    maximum.loading,
-    maximum.error,
-    routeKey,
-    source?.availableRaw
-  ])
+      : null
   const available =
     selected && source
       ? resolvePortfolioTransferAvailability({
           balanceRaw: source.availableRaw,
           decimals: selected.asset.metadata.decimals,
           isNative: selected.asset.asset.kind === 'native',
-          maximumRaw: maximum.value?.amountRaw ?? null
+          maximumRaw: null
         })
       : null
   const shieldAvailable =
@@ -1181,31 +1131,17 @@ function TransferForm() {
           balanceRaw: shieldSourceRaw,
           decimals: selected.asset.metadata.decimals,
           isNative: from !== 'shield' && selected.asset.asset.kind === 'native',
-          maximumRaw: from === 'shield' ? shieldSourceRaw : (maximum.value?.amountRaw ?? null)
+          maximumRaw: null
         })
       : null
-  const currentAmount = maxSelected
-    ? nativeMaximumRequired && (!maximum.value || maximum.loading)
-      ? ''
+  const maxAmount =
+    selected && maximumRaw !== null
+      ? formatBaseUnitDecimalAmount(maximumRaw, selected.asset.metadata.decimals)
       : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
-    : amount
+  const currentAmount = maxSelected ? maxAmount : amount
   useEffect(() => {
-    if (!maxSelected) return
-    if (nativeMaximumRequired && (!maximum.value || maximum.loading)) {
-      setAmount('')
-      return
-    }
-    const value = fundingRoute ? shieldAvailable : available
-    if (value) setAmount(value.display)
-  }, [
-    maxSelected,
-    nativeMaximumRequired,
-    maximum.value,
-    maximum.loading,
-    fundingRoute,
-    shieldAvailable?.display,
-    available?.display
-  ])
+    if (maxSelected) setAmount(maxAmount)
+  }, [maxSelected, maxAmount])
   const amountState =
     selected && available && source && supportedPair
       ? resolvePrivateBalanceTransferAmount({
@@ -1381,10 +1317,7 @@ function TransferForm() {
     (!clusterPair || (method === 'directly' && directQuoted)) &&
     !tokenFeeBalanceError &&
     (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
-    (!maxSelected || (available?.display === currentAmount && amount === currentAmount)) &&
-    (!maxSelected ||
-      selected.asset.asset.kind !== 'native' ||
-      (maximum.value && !maximum.loading)) &&
+    (!maxSelected || amount === currentAmount) &&
     amountState?.amountRaw
   )
   const canReviewShield = Boolean(
@@ -1399,11 +1332,7 @@ function TransferForm() {
     shieldConnection === 'connected' &&
     shieldSourceRaw !== null &&
     !tokenFeeBalanceError &&
-    (!maxSelected || (shieldAvailable?.display === currentAmount && amount === currentAmount)) &&
-    (!maxSelected ||
-      selected.asset.asset.kind !== 'native' ||
-      from === 'shield' ||
-      (maximum.value && !maximum.loading)) &&
+    (!maxSelected || amount === currentAmount) &&
     shieldAmountState?.amountRaw
   )
   const selectDomain = (domain: TransferDomain, side: 'from' | 'to') => {
@@ -1535,11 +1464,10 @@ function TransferForm() {
       !available ||
       BigInt(available.amountRaw) === 0n
   const handleMax = () => {
-    if (!selected || maxDisabled) return
+    if (!selected || maxDisabled || maximumRaw === '0') return
     setSelectedAssetId(selected.asset.asset.id)
     setMaxSelected(true)
-    if (selected.asset.asset.kind === 'native' && from !== 'shield') void maximum.request()
-    else setAmount((fundingRoute ? shieldAvailable : available)?.display ?? '')
+    setAmount(maxAmount)
   }
 
   const scopeStillCurrent = () => {
@@ -2124,11 +2052,11 @@ function TransferForm() {
             <button
               type="button"
               onClick={handleMax}
-              disabled={!selected || maxDisabled || maximum.loading}
+              disabled={!selected || maxDisabled || maximumRaw === '0'}
               aria-label="Max"
               className="wallet-interactive shrink-0 rounded bg-white/10 px-1.5 py-0.5 disabled:opacity-40"
             >
-              {maximum.loading ? '…' : 'Max'}
+              Max
             </button>
           </div>
         </div>
@@ -2319,10 +2247,9 @@ function TransferForm() {
                 shieldConnection === 'checking' ||
                 shieldConnection === 'busy')) ||
             (!transferError &&
-              ((clusterPair &&
-                (fundingRoute ? clusterSelected : method === 'directly') &&
-                selectedEstimate.loading) ||
-                (maxSelected && maximum.loading)))
+              clusterPair &&
+              (fundingRoute ? clusterSelected : method === 'directly') &&
+              selectedEstimate.loading)
           }
           onClick={fundingRoute ? () => void prepareShield() : review}
         >

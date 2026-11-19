@@ -3,6 +3,7 @@ import { expect } from '@playwright/test'
 import {
   estimateRheaRouteMaximum,
   fallbackTransferMaximum,
+  resolveNativeRouteMaximum,
   resolveTransferSpendableRaw,
   isTransferAmountSpendable
 } from '../../../src/popup/services/transfer-maximum.ts'
@@ -96,6 +97,22 @@ test('uses one fee-adjusted amount for display, Max and validation without deduc
   expect(isTransferAmountSpendable('901', available)).toBe(false)
   expect(resolveTransferSpendableRaw('1000', null, false)).toBe('1000')
   expect(() => resolveTransferSpendableRaw('1000', '1001', true)).toThrow('Invalid')
+})
+
+test('routed Max holds a fixed native reserve and never spends a balance below it', () => {
+  const cases = [
+    { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 3_000_000_000_000_000n },
+    { family: 'evm', chainId: 'eip155:8453', decimals: 18, reserve: 300_000_000_000_000n },
+    { family: 'zcash', decimals: 8, reserve: 50_000n }
+  ]
+  for (const { reserve, ...source } of cases) {
+    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve - 1n) })).toBe('0')
+    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve) })).toBe('0')
+    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve + 1n) })).toBe('1')
+    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve * 100n) })).toBe(
+      String(reserve * 99n)
+    )
+  }
 })
 
 test('fee-estimate failure leaves a positive native proposal with a fee reserve on each family', () => {

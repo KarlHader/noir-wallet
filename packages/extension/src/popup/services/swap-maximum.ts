@@ -32,6 +32,25 @@ export interface SwapMaximumAdjustment {
   readonly maximum?: QuoteDepositMaximum
 }
 
+export interface ZcashSwapMaximumTarget {
+  readonly scope: string
+  readonly address: string
+  readonly amount: string
+}
+
+export function resolveZcashSwapRequoteMaximum(input: {
+  readonly maxSelected: boolean
+  readonly scope: string
+  readonly target: ZcashSwapMaximumTarget | null
+  readonly depositAddress: string
+  readonly amount: string
+}): string | null {
+  const { maxSelected, scope, target, depositAddress, amount } = input
+  return maxSelected && !depositAddress && target?.scope === scope && target.amount === amount
+    ? target.amount
+    : null
+}
+
 export function isSwapMaximumQuotePending(input: {
   readonly selected: boolean
   readonly nativeSource: boolean

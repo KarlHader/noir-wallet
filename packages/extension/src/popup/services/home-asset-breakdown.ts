@@ -1,8 +1,6 @@
-import Big from '@/lib/big'
 import type { PortfolioFiatSummary } from '@/popup/components/portfolio/portfolio-prices'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
-import type { ZcashBalance } from '@/types'
 import { buildAccountKey } from '@/core/wallet/account-scope'
 import type { AccountPortfolioValueSnapshot } from '@/core/wallet/account-portfolio-value'
 import { isPortfolioModelForScope } from './portfolio-cache'
@@ -181,26 +179,10 @@ export function hasCompletePortfolioTotal(
 }
 
 export function getHomeAssetBreakdown(input: {
-  readonly multichainEnabled: boolean
-  readonly liveMultichainTotal: boolean
-  readonly multichainFiat: PortfolioFiatSummary
+  readonly livePortfolioTotal: boolean
   readonly portfolio?: PortfolioReadModel | null
   readonly prices?: AssetPriceReadModel | null
-  readonly zcashBalance: ZcashBalance | null | undefined
-  readonly zecPrice: number
 }): HomeAssetBreakdown | null {
-  if (input.multichainEnabled) {
-    if (!input.liveMultichainTotal || !input.portfolio) return null
-    const domains = summarizeAssetDomainsUsd(input.portfolio, input.prices ?? null)
-    return domains
-  }
-  if (!input.zcashBalance || input.zecPrice <= 0) return null
-  return Object.freeze({
-    publicUsd: new Big(input.zcashBalance.transparent).times(input.zecPrice).toFixed(),
-    publicUsdPartial: false,
-    shieldUsd: new Big(input.zcashBalance.shielded).times(input.zecPrice).toFixed(),
-    shieldUsdPartial: false,
-    privateUsd: '0',
-    privateUsdPartial: false
-  })
+  if (!input.livePortfolioTotal || !input.portfolio) return null
+  return summarizeAssetDomainsUsd(input.portfolio, input.prices ?? null)
 }

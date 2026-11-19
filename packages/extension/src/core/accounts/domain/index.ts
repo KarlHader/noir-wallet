@@ -15,6 +15,7 @@ export {
   type AddressWalletCompatibility
 } from './address'
 export {
+  chainAccountsEqual,
   parseChainAccountId,
   type ChainAccount,
   type ChainAccountId,

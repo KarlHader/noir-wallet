@@ -359,9 +359,12 @@ test.describe('Solana and NEAR address-only Portfolio', () => {
 
   test('persists generation-bound cache and composes both Beta chains through the unified model', async () => {
     const records = new Map()
+    const get = async (requestedGenerationId, chainAccountId) =>
+      records.get(JSON.stringify([requestedGenerationId, chainAccountId])) ?? null
     const cacheRepository = {
-      get: async (requestedGenerationId, chainAccountId) =>
-        records.get(JSON.stringify([requestedGenerationId, chainAccountId])) ?? null,
+      get,
+      getForActiveChainAccount: (requestedGenerationId, chainAccount) =>
+        get(requestedGenerationId, chainAccount.id),
       put: async record => {
         records.set(JSON.stringify([record.generationId, record.source.chainAccount.id]), record)
       }

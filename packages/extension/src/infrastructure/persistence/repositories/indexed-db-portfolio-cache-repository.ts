@@ -1,7 +1,9 @@
 import {
+  chainAccountsEqual,
   parseAccountId,
   parseChainAccountId,
   type AccountId,
+  type ChainAccount,
   type ChainAccountId
 } from '@/core/accounts/domain'
 import type { ChainId } from '@/core/chains/domain'
@@ -20,7 +22,7 @@ import type { Network } from '@/types/wallet'
 
 export const PORTFOLIO_CACHE_DATABASE = Object.freeze({
   name: 'noir-wallet-portfolio-v2-db',
-  version: 2
+  version: 3
 })
 
 const STORE = 'sources'
@@ -28,6 +30,7 @@ const INVALIDATIONS = 'invalidations'
 const BY_ACCOUNT = 'byAccount'
 const BY_GENERATION = 'byGeneration'
 const BY_GENERATION_ACCOUNT = 'byGenerationAccount'
+const BY_CHAIN_ACCOUNT_TIME = 'byChainAccountTime'
 const MAXIMUM_SOURCES_PER_ACCOUNT = 100
 const MAXIMUM_INVALIDATIONS_PER_SCOPE = 200
 
@@ -312,13 +315,19 @@ function openDatabase(databaseName: string): Promise<IDBDatabase> {
     request.onblocked = () => reject(new Error('Portfolio cache upgrade is blocked'))
     request.onupgradeneeded = () => {
       const database = request.result
-      if (!database.objectStoreNames.contains(STORE)) {
-        const store = database.createObjectStore(STORE, {
-          keyPath: ['generationId', 'chainAccountId']
-        })
-        store.createIndex(BY_ACCOUNT, 'accountKey', { unique: false })
-        store.createIndex(BY_GENERATION, 'generationId', { unique: false })
-        store.createIndex(BY_GENERATION_ACCOUNT, 'generationAccountKey', { unique: false })
+      const hasSources = database.objectStoreNames.contains(STORE)
+      const sources = hasSources
+        ? request.transaction!.objectStore(STORE)
+        : database.createObjectStore(STORE, {
+            keyPath: ['generationId', 'chainAccountId']
+          })
+      if (!hasSources) {
+        sources.createIndex(BY_ACCOUNT, 'accountKey', { unique: false })
+        sources.createIndex(BY_GENERATION, 'generationId', { unique: false })
+        sources.createIndex(BY_GENERATION_ACCOUNT, 'generationAccountKey', { unique: false })
+      }
+      if (!sources.indexNames.contains(BY_CHAIN_ACCOUNT_TIME)) {
+        sources.createIndex(BY_CHAIN_ACCOUNT_TIME, ['accountKey', 'chainAccountId', 'cachedAt'])
       }
       if (!database.objectStoreNames.contains(INVALIDATIONS)) {
         const store = database.createObjectStore(INVALIDATIONS, {
@@ -407,6 +416,54 @@ export class IndexedDbPortfolioCacheRepository implements PortfolioCacheReposito
     return runDatabase(this.databaseName, 'readonly', async store => {
       const value = await requestResult<unknown>(store.get([generationId, chainAccountId]))
       return value === undefined ? null : fromStoredRecord(value)
+    })
+  }
+
+  async getForActiveChainAccount(
+    generationIdValue: StorageV2GenerationId,
+    chainAccountValue: ChainAccount
+  ): Promise<PortfolioCacheRecord | null> {
+    const generationId = parseStorageV2GenerationId(generationIdValue)
+    const chainAccount = parseStorageV2ChainAccount(chainAccountValue)
+    return runDatabase(this.databaseName, 'readonly', async store => {
+      const current = await requestResult<unknown>(store.get([generationId, chainAccount.id]))
+      if (current !== undefined) {
+        const record = fromStoredRecord(current)
+        if (!chainAccountsEqual(record.source.chainAccount, chainAccount)) {
+          throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
+        }
+        return record
+      }
+      const key = [accountKey(chainAccount.scope), chainAccount.id]
+      const range = IDBKeyRange.bound([...key, 0], [...key, Number.MAX_SAFE_INTEGER])
+      return new Promise((resolve, reject) => {
+        const request = store.index(BY_CHAIN_ACCOUNT_TIME).openCursor(range, 'prev')
+        request.onerror = () => reject(request.error ?? new Error('Portfolio cache cursor failed'))
+        request.onsuccess = () => {
+          try {
+            const cursor = request.result
+            if (!cursor) {
+              resolve(null)
+              return
+            }
+            const record = fromStoredRecord(cursor.value)
+            if (!chainAccountsEqual(record.source.chainAccount, chainAccount)) {
+              cursor.continue()
+              return
+            }
+            resolve(
+              record.source.status === 'ready'
+                ? Object.freeze({
+                    ...record,
+                    source: Object.freeze({ ...record.source, status: 'loading' as const })
+                  })
+                : record
+            )
+          } catch (error) {
+            reject(error)
+          }
+        }
+      })
     })
   }
 

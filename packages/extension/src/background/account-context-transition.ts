@@ -34,6 +34,13 @@ export class AccountContextTransitionCoordinator {
     return this.enqueue(operation)
   }
 
+  runActiveOperationWhenReady<T>(
+    withReadiness: (whenReady: () => Promise<T>) => Promise<T>,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    return withReadiness(() => this.runActiveOperation(operation))
+  }
+
   runAccountSwitch<T>(
     target: WalletAccountContext,
     operation: AccountSwitchOperation<T>

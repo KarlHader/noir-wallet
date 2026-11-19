@@ -309,7 +309,7 @@ test.describe('Unified active Portfolio coordinator', () => {
     expect({ cachedReads, refreshes }).toEqual({ cachedReads: 1, refreshes: 1 })
   })
 
-  test('reads every enabled EVM ChainAccount instead of only the active EVM network', async () => {
+  test('returns a selected EVM refresh while another enabled chain is still refreshing', async () => {
     const arbitrumChainId = 'eip155:42161'
     const arbitrumChainAccount = {
       ...evmChainAccount,
@@ -346,7 +346,19 @@ test.describe('Unified active Portfolio coordinator', () => {
         ]
       }
     }
-    const model = await new UnifiedPortfolioCoordinator({
+    let releaseArbitrum
+    const slowRefresh = new Promise(resolve => {
+      releaseArbitrum = resolve
+    })
+    let releaseEthereum
+    const ethereumRefresh = new Promise(resolve => {
+      releaseEthereum = resolve
+    })
+    let ethereum = evmSource('loading')
+    let arbitrum = null
+    let requestedArbitrum = false
+    let ethereumRefreshes = 0
+    const coordinator = new UnifiedPortfolioCoordinator({
       storageRepository: {
         getActivePointer: async () => pointer,
         getSnapshot: async () => multiEvmSnapshot
@@ -357,20 +369,65 @@ test.describe('Unified active Portfolio coordinator', () => {
         {
           chainId: evmChainId,
           portfolio: {
-            readCachedActiveSource: async () => evmSource(),
-            refreshActiveSource: async () => evmSource()
+            readCachedActiveSource: async () => ethereum,
+            refreshActiveSource: async () => {
+              ethereumRefreshes += 1
+              await ethereumRefresh
+              ethereum = evmSource()
+              return ethereum
+            }
           }
         },
         {
           chainId: arbitrumChainId,
           portfolio: {
-            readCachedActiveSource: async () => arbitrumSource,
-            refreshActiveSource: async () => arbitrumSource
+            readCachedActiveSource: async () => arbitrum,
+            refreshActiveSource: async () => {
+              requestedArbitrum = true
+              await slowRefresh
+              arbitrum = arbitrumSource
+              return arbitrum
+            }
           }
         }
       ],
       readZcashState: () => ({ balance: null, status: 'loading', updatedAt: 0 })
-    }).refreshActive()
+    })
+    const scope = { network: 'mainnet', generationId, keyDomainId, accountId, runtimeKey: 'rpc-1' }
+    const service = new BackgroundPortfolioService({
+      coordinator,
+      readScope: async () => scope,
+      enrich: async model => model,
+      onUpdated: () => {},
+      markStale: async () => {},
+      ...emptyInvalidations
+    })
+    const full = service.refreshActive()
+    try {
+      await expect.poll(() => requestedArbitrum).toBe(true)
+      let selected
+      const refresh = service.refreshActive([evmChainId])
+      void refresh.then(model => {
+        selected = model
+      })
+      await new Promise(resolve => setImmediate(resolve))
+      releaseEthereum()
+      await expect
+        .poll(() => selected?.chains.find(item => item.chain.id === evmChainId)?.status, {
+          timeout: 1000
+        })
+        .toBe('ready')
+      expect(selected.chains.find(item => item.chain.id === zcashChainId)?.status).toBe('loading')
+      expect(selected.chains.find(item => item.chain.id === arbitrumChainId)?.status).toBe(
+        'loading'
+      )
+      expect(ethereumRefreshes).toBe(1)
+    } finally {
+      releaseEthereum()
+      releaseArbitrum()
+      await full
+    }
+    const model = await full
 
     expect(model?.chains.map(chain => chain.chain.id)).toEqual([
       zcashChainId,
@@ -745,6 +802,63 @@ test('background Portfolio joins overlapping chain refreshes and leaves fresh au
   expect(requests).toHaveLength(2)
 })
 
+test(
+  'background Portfolio returns cache and starts a queued chain while another chain is busy',
+  { timeout: 2_000 },
+  async () => {
+    const scope = { network: 'mainnet', generationId, keyDomainId, accountId, runtimeKey: 'rpc-1' }
+    const refreshed = new Set()
+    let finishRefresh
+    let startRefresh
+    const started = new Promise(resolve => {
+      startRefresh = resolve
+    })
+    const service = new BackgroundPortfolioService({
+      coordinator: {
+        readCachedActive: async () => serviceModel(scope, refreshed),
+        refreshActive: (chainIds, { claimChainRefresh, onChainRefreshed }) =>
+          new Promise(resolve => {
+            if (chainIds.length === 1) {
+              expect(chainIds).toEqual(['eip155:1'])
+              expect(claimChainRefresh('eip155:1')).toBe(true)
+              refreshed.add('eip155:1')
+              onChainRefreshed('eip155:1', serviceModel(scope, refreshed).chains[0])
+              resolve(serviceModel(scope, refreshed))
+              return
+            }
+            expect(chainIds).toEqual(['eip155:1', 'near:mainnet'])
+            expect(claimChainRefresh('near:mainnet')).toBe(true)
+            finishRefresh = () => {
+              expect(claimChainRefresh('eip155:1')).toBe(false)
+              refreshed.add('near:mainnet')
+              resolve(serviceModel(scope, refreshed))
+            }
+            startRefresh()
+          })
+      },
+      readScope: async () => scope,
+      enrich: async model => model,
+      onUpdated: () => {},
+      markStale: async () => {},
+      ...emptyInvalidations
+    })
+
+    const fullRefresh = service.refreshActive()
+    await started
+    try {
+      await expect(service.readCachedActive()).resolves.toMatchObject({
+        scope: { keyDomainId, accountId }
+      })
+      await expect(service.refreshActive(['eip155:1'])).resolves.toMatchObject({
+        chains: [{ status: 'ready' }, { status: 'loading' }]
+      })
+    } finally {
+      finishRefresh()
+      await fullRefresh
+    }
+  }
+)
+
 test('background Portfolio discards a refresh after the active account changes', async () => {
   const oldScope = {
     network: 'mainnet',
@@ -963,7 +1077,7 @@ test('background Portfolio requires a new Bitcoin scan before acknowledging its 
   })
 
   await service.refreshActive([chainId])
-  expect(requests).toEqual([
+  expect(requests).toMatchObject([
     {
       chainIds: [chainId],
       options: { awaitBitcoin: true, requireNewBitcoinScan: true }

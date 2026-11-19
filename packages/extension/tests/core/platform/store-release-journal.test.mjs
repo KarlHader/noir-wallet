@@ -370,6 +370,58 @@ describe('Store release journal', () => {
     assert.deepEqual(value, { upload: null, submit: null, notify: null })
   })
 
+  it('restores a reused upload without treating a new execution as already recorded', async () => {
+    const artifacts = [
+      fixtureArtifact(fixtureReceipt('upload', 'intent', 99), 1),
+      fixtureArtifact(fixtureReceipt('upload', 'result', 99), 2),
+      fixtureArtifact(fixtureReceipt('submit', 'intent', 99, 2), 3, '2026-11-01T00:04:00Z')
+    ]
+    const steps = name => [
+      { name: 'Persist intent before any external write', conclusion: 'success' },
+      { name: `Execute or reconcile ${name}`, status: 'completed' }
+    ]
+    const upload = {
+      ...historicJob(99, 'upload', steps('upload')),
+      id: 100,
+      run_attempt: 1,
+      conclusion: 'success',
+      started_at: '2026-11-01T00:00:00Z',
+      completed_at: '2026-11-01T00:01:00Z'
+    }
+    const reusedUpload = { ...upload, id: 200, run_attempt: 2 }
+    const submit = historicJob(99, 'submit', steps('submit'))
+    const options = {
+      historyRuns: [historicRun(99, { attempt: 3 })],
+      historyJobs: { '99/1': [upload], '99/2': [reusedUpload, submit] },
+      currentRun: run(99, 3)
+    }
+    const { value } = await restore(artifacts, options)
+    assert.deepEqual(value.upload, result())
+    assert.deepEqual(value.submit, {
+      status: 'unknown',
+      retryable: false,
+      reason: 'receipt_missing'
+    })
+
+    await assert.rejects(
+      restore(artifacts, {
+        ...options,
+        historyJobs: {
+          ...options.historyJobs,
+          '99/2': [
+            {
+              ...reusedUpload,
+              started_at: '2026-11-01T00:02:00Z',
+              completed_at: '2026-11-01T00:03:00Z'
+            },
+            submit
+          ]
+        }
+      }),
+      /missing release journal receipt/
+    )
+  })
+
   it('checks older attempts of the current run and fails closed on truncated run history', async () => {
     const historyRuns = [historicRun(99, { attempt: 2 })]
     const historyJobs = {

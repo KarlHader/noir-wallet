@@ -152,6 +152,7 @@ test('imported EVM accounts refresh Main-only caches before exposing combined ba
     },
     cacheRepository: {
       get: async () => cached,
+      getForActiveChainAccount: async () => cached,
       put: async record => {
         cached = record
       }

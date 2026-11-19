@@ -72,7 +72,6 @@ import { useSwapPreferences } from '@/store/swap-store'
 import { toast } from '@/store/toast-store'
 import { useTransaction } from '../../hooks/useTransaction'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
-import { useMaxTransferEstimate } from '../../hooks/useMaxTransferEstimate'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import {
   getNativeZecIntentsSwap,
@@ -182,19 +181,8 @@ import { classifyError } from '@/lib/errors'
 import { createDebugRequestId, logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
 import { logger } from '@/lib/logger'
 import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wallet-client'
-import {
-  resolveSwapMaximumAdjustment,
-  resolveEvmSwapMaximumInsufficientFundsAdjustment,
-  isSwapMaximumQuotePending,
-  resolveSelectedSwapMaximum,
-  resolveZcashSwapMaximumAdjustment,
-  canUseEstimatedEvmSwapMaximum
-} from '@/popup/services/swap-maximum'
-import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
-import {
-  estimateRheaRouteMaximum,
-  fallbackTransferMaximum
-} from '@/popup/services/transfer-maximum'
+import { resolveSelectedSwapMaximum } from '@/popup/services/swap-maximum'
+import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
 import {
   createRheaSwapBinding,
   listWalletSwapSourceTokens,
@@ -1261,10 +1249,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     graph: TransactionGraph
   } | null>(null)
   const restoredApprovalId = useRef<string | null>(null)
-  const [zcashMaximumTarget, setZcashMaximumTarget] = useState<{
-    readonly scope: string
-    readonly address: string
-  } | null>(null)
   const [pendingRheaEvmAfterApproval, setPendingRheaEvmAfterApproval] =
     useState<PendingRheaEvmAfterApproval | null>(null)
   const pendingQuoteTransfer = useRef<PreparedQuoteDepositTransfer | null>(null)
@@ -1276,8 +1260,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const quoteRequestSequence = useRef(0)
   const preparingReview = useRef(false)
   const lastRequestedQuoteKey = useRef<string | null>(null)
-  const maxQuoteAdjustmentCount = useRef(0)
-  const maxSourceBalanceRaw = useRef<string | null>(null)
   const reviewAfterQuoteRefresh = useRef<SwapQuoteRefreshTarget | null>(null)
   const expiredPrepareRetryKey = useRef<string | null>(null)
   const initializedPrivateFundingScope = useRef<string | null>(null)
@@ -2802,87 +2784,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     }
   }, [walletOwnedSource, swap.amountIn])
 
-  const zcashMaximumScope = JSON.stringify([
-    walletSourcesScope,
-    currentNetwork,
-    swap.tokenIn?.assetId,
-    swap.tokenOut?.assetId,
-    resolvedRecipientAddress,
-    feeTier,
-    fundingSource
-  ])
-  const zcashMaximumAddress =
-    zcashMaximumTarget?.scope === zcashMaximumScope &&
-    zcashMaximumTarget.address === swap.depositAddress
-      ? zcashMaximumTarget.address
-      : undefined
-  const maxTransfer = useMaxTransferEstimate({
-    to: zcashMaximumAddress,
-    feeTier,
-    fundingSource,
-    enabled: swap.isZecSource,
-    scopeKey: feeSyncScope
-  })
-  const isMaxTransferAmount =
-    !!maxTransfer.maxAmount && safeBig(swap.amountIn || '0').eq(maxTransfer.maxAmount)
-
-  // Estimate as soon as we have a deposit address, so the input page reflects
-  // the live tier fee instead of waiting until the review step.
   const feeEstimate = useFeeEstimate({
     type: 'send',
     to: swap.depositAddress,
     amount: swap.amountIn,
     fundingSource,
     feeTier,
-    enabled:
-      swap.isZecSource &&
-      !!swap.depositAddress &&
-      (!maxSelected || maxTransfer.maxAmount === null) &&
-      !isMaxTransferAmount,
+    enabled: swap.isZecSource && !!swap.depositAddress,
     scopeKey: feeSyncScope
   })
-  const isMaxFeeMode = (maxSelected && maxTransfer.maxAmount !== null) || isMaxTransferAmount
-  const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
-  const displayedFeeLoadingByTier = isMaxFeeMode
-    ? maxTransfer.loadingByTier
-    : feeEstimate.loadingByTier
-  const displayedFeeLoading = isMaxFeeMode ? maxTransfer.loading : feeEstimate.loading
+  const displayedFeeByTier = feeEstimate.feeByTier
+  const displayedFeeLoadingByTier = feeEstimate.loadingByTier
+  const displayedFeeLoading = feeEstimate.loading
   const standardFeeZats = feeEstimate.feeByTier.standard ?? staticFeeFallbackZats('standard')
   const selectedFeeZats = feeEstimate.feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
-  const zcashFallbackFeeScope = JSON.stringify([
-    walletSourcesScope,
-    currentNetwork,
-    swap.tokenIn?.assetId,
-    swap.tokenOut?.assetId,
-    resolvedRecipientAddress,
-    feeTier,
-    fundingSource,
-    zcashFundingBalance.available
-  ])
-  const zcashFallbackFeeRef = useRef({
-    scope: zcashFallbackFeeScope,
-    zats: staticFeeFallbackZats(feeTier)
-  })
-  if (zcashFallbackFeeRef.current.scope !== zcashFallbackFeeScope) {
-    zcashFallbackFeeRef.current = {
-      scope: zcashFallbackFeeScope,
-      zats: staticFeeFallbackZats(feeTier)
-    }
-  }
-  if (!maxSelected || isMaxFeeMode)
-    zcashFallbackFeeRef.current.zats = staticFeeFallbackZats(feeTier)
-  if (maxSelected && !isMaxFeeMode && feeEstimate.feeZats !== null) {
-    zcashFallbackFeeRef.current.zats = Math.max(
-      zcashFallbackFeeRef.current.zats,
-      feeEstimate.feeZats
-    )
-  }
-  const maximumFeeReserveZats =
-    maxSelected && !isMaxFeeMode ? zcashFallbackFeeRef.current.zats : selectedFeeZats
   const estimatedFeeZec = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
-  // Approximate while no live estimate is in flight or resolved (e.g. before a
-  // quote has produced a deposit address). UI uses this to avoid implying the
-  // ZIP-317 fallback figure is the real network fee.
   const feeIsApproximate =
     swap.isZecSource &&
     !displayedFeeLoading &&
@@ -2891,115 +2807,28 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const zcashAvailability = resolveZcashFundingAvailability({
     balance: swap.isZecSource ? storeBalance : null,
     fundingSource,
-    selectedFeeZats: maximumFeeReserveZats,
-    standardFeeZats,
-    maximumAmount: maxTransfer.maxAmount
+    selectedFeeZats,
+    standardFeeZats
   })
-  const canEstimateRouteMaximum = Boolean(
-    !confidentialShieldSwapActive &&
-    swap.selectionReady &&
-    viewStep === 'input' &&
-    !swap.isZecSource &&
-    walletOwnedSource?.asset.asset.kind === 'native' &&
-    swap.tokenIn &&
-    swap.tokenOut &&
-    quotePurpose &&
-    resolvedRecipientAddress &&
-    recipientError === null &&
-    publicPrivacySendRouteReady &&
-    publicPrivacySendRecipientReady &&
-    publicPrivacySendFundingReady &&
-    (!crossChainSendRequested ||
-      (crossChainSendSourceReady &&
-        crossChainSendDestinationReady &&
-        crossChainSendRecipientReady)) &&
-    !walletSourcesLoading &&
-    BigInt(walletOwnedSource.asset.balance.availableRaw) > 0n
-  )
-  const routeMaximum = useTransferMaximum({
-    prefetch: maxSelected && walletOwnedSource?.family === 'evm',
-    fallback: walletOwnedSource ? () => fallbackTransferMaximum(walletOwnedSource) : undefined,
-    // Keep the entered amount stable; review validates expired fee estimates on demand.
-    refreshOnExpiry: false,
-    enabled: canEstimateRouteMaximum,
-    requestKey: `${walletSourcesScope}:${swap.tokenIn?.assetId}:${swap.tokenOut?.assetId}:${walletOwnedSource?.refundAddress}:${walletOwnedSource?.asset.balance.availableRaw}:${resolvedRecipientAddress}:${executionSourceMode}:${destinationMode}:${quotePurpose}:${swap.slippage}:${quoteMode}:${networkFeeTier}`,
-    estimate: async () => {
-      if (!walletOwnedSource || !swap.tokenIn || !swap.tokenOut || !quotePurpose)
-        throw new Error('Incomplete Swap route')
-      return estimateRheaRouteMaximum({
-        source: walletOwnedSource,
-        tokenIn: swap.tokenIn,
-        tokenOut: swap.tokenOut,
-        recipient: resolvedRecipientAddress,
-        confidential:
-          isPrivateFunding ||
-          publicPrivacySendRequested ||
-          (!privateSwapRequested &&
-            (executionSourceMode === 'private' || destinationMode === 'private')),
-        purpose: quotePurpose,
-        executionMode: executionSourceMode,
-        feeTier: networkFeeTier,
-        slippageBps: Math.round(swap.slippage * 100),
-        quoteMode
-      })
-    }
-  })
-  useEffect(() => {
-    if (
-      !maxSelected ||
-      viewStep !== 'input' ||
-      preparingReview.current ||
-      !walletOwnedSource ||
-      walletOwnedSource.asset.asset.kind !== 'native'
-    ) {
-      if (!maxSelected) maxSourceBalanceRaw.current = null
-      return
-    }
-    const sourceBalanceRaw = walletOwnedSource.asset.balance.availableRaw
-    const balanceChanged =
-      maxSourceBalanceRaw.current !== null && maxSourceBalanceRaw.current !== sourceBalanceRaw
-    maxSourceBalanceRaw.current = sourceBalanceRaw
-    if (balanceChanged) {
-      reviewAfterQuoteRefresh.current = null
-      maxQuoteAdjustmentCount.current = 0
-    }
-    if (routeMaximum.value) {
-      const maximumAmount = formatBaseUnitDecimalAmount(
-        routeMaximum.value.amountRaw,
-        swap.tokenIn?.decimals ?? 18
+  const nativeMaximum = swap.isZecSource
+    ? formatBaseUnitDecimalAmount(
+        resolveNativeRouteMaximum({
+          family: 'zcash',
+          availableRaw: parseDisplayUnitAmount(zcashFundingBalance.available, ZEC_DECIMALS),
+          decimals: ZEC_DECIMALS
+        }),
+        ZEC_DECIMALS
       )
-      if (reviewAfterQuoteRefresh.current === null && swap.amountIn !== maximumAmount)
-        swap.updateAmountIn(maximumAmount)
-      return
-    }
-    if (routeMaximum.error) return
-    if (
-      !canEstimateRouteMaximum ||
-      routeMaximum.loading ||
-      reviewAfterQuoteRefresh.current !== null
-    )
-      return
-    void routeMaximum.request()
-  }, [
-    maxSelected,
-    canEstimateRouteMaximum,
-    routeMaximum.value,
-    routeMaximum.loading,
-    routeMaximum.error,
-    viewStep,
-    walletOwnedSource?.asset.balance.availableRaw,
-    walletOwnedSource?.asset.asset.kind,
-    swap.amountIn,
-    swap.updateAmountIn,
-    swap.tokenIn?.decimals
-  ])
-  const nativeMaxError =
-    maxSelected &&
-    !swap.isZecSource &&
-    walletOwnedSource?.asset.asset.kind === 'native' &&
-    routeMaximum.error &&
-    !routeMaximum.value
-      ? 'Unable to calculate Max. Try again.'
+    : walletOwnedSource?.asset.asset.kind === 'native'
+      ? formatBaseUnitDecimalAmount(
+          resolveNativeRouteMaximum({
+            family: walletOwnedSource.family,
+            chainId: walletOwnedSource.chain.chain.id,
+            availableRaw: walletOwnedSource.asset.balance.availableRaw,
+            decimals: walletOwnedSource.asset.metadata.decimals
+          }),
+          walletOwnedSource.asset.metadata.decimals
+        )
       : null
   const walletAvailability = walletOwnedSource
     ? resolvePortfolioTransferAvailability({
@@ -3010,6 +2839,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       })
     : null
   const walletSpendableBalance = walletAvailability?.display ?? '0'
+  const applyMaximum = () => {
+    const maximum = nativeMaximum ?? walletSpendableBalance
+    if (safeBig(maximum).lte(0)) return
+    reviewAfterQuoteRefresh.current = null
+    setMaxSelected(true)
+    swap.updateAmountIn(maximum)
+  }
   const mainWalletSpendableBalance = mainWalletOwnedSource
     ? resolvePortfolioTransferAvailability({
         balanceRaw: mainWalletOwnedSource.asset.balance.availableRaw,
@@ -3030,29 +2866,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     ? zcashAvailability.amount
     : (walletAvailability?.display ?? '—')
   useEffect(() => {
-    if (!swap.isZecSource || viewStep !== 'input' || reviewAfterQuoteRefresh.current !== null)
+    if (
+      nativeMaximum === null ||
+      viewStep !== 'input' ||
+      preparingReview.current ||
+      reviewAfterQuoteRefresh.current !== null
+    )
       return
     const amount = resolveSelectedSwapMaximum({
       selected: maxSelected,
       currentAmount: swap.amountIn,
-      maximumAmount: zcashAvailability.amount
+      maximumAmount: nativeMaximum
     })
     if (amount !== null) swap.updateAmountIn(amount)
-  }, [
-    maxSelected,
-    viewStep,
-    swap.isZecSource,
-    swap.amountIn,
-    swap.updateAmountIn,
-    zcashAvailability.amount
-  ])
-  const selectedFee = selectSwapFeeEstimate(
-    swap.amountIn,
-    maxSelected,
-    maxTransfer.maxAmount,
-    { ...maxTransfer, feeZats: maxTransfer.feeByTier[feeTier] },
-    feeEstimate
-  )
+  }, [maxSelected, viewStep, nativeMaximum, swap.amountIn, swap.updateAmountIn])
+  const selectedFee = selectSwapFeeEstimate(swap.amountIn, false, null, feeEstimate, feeEstimate)
   const networkFee =
     selectedFee.feeZats === null
       ? estimatedFeeZec
@@ -3069,12 +2897,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   ])
   const latestFee = useRef({ ...selectedFee, feeSelectionKey })
   latestFee.current = { ...selectedFee, feeSelectionKey }
-  useEffect(() => {
-    if (!swap.isZecSource || !selectedFee.staleMax || isSending || viewStep !== 'review') return
-    setMaxSelected(false)
-    setViewStep('input')
-    toast.info('Maximum amount changed', 'Review the quote again before sending.')
-  }, [swap.isZecSource, selectedFee.staleMax, isSending, viewStep])
 
   const zcashAmountError = swap.isZecSource
     ? getFundingAmountError(swap.amountIn, zcashFundingBalance, zcashAvailability.amount)
@@ -3123,21 +2945,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           : undefined,
       blocked: false
     })
-    const refreshTarget = reviewAfterQuoteRefresh.current
-    const refreshingBoundMaxQuote =
-      refreshTarget !== null &&
-      candidate !== null &&
-      refreshTarget.scopeKey === candidate.scopeKey &&
-      refreshTarget.amount === candidate.amount
     const blocked =
       confidentialShieldSwapActive ||
       !swap.selectionReady ||
-      isSwapMaximumQuotePending({
-        selected: maxSelected && viewStep === 'input' && !refreshingBoundMaxQuote,
-        nativeSource: !swap.isZecSource && walletOwnedSource?.asset.asset.kind === 'native',
-        loading: routeMaximum.loading,
-        maximum: routeMaximum.value
-      }) ||
       walletActionMode.loading ||
       destinationWalletActionMode.loading ||
       legacyShieldSwapRequested ||
@@ -3187,8 +2997,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     hasInvalidWalletAmount,
     maxSelected,
     viewStep,
-    routeMaximum.loading,
-    routeMaximum.value,
     zcashAmountError,
     walletSourcesLoading,
     isPrivateFunding,
@@ -3206,48 +3014,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     crossChainSendRecipientReady,
     crossChainPrivateSourceUnavailable,
     recipientError
-  ])
-  const lastZcashQuoteRequest = useRef(liveQuoteRequest)
-  if (swap.isZecSource && liveQuoteRequest) lastZcashQuoteRequest.current = liveQuoteRequest
-  useEffect(() => {
-    if (
-      !swap.isZecSource ||
-      !maxSelected ||
-      isMaxFeeMode ||
-      viewStep !== 'review' ||
-      feeEstimate.feeZats === null ||
-      isSending ||
-      isPreparingReview ||
-      reviewAfterQuoteRefresh.current ||
-      !quoteResult ||
-      lastZcashQuoteRequest.current?.key !== liveQuoteKey
-    )
-      return
-    const amount = resolveSelectedSwapMaximum({
-      selected: true,
-      currentAmount: swap.amountIn,
-      maximumAmount: zcashAvailability.amount
-    })
-    if (!amount || safeBig(amount).lte(0) || amount === swap.amountIn) return
-    reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(lastZcashQuoteRequest.current, {
-      decimal: amount,
-      decimals: swap.tokenIn?.decimals ?? ZEC_DECIMALS
-    })
-    swap.updateAmountIn(amount)
-  }, [
-    swap.isZecSource,
-    swap.amountIn,
-    swap.tokenIn?.decimals,
-    swap.updateAmountIn,
-    maxSelected,
-    isMaxFeeMode,
-    viewStep,
-    feeEstimate.feeZats,
-    isSending,
-    isPreparingReview,
-    quoteResult,
-    liveQuoteKey,
-    zcashAvailability.amount
   ])
 
   useEffect(() => {
@@ -3731,54 +3497,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           return
         }
         let preparedBalanceTransferReview: PrivateBalanceTransferReview | null = null
-        if (
-          maxSelected &&
-          !swap.isZecSource &&
-          walletOwnedSource &&
-          !canUseEstimatedEvmSwapMaximum({
-            source: walletOwnedSource,
-            review,
-            currentAmount: swap.amountIn,
-            maximum: routeMaximum.value,
-            fallbackUsed: routeMaximum.fallbackUsed,
-            refreshingFees: feeTierOverride !== undefined
-          })
-        ) {
-          if (feeTierOverride !== undefined) maxQuoteAdjustmentCount.current = 0
-          const adjustment = await measure('resolve-maximum', () =>
-            resolveSwapMaximumAdjustment(
-              {
-                source: walletOwnedSource,
-                review,
-                currentAmount: swap.amountIn,
-                feeTier: feeTierOverride ?? networkFeeTier,
-                executionMode: executionSourceMode,
-                refreshFees: feeTierOverride !== undefined,
-                adjustmentCount: maxQuoteAdjustmentCount.current
-              },
-              {
-                getEvmTransactionPlan: rheaSwapClient.getEvmTransactionPlan,
-                estimateMaximum: quoteDepositTransferClient.estimateMaximum
-              }
-            )
-          )
-          if (requestSequence !== quoteRequestSequence.current) return
-          if (adjustment) {
-            maxQuoteAdjustmentCount.current = adjustment.adjustmentCount
-            if (feeTierOverride) setNetworkFeeTier(feeTierOverride)
-            await rheaSwapClient.discard(result.quoteHandle)
-            if (requestSequence !== quoteRequestSequence.current) return
-            reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest, {
-              decimal: adjustment.amount,
-              decimals: walletOwnedSource.asset.metadata.decimals
-            })
-            if (adjustment.maximum) routeMaximum.update(adjustment.maximum)
-            if (viewStep !== 'review') setViewStep('input')
-            setLiveQuoteKey(null)
-            swap.updateAmountIn(adjustment.amount)
-            return
-          }
-        }
         if (swap.isZecSource) {
           if (
             review.execution.kind !== 'zcash-transfer' ||
@@ -3789,44 +3507,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
 
           const transferTarget = review.execution.target
-          const maximumEstimate = maxSelected
-            ? await measure('zcash-estimate-maximum', () =>
-                maxTransfer.estimateForTarget(transferTarget)
-              )
-            : null
-          if (requestSequence !== quoteRequestSequence.current) return
-          const feeQuote =
-            maximumEstimate?.feeQuote ?? (await zcashWalletRuntimeClient.getFeeQuote())
+          const feeQuote = await zcashWalletRuntimeClient.getFeeQuote()
           const marginalFeeZats = marginalFeeForTier(feeTier, feeQuote.standardMarginalFeeZats)
-          if (maxSelected) {
-            const estimate = maximumEstimate
-            const exactMax = estimate
-              ? formatBaseUnitDecimalAmount(estimate.maxAmountZats, ZEC_DECIMALS)
-              : null
-            const adjustment = resolveZcashSwapMaximumAdjustment({
-              currentAmount: swap.amountIn,
-              exactMaximum: exactMax,
-              adjustmentCount: maxQuoteAdjustmentCount.current
-            })
-            if (adjustment) {
-              maxQuoteAdjustmentCount.current = adjustment.adjustmentCount
-              await rheaSwapClient.discard(result.quoteHandle).catch(() => {})
-              if (requestSequence !== quoteRequestSequence.current) return
-              reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest, {
-                decimal: adjustment.amount,
-                decimals: tokenIn.decimals
-              })
-            }
-            if (estimate) {
-              setZcashMaximumTarget({ scope: zcashMaximumScope, address: transferTarget })
-              maxTransfer.update(estimate, transferTarget)
-            }
-            if (adjustment) {
-              if (viewStep !== 'review') setViewStep('input')
-              swap.updateAmountIn(adjustment.amount)
-              return
-            }
-          }
 
           const preparedFeeEstimate = await measure('zcash-estimate-fee', () =>
             zcashWalletRuntimeClient.estimateTransferFee({
@@ -3849,30 +3531,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             Number(preparedFeeEstimate.marginalFeeZats) !== marginalFeeZats
           )
             throw new Error('Invalid network fee estimate')
-          if (maxSelected && !maximumEstimate) {
-            zcashFallbackFeeRef.current.zats = Math.max(
-              zcashFallbackFeeRef.current.zats,
-              preparedFeeZats
-            )
-            const affordableAmount = resolveZcashFundingAvailability({
-              balance: storeBalance,
-              fundingSource,
-              selectedFeeZats: zcashFallbackFeeRef.current.zats,
-              standardFeeZats
-            }).amount
-            if (safeBig(swap.amountIn).gt(affordableAmount)) {
-              if (safeBig(affordableAmount).lte(0))
-                throw new Error('Insufficient ZEC for the network fee')
-              await rheaSwapClient.discard(result.quoteHandle).catch(() => {})
-              if (requestSequence !== quoteRequestSequence.current) return
-              reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest, {
-                decimal: affordableAmount,
-                decimals: tokenIn.decimals
-              })
-              if (viewStep !== 'review') setViewStep('input')
-              swap.updateAmountIn(affordableAmount)
-              return
-            }
+          if (
+            safeBig(swap.amountIn)
+              .plus(formatBaseUnitDecimalAmount(preparedFeeEstimate.feeZats, ZEC_DECIMALS))
+              .gt(zcashFundingBalance.available)
+          ) {
+            throw new Error('Insufficient ZEC for the network fee')
           }
         } else {
           if (!walletOwnedSource) throw new Error('The selected source asset is unavailable')
@@ -3980,72 +3644,46 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             } else {
               const isNativeTransfer =
                 walletOwnedSource.asset.asset.kind === 'native' && plan.transaction.data === '0x'
-              const evmReview = await (
-                isNativeTransfer
-                  ? measure('evm-prepare-transfer', () =>
-                      evmWalletClient.prepareTransfer(
-                        {
-                          assetId: walletOwnedSource.asset.asset.id,
-                          recipient: plan.transaction.to,
-                          amountRaw: plan.transaction.value
-                        },
-                        {
-                          rheaSwapBinding: binding,
-                          ...(evmMoveFee
-                            ? { feeSelection: evmMoveFee }
-                            : {
-                                feeTier: feeTierOverride ?? networkFeeTier
-                              }),
-                          executionMode: executionSourceMode,
-                          debugRequestId: requestId
-                        }
-                      )
-                    )
-                  : measure('evm-prepare-contract-call', () =>
-                      evmWalletClient.prepareContractCall(
-                        {
-                          chainId: walletOwnedSource.chain.chain.id,
-                          contractAddress: plan.transaction.to,
-                          valueRaw: plan.transaction.value,
-                          calldata: plan.transaction.data
-                        },
-                        {
-                          rheaSwapBinding: binding,
-                          ...(evmMoveFee
-                            ? { feeSelection: evmMoveFee }
-                            : {
-                                feeTier: feeTierOverride ?? networkFeeTier
-                              }),
-                          executionMode: executionSourceMode,
-                          debugRequestId: requestId
-                        }
-                      )
-                    )
-              ).catch(async error => {
-                const adjustment = maxSelected
-                  ? resolveEvmSwapMaximumInsufficientFundsAdjustment(
+              const evmReview = await (isNativeTransfer
+                ? measure('evm-prepare-transfer', () =>
+                    evmWalletClient.prepareTransfer(
                       {
-                        source: walletOwnedSource,
-                        currentAmount: swap.amountIn,
-                        adjustmentCount: maxQuoteAdjustmentCount.current
+                        assetId: walletOwnedSource.asset.asset.id,
+                        recipient: plan.transaction.to,
+                        amountRaw: plan.transaction.value
                       },
-                      error
+                      {
+                        rheaSwapBinding: binding,
+                        ...(evmMoveFee
+                          ? { feeSelection: evmMoveFee }
+                          : {
+                              feeTier: feeTierOverride ?? networkFeeTier
+                            }),
+                        executionMode: executionSourceMode,
+                        debugRequestId: requestId
+                      }
                     )
-                  : null
-                if (!adjustment) throw error
-                maxQuoteAdjustmentCount.current = adjustment.adjustmentCount
-                await rheaSwapClient.discard(result.quoteHandle).catch(() => {})
-                if (requestSequence !== quoteRequestSequence.current) return null
-                if (feeTierOverride) setNetworkFeeTier(feeTierOverride)
-                reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest, {
-                  decimal: adjustment.amount,
-                  decimals: walletOwnedSource.asset.metadata.decimals
-                })
-                if (viewStep !== 'review') setViewStep('input')
-                setLiveQuoteKey(null)
-                swap.updateAmountIn(adjustment.amount)
-                return null
-              })
+                  )
+                : measure('evm-prepare-contract-call', () =>
+                    evmWalletClient.prepareContractCall(
+                      {
+                        chainId: walletOwnedSource.chain.chain.id,
+                        contractAddress: plan.transaction.to,
+                        valueRaw: plan.transaction.value,
+                        calldata: plan.transaction.data
+                      },
+                      {
+                        rheaSwapBinding: binding,
+                        ...(evmMoveFee
+                          ? { feeSelection: evmMoveFee }
+                          : {
+                              feeTier: feeTierOverride ?? networkFeeTier
+                            }),
+                        executionMode: executionSourceMode,
+                        debugRequestId: requestId
+                      }
+                    )
+                  ))
               if (!evmReview) return
               prepared = Object.freeze({
                 family: 'evm' as const,
@@ -4310,14 +3948,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       effectiveWalletId,
       effectiveAccountId,
       lockedAssetFlowRequested,
-      routeMaximum.update,
-      routeMaximum.value,
-      routeMaximum.fallbackUsed,
-      maxTransfer.update,
-      maxTransfer.estimateForTarget,
-      zcashMaximumScope,
-      storeBalance,
-      standardFeeZats
+      zcashFundingBalance.available
     ]
   )
 
@@ -4950,13 +4581,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             currentQuote.id !== reviewedFeeQuote.id ||
             reviewedFeeQuote.expiresAt <= Date.now()
           ) {
-            if (isMaxFeeMode) void maxTransfer.request(true)
-            else feeEstimate.retry()
+            feeEstimate.retry()
             return
           }
         } catch {
-          if (isMaxFeeMode) void maxTransfer.request(true)
-          else feeEstimate.retry()
+          feeEstimate.retry()
           return
         }
         const quoteBinding =
@@ -5003,8 +4632,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             latestFee.current.feeZats !== reviewedFee.feeZats ||
             reviewSequence !== quoteRequestSequence.current
           ) {
-            if (isMaxFeeMode) void maxTransfer.request()
-            else feeEstimate.retry()
+            feeEstimate.retry()
             return
           }
         } catch (error) {
@@ -5499,7 +5127,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             initializedDestinationScope.current = `${walletSourcesScope}:${requestedDestinationAssetId}`
           reviewAfterQuoteRefresh.current = null
           setMaxSelected(false)
-          maxQuoteAdjustmentCount.current = 0
           if (!isZecDestination) setSourceMode(reversedSourceMode)
           if (!swap.isZecSource) {
             destinationWalletActionMode.setMode(reversedDestinationMode)
@@ -6175,7 +5802,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     if (mode === 'private' && !ordinarySwapRequested && walletSourcesScope)
       setDestinationModeSelection({ scope: walletSourcesScope, mode: 'private' })
     setMaxSelected(false)
-    maxQuoteAdjustmentCount.current = 0
     swap.updateAmountIn('')
   }
 
@@ -6336,7 +5962,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                     lastRequestedQuoteKey.current = null
                     reviewAfterQuoteRefresh.current = null
                     setMaxSelected(false)
-                    maxQuoteAdjustmentCount.current = 0
                     swap.updateAmountIn('')
                     swap.setDepositAddress('')
                     swap.setQuoteError(null)
@@ -6551,16 +6176,22 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           })}
           slippage={swap.slippage}
           provider="NEAR Confidential Intents"
-          sourceNetworkFee={{ amount: networkFee, symbol: 'ZEC' }}
           preparationError={
             !review
               ? swap.isQuoting
                 ? null
                 : (swap.quoteError ?? 'Quote expired. Refresh it.')
-              : !selectedFee.ready
-                ? 'Network fee estimate is unavailable'
-                : null
+              : null
           }
+          feeTier={feeTier}
+          onFeeTierChange={setFeeTier}
+          feeByTier={displayedFeeByTier}
+          feeLoadingByTier={displayedFeeLoadingByTier}
+          feeLoading={displayedFeeLoading}
+          feeUnavailable={!selectedFee.ready}
+          feeError={feeEstimate.error}
+          onRetryFee={feeEstimate.retry}
+          fundingSource={fundingSource}
           insufficient={hasInsufficientFunds}
           onRefreshQuote={() => {
             setQuoteRefreshTick(value => value + 1)
@@ -6946,10 +6577,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           feeLoadingByTier={swap.isZecSource ? displayedFeeLoadingByTier : undefined}
           feeLoading={swap.isZecSource ? displayedFeeLoading : undefined}
           feeUnavailable={swap.isZecSource && !selectedFee.ready}
-          feeError={swap.isZecSource && (isMaxFeeMode ? maxTransfer.error : feeEstimate.error)}
+          feeError={swap.isZecSource && feeEstimate.error}
           onRetryFee={() => {
-            if (isMaxFeeMode) void maxTransfer.request()
-            else feeEstimate.retry()
+            feeEstimate.retry()
           }}
           fundingSource={swap.isZecSource ? fundingSource : undefined}
           sourceNetworkFee={getPreparedSwapNetworkFee(preparedQuoteTransfer)}
@@ -7185,19 +6815,15 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           destinationAssetsLoading={
             swap.destinationTokensLoading && swap.destinationTokens.length === 0
           }
-          hasInsufficientFunds={hasInsufficientFunds || Boolean(nativeMaxError)}
+          hasInsufficientFunds={hasInsufficientFunds}
           insufficientMessage={
-            nativeMaxError ??
-            (swap.tokenIn ? `Insufficient ${swap.tokenIn.symbol} balance` : undefined)
+            swap.tokenIn ? `Insufficient ${swap.tokenIn.symbol} balance` : undefined
           }
-          maxLoading={routeMaximum.loading}
+          maxLoading={false}
           maxDisabled={
             !resolvedRecipientAddress ||
-            Boolean(
-              walletOwnedSource &&
-              (BigInt(walletOwnedSource.asset.balance.availableRaw) === 0n ||
-                (walletOwnedSource.asset.asset.kind === 'native' && !canEstimateRouteMaximum))
-            )
+            !walletOwnedSource ||
+            safeBig(nativeMaximum ?? walletSpendableBalance).lte(0)
           }
           maxDisabledReason={
             walletOwnedSource && BigInt(walletOwnedSource.asset.balance.availableRaw) === 0n
@@ -7207,30 +6833,15 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 : 'Max is unavailable for this route'
           }
           canGetQuote={canGetQuote}
-          actionLoading={isPreparingReview || feeLoading || (maxSelected && routeMaximum.loading)}
+          actionLoading={isPreparingReview || feeLoading}
           providerName={activeQuote?.router}
           slippage={swap.slippage}
           onAmountChange={value => {
             reviewAfterQuoteRefresh.current = null
             setMaxSelected(false)
-            maxQuoteAdjustmentCount.current = 0
             swap.updateAmountIn(value)
           }}
-          onMaxClick={
-            walletOwnedSource
-              ? () => {
-                  if (walletOwnedSource.asset.asset.kind === 'native' && !canEstimateRouteMaximum)
-                    return
-                  reviewAfterQuoteRefresh.current = null
-                  setMaxSelected(true)
-                  maxQuoteAdjustmentCount.current = 0
-                  if (walletOwnedSource.asset.asset.kind === 'native') {
-                    swap.updateAmountIn('')
-                    void routeMaximum.request()
-                  } else swap.updateAmountIn(walletSpendableBalance)
-                }
-              : undefined
-          }
+          onMaxClick={walletOwnedSource ? applyMaximum : undefined}
           onRecipientChange={handleRecipientAddressChange}
           onSelectRecipient={recipientChainId ? handleSelectRecipient : undefined}
           onRetryCatalog={() => {
@@ -7400,19 +7011,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 )
             : undefined
         }
-        maxLoading={routeMaximum.loading || maxTransfer.loading}
-        maxDisabled={
-          swap.isZecSource
-            ? safeBig(spendableBalance || '0').lte(0)
-            : Boolean(
-                walletOwnedSource &&
-                (BigInt(walletOwnedSource.asset.balance.availableRaw) === 0n ||
-                  (walletOwnedSource.asset.asset.kind === 'native' && !canEstimateRouteMaximum))
-              )
-        }
+        maxDisabled={safeBig(nativeMaximum ?? walletSpendableBalance).lte(0)}
         maxDisabledReason={
-          (swap.isZecSource && safeBig(spendableBalance || '0').lte(0)) ||
-          (walletOwnedSource && BigInt(walletOwnedSource.asset.balance.availableRaw) === 0n)
+          safeBig(nativeMaximum ?? walletSpendableBalance).lte(0)
             ? 'No available balance'
             : ordinarySwapRequested && !shieldNativeZecSwap && !resolvedRecipientAddress
               ? 'Receive account unavailable'
@@ -7440,14 +7041,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           )
         }
         actionStatus={zcashSyncActionStatus}
-        hasInsufficientFunds={hasInsufficientFunds || Boolean(nativeMaxError)}
+        hasInsufficientFunds={hasInsufficientFunds}
         insufficientMessage={
-          nativeMaxError ??
-          (swap.isZecSource
+          swap.isZecSource
             ? zcashAmountErrorCopy
             : swap.tokenIn
               ? `Insufficient ${swap.tokenIn.symbol} balance`
-              : undefined)
+              : undefined
         }
         walletManagedRefundAddress={resolvedRefundAddress || undefined}
         feeIsApproximate={feeIsApproximate}
@@ -7472,37 +7072,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         onAmountInChange={value => {
           reviewAfterQuoteRefresh.current = null
           setMaxSelected(false)
-          setZcashMaximumTarget(null)
-          maxQuoteAdjustmentCount.current = 0
           swap.updateAmountIn(value)
         }}
         focusAmountOnMount={ordinarySwapRequested}
         amountFocusToken={
           ordinarySwapRequested && amountFocusToken > 0 ? amountFocusToken : undefined
         }
-        onMaxClick={
-          swap.isZecSource
-            ? () => {
-                reviewAfterQuoteRefresh.current = null
-                setMaxSelected(true)
-                maxQuoteAdjustmentCount.current = 0
-                swap.updateAmountIn(spendableBalance)
-                void maxTransfer.request()
-              }
-            : walletOwnedSource
-              ? () => {
-                  if (walletOwnedSource.asset.asset.kind === 'native' && !canEstimateRouteMaximum)
-                    return
-                  reviewAfterQuoteRefresh.current = null
-                  setMaxSelected(true)
-                  maxQuoteAdjustmentCount.current = 0
-                  if (walletOwnedSource.asset.asset.kind === 'native') {
-                    swap.updateAmountIn('')
-                    void routeMaximum.request()
-                  } else swap.updateAmountIn(walletSpendableBalance)
-                }
-              : undefined
-        }
+        onMaxClick={swap.isZecSource || walletOwnedSource ? applyMaximum : undefined}
         onRecipientAddressChange={handleRecipientAddressChange}
         onSelectRecipientFromWallet={recipientChainId ? handleSelectRecipient : undefined}
         onSelectToken={type => {
@@ -7573,12 +7149,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 ? 'Review Send'
                 : 'Swap'
         }
-        actionLoading={
-          isPrivateFundingSubmitting ||
-          isPreparingReview ||
-          feeLoading ||
-          (maxSelected && routeMaximum.loading)
-        }
+        actionLoading={isPrivateFundingSubmitting || isPreparingReview || feeLoading}
       />
     )
   }

@@ -85,6 +85,46 @@ test('does not change the active pointer when context invalidation fails', async
   expect(current).toBe(account0)
 })
 
+test('keeps a sync wait out of the shared queue and rejects work for an old account', async () => {
+  const coordinator = new AccountContextTransitionCoordinator()
+  const events = []
+  let current = account0
+  let finishSync
+  const syncing = new Promise(resolve => {
+    finishSync = resolve
+  })
+  const queuedSpend = coordinator.runActiveOperationWhenReady(
+    async whenReady => {
+      events.push('pause sync')
+      try {
+        await syncing
+        return await whenReady()
+      } finally {
+        events.push('resume sync')
+      }
+    },
+    async () => {
+      if (current !== account0) throw new Error('Active account changed')
+      events.push('sign Zcash')
+    }
+  )
+
+  await coordinator.runActiveOperation(async () => {
+    events.push('submit EVM')
+  })
+  await coordinator.runAccountSwitch(account1, {
+    readCurrent: () => current,
+    validateTarget: () => {},
+    commit: async () => {
+      current = account1
+    }
+  })
+  expect(events).toEqual(['pause sync', 'submit EVM'])
+  finishSync()
+  await expect(queuedSpend).rejects.toThrow('Active account changed')
+  expect(events).toEqual(['pause sync', 'submit EVM', 'resume sync'])
+})
+
 test('skips invalidation when selecting the already active Account', async () => {
   const coordinator = new AccountContextTransitionCoordinator()
   let invalidations = 0

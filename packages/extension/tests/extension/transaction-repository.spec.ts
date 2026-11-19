@@ -167,6 +167,62 @@ test('persists and replaces generation-bound Portfolio cache records', async ({
   await popup.evaluate(name => window.transactionRepositoryIntegration!.reset(name), databaseName)
 })
 
+test('reuses only matching Portfolio balances across account switch generations in IndexedDB', async ({
+  popup,
+  extensionId
+}) => {
+  const databaseName = `portfolio-account-switch-e2e-${crypto.randomUUID()}`
+  await popup.goto(
+    `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
+  )
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  await popup.evaluate(
+    name => window.transactionRepositoryIntegration!.initializeAccountSwitchPortfolioCache(name),
+    databaseName
+  )
+
+  await popup.reload()
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  await expect(
+    popup.evaluate(
+      name => window.transactionRepositoryIntegration!.inspectAccountSwitchPortfolioCache(name),
+      databaseName
+    )
+  ).resolves.toEqual({
+    exact: {
+      generationId: 'metadata:portfolio:account-switch:1',
+      cachedAt: 2_900,
+      status: 'ready',
+      totalRaw: '1',
+      balanceUpdatedAt: 2_000,
+      errorCode: undefined
+    },
+    fallback: {
+      generationId: 'metadata:portfolio:account-switch:2',
+      cachedAt: 3_100,
+      status: 'loading',
+      totalRaw: '2',
+      balanceUpdatedAt: 2_000,
+      errorCode: undefined
+    },
+    historicalError: {
+      generationId: 'metadata:portfolio:account-switch:2',
+      cachedAt: 3_200,
+      status: 'error',
+      totalRaw: '7',
+      balanceUpdatedAt: 2_000,
+      errorCode: 'rate-limited'
+    },
+    changedIdentity: null,
+    unrelatedAccount: null
+  })
+  await popup.evaluate(name => window.transactionRepositoryIntegration!.reset(name), databaseName)
+})
+
 test('resumes scoped Portfolio invalidations and preserves a newer revision', async ({
   popup,
   extensionId

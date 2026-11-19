@@ -58,7 +58,8 @@ import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
 import {
   formatFiatAmount,
   formatBaseUnitDecimalAmount,
-  formatTokenQuantity
+  formatTokenQuantity,
+  parseDisplayUnitAmount
 } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
@@ -76,6 +77,7 @@ import { useSettingsStore } from '@/store/settings-store'
 import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-policy'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { resolveZcashFundingAvailability } from '@/popup/services/transfer-availability'
+import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
 import {
   getFundingBalance,
   getFundingAmountError,
@@ -280,7 +282,6 @@ export function ZcashTransfer({
     accountDisplayNames
   )
   const isHardwareWallet = isZcashHardwareKeySource(currentWallet?.keySource)
-  const moveMaxExactSeen = useRef(false)
   // Keep a bare Move route stable while balances refresh; entry points pass a funded source explicitly.
   const defaultMoveSource = getDefaultZcashSelfMoveSource({
     addresses: currentAccount?.addresses,
@@ -456,6 +457,7 @@ export function ZcashTransfer({
     (!effectiveToAddress || isTransparentZcashAddress(effectiveToAddress)) &&
     !getFundingSourceUnavailableReason(currentWallet?.keySource, 'transparent')
   const sendPrivately = privateSendAvailable && privateSendScope === privacyScope
+  const usesFixedMaximum = isSelfMove || sendPrivately
   const memoUnsupported = Boolean(!isSelfMove && !sendPrivately && memo && !recipientSupportsMemo)
   const {
     preview: privatePreview,
@@ -497,7 +499,7 @@ export function ZcashTransfer({
       active &&
       balanceKnown &&
       !syncBlocked &&
-      !sendPrivately &&
+      !usesFixedMaximum &&
       !moveUnavailable &&
       !!effectiveToAddress &&
       !!fromAddress &&
@@ -562,7 +564,7 @@ export function ZcashTransfer({
   const retryFeeEstimate = () => {
     if (moveUnavailable) return
     if (isMaxFeeMode) void maxTransfer.request()
-    else if (maxSelected) {
+    else if (maxSelected && !usesFixedMaximum) {
       const retryAccountScope = getActiveAccountScopeKey()
       const retryTarget = effectiveToAddress
       const retryAmount = amount
@@ -614,7 +616,7 @@ export function ZcashTransfer({
   const maximumFeeReserveZats =
     maxSelected && !isMaxFeeMode ? fallbackFeeRef.current.zats : selectedFeeZats
   const estimatedFeeZec = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
-  const { amount: effectiveMaxStr } = resolveZcashFundingAvailability({
+  const { amount: feeAdjustedAvailable } = resolveZcashFundingAvailability({
     balance,
     fundingSource,
     selectedFeeZats: maximumFeeReserveZats,
@@ -622,11 +624,24 @@ export function ZcashTransfer({
     maximumAmount: maxTransfer.maxAmount,
     capTransparentToShieldable: isTransparentToShieldMove
   })
+  const effectiveMaxStr = usesFixedMaximum
+    ? formatBaseUnitDecimalAmount(
+        resolveNativeRouteMaximum({
+          family: 'zcash',
+          availableRaw: parseDisplayUnitAmount(
+            isTransparentToShieldMove ? shieldableBalance : sourceBalance.available,
+            ZEC_DECIMALS
+          ),
+          decimals: ZEC_DECIMALS
+        }),
+        ZEC_DECIMALS
+      )
+    : feeAdjustedAvailable
   const amountError = isTransparentToShieldMove
     ? null
-    : getFundingAmountError(amount, sourceBalance, effectiveMaxStr)
+    : getFundingAmountError(amount, sourceBalance, feeAdjustedAvailable)
   const amountErrorCopy = isTransparentToShieldMove
-    ? getZcashTransparentToShieldMoveAmountError(amount, balance, effectiveMaxStr)
+    ? getZcashTransparentToShieldMoveAmountError(amount, balance, feeAdjustedAvailable)
     : getFundingAmountErrorCopy(amountError)
   const reviewInsufficient =
     amountError !== null || (isTransparentToShieldMove && amountErrorCopy !== undefined)
@@ -662,19 +677,10 @@ export function ZcashTransfer({
   }, [showReview, staleSelectedMax, isConfirming, isConfidentialMove])
 
   useEffect(() => {
-    if (!maxSelected || !isConfidentialMove) moveMaxExactSeen.current = false
-  }, [maxSelected, isConfidentialMove])
-
-  useEffect(() => {
-    if (active && maxSelected && effectiveMaxStr) {
-      if (isConfidentialMove) {
-        if (showReview) return
-        if (maxTransfer.maxAmount) moveMaxExactSeen.current = true
-        else if (moveMaxExactSeen.current) return
-      }
+    if (active && maxSelected && effectiveMaxStr && !(usesFixedMaximum && showReview)) {
       setAmount(current => (current === effectiveMaxStr ? current : effectiveMaxStr))
     }
-  }, [active, maxSelected, effectiveMaxStr, isConfidentialMove, maxTransfer.maxAmount, showReview])
+  }, [active, maxSelected, effectiveMaxStr, usesFixedMaximum, showReview])
 
   useEffect(() => {
     if (!active) setShowReview(false)
@@ -1177,7 +1183,6 @@ export function ZcashTransfer({
                 onClick={() => {
                   setMaxSelected(true)
                   setAmount(effectiveMaxStr)
-                  if (effectiveToAddress) void maxTransfer.request()
                 }}
                 className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-1 font-medium text-primary disabled:opacity-40"
               >
@@ -1567,7 +1572,7 @@ export function ZcashTransfer({
               onClick={() => {
                 setMaxSelected(true)
                 setAmount(effectiveMaxStr)
-                void maxTransfer.request()
+                if (!usesFixedMaximum) void maxTransfer.request()
               }}
               className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-1 font-medium text-primary disabled:opacity-40"
             >

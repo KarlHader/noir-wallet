@@ -19,6 +19,7 @@ import {
   subscribeTransactionPortfolioInvalidations
 } from '@/infrastructure/persistence/repositories'
 import {
+  parseStorageV2ChainAccount,
   parseStorageV2GenerationId,
   parseStorageV2Snapshot,
   parseStorageV2SourceFingerprint
@@ -454,7 +455,7 @@ async function inspectProductionEvmMonitor() {
     : null
 }
 
-const portfolioChainAccount = {
+const portfolioChainAccount = parseStorageV2ChainAccount({
   id: 'chain-account:portfolio:evm',
   scope: {
     keyDomainId: 'key-domain:portfolio',
@@ -467,7 +468,7 @@ const portfolioChainAccount = {
     value: '0x1111111111111111111111111111111111111111'
   },
   createdAt: 1_000
-}
+})
 
 function portfolioSource(totalRaw: string, status: 'ready' | 'error' = 'ready') {
   return {
@@ -524,6 +525,73 @@ async function inspectPortfolioCache(databaseName: string) {
     })),
     deleted,
     remaining: (await repository.list(generationId, scope)).length
+  }
+}
+
+async function initializeAccountSwitchPortfolioCache(databaseName: string) {
+  await deleteDatabase(databaseName)
+  const repository = new IndexedDbPortfolioCacheRepository({ databaseName })
+  const first = parseStorageV2GenerationId('metadata:portfolio:account-switch:1')
+  const second = parseStorageV2GenerationId('metadata:portfolio:account-switch:2')
+  const errorAccount = parseStorageV2ChainAccount({
+    ...portfolioChainAccount,
+    id: 'chain-account:portfolio:error'
+  })
+  const otherAccount = parseStorageV2ChainAccount({
+    ...portfolioChainAccount,
+    id: 'chain-account:portfolio:other',
+    scope: { ...portfolioChainAccount.scope, accountId: 'account:other' }
+  })
+
+  await repository.put({ generationId: first, cachedAt: 2_900, source: portfolioSource('1') })
+  await repository.put({ generationId: second, cachedAt: 3_100, source: portfolioSource('2') })
+  await repository.put({
+    generationId: second,
+    cachedAt: 3_200,
+    source: { ...portfolioSource('7', 'error'), chainAccount: errorAccount }
+  })
+  await repository.put({
+    generationId: second,
+    cachedAt: 3_300,
+    source: { ...portfolioSource('9'), chainAccount: otherAccount }
+  })
+}
+
+async function inspectAccountSwitchPortfolioCache(databaseName: string) {
+  const repository = new IndexedDbPortfolioCacheRepository({ databaseName })
+  const first = parseStorageV2GenerationId('metadata:portfolio:account-switch:1')
+  const current = parseStorageV2GenerationId('metadata:portfolio:account-switch:3')
+  const errorAccount = parseStorageV2ChainAccount({
+    ...portfolioChainAccount,
+    id: 'chain-account:portfolio:error'
+  })
+  const changedIdentity = parseStorageV2ChainAccount({
+    ...portfolioChainAccount,
+    identity: {
+      ...portfolioChainAccount.identity,
+      value: '0x2222222222222222222222222222222222222222'
+    }
+  })
+  const unrelatedAccount = parseStorageV2ChainAccount({
+    ...portfolioChainAccount,
+    scope: { ...portfolioChainAccount.scope, accountId: 'account:unrelated' }
+  })
+  const summarize = (record: Awaited<ReturnType<typeof repository.get>>) =>
+    record && {
+      generationId: record.generationId,
+      cachedAt: record.cachedAt,
+      status: record.source.status,
+      totalRaw: record.source.balances[0]?.totalRaw,
+      balanceUpdatedAt: record.source.balances[0]?.updatedAt,
+      errorCode: record.source.errorCode
+    }
+
+  return {
+    exact: summarize(await repository.getForActiveChainAccount(first, portfolioChainAccount)),
+    fallback: summarize(await repository.getForActiveChainAccount(current, portfolioChainAccount)),
+    historicalError: summarize(await repository.getForActiveChainAccount(current, errorAccount)),
+    changedIdentity: await repository.getForActiveChainAccount(current, changedIdentity),
+    unrelatedAccount: await repository.getForActiveChainAccount(current, unrelatedAccount)
   }
 }
 
@@ -888,6 +956,8 @@ export interface TransactionRepositoryIntegration {
   readonly resetProductionEvmMonitor: typeof resetProductionEvmMonitor
   readonly initializePortfolioCache: typeof initializePortfolioCache
   readonly inspectPortfolioCache: typeof inspectPortfolioCache
+  readonly initializeAccountSwitchPortfolioCache: typeof initializeAccountSwitchPortfolioCache
+  readonly inspectAccountSwitchPortfolioCache: typeof inspectAccountSwitchPortfolioCache
   readonly initializePortfolioInvalidations: typeof initializePortfolioInvalidations
   readonly inspectPortfolioInvalidations: typeof inspectPortfolioInvalidations
   readonly initializeProductionEvmPortfolio: typeof initializeProductionEvmPortfolio
@@ -917,6 +987,8 @@ window.transactionRepositoryIntegration = Object.freeze({
   resetProductionEvmMonitor,
   initializePortfolioCache,
   inspectPortfolioCache,
+  initializeAccountSwitchPortfolioCache,
+  inspectAccountSwitchPortfolioCache,
   initializePortfolioInvalidations,
   inspectPortfolioInvalidations,
   initializeProductionEvmPortfolio,

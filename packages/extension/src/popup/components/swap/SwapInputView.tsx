@@ -491,23 +491,21 @@ export function SwapAssetCard({
 
         {isReadOnly ? (
           <div className="min-w-0 flex-1 text-right">
-            <p
+            <div
               aria-live="polite"
               aria-label={isEstimatedAmount && amount ? `Estimated output: ${amount}` : undefined}
               title={amount || undefined}
               className={cn(
-                'flex h-[26px] items-center justify-end overflow-x-auto whitespace-nowrap font-sans text-xl font-semibold leading-[26px]',
+                'flex h-[26px] items-center justify-end whitespace-nowrap font-sans text-xl font-semibold leading-[26px]',
+                amount ? 'overflow-x-auto' : 'overflow-hidden',
                 isEstimatedAmount && 'text-muted'
               )}
             >
               {isAmountLoading && !amount ? (
-                <Icon
-                  icon="lucide:loader-circle"
-                  width={20}
-                  height={20}
-                  className="ml-auto animate-spin text-primary"
-                  aria-label="Refreshing quote"
-                />
+                <>
+                  <span className="sr-only">Refreshing quote</span>
+                  <Skeleton className="h-5 w-20 max-w-full shrink-0" />
+                </>
               ) : amount ? (
                 <>
                   {isEstimatedAmount && <span aria-hidden="true">≈ </span>}
@@ -516,31 +514,25 @@ export function SwapAssetCard({
               ) : (
                 '—'
               )}
-            </p>
-            <p className="mt-0.5 truncate text-xs leading-4 text-muted">
-              {isEstimatedAmount ? (
-                <span className="inline-flex items-center justify-end gap-1">
-                  {isAmountLoading && (
-                    <Icon
-                      icon="lucide:loader-circle"
-                      width={11}
-                      height={11}
-                      className="animate-spin"
-                      aria-hidden="true"
-                    />
-                  )}
-                  <span>
-                    {fiatValue
-                      ? `≈${formatFiatAmount(fiatValue, { showSign: true })}`
-                      : 'Estimated'}
-                  </span>
-                </span>
-              ) : fiatValue ? (
-                formatFiatAmount(fiatValue, { showSign: true })
+            </div>
+            <div className="mt-0.5 flex h-4 min-w-0 items-center justify-end gap-1 text-xs leading-4 text-muted">
+              {isAmountLoading && !amount ? (
+                <Skeleton className="h-2.5 w-12 max-w-full shrink-0" />
               ) : (
-                '—'
+                <>
+                  {isAmountLoading && isEstimatedAmount && (
+                    <Skeleton className="h-2 w-3 shrink-0" />
+                  )}
+                  <span className="min-w-0 truncate">
+                    {fiatValue
+                      ? `${isEstimatedAmount ? '≈' : ''}${formatFiatAmount(fiatValue, { showSign: true })}`
+                      : isEstimatedAmount
+                        ? 'Estimated'
+                        : '—'}
+                  </span>
+                </>
               )}
-            </p>
+            </div>
           </div>
         ) : (
           <label htmlFor={amountInputId} className="min-w-0 flex-1 cursor-text text-right">
