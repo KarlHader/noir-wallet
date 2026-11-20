@@ -12,6 +12,7 @@ import {
   parseVaultGroupSaveRequest,
   parseVaultGroupSummaryRequest,
   parseCreationRequest,
+  parseVaultRecoverRequest,
   type VaultGroupMethod,
   type VaultGroupSchema,
   type VaultGroupSummaryResponse
@@ -25,10 +26,12 @@ import type { MultisigGroupRecord } from '@/core/multisig/types'
 import {
   isVaultAddress,
   isVaultFingerprint,
+  parseSealedVaultRecord,
   type SealedVaultRecord,
   type VaultNetwork
 } from '@/core/multisig/vault-record'
 import type { MultisigGroupScope } from '@/lib/multisig-group-storage'
+import type { PendingPhoneRecovery } from '@/lib/multisig-recovery-storage'
 
 export interface MultisigVaultWallet {
   id: string
@@ -47,13 +50,29 @@ export interface MultisigVaultDeps {
   isUnlocked(): Promise<boolean>
   bindCredential(walletId: string): Promise<boolean>
   forwardToWorker(
-    method: 'vault.dkg.open' | 'vault.record.summary',
+    method: 'vault.dkg.open' | 'vault.record.summary' | 'vault.record.recoverPrepare',
     payload: Readonly<Record<string, unknown>>
   ): Promise<unknown>
   readRecord(scope: MultisigGroupScope): Promise<SealedVaultRecord | null>
   /** Stores the record and proves it landed; on failure the scope's earlier record is kept. */
   saveRecord(scope: MultisigGroupScope, record: SealedVaultRecord): Promise<void>
   readGroupId(scope: MultisigGroupScope): Promise<string | null>
+  recovery?: {
+    withScope<T>(scope: MultisigGroupScope, operation: () => Promise<T>): Promise<T>
+    readCreationReady(scope: MultisigGroupScope, groupId: string): Promise<boolean>
+    assertSafe(scope: MultisigGroupScope): Promise<void>
+    invalidateSigning(scope: MultisigGroupScope): Promise<void>
+    readGeneration(): Promise<number>
+    readPending(recoveryId: string): Promise<PendingPhoneRecovery | null>
+    savePending(recoveryId: string, pending: PendingPhoneRecovery): Promise<void>
+    removePending(recoveryId: string): Promise<void>
+    replaceRecord(
+      scope: MultisigGroupScope,
+      previous: SealedVaultRecord,
+      candidate: SealedVaultRecord,
+      assertAuthorized: () => Promise<void>
+    ): Promise<void>
+  }
   creation?: {
     /** Stops sync before metadata locking and keeps it paused until the mutation settles. */
     withMutation<T>(walletId: string, operation: () => Promise<T>): Promise<T>
@@ -95,6 +114,146 @@ const CANNOT_OPEN = 'Vault record cannot be opened'
 const CANNOT_START = 'Vault setup could not start'
 
 export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVaultHandler {
+  const recoveryLifetimeMs = 10 * 60_000
+  async function authorizeRecovery(scope: MultisigGroupScope): Promise<SealedVaultRecord> {
+    if (!deps.recovery) throw new Error(SCOPE_UNAVAILABLE)
+    const state = await deps.readWalletState()
+    if (state.activeAccountId !== scope.accountId) throw new Error(NOT_ACTIVE)
+    const { activeWalletId } = await checkScope(scope)
+    await requireBoundActiveWallet(scope, activeWalletId)
+    const record = await deps.readRecord(scope)
+    if (
+      !record ||
+      record.version !== 2 ||
+      record.ownerWalletId !== scope.walletId ||
+      record.accountId !== scope.accountId ||
+      record.network !== scope.network ||
+      (await deps.readGroupId(scope)) !== record.groupId ||
+      !(await deps.recovery.readCreationReady(scope, record.groupId))
+    )
+      throw new Error(SCOPE_UNAVAILABLE)
+    const latest = await deps.readWalletState()
+    if (
+      latest.network !== scope.network ||
+      latest.activeWalletId !== scope.walletId ||
+      latest.activeAccountId !== scope.accountId ||
+      !latest.wallets.find(
+        wallet =>
+          wallet.id === scope.walletId &&
+          wallet.mnemonic &&
+          wallet.accountIds.includes(scope.accountId)
+      ) ||
+      !(await deps.isUnlocked())
+    )
+      throw new Error(SCOPE_UNAVAILABLE)
+    return record
+  }
+  async function assertRecoveryPending(id: string, pending: PendingPhoneRecovery): Promise<void> {
+    const current = await deps.recovery!.readPending(id)
+    if (
+      !current ||
+      current.expiresAt !== pending.expiresAt ||
+      current.contextGeneration !== pending.contextGeneration ||
+      current.scope.network !== pending.scope.network ||
+      current.scope.walletId !== pending.scope.walletId ||
+      current.scope.accountId !== pending.scope.accountId ||
+      !sealedVaultRecordEquals(current.previous, pending.previous) ||
+      !sealedVaultRecordEquals(current.candidate, pending.candidate)
+    )
+      throw new Error(SCOPE_UNAVAILABLE)
+  }
+  async function handleRecovery(
+    method:
+      | 'vault.group.recover.prepare'
+      | 'vault.group.recover.complete'
+      | 'vault.group.recover.cancel',
+    payload: unknown
+  ): Promise<unknown> {
+    const request = parseVaultRecoverRequest(method, payload)
+    if (method === 'vault.group.recover.prepare') {
+      if (!deps.recovery) throw new Error(SCOPE_UNAVAILABLE)
+      const contextGeneration = await deps.recovery!.readGeneration()
+      const previous = await authorizeRecovery(request.scope)
+      const reply = (await deps.forwardToWorker('vault.record.recoverPrepare', {
+        record: previous,
+        ownerWalletId: request.scope.walletId,
+        request: request.request!
+      })) as { record?: unknown; reply?: unknown }
+      const candidate = parseSealedVaultRecord(reply?.record)
+      if (
+        !candidate ||
+        candidate.version !== 2 ||
+        candidate.network !== request.scope.network ||
+        candidate.accountId !== request.scope.accountId ||
+        candidate.ownerWalletId !== request.scope.walletId ||
+        candidate.groupId !== previous.groupId ||
+        typeof reply?.reply !== 'string' ||
+        !isBase64Text(reply.reply) ||
+        sealedVaultRecordEquals(candidate, previous)
+      )
+        throw new Error(CANNOT_OPEN)
+      const current = await authorizeRecovery(request.scope)
+      if (
+        !sealedVaultRecordEquals(current, previous) ||
+        (await deps.recovery!.readGeneration()) !== contextGeneration
+      )
+        throw new Error(SCOPE_UNAVAILABLE)
+      const recoveryId = crypto.randomUUID()
+      const expiresAt = Date.now() + recoveryLifetimeMs
+      await deps.recovery!.savePending(recoveryId, {
+        scope: request.scope,
+        previous,
+        candidate,
+        expiresAt,
+        contextGeneration
+      })
+      return { recoveryId, reply: reply.reply, expiresAt }
+    }
+    await authorizeRecovery(request.scope)
+    const pending = await deps.recovery!.readPending(request.recoveryId!)
+    if (
+      !pending ||
+      pending.expiresAt <= Date.now() ||
+      pending.contextGeneration !== (await deps.recovery!.readGeneration()) ||
+      pending.scope.network !== request.scope.network ||
+      pending.scope.walletId !== request.scope.walletId ||
+      pending.scope.accountId !== request.scope.accountId
+    )
+      throw new Error(SCOPE_UNAVAILABLE)
+    if (method === 'vault.group.recover.cancel') {
+      await deps.recovery!.removePending(request.recoveryId!)
+      return true
+    }
+    const current = await authorizeRecovery(request.scope)
+    if (sealedVaultRecordEquals(current, pending.candidate)) {
+      await deps.recovery!.removePending(request.recoveryId!)
+      return true
+    }
+    if (!sealedVaultRecordEquals(current, pending.previous)) throw new Error(SCOPE_UNAVAILABLE)
+    await deps.recovery!.assertSafe(request.scope)
+    await assertRecoveryPending(request.recoveryId!, pending)
+    await deps.recovery!.invalidateSigning(request.scope)
+    await deps.recovery!.withScope(request.scope, async () => {
+      if (pending.contextGeneration !== (await deps.recovery!.readGeneration()))
+        throw new Error(SCOPE_UNAVAILABLE)
+      const current = await authorizeRecovery(request.scope)
+      if (!sealedVaultRecordEquals(current, pending.previous)) throw new Error(SCOPE_UNAVAILABLE)
+      await deps.recovery!.replaceRecord(
+        request.scope,
+        pending.previous,
+        pending.candidate,
+        async () => {
+          await assertRecoveryPending(request.recoveryId!, pending)
+          if (pending.contextGeneration !== (await deps.recovery!.readGeneration()))
+            throw new Error(SCOPE_UNAVAILABLE)
+          const latest = await authorizeRecovery(request.scope)
+          if (!sealedVaultRecordEquals(latest, pending.previous)) throw new Error(SCOPE_UNAVAILABLE)
+        }
+      )
+    })
+    await deps.recovery!.removePending(request.recoveryId!)
+    return true
+  }
   function creation() {
     if (!deps.creation) throw new Error('Independent account creation is unavailable')
     return deps.creation
@@ -561,6 +720,11 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
           break
         case 'vault.group.summary':
           run = summary(payload)
+          break
+        case 'vault.group.recover.prepare':
+        case 'vault.group.recover.complete':
+        case 'vault.group.recover.cancel':
+          run = handleRecovery(method, payload)
           break
         default:
           run = Promise.reject(new Error(INVALID_REQUEST))

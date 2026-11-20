@@ -3,7 +3,11 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { x25519 } from '@noble/curves/ed25519'
 import { pairingSas } from '../../../src/core/multisig/ble/sas'
-import { ChannelError, connectSecureChannel } from '../../../src/core/multisig/ble/secure-channel'
+import {
+  ChannelError,
+  connectSecureChannel,
+  RECOVER_NOISE_PROLOGUE
+} from '../../../src/core/multisig/ble/secure-channel'
 import { generateNoiseStatic } from '../../../src/core/multisig/ble/noise'
 import { createFakePhone } from './helpers/ble-phone'
 import { identityFromSeed } from './helpers/identity'
@@ -80,6 +84,26 @@ test('a phone using another prologue fails the handshake', async () => {
   await expect(
     connectSecureChannel(phone.open, {
       identity: extensionIdentity,
+      noiseStatic: generateNoiseStatic(),
+      handshakeTimeoutMs: 500
+    })
+  ).rejects.toBeInstanceOf(ChannelError)
+})
+
+test('recovery prologue only connects to a recovery session', async () => {
+  const { extensionIdentity, phone } = await setup({ prologue: RECOVER_NOISE_PROLOGUE })
+  const channel = await connectSecureChannel(phone.open, {
+    identity: extensionIdentity,
+    noiseStatic: generateNoiseStatic(),
+    prologue: RECOVER_NOISE_PROLOGUE
+  })
+  expect(channel.sas).toBe(pairingSas(phone.responder.handshakeHash()))
+  channel.close()
+
+  const pairing = await setup({ prologue: RECOVER_NOISE_PROLOGUE })
+  await expect(
+    connectSecureChannel(pairing.phone.open, {
+      identity: pairing.extensionIdentity,
       noiseStatic: generateNoiseStatic(),
       handshakeTimeoutMs: 500
     })

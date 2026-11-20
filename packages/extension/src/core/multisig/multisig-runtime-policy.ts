@@ -23,6 +23,7 @@ export function isVaultRpcBlocked(
 export function isBackgroundOnlyVaultRpc(method: string): boolean {
   return (
     method === 'vault.record.summary' ||
+    method === 'vault.record.recoverPrepare' ||
     method === 'vault.dkg.open' ||
     method.startsWith('vault.sign.worker.') ||
     method === 'wallet.registerFrostAccount' ||

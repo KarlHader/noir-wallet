@@ -10,6 +10,7 @@ import type { DeviceIdentity } from './identity'
 import type { RosterManifest } from './roster'
 import { parseIdentityPublicKey } from './identity'
 import {
+  effectiveSigningRoster,
   openVaultRecord,
   parseSealedVaultRecord,
   type SealedVaultRecord,
@@ -480,7 +481,7 @@ export function createSigningWorkerRpcHandler(
         check(authority)
         keyset(opened.header, opened.share, request)
         if (opened.header.version !== 2) throw new Error(FAIL)
-        roster = structuredClone(opened.header.roster)
+        roster = structuredClone(effectiveSigningRoster(opened.header))
         participants = opened.header.participants
         await identity(authority, opened.header)
         check(authority)
@@ -635,7 +636,7 @@ export function createSigningWorkerRpcHandler(
         const engine = await SigningCoordinatorSession.open(wasm, {
           scope: entry.request.scope,
           binding: entry.binding,
-          roster: opened.header.roster,
+          roster: effectiveSigningRoster(opened.header),
           identity: device,
           keyPackage: key,
           publicKeyPackage: base64ToBytes(opened.header.publicKeyPackage),

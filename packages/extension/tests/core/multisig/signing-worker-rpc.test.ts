@@ -7,9 +7,13 @@ import {
   isSigningWorkerMethod
 } from '../../../src/core/multisig/signing-worker-rpc'
 import type { SigningStatus } from '../../../src/core/multisig/signing-coordinator'
-import { loadWalletWasm } from './helpers/vault-wasm'
-import { bytesToBase64 } from '../../../src/lib/bytes'
+import { loadWalletWasm, TEST_MNEMONIC } from './helpers/vault-wasm'
+import { base64ToBytes, bytesToBase64 } from '../../../src/lib/bytes'
 import { readFile } from 'node:fs/promises'
+import { openVaultRecord, sealVaultRecord } from '../../../src/core/multisig/vault-record'
+import { generateDeviceIdentity } from '../../../src/core/multisig/identity'
+import { createEnvelopeSigner } from '../../../src/core/multisig/envelope-signing'
+import { parseSignEnvelopePayload } from '../../../src/core/multisig/sign-protocol'
 
 const status = (): SigningStatus => ({
   sessionId: 'session',
@@ -312,4 +316,101 @@ test('a prepared review cannot start without a valid immutable chain policy', as
   await expect(handler.handle('vault.sign.worker.prepare', request)).rejects.toThrow(
     'Signing session is unavailable'
   )
+})
+
+test('restored phone identity is pinned for both review and signing ingress', async () => {
+  const rig = await realReviewFixture()
+  const opened = await openVaultRecord(rig.request.sealedRecord, TEST_MNEMONIC)
+  if (opened.header.version !== 2) throw new Error('Expected v2 record')
+  const restored = await generateDeviceIdentity()
+  const sealedRecord = await sealVaultRecord(
+    { ...opened.header, recoveredPhoneIdentityPublicKey: bytesToBase64(restored.publicKey) },
+    opened.share,
+    TEST_MNEMONIC
+  )
+  opened.share.fill(0)
+  const native = createProtocolOnlySigningWasm(rig.wasm)
+  const pczt = Uint8Array.from(
+    Buffer.from(
+      (await readFile(new URL('./fixtures/ironwood_1action.hex', import.meta.url), 'utf8')).trim(),
+      'hex'
+    )
+  )
+  for (const [restoredKey, identity] of [
+    [false, rig.identities[1]],
+    [true, restored]
+  ] as const) {
+    const handler = createSigningWorkerRpcHandler(native, {
+      credential: () => rig.credential,
+      network: () => 'testnet',
+      identity: async () => rig.identities[0],
+      reviewProvider: {
+        available: true,
+        prepare: async ({ intent }) => ({
+          pczt: pczt.slice(),
+          summary: {
+            recipient: intent.recipient,
+            amount: intent.amount,
+            memo: intent.memo,
+            fee: '10000'
+          },
+          reviewedChainPolicy: { expiryHeight: 4_134_041, consensusBranchId: 0x37a5165b }
+        })
+      }
+    })
+    const reviewed = await handler.handle('vault.sign.worker.prepare', {
+      ...rig.request,
+      sealedRecord
+    })
+    expect(reviewed.available).toBe(true)
+    if (!reviewed.available) throw new Error('Expected reviewed transfer')
+    const ref = {
+      walletId: rig.request.scope.walletId,
+      reviewId: reviewed.binding.reviewId,
+      sessionId: reviewed.binding.sessionId
+    }
+    const roster = await handler.handle('vault.sign.worker.roster', ref)
+    expect(roster.participants[1].identityPublicKey).toBe(bytesToBase64(restored.publicKey))
+    let progress = await handler.handle('vault.sign.worker.start', ref)
+    for (let index = 0; progress.persistence && index < 3; index++)
+      progress = await handler.handle('vault.sign.worker.advance', {
+        ...ref,
+        acknowledgement: { ...progress.persistence, persisted: true }
+      })
+    expect(progress.outbound).toHaveLength(1)
+    const signer = new rig.wasm.Signer(
+      base64ToBytes(ref.sessionId),
+      1,
+      2,
+      rig.phones[0].keyPackage()
+    )
+    try {
+      const commitment = signer.init(
+        parseSignEnvelopePayload(JSON.parse(progress.outbound[0].encrypted_payload))!
+      )
+      const envelopeSigner = createEnvelopeSigner({
+        groupId: rig.request.scope.groupId,
+        sessionId: ref.sessionId,
+        senderId: 'device-2',
+        signingKey: identity.signingKeys.privateKey
+      })
+      const incoming = envelopeSigner.next('SIGN_COMMITMENTS', 'device-1', {
+        envelope: bytesToBase64(commitment)
+      })
+      if (restoredKey) {
+        const accepted = await handler.handle('vault.sign.worker.ingest', {
+          ...ref,
+          envelope: await incoming
+        })
+        expect(accepted.status.phase).not.toBe('aborted')
+      } else {
+        await expect(
+          handler.handle('vault.sign.worker.ingest', { ...ref, envelope: await incoming })
+        ).rejects.toThrow()
+      }
+    } finally {
+      signer.free()
+      await handler.handle('vault.sign.worker.close', ref).catch(() => {})
+    }
+  }
 })

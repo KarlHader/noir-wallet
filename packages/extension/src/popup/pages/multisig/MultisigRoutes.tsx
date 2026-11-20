@@ -12,6 +12,7 @@ import { TeamPage } from './TeamPage'
 import { ThresholdPage } from './ThresholdPage'
 import { VerifyPage } from './VerifyPage'
 import { SendPage } from './SendPage'
+import { RecoverPage } from './RecoverPage'
 
 const SESSION_FREE_PATHS: ReadonlySet<string> = new Set(['create', 'create/failed'])
 
@@ -81,6 +82,7 @@ export function MultisigRoutes() {
     <Routes>
       <Route path="team" element={<TeamPage />} />
       <Route path="send" element={<SendPage />} />
+      <Route path="recover" element={<RecoverPage />} />
     </Routes>
   )
 }

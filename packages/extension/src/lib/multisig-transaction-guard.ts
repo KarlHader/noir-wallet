@@ -7,7 +7,11 @@ import {
   parseSigningJournalScopeKey,
   signingJournalScopeKey
 } from '@/core/multisig/signing-journal'
-import { parseSigningIntent, signingIntentBinding } from '@/core/multisig/signing-journal'
+import {
+  isSigningIntentTerminal,
+  parseSigningIntent,
+  signingIntentBinding
+} from '@/core/multisig/signing-journal'
 import { storageJsonEquals } from './storage-json-equality'
 import { hasFinalizationBarrier } from './multisig-finalization-barrier'
 
@@ -151,4 +155,43 @@ export async function assertNoUnresolvedMultisigTransactionsLocked(
   for (const scope of barrierScopes.values())
     if (await hasFinalizationBarrier(scope))
       throw new Error('Resolve pending multisig finalization before deleting this account')
+}
+
+/** A roster change cannot overtake an active review, even before it has created a nonce. */
+export async function assertNoMultisigRecoveryConflictLocked(scope: {
+  network: 'mainnet' | 'testnet'
+  walletId: string
+  accountId: string
+}): Promise<void> {
+  await assertNoUnresolvedMultisigTransactionsLocked(
+    (walletId, accountId) => walletId === scope.walletId && accountId === scope.accountId
+  )
+  const raw: unknown = (await chrome.storage.local.get('multisig_signing_v1')).multisig_signing_v1
+  if (raw === undefined) return
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    throw new Error('Multisig signing records are unavailable')
+  for (const [key, account] of Object.entries(raw)) {
+    const parsedScope = parseSigningJournalScopeKey(key)
+    if (
+      !parsedScope ||
+      !account ||
+      typeof account !== 'object' ||
+      Array.isArray(account) ||
+      !Array.isArray((account as { records?: unknown }).records)
+    )
+      throw new Error('Multisig signing records are unavailable')
+    if (
+      parsedScope.network !== scope.network ||
+      parsedScope.walletId !== scope.walletId ||
+      parsedScope.accountId !== scope.accountId
+    )
+      continue
+    for (const row of (account as { records: unknown[] }).records) {
+      const intent = parseSigningIntent(row)
+      if (signingJournalScopeKey(intent) !== key)
+        throw new Error('Multisig signing records are unavailable')
+      if (!isSigningIntentTerminal(intent.phase))
+        throw new Error('Resolve pending multisig signing before recovering this phone')
+    }
+  }
 }

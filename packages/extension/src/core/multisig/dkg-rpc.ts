@@ -22,10 +22,13 @@ import {
   openVaultRecord,
   parseSealedVaultRecord,
   parseVaultRecordBinding,
+  sealVaultRecord,
   type VaultRecordBinding,
   type SealedVaultRecord,
   type VaultRecordSummary
 } from './vault-record'
+import { checkRecoverRequest, sealRecoverReply } from './recover-handshake'
+import { buildRestoreConfig } from './recover-config'
 
 export type VaultDkgAcceptRequest = {
   sessionId: string
@@ -75,6 +78,10 @@ export interface VaultDkgSchema {
     }
     response: VaultRecordSummary
   }
+  'vault.record.recoverPrepare': {
+    request: { record: SealedVaultRecord; ownerWalletId: string; request: string }
+    response: { record: SealedVaultRecord; reply: string }
+  }
 }
 
 export type VaultDkgMethod = keyof VaultDkgSchema
@@ -85,7 +92,8 @@ const METHODS: readonly VaultDkgMethod[] = [
   'vault.dkg.acceptRound2',
   'vault.dkg.confirmRound1',
   'vault.dkg.close',
-  'vault.record.summary'
+  'vault.record.summary',
+  'vault.record.recoverPrepare'
 ]
 
 export function isVaultDkgMethod(method: string): method is VaultDkgMethod {
@@ -258,6 +266,22 @@ function parseSummary(payload: unknown): VaultDkgSchema['vault.record.summary'][
   }
 }
 
+function parseRecoverPrepare(
+  payload: unknown
+): VaultDkgSchema['vault.record.recoverPrepare']['request'] {
+  if (
+    !hasKeys(payload, ['record', 'ownerWalletId', 'request']) ||
+    !isVaultWalletId(payload.ownerWalletId) ||
+    !isBase64Text(payload.request)
+  )
+    throw new Error(INVALID_REQUEST)
+  const record = parseSealedVaultRecord(payload.record)
+  if (!record || record.version !== 2) throw new Error(INVALID_REQUEST)
+  const bytes = base64ToBytes(payload.request)
+  if (bytesToBase64(bytes) !== payload.request) throw new Error(INVALID_REQUEST)
+  return { record, ownerWalletId: payload.ownerWalletId, request: payload.request }
+}
+
 function encodeBySlot(map: ReadonlyMap<number, Uint8Array>): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [slot, bytes] of map) out[String(slot)] = bytesToBase64(bytes)
@@ -398,9 +422,82 @@ export function createVaultDkgRpcHandler(
     }
   }
 
+  async function recoverPrepare(
+    request: VaultDkgSchema['vault.record.recoverPrepare']['request']
+  ): Promise<VaultDkgSchema['vault.record.recoverPrepare']['response']> {
+    let share: Uint8Array | null = null
+    let config: Uint8Array | null = null
+    try {
+      const mnemonic = resolveMnemonic(request.ownerWalletId)
+      const opened = await openVaultRecord(request.record, mnemonic)
+      share = opened.share
+      const { header } = opened
+      if (
+        header.version !== 2 ||
+        header.ownerWalletId !== request.ownerWalletId ||
+        header.participants !== 2 ||
+        header.threshold !== 2
+      )
+        throw new Error('unsupported recovery')
+      const ak = hexToBytes(header.groupVerifyingKey)
+      const backup = wasm.ShareBackup.from_bytes(share, ak, 0)
+      try {
+        if (backup.slot() !== 0) throw new Error('invalid share')
+      } finally {
+        backup.free()
+      }
+      if (
+        !wasm.Keyset.ufvk_matches_ak(header.ufvk, ak) ||
+        bytesToHex(wasm.Keyset.fvk_from_ufvk(header.ufvk)) !==
+          bytesToHex(base64ToBytes(header.fvk)) ||
+        bytesToHex(wasm.Keyset.fingerprint_from_ufvk(header.ufvk, header.network === 'mainnet')) !==
+          header.fingerprint
+      )
+        throw new Error('invalid keyset')
+      const bytes = base64ToBytes(request.request)
+      const checked = checkRecoverRequest(bytes, {
+        publicKeyPackage: base64ToBytes(header.publicKeyPackage),
+        nowSeconds: Math.floor(Date.now() / 1000),
+        expectedSlot: 1
+      })
+      if (!checked.ok) throw new Error('invalid phone proof')
+      const phoneIdentity = bytesToBase64(checked.request.identityPublicKey)
+      if (phoneIdentity === header.roster.participants[0].identityPublicKey)
+        throw new Error('duplicate identity')
+      config = buildRestoreConfig({
+        publicKeyPackage: header.publicKeyPackage,
+        ufvk: header.ufvk,
+        fingerprint: header.fingerprint,
+        participants: header.participants,
+        owner: {
+          identityPublicKey: base64ToBytes(header.roster.participants[0].identityPublicKey),
+          name: 'Noir Wallet'
+        },
+        phoneName: 'iPhone',
+        phoneIdentityPublicKey: checked.request.identityPublicKey
+      })
+      const reply = await sealRecoverReply(bytes, config)
+      const record = await sealVaultRecord(
+        { ...header, recoveredPhoneIdentityPublicKey: phoneIdentity },
+        share,
+        mnemonic
+      )
+      if (resolveMnemonic(request.ownerWalletId) !== mnemonic)
+        throw new Error('Wallet credential session changed')
+      return { record, reply: bytesToBase64(reply) }
+    } catch {
+      throw new Error(RECORD_UNOPENABLE)
+    } finally {
+      share?.fill(0)
+      config?.fill(0)
+    }
+  }
+
   async function dispatch(method: VaultDkgMethod, payload: unknown): Promise<unknown> {
     // Not a ceremony call: it neither uses nor sweeps the session table.
     if (method === 'vault.record.summary') return summarize(parseSummary(payload))
+    if (method === 'vault.record.recoverPrepare')
+      return recoverPrepare(parseRecoverPrepare(payload))
     const at = now()
     expireIdle(at)
     switch (method) {

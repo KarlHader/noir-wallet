@@ -21,6 +21,16 @@ import {
   readCreationOperation,
   saveCreationOperation
 } from '../../../src/lib/multisig-creation-storage'
+import {
+  MULTISIG_PHONE_RECOVERY_PENDING_STORAGE_KEY,
+  MULTISIG_PHONE_RECOVERY_GENERATION_STORAGE_KEY,
+  readPhoneRecoveryGeneration,
+  invalidatePendingPhoneRecoveries,
+  readPendingPhoneRecovery,
+  savePendingPhoneRecovery,
+  removePendingPhoneRecovery,
+  type PendingPhoneRecovery
+} from '../../../src/lib/multisig-recovery-storage'
 
 const fixture = JSON.parse(
   await readFile(new URL('./fixtures/vault-record-v1.json', import.meta.url), 'utf8')
@@ -34,6 +44,19 @@ const SECOND: SealedVaultRecord = {
   salt: 'AQECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 }
 
+const RECOVERY_ID = '11111111-2222-4333-8444-555555555555'
+const OTHER_RECOVERY_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+const PREVIOUS_V2 = { ...RECORD, version: 2 as const, ownerWalletId: 'w', accountId: 'a' }
+const CANDIDATE_V2 = { ...PREVIOUS_V2, iv: 'AAAAAAAAAAAAAAAA' }
+const pendingRecovery = (overrides: Partial<PendingPhoneRecovery> = {}): PendingPhoneRecovery => ({
+  scope: TESTNET,
+  previous: PREVIOUS_V2,
+  candidate: CANDIDATE_V2,
+  expiresAt: Date.now() + 60_000,
+  contextGeneration: 0,
+  ...overrides
+})
+
 let env: ReturnType<typeof installStorageEnv>
 
 beforeEach(() => {
@@ -45,6 +68,27 @@ afterEach(() => {
 })
 
 type StorageArea = { set: (items: Record<string, unknown>) => Promise<void> }
+
+function installSessionStorage(): Map<string, unknown> {
+  const store = new Map<string, unknown>()
+  const storage = (globalThis as unknown as { chrome: { storage: Record<string, unknown> } }).chrome
+    .storage
+  storage.session = {
+    get: async (keys: string | string[]) =>
+      Object.fromEntries(
+        (Array.isArray(keys) ? keys : [keys])
+          .filter(key => store.has(key))
+          .map(key => [key, structuredClone(store.get(key))])
+      ),
+    set: async (items: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(items)) store.set(key, structuredClone(value))
+    },
+    remove: async (key: string) => {
+      store.delete(key)
+    }
+  }
+  return store
+}
 
 function storageArea(): StorageArea {
   return (globalThis as unknown as { chrome: { storage: { local: StorageArea } } }).chrome.storage
@@ -106,6 +150,131 @@ function seedAll(scopeKeys: { vault: string[]; group: string[]; banner: string[]
 }
 
 test.describe('multisig vault storage', () => {
+  test('pending phone recovery survives a new caller and uses only its session key', async () => {
+    const session = installSessionStorage()
+    const pending = pendingRecovery()
+    await savePendingPhoneRecovery(RECOVERY_ID, pending)
+    const resumed = await import(
+      new URL('../../../src/lib/multisig-recovery-storage.ts?resumed=1', import.meta.url).href
+    )
+    expect(await resumed.readPendingPhoneRecovery(RECOVERY_ID)).toEqual(pending)
+    expect(await resumed.readPhoneRecoveryGeneration()).toBe(0)
+    expect([...session.keys()]).toEqual([MULTISIG_PHONE_RECOVERY_PENDING_STORAGE_KEY])
+    expect(env.store.size).toBe(0)
+
+    const replacement = pendingRecovery()
+    await savePendingPhoneRecovery(OTHER_RECOVERY_ID, replacement)
+    expect(await readPendingPhoneRecovery(RECOVERY_ID)).toBeNull()
+    expect(await readPendingPhoneRecovery(OTHER_RECOVERY_ID)).toEqual(replacement)
+  })
+
+  test('context invalidation rejects an in-flight prepare and clears pending recoveries', async () => {
+    const session = installSessionStorage()
+    const generation = await readPhoneRecoveryGeneration()
+    expect(generation).toBe(0)
+    await savePendingPhoneRecovery(RECOVERY_ID, pendingRecovery({ contextGeneration: generation }))
+    await invalidatePendingPhoneRecoveries()
+    expect(await readPhoneRecoveryGeneration()).toBe(1)
+    expect(await readPendingPhoneRecovery(RECOVERY_ID)).toBeNull()
+    expect(session.get(MULTISIG_PHONE_RECOVERY_PENDING_STORAGE_KEY)).toEqual({})
+    expect(session.get(MULTISIG_PHONE_RECOVERY_GENERATION_STORAGE_KEY)).toBe(1)
+    await expect(
+      savePendingPhoneRecovery(RECOVERY_ID, pendingRecovery({ contextGeneration: generation }))
+    ).rejects.toThrow('context changed')
+    const fresh = pendingRecovery({ contextGeneration: 1 })
+    await savePendingPhoneRecovery(RECOVERY_ID, fresh)
+    expect(await readPendingPhoneRecovery(RECOVERY_ID)).toEqual(fresh)
+  })
+
+  test('invalid generation and failed invalidation readback fail closed', async () => {
+    const session = installSessionStorage()
+    session.set(MULTISIG_PHONE_RECOVERY_GENERATION_STORAGE_KEY, -1)
+    await expect(readPhoneRecoveryGeneration()).rejects.toThrow()
+    await expect(savePendingPhoneRecovery(RECOVERY_ID, pendingRecovery())).rejects.toThrow()
+    await expect(invalidatePendingPhoneRecoveries()).rejects.toThrow()
+
+    session.set(MULTISIG_PHONE_RECOVERY_GENERATION_STORAGE_KEY, 0)
+    await savePendingPhoneRecovery(RECOVERY_ID, pendingRecovery())
+    const area = (globalThis as unknown as { chrome: { storage: { session: StorageArea } } }).chrome
+      .storage.session
+    const realSet = area.set
+    area.set = async () => {}
+    await expect(invalidatePendingPhoneRecoveries()).rejects.toThrow('invalidation')
+    area.set = realSet
+    expect(await readPendingPhoneRecovery(RECOVERY_ID)).not.toBeNull()
+  })
+
+  test('saving a recovery prunes expired entries but retains another account', async () => {
+    const session = installSessionStorage()
+    const otherScope = { ...TESTNET, accountId: 'b' }
+    const otherPrevious = { ...PREVIOUS_V2, accountId: 'b' }
+    const otherCandidate = { ...CANDIDATE_V2, accountId: 'b' }
+    const other = pendingRecovery({
+      scope: otherScope,
+      previous: otherPrevious,
+      candidate: otherCandidate
+    })
+    await savePendingPhoneRecovery(RECOVERY_ID, other)
+    session.set(MULTISIG_PHONE_RECOVERY_PENDING_STORAGE_KEY, {
+      [RECOVERY_ID]: other,
+      [OTHER_RECOVERY_ID]: { ...pendingRecovery(), expiresAt: Date.now() - 1 }
+    })
+    const nextId = '99999999-aaaa-4bbb-8ccc-dddddddddddd'
+    await savePendingPhoneRecovery(nextId, pendingRecovery())
+    expect(await readPendingPhoneRecovery(RECOVERY_ID)).toEqual(other)
+    expect(await readPendingPhoneRecovery(OTHER_RECOVERY_ID)).toBeNull()
+    expect(
+      Object.keys(session.get(MULTISIG_PHONE_RECOVERY_PENDING_STORAGE_KEY) as object).sort()
+    ).toEqual([RECOVERY_ID, nextId].sort())
+  })
+
+  test('pending phone recovery expires and malformed scope or records cannot be exposed', async () => {
+    const session = installSessionStorage()
+    const pending = pendingRecovery()
+    await savePendingPhoneRecovery(RECOVERY_ID, pending)
+    session.set(MULTISIG_PHONE_RECOVERY_PENDING_STORAGE_KEY, {
+      [RECOVERY_ID]: { ...pending, expiresAt: Date.now() - 1 }
+    })
+    expect(await readPendingPhoneRecovery(RECOVERY_ID)).toBeNull()
+
+    for (const corrupt of [
+      { ...pending, scope: { ...TESTNET, accountId: 'other' } },
+      { ...pending, candidate: { ...CANDIDATE_V2, groupId: 'other' } },
+      { ...pending, candidate: PREVIOUS_V2 },
+      { ...pending, extra: true },
+      { ...pending, expiresAt: Infinity }
+    ]) {
+      session.set(MULTISIG_PHONE_RECOVERY_PENDING_STORAGE_KEY, { [RECOVERY_ID]: corrupt })
+      await expect(readPendingPhoneRecovery(RECOVERY_ID)).rejects.toThrow()
+      await expect(savePendingPhoneRecovery(OTHER_RECOVERY_ID, pendingRecovery())).rejects.toThrow()
+      await expect(removePendingPhoneRecovery(RECOVERY_ID)).rejects.toThrow()
+    }
+  })
+
+  test('pending recovery rejects invalid ids and confirms write and removal readback', async () => {
+    const session = installSessionStorage()
+    await expect(savePendingPhoneRecovery('not-a-uuid', pendingRecovery())).rejects.toThrow()
+    await expect(
+      savePendingPhoneRecovery(RECOVERY_ID, pendingRecovery({ candidate: PREVIOUS_V2 }))
+    ).rejects.toThrow()
+    const area = (
+      globalThis as unknown as {
+        chrome: { storage: { session: StorageArea & { remove: (key: string) => Promise<void> } } }
+      }
+    ).chrome.storage.session
+    const realSet = area.set
+    area.set = async () => {}
+    await expect(savePendingPhoneRecovery(RECOVERY_ID, pendingRecovery())).rejects.toThrow()
+    area.set = realSet
+    await savePendingPhoneRecovery(RECOVERY_ID, pendingRecovery())
+    const realRemove = area.remove
+    area.remove = async () => {}
+    await expect(removePendingPhoneRecovery(RECOVERY_ID)).rejects.toThrow()
+    area.remove = realRemove
+    await removePendingPhoneRecovery(RECOVERY_ID)
+    expect(await readPendingPhoneRecovery(RECOVERY_ID)).toBeNull()
+    expect(session.has(MULTISIG_PHONE_RECOVERY_PENDING_STORAGE_KEY)).toBe(false)
+  })
   test('creation progress reads back and preserves unknown unrelated records', async () => {
     env.store.set(MULTISIG_CREATION_STORAGE_KEY, { 'testnet:other:future': { version: 9 } })
     const operation = {

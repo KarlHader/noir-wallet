@@ -1196,7 +1196,8 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       case 'vault.dkg.acceptRound2':
       case 'vault.dkg.confirmRound1':
       case 'vault.dkg.close':
-      case 'vault.record.summary': {
+      case 'vault.record.summary':
+      case 'vault.record.recoverPrepare': {
         result = await vaultDkg.handle(method, payload)
         break
       }

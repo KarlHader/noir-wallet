@@ -6,6 +6,7 @@ import { buildRoster } from '../../../src/core/multisig/roster'
 import {
   isVaultGroupId,
   isVaultWalletId,
+  effectiveSigningRoster,
   openVaultRecord,
   parseSealedVaultRecord,
   sealVaultRecord,
@@ -37,6 +38,47 @@ function flipByte(base64: string): string {
 }
 
 test.describe('multisig vault record', () => {
+  test('a restored 2-of-2 phone changes the signing roster while preserving DKG evidence', async () => {
+    const original = buildRoster({
+      groupId: HEADER.groupId,
+      threshold: 2,
+      identities: new Map([
+        [0, bytesToBase64(Uint8Array.of(1, ...new Uint8Array(64).fill(1)))],
+        [1, bytesToBase64(Uint8Array.of(1, ...new Uint8Array(64).fill(2)))]
+      ])
+    })
+    const restoredIdentity = bytesToBase64(Uint8Array.of(1, ...new Uint8Array(64).fill(3)))
+    const header = {
+      ...HEADER,
+      version: 2 as const,
+      participants: 2 as const,
+      threshold: 2 as const,
+      accountId: 'account-1',
+      ownerWalletId: 'wallet-1',
+      birthdayHeight: 123,
+      rosterVersion: 1 as const,
+      roster: original,
+      recoveredPhoneIdentityPublicKey: restoredIdentity
+    }
+    const sealed = await sealVaultRecord(header, SHARE, MNEMONIC)
+    const opened = await openVaultRecord(sealed, MNEMONIC)
+    expect(opened.header).toEqual(header)
+    if (opened.header.version !== 2) throw new Error('Expected v2 record')
+    const effective = effectiveSigningRoster(opened.header)
+    expect(opened.header.roster.rosterHash).toBe(original.rosterHash)
+    expect(effective.rosterHash).not.toBe(original.rosterHash)
+    expect(effective.participants[1].identityPublicKey).toBe(restoredIdentity)
+    expect(effective.participants[0]).toEqual(original.participants[0])
+    opened.share.fill(0)
+    await expect(
+      sealVaultRecord(
+        { ...header, recoveredPhoneIdentityPublicKey: original.participants[0].identityPublicKey },
+        SHARE,
+        MNEMONIC
+      )
+    ).rejects.toThrow('Invalid vault record')
+  })
+
   test('v2 authenticates ownership and immutable roster, while legacy stays readable only', async () => {
     const roster = buildRoster({
       groupId: HEADER.groupId,

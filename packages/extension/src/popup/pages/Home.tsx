@@ -34,7 +34,12 @@ import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
 import { isFrostAccount } from '@/core/accounts/domain'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { isSidePanelSurface } from '@/lib/extension-display-mode'
-import { openMultisigCreateTab, openMultisigSendTab } from '@/lib/multisig-tab'
+import {
+  openMultisigCreateTab,
+  openMultisigSendTab,
+  openMultisigRecoverTab
+} from '@/lib/multisig-tab'
+import { RecoverPhoneDialog } from '../components/multisig/RecoverPhoneDialog'
 import { useMultisigGroup, useMultisigGroupStore } from '../multisig/group-store'
 import { dismissMultisigBanner, isMultisigBannerDismissed } from '@/lib/multisig-group-storage'
 import { LegacyPoolPrivacyNotice } from '../components/common/LegacyPoolPrivacyNotice'
@@ -897,7 +902,36 @@ export function Home() {
             </PopoverContent>
           </Popover>
           {isMultisigUiEnabled() && multisigGroup && (
-            <MultisigBadge threshold={multisigGroup.threshold} />
+            <MultisigBadge
+              threshold={multisigGroup.threshold}
+              onClick={
+                multisigScope &&
+                isIndependentMultisig &&
+                !multisigGroup.mock &&
+                multisigGroup.threshold === '2-of-2'
+                  ? () => {
+                      const scope = multisigScope
+                      void openModal({
+                        title: 'Restore phone',
+                        showCloseButton: true,
+                        body: (_resolve, close) => (
+                          <RecoverPhoneDialog
+                            onClose={close}
+                            onSelect={transport => {
+                              void openMultisigRecoverTab(scope, transport)
+                                .then(() => {
+                                  close()
+                                  if (!isSidePanelSurface(window.location.search)) window.close()
+                                })
+                                .catch(() => toast.error('Unable to open phone recovery'))
+                            }}
+                          />
+                        )
+                      })
+                    }
+                  : undefined
+              }
+            />
           )}
         </div>
       </header>

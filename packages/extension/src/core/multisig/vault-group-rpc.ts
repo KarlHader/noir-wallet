@@ -10,6 +10,8 @@ import type { MultisigCreationOperation } from '@/lib/multisig-creation-storage'
 import { parseEnvelope } from './messages'
 import type { MultisigEnvelope } from './messages'
 import { isDkgSessionIdText, isDkgShape } from './dkg-protocol'
+import { isBase64Text } from './dkg-protocol'
+import { base64ToBytes, bytesToBase64 } from '@/lib/bytes'
 import {
   isVaultGroupId,
   isVaultWalletId,
@@ -98,6 +100,18 @@ export interface VaultGroupSchema {
     request: { scope: MultisigGroupScope }
     response: VaultGroupSummaryResponse
   }
+  'vault.group.recover.prepare': {
+    request: { scope: MultisigGroupScope; request: string }
+    response: { recoveryId: string; reply: string; expiresAt: number }
+  }
+  'vault.group.recover.complete': {
+    request: { scope: MultisigGroupScope; recoveryId: string }
+    response: true
+  }
+  'vault.group.recover.cancel': {
+    request: { scope: MultisigGroupScope; recoveryId: string }
+    response: true
+  }
 }
 
 export type VaultGroupMethod = keyof VaultGroupSchema
@@ -110,7 +124,10 @@ const METHODS: readonly VaultGroupMethod[] = [
   'vault.group.cancel',
   'vault.group.open',
   'vault.group.save',
-  'vault.group.summary'
+  'vault.group.summary',
+  'vault.group.recover.prepare',
+  'vault.group.recover.complete',
+  'vault.group.recover.cancel'
 ]
 
 export function isVaultGroupMethod(method: string): method is VaultGroupMethod {
@@ -205,6 +222,30 @@ export function parseVaultGroupSaveRequest(payload: unknown): VaultGroupSaveRequ
 export function parseVaultGroupSummaryRequest(payload: unknown): { scope: MultisigGroupScope } {
   if (!hasKeys(payload, ['scope'])) throw new Error(INVALID_REQUEST)
   return { scope: parseVaultGroupScope(payload.scope) }
+}
+
+export function parseVaultRecoverRequest(
+  method:
+    | 'vault.group.recover.prepare'
+    | 'vault.group.recover.complete'
+    | 'vault.group.recover.cancel',
+  payload: unknown
+): { scope: MultisigGroupScope; request?: string; recoveryId?: string } {
+  if (method === 'vault.group.recover.prepare') {
+    if (!hasKeys(payload, ['scope', 'request']) || !isBase64Text(payload.request))
+      throw new Error(INVALID_REQUEST)
+    const bytes = base64ToBytes(payload.request)
+    if (bytesToBase64(bytes) !== payload.request || bytes.length !== 202)
+      throw new Error(INVALID_REQUEST)
+    return { scope: parseVaultGroupScope(payload.scope), request: payload.request }
+  }
+  if (
+    !hasKeys(payload, ['scope', 'recoveryId']) ||
+    typeof payload.recoveryId !== 'string' ||
+    !/^[0-9a-f-]{36}$/.test(payload.recoveryId)
+  )
+    throw new Error(INVALID_REQUEST)
+  return { scope: parseVaultGroupScope(payload.scope), recoveryId: payload.recoveryId }
 }
 
 export function parseCreationRequest(

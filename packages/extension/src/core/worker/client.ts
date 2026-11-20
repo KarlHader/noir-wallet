@@ -167,6 +167,7 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'vault.dkg.acceptRound2': LIGHT,
   'vault.dkg.close': LIGHT,
   'vault.record.summary': LIGHT,
+  'vault.record.recoverPrepare': LIGHT,
   'vault.group.open': LIGHT,
   'vault.group.save': LIGHT,
   'vault.group.summary': LIGHT,

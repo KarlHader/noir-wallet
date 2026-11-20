@@ -63,21 +63,21 @@ export const useMultisigGroupStore = create<MultisigGroupStore>()((set, get) => 
   }
 }))
 
-/** The activated group for an account, loading the cache from storage on first use. */
+/** Refresh on account changes so groups created in another extension page become visible. */
 export function useMultisigGroup(scope: MultisigGroupScope | null): MultisigGroupRecord | null {
   // A flag-off build must not touch multisig storage at all; the hooks still run unconditionally
   // so the hook order stays stable, and the flag is decided inside them.
   const enabled = isMultisigUiEnabled()
-  const loaded = useMultisigGroupStore(state => state.loaded)
+  const scopeKey = scope ? multisigGroupScopeKey(scope) : null
   const record = useMultisigGroupStore(state =>
     enabled && scope ? groupFor(state.groups, scope) : null
   )
   useEffect(() => {
-    if (!enabled || loaded) return
+    if (!enabled) return
     useMultisigGroupStore
       .getState()
       .load()
       .catch(error => console.error('Failed to load multisig groups', error))
-  }, [enabled, loaded])
+  }, [enabled, scopeKey])
   return record
 }

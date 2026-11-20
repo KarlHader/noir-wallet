@@ -303,6 +303,38 @@ function preserveAccountNetworkSelections(
   }
 }
 
+function preserveCommittedFrostAccounts(
+  incoming: WalletSnapshot,
+  current: WalletSnapshot | null
+): WalletSnapshot {
+  if (!current) return incoming
+  const priorWallets = new Map(current.state.wallets.map(wallet => [wallet.id, wallet]))
+  return {
+    ...incoming,
+    state: {
+      ...incoming.state,
+      wallets: incoming.state.wallets.map(wallet => {
+        const saved = priorWallets.get(wallet.id)
+        if (
+          !saved ||
+          saved.createdAt !== wallet.createdAt ||
+          saved.seedPhraseKey !== wallet.seedPhraseKey ||
+          (wallet.keySource !== undefined && wallet.keySource !== 'software')
+        ) {
+          return wallet
+        }
+        const incomingIds = new Set(wallet.accounts.map(account => account.id))
+        const omitted = saved.accounts.filter(
+          account => isFrostAccount(account) && !incomingIds.has(account.id)
+        )
+        return omitted.length > 0
+          ? { ...wallet, accounts: [...wallet.accounts, ...omitted] }
+          : wallet
+      })
+    }
+  }
+}
+
 export async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
   if (!navigator.locks) throw new Error('Wallet storage coordination is unavailable')
   return navigator.locks.request(METADATA_LOCK, operation)
@@ -400,7 +432,10 @@ export function writeWalletMetadata(value: unknown): Promise<void> {
     await chrome.storage.local.set({
       [WALLET_STATE_KEY]: filterDeleted(
         preserveAccountNetworkSelections(
-          preserveRetainedNames(preserveBackupVerification(snapshot, current), current),
+          preserveRetainedNames(
+            preserveBackupVerification(preserveCommittedFrostAccounts(snapshot, current), current),
+            current
+          ),
           current
         ),
         parseDeletedIds(saved[DELETED_WALLETS_KEY]),

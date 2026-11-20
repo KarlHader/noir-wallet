@@ -439,6 +439,8 @@ function lockHarness({
   workerFails = false,
   sessionFails = false,
   signingFails = false,
+  recoveryFails = false,
+  offscreenAlive = true,
   drain
 } = {}) {
   const state = {
@@ -452,11 +454,16 @@ function lockHarness({
     confidentialSessionsCleared: false,
     signingCleanupAttempts: [],
     signingWorkerClosed: false,
-    signingJournalInterrupted: false
+    signingJournalInterrupted: false,
+    recoveryInvalidated: false
   }
   const zcashError = new Error('Zcash cleanup failed')
   const signingError = new Error('Signing cleanup was not acknowledged')
   const dependencies = {
+    async invalidatePendingPhoneRecoveries() {
+      if (recoveryFails) throw new Error('Recovery invalidation failed')
+      state.recoveryInvalidated = true
+    },
     multisigSend: {
       async invalidate() {
         state.signingCleanupAttempts.push({
@@ -514,7 +521,7 @@ function lockHarness({
     chrome: {
       offscreen: {
         async hasDocument() {
-          return true
+          return offscreenAlive
         }
       }
     },
@@ -551,6 +558,16 @@ test('wallet lock drains active sync before recreating workers when Zcash cleanu
   assert.equal(state.workerRecreated, true)
   assert.deepEqual(state.signingCleanupAttempts, [{ workerRecreated: true, sessionLocked: true }])
   assert.equal(state.signingJournalInterrupted, true)
+  assert.equal(state.recoveryInvalidated, true)
+  assert.equal(state.syncPaused, false)
+})
+
+test('wallet lock rejects failed recovery invalidation even after offscreen teardown', async () => {
+  const { functions, state } = lockHarness({ recoveryFails: true, offscreenAlive: false })
+  await assert.rejects(functions.performWalletLockState(), /Recovery invalidation failed/)
+  assert.equal(state.sessionLocked, true)
+  assert.equal(state.workerRecreated, true)
+  assert.equal(state.recoveryInvalidated, false)
   assert.equal(state.syncPaused, false)
 })
 

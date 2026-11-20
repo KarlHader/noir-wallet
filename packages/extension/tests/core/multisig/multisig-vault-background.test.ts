@@ -11,6 +11,8 @@ import type { MultisigGroupScope } from '../../../src/lib/multisig-group-storage
 import type { MultisigCreationOperation } from '../../../src/lib/multisig-creation-storage'
 import { buildRoster } from '../../../src/core/multisig/roster'
 import { bytesToBase64 } from '../../../src/lib/bytes'
+import { sealedVaultRecordEquals } from '../../../src/core/multisig/vault-record'
+import type { PendingPhoneRecovery } from '../../../src/lib/multisig-recovery-storage'
 import { createVaultDkgRpcHandler } from '../../../src/core/multisig/dkg-rpc'
 import { generateDeviceIdentity } from '../../../src/core/multisig/identity'
 import { createEnvelopeSigner } from '../../../src/core/multisig/envelope-signing'
@@ -76,6 +78,115 @@ function setup(overrides: Partial<MultisigVaultDeps> = {}) {
 const INVALID = 'Invalid vault group request'
 
 test.describe('multisig vault background', () => {
+  test('phone recovery survives Background restart and replaces only after explicit safe completion', async () => {
+    const original: SealedVaultRecord = {
+      ...RECORD,
+      version: 2,
+      accountId: SCOPE.accountId,
+      ownerWalletId: SCOPE.walletId
+    }
+    const candidate: SealedVaultRecord = {
+      ...original,
+      iv: bytesToBase64(new Uint8Array(12).fill(7))
+    }
+    let stored = original
+    let pending: { id: string; value: PendingPhoneRecovery } | null = null
+    let blocked = true
+    let invalidated = 0
+    let pauseSafety = false
+    let releaseSafety: (() => void) | null = null
+    let safetyEntered: (() => void) | null = null
+    const deps: MultisigVaultDeps = {
+      readWalletState: async () => ({
+        network: 'testnet',
+        activeWalletId: 'w',
+        activeAccountId: 'a',
+        wallets: [{ id: 'w', mnemonic: true, accountIds: ['a'] }]
+      }),
+      isUnlocked: async () => true,
+      bindCredential: async () => true,
+      forwardToWorker: async () => ({
+        record: candidate,
+        reply: bytesToBase64(Uint8Array.of(1, 2, 3))
+      }),
+      readRecord: async () => stored,
+      saveRecord: async () => {},
+      readGroupId: async () => original.groupId,
+      recovery: {
+        withScope: async (_scope, operation) => operation(),
+        readCreationReady: async () => true,
+        assertSafe: async () => {
+          if (blocked) throw new Error('Pending signing')
+          if (pauseSafety) {
+            pauseSafety = false
+            safetyEntered?.()
+            await new Promise<void>(resolve => {
+              releaseSafety = resolve
+            })
+          }
+        },
+        invalidateSigning: async () => {
+          invalidated++
+        },
+        readGeneration: async () => 0,
+        readPending: async id => (pending?.id === id ? pending.value : null),
+        savePending: async (id, value) => {
+          pending = { id, value }
+        },
+        removePending: async id => {
+          if (pending?.id === id) pending = null
+        },
+        replaceRecord: async (_scope, previous, next, assertAuthorized) => {
+          await assertAuthorized()
+          if (!sealedVaultRecordEquals(stored, previous)) throw new Error('Record changed')
+          stored = next
+        }
+      }
+    }
+    const request = bytesToBase64(new Uint8Array(202).fill(1))
+    const prepared = await createMultisigVaultHandler(deps).handle('vault.group.recover.prepare', {
+      scope: SCOPE,
+      request
+    })
+    expect(stored).toEqual(original)
+    expect(prepared.reply).toBe(bytesToBase64(Uint8Array.of(1, 2, 3)))
+    const resumed = createMultisigVaultHandler(deps)
+    await expect(
+      resumed.handle('vault.group.recover.complete', {
+        scope: SCOPE,
+        recoveryId: prepared.recoveryId
+      })
+    ).rejects.toThrow('Pending signing')
+    expect(stored).toEqual(original)
+    expect(invalidated).toBe(0)
+    blocked = false
+    pauseSafety = true
+    const entered = new Promise<void>(resolve => {
+      safetyEntered = resolve
+    })
+    const oldCompletion = resumed.handle('vault.group.recover.complete', {
+      scope: SCOPE,
+      recoveryId: prepared.recoveryId
+    })
+    await entered
+    const replacement = await resumed.handle('vault.group.recover.prepare', {
+      scope: SCOPE,
+      request
+    })
+    releaseSafety?.()
+    await expect(oldCompletion).rejects.toThrow('Vault group scope is not available')
+    expect(stored).toEqual(original)
+    expect(
+      await resumed.handle('vault.group.recover.complete', {
+        scope: SCOPE,
+        recoveryId: replacement.recoveryId
+      })
+    ).toBe(true)
+    expect(stored).toEqual(candidate)
+    expect(invalidated).toBe(1)
+    expect(pending).toBeNull()
+  })
+
   test('reserved independent creation retains saved material after metadata failure and resumes after restart', async () => {
     let operation: MultisigCreationOperation | null = null
     let stored: SealedVaultRecord | null = null

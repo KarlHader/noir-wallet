@@ -1,5 +1,10 @@
 import type { Page } from '@playwright/test'
 import { createServer } from 'node:http'
+import { x25519 } from '@noble/curves/ed25519'
+import { pallas } from '@noble/curves/misc'
+import { blake2b } from '@noble/hashes/blake2b'
+import { hkdf } from '@noble/hashes/hkdf'
+import { sha256 } from '@noble/hashes/sha2'
 import { address, networks, Transaction } from 'bitcoinjs-lib'
 import {
   createAssetRegistry,
@@ -20,7 +25,12 @@ import {
   selectBitcoinCoins
 } from '../../src/infrastructure/chains/bitcoin'
 import { buildSolanaNativeTransfer } from '../../src/infrastructure/chains/solana/solana-transaction-builder'
-import { test, expect, waitForBackgroundWalletInitialization } from '../helpers/extension-fixtures'
+import {
+  test,
+  expect,
+  terminateExtensionServiceWorker,
+  waitForBackgroundWalletInitialization
+} from '../helpers/extension-fixtures'
 import type { VaultDkgRpcHandler } from '../../src/core/multisig/dkg-rpc'
 import type { MultisigCreationOperation } from '../../src/lib/multisig-creation-storage'
 import { buildRoster } from '../../src/core/multisig/roster'
@@ -28,6 +38,21 @@ import { generateDeviceIdentity } from '../../src/core/multisig/identity'
 import { createEnvelopeSigner } from '../../src/core/multisig/envelope-signing'
 import { loadVaultWasm } from '../core/multisig/helpers/vault-wasm'
 import { Phone, runRounds } from '../core/multisig/helpers/raw-phone'
+import { verifyShareProof } from '../../src/core/multisig/share-proof'
+import {
+  checkRecoverRequest,
+  recoverRequestSignedBytes
+} from '../../src/core/multisig/recover-handshake'
+import { parseGroupConfig } from '../../src/core/multisig/recover-config'
+import {
+  effectiveSigningRoster,
+  openVaultRecord,
+  type SealedVaultRecord
+} from '../../src/core/multisig/vault-record'
+import {
+  MULTISIG_VAULT_RECORDS_STORAGE_KEY,
+  multisigGroupScopeKey
+} from '../../src/lib/multisig-group-storage'
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
@@ -42,6 +67,124 @@ const CREDENTIAL_BINDING = Object.freeze({
   credentialGenerationId: 'credential-generation:multichain-e2e',
   globalUnlockEpoch: 'global-unlock:multichain-e2e'
 })
+
+function makePhoneRecoverRequest(
+  keyPackage: Uint8Array,
+  publicKeyPackage: Uint8Array,
+  identityPublicKey: Uint8Array
+): { request: Uint8Array; ephemeralSecret: Uint8Array } {
+  // Pinned frost-core KeyPackage postcard layout: header(5), identifier(32), signing share(32).
+  if (keyPackage.length !== 134 || keyPackage[0] !== 0)
+    throw new Error(
+      `Unknown KeyPackage layout: length ${keyPackage.length}, version ${keyPackage[0]}`
+    )
+  const scalarBytes = keyPackage.slice(37, 69)
+  const fromLe = (bytes: Uint8Array) => BigInt(`0x${Buffer.from(bytes).reverse().toString('hex')}`)
+  const toLe = (value: bigint) =>
+    Uint8Array.from(Buffer.from(value.toString(16).padStart(64, '0'), 'hex').reverse())
+  const baseBytes = Buffer.from(
+    '63c975b884721a8d0ca1707be30c7f0c5f445f3e7c188d3b06d6f128b32355b7',
+    'hex'
+  )
+  const odd = (baseBytes[31] & 0x80) !== 0
+  baseBytes[31] &= 0x7f
+  const base = pallas.ProjectivePoint.fromHex(
+    `${odd ? '03' : '02'}${Buffer.from(baseBytes.reverse()).toString('hex')}`
+  )
+  try {
+    const order = pallas.CURVE.n
+    const scalar = fromLe(scalarBytes)
+    if (scalar === 0n || scalar >= order) throw new Error('Invalid phone share')
+    const pointBytes = (value: bigint): Uint8Array => {
+      const compressed = base.multiply(value).toRawBytes(true)
+      const bytes = Uint8Array.from(compressed.subarray(1)).reverse()
+      if (compressed[0] === 3) bytes[31] |= 0x80
+      return bytes
+    }
+    const verifyingShare = pointBytes(scalar)
+    const ephemeralSecret = x25519.utils.randomPrivateKey()
+    const ephemeralPublic = x25519.getPublicKey(ephemeralSecret)
+    const issuedAt = Buffer.alloc(8)
+    issuedAt.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000)))
+    const unsigned = Buffer.concat([
+      Buffer.from([1]),
+      Buffer.from(verifyingShare),
+      Buffer.from(identityPublicKey),
+      Buffer.from(ephemeralPublic),
+      issuedAt
+    ])
+    const signed = recoverRequestSignedBytes({
+      verifyingShare,
+      identityPublicKey,
+      ephemeralKey: ephemeralPublic,
+      issuedAt: Number(issuedAt.readBigUInt64BE()),
+      signature: new Uint8Array(64)
+    })
+    let nonce = fromLe(crypto.getRandomValues(new Uint8Array(32))) % order
+    if (nonce === 0n) nonce = 1n
+    const commitment = pointBytes(nonce)
+    const challenge =
+      fromLe(
+        blake2b(
+          Buffer.concat([
+            Buffer.from(commitment),
+            Buffer.from(verifyingShare),
+            Buffer.from('noir/share-proof/v1'),
+            Buffer.from(signed)
+          ]),
+          { dkLen: 64, personalization: new TextEncoder().encode('Zcash_RedPallasH') }
+        )
+      ) % order
+    const signature = Buffer.concat([
+      Buffer.from(commitment),
+      Buffer.from(toLe((nonce + challenge * scalar) % order))
+    ])
+    if (!verifyShareProof(verifyingShare, signed, signature)) {
+      throw new Error('Phone recovery proof does not verify')
+    }
+    const request = Uint8Array.from(Buffer.concat([unsigned, signature]))
+    if (request.length !== 202 || request[33] !== 1)
+      throw new Error('Unexpected phone recovery wire format')
+    const checked = checkRecoverRequest(request, {
+      publicKeyPackage,
+      nowSeconds: Math.floor(Date.now() / 1000),
+      expectedSlot: 1
+    })
+    if (!checked.ok)
+      throw new Error(
+        `Phone recovery request rejected: ${checked.reason} (request ${request.length}, identity ${identityPublicKey.length}, proof ${signature.length}, version ${identityPublicKey[0]})`
+      )
+    return { request, ephemeralSecret }
+  } finally {
+    scalarBytes.fill(0)
+  }
+}
+
+async function openPhoneRecoverReply(
+  request: Uint8Array,
+  ephemeralSecret: Uint8Array,
+  reply: Uint8Array
+): Promise<Uint8Array> {
+  if (reply[0] !== 1 || reply.length < 61) throw new Error('Invalid recovery reply')
+  const shared = x25519.getSharedSecret(ephemeralSecret, reply.subarray(1, 33))
+  const raw = hkdf(
+    sha256,
+    shared,
+    sha256(request),
+    new TextEncoder().encode('noir/recover-reply/v1'),
+    32
+  )
+  const key = await crypto.subtle.importKey('raw', new Uint8Array(raw), 'AES-GCM', false, [
+    'decrypt'
+  ])
+  return new Uint8Array(
+    await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: reply.subarray(33, 45), additionalData: reply.subarray(0, 33) },
+      key,
+      reply.subarray(45)
+    )
+  )
+}
 
 let commandSequence = 0
 
@@ -2216,9 +2359,9 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
   popup,
   extensionId
 }) => {
-  test.setTimeout(240_000)
+  test.setTimeout(360_000)
   await waitForBackgroundWalletInitialization(popup)
-  const background = context.serviceWorkers()[0]
+  let background = context.serviceWorkers()[0]
   const verifyUi = process.env.FROST_MULTISIG_UI === '1'
   await context.route('https://zcash-wallet-history.deltarpc.com/**', async route => {
     const request = route.request().postDataJSON() as { method?: string } | null
@@ -2245,6 +2388,7 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
   let chainTip = 1_999_999
   let operation: MultisigCreationOperation | null = null
   let parentAccountId: string | null = null
+  let switchedAt = 0
   const pageRpc = async <T>(method: string, payload: unknown): Promise<T> => {
     const response = await popup.evaluate(
       input => chrome.runtime.sendMessage({ type: 'WORKER_RPC', ...input }),
@@ -2598,15 +2742,59 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       ).toMatchObject({ phase: 'ready', scope: operation.scope })
       expect(
         await popup.evaluate(
+          async ({ walletId, accountId }) => {
+            const raw = (await chrome.storage.local.get('wallet_state')).wallet_state
+            const state = typeof raw === 'string' ? JSON.parse(raw) : raw
+            return state.state.wallets
+              .find((wallet: { id: string }) => wallet.id === walletId)
+              ?.accounts.some((account: { id: string }) => account.id === accountId)
+          },
+          { walletId, accountId }
+        )
+      ).toBe(true)
+      switchedAt = Date.now()
+      expect(
+        await popup.evaluate(
           input => chrome.runtime.sendMessage({ type: 'SWITCH_ACCOUNT', ...input }),
           { walletId, accountId }
         )
       ).toMatchObject({ success: true })
     }
-    // A normal account switch can return before Background's snapshot reload.
-    // Wait on the actual account inventory rather than initializing a second
-    // fixture-owned wallet over the production lifecycle.
+    // Account switching can reload the Worker before starting its scan. This fixture
+    // has no compact-block chain: wait until registration has finished, then abort
+    // the scan and await its acknowledgement before sending internal Worker RPCs.
     if (verifyUi) {
+      const syncStatus = () =>
+        popup.evaluate(
+          async input => {
+            const state = await chrome.runtime.sendMessage({
+              type: 'GET_SYNC_STATE',
+              walletId: input.walletId,
+              accountId: input.accountId
+            })
+            const job = (await chrome.storage.local.get('sync_jobs')).sync_jobs?.[
+              `mainnet_${input.walletId}`
+            ]
+            return {
+              syncing: state?.isSyncing,
+              advanced: job?.startedAt >= input.switchedAt,
+              status: job?.status
+            }
+          },
+          { walletId, accountId, switchedAt }
+        )
+      await expect
+        .poll(syncStatus, { timeout: 30_000 })
+        .toEqual({ syncing: true, advanced: true, status: 'running' })
+      expect(
+        await popup.evaluate(
+          walletId => chrome.runtime.sendMessage({ type: 'ABORT_SYNC', walletId }),
+          walletId
+        )
+      ).toEqual({ success: true })
+      await expect
+        .poll(syncStatus, { timeout: 30_000 })
+        .toEqual({ syncing: false, advanced: true, status: 'interrupted' })
       await expect
         .poll(async () => {
           try {
@@ -2707,6 +2895,47 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
       const actions = popup.getByTestId('home-actions')
       for (const name of ['Swap', 'Move', 'Shielded']) {
         await expect(actions.getByRole('button', { name, exact: true })).toHaveCount(0)
+      }
+      const homeBadge = popup.getByRole('button', { name: 'Multisig 2/2, restore a phone' })
+      await expect(homeBadge).toBeVisible()
+      await homeBadge.click()
+      const homeDialog = popup.getByRole('dialog')
+      await expect(homeDialog).toBeVisible()
+      await popup.screenshot({
+        path: '../../e2e-output/multisig/restore-phone-dialog.png',
+        animations: 'disabled'
+      })
+      await popup.keyboard.press('Escape')
+      await expect(homeDialog).toHaveCount(0)
+      const recoveryEntry = await context.newPage()
+      try {
+        await recoveryEntry.setViewportSize({ width: 375, height: 600 })
+        await recoveryEntry.goto(`chrome-extension://${extensionId}/index.html`)
+        const badge = recoveryEntry.getByRole('button', {
+          name: 'Multisig 2/2, restore a phone'
+        })
+        await expect(badge).toBeVisible()
+        await badge.click()
+        const dialog = recoveryEntry.getByRole('dialog')
+        await expect(dialog).toBeVisible()
+        const recoveryPagePromise = context.waitForEvent('page')
+        await dialog.getByRole('button', { name: /QR code/ }).click()
+        const recoveryPage = await recoveryPagePromise
+        try {
+          await expect(recoveryPage.getByText('Restore with QR codes')).toBeVisible()
+          await expect(recoveryPage.getByText(/32 backup words/)).toBeVisible()
+          await expect(
+            recoveryPage.getByText('Scan the recovery request displayed on your phone.')
+          ).toBeVisible()
+          await recoveryPage.screenshot({
+            path: '../../e2e-output/multisig/restore-phone-qr.png',
+            animations: 'disabled'
+          })
+        } finally {
+          await recoveryPage.close()
+        }
+      } finally {
+        if (!recoveryEntry.isClosed()) await recoveryEntry.close()
       }
       await popup.getByRole('button', { name: 'Receive', exact: true }).click()
       const receiveAddresses = popup.getByRole('region', { name: 'Account network addresses' })
@@ -3030,6 +3259,133 @@ test('imports a sealed FROST v2 account through the real Worker and reloads its 
     if (verifyUi) expect(treeStateRequests).toBeGreaterThanOrEqual(1)
     else expect(treeStateRequests).toBe(1)
     expect(submissionRequests).toBe(0)
+    if (verifyUi) {
+      const scope = { network: 'mainnet' as const, walletId, accountId }
+      const storageKey = multisigGroupScopeKey(scope)
+      const storedRecord = () =>
+        popup.evaluate(
+          async ({ key, scopeKey }) => {
+            const map = (await chrome.storage.local.get(key))[key]
+            return (map?.[scopeKey] ?? null) as SealedVaultRecord | null
+          },
+          { key: MULTISIG_VAULT_RECORDS_STORAGE_KEY, scopeKey: storageKey }
+        )
+      const original = await storedRecord()
+      expect(original).not.toBeNull()
+      const oldPhoneKey = Buffer.from(phoneIdentity.publicKey).toString('base64')
+      const openedOriginal = await openVaultRecord(original!, MNEMONIC, {
+        accountId,
+        ownerWalletId: walletId,
+        groupId,
+        network: 'mainnet'
+      })
+      expect(openedOriginal.header.version).toBe(2)
+      if (openedOriginal.header.version !== 2) throw new Error('Expected V2 vault record')
+      expect(effectiveSigningRoster(openedOriginal.header).participants[1].identityPublicKey).toBe(
+        oldPhoneKey
+      )
+      openedOriginal.share.fill(0)
+
+      const restoredIdentity = await generateDeviceIdentity()
+      const phoneRequest = makePhoneRecoverRequest(
+        phone.keyPackage(),
+        Buffer.from(openedOriginal.header.publicKeyPackage, 'base64'),
+        restoredIdentity.publicKey
+      )
+      const requestBase64 = Buffer.from(phoneRequest.request).toString('base64')
+      const invalidProof = phoneRequest.request.slice()
+      invalidProof[invalidProof.length - 1] ^= 1
+      await expect(
+        pageRpc('vault.group.recover.prepare', {
+          scope,
+          request: Buffer.from(invalidProof).toString('base64')
+        })
+      ).rejects.toThrow()
+      await expect(
+        pageRpc('vault.group.recover.prepare', {
+          scope: { ...scope, accountId: `${accountId}-other` },
+          request: requestBase64
+        })
+      ).rejects.toThrow()
+      expect(await storedRecord()).toEqual(original)
+
+      const first = await pageRpc<{ recoveryId: string; reply: string; expiresAt: number }>(
+        'vault.group.recover.prepare',
+        { scope, request: requestBase64 }
+      )
+      expect(first.expiresAt).toBeGreaterThan(Date.now())
+      expect(await storedRecord()).toEqual(original)
+      const configBytes = await openPhoneRecoverReply(
+        phoneRequest.request,
+        phoneRequest.ephemeralSecret,
+        Buffer.from(first.reply, 'base64')
+      )
+      const config = parseGroupConfig(configBytes)
+      expect(config).not.toBeNull()
+      expect(config?.fingerprint).toEqual(new Uint8Array(Buffer.from(complete.fingerprint, 'hex')))
+      expect(config?.roster[0].identityPublicKey).toEqual(
+        new Uint8Array(extensionIdentityPublicKey)
+      )
+      expect(config?.roster[1].identityPublicKey).toEqual(restoredIdentity.publicKey)
+      expect(
+        await pageRpc('vault.group.recover.cancel', { scope, recoveryId: first.recoveryId })
+      ).toBe(true)
+      expect(await storedRecord()).toEqual(original)
+
+      const second = await pageRpc<{ recoveryId: string; reply: string; expiresAt: number }>(
+        'vault.group.recover.prepare',
+        { scope, request: requestBase64 }
+      )
+      await terminateExtensionServiceWorker(context, popup)
+      await expect
+        .poll(() =>
+          popup.evaluate(() => chrome.runtime.sendMessage({ type: 'GET_WALLET_SESSION_STATE' }))
+        )
+        .toEqual({ active: true })
+      background = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'))
+      await expect
+        .poll(async () => {
+          try {
+            return (await pageRpc<{ status: string }>('vault.group.summary', { scope })).status
+          } catch {
+            return 'unavailable'
+          }
+        })
+        .toBe('ok')
+      expect(await storedRecord()).toEqual(original)
+      expect(
+        await pageRpc('vault.group.recover.complete', { scope, recoveryId: second.recoveryId })
+      ).toBe(true)
+      await expect(
+        pageRpc('vault.group.recover.complete', { scope, recoveryId: second.recoveryId })
+      ).rejects.toThrow()
+      const recovered = await storedRecord()
+      expect(recovered).not.toEqual(original)
+      const openedRecovered = await openVaultRecord(recovered!, MNEMONIC, {
+        accountId,
+        ownerWalletId: walletId,
+        groupId,
+        network: 'mainnet'
+      })
+      expect(openedRecovered.header.version).toBe(2)
+      if (openedRecovered.header.version !== 2) throw new Error('Expected V2 vault record')
+      expect(openedRecovered.header.roster.participants[1].identityPublicKey).toBe(oldPhoneKey)
+      expect(effectiveSigningRoster(openedRecovered.header).participants[1].identityPublicKey).toBe(
+        Buffer.from(restoredIdentity.publicKey).toString('base64')
+      )
+      openedRecovered.share.fill(0)
+
+      await rpc('worker.recreate', {})
+      await unlock()
+      expect(await rpc('wallet.resolveFrostAccount', { ...request, sealedRecord: recovered })).toBe(
+        id
+      )
+      const afterRestart = await storedRecord()
+      expect(afterRestart).toEqual(recovered)
+      expect(await rpc('wallet.getUnifiedAddresses', { walletId, accountId: id })).toEqual(
+        addresses
+      )
+    }
     // The E2E-only page faults the production barrier's post-write readback,
     // not a Worker mid-finalization. Browser storage still holds the marker.
     const barrierKey = `noir_multisig_finalization_barrier_v1:mainnet:${walletId}`

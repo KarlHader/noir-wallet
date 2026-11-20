@@ -103,6 +103,36 @@ test.describe('Wallet metadata persistence', () => {
     }
   })
 
+  test('a stale store write retains a newly committed external account until deletion', async () => {
+    const source = { kind: 'frost-vault', version: 1, groupId: 'new-group', network: 'mainnet' }
+    const external = { id: 'external-account', source }
+    const stale = { state: { wallets: [wallet], currentWalletId: wallet.id } }
+    const committed = {
+      state: {
+        wallets: [{ ...wallet, accounts: [...wallet.accounts, external] }],
+        currentWalletId: wallet.id,
+        accountDisplayNames: { [`${wallet.id}_${external.id}`]: 'Shared funds' }
+      }
+    }
+    const storage = mockStorage({ wallet_state: committed })
+    try {
+      await writeWalletMetadata(stale)
+      expect((await readWalletMetadata()).state.wallets[0].accounts).toEqual([
+        ...wallet.accounts,
+        external
+      ])
+      expect((await readWalletMetadata()).state.accountDisplayNames).toEqual({
+        [`${wallet.id}_${external.id}`]: 'Shared funds'
+      })
+      await commitAccountMetadataDeletion(wallet.id, external.id, 'mainnet', source)
+      await writeWalletMetadata(stale)
+      expect((await readWalletMetadata()).state.wallets[0].accounts).toEqual(wallet.accounts)
+      expect((await readWalletMetadata()).state.accountDisplayNames).toEqual({})
+    } finally {
+      storage.restore()
+    }
+  })
+
   test('external deletion retains its source for recovery without reserving an HD index', async () => {
     const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
     const external = { id: 'external-account', source }

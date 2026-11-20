@@ -1,4 +1,5 @@
 import type { MultisigGroupScope } from './multisig-group-storage'
+import type { MultisigTransportKind } from '@/core/multisig/types'
 
 export const MULTISIG_ROUTE_PREFIX = '/multisig'
 
@@ -23,6 +24,22 @@ export function multisigSendRoute(scope: MultisigGroupScope): string {
 
 export async function openMultisigSendTab(scope: MultisigGroupScope): Promise<void> {
   await chrome.tabs.create({ url: chrome.runtime.getURL(`index.html#${multisigSendRoute(scope)}`) })
+}
+
+export function multisigRecoverRoute(
+  scope: MultisigGroupScope,
+  transport: MultisigTransportKind
+): string {
+  return `${MULTISIG_ROUTE_PREFIX}/recover?${new URLSearchParams({ ...scope, transport }).toString()}`
+}
+
+export async function openMultisigRecoverTab(
+  scope: MultisigGroupScope,
+  transport: MultisigTransportKind
+): Promise<void> {
+  await chrome.tabs.create({
+    url: chrome.runtime.getURL(`index.html#${multisigRecoverRoute(scope, transport)}`)
+  })
 }
 
 // Chrome rejects requestDevice() without showing the Bluetooth chooser in the popup, the side panel

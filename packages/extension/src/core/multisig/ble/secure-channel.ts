@@ -9,6 +9,8 @@ import { pairingSas } from './sas'
 
 /** The prologue both sides feed into the handshake; any difference makes it fail. */
 export const NOISE_PROLOGUE = new TextEncoder().encode('noir/pair/v1')
+/** Recovery handshakes cannot be confused with pairing handshakes. */
+export const RECOVER_NOISE_PROLOGUE = new TextEncoder().encode('noir/recover/v1')
 const BIND_CONTEXT = new TextEncoder().encode('NoirDeviceSig v1|noir.transport.bind.v1|')
 const ROLE_INITIATOR = 1
 const ROLE_RESPONDER = 0
@@ -44,6 +46,8 @@ export interface SecureChannel {
 export interface ChannelOptions {
   identity: DeviceIdentity
   noiseStatic: NoiseKeyPair
+  /** Defaults to the pairing prologue. */
+  prologue?: Uint8Array
   /** Tests only. */
   ephemeralSecret?: Uint8Array
   handshakeTimeoutMs?: number
@@ -204,7 +208,7 @@ async function openSecureChannel(
 
   const noise = new NoiseInitiator({
     staticSecret: options.noiseStatic.secret,
-    prologue: NOISE_PROLOGUE,
+    prologue: options.prologue ?? NOISE_PROLOGUE,
     ephemeralSecret: options.ephemeralSecret
   })
 

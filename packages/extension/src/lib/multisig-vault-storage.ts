@@ -19,6 +19,7 @@ import {
 } from '@/core/multisig/signing-journal'
 import {
   assertNoUnresolvedMultisigTransactionsLocked,
+  assertNoMultisigRecoveryConflictLocked,
   deleteResolvedFinalizationRecoveryLocked,
   MULTISIG_TRANSACTION_STORAGE_KEY
 } from './multisig-transaction-guard'
@@ -99,6 +100,50 @@ export function saveVaultRecordVerified(
     else delete restored[key]
     await chrome.storage.local.set({ [MULTISIG_VAULT_RECORDS_STORAGE_KEY]: restored })
     throw new Error('Vault record could not be saved')
+  })
+}
+
+/** Replace only the record whose phone proof was reviewed, under the shared multisig lock. */
+export function replaceVaultRecordForRecovery(
+  scope: MultisigGroupScope,
+  previous: SealedVaultRecord,
+  candidate: SealedVaultRecord,
+  assertAuthorized: () => Promise<void>
+): Promise<void> {
+  const checked = parseSealedVaultRecord(candidate)
+  if (
+    !checked ||
+    checked.version !== 2 ||
+    checked.network !== scope.network ||
+    checked.ownerWalletId !== scope.walletId ||
+    checked.accountId !== scope.accountId ||
+    checked.groupId !== previous.groupId
+  )
+    return Promise.reject(new Error('Invalid vault recovery record'))
+  const key = multisigGroupScopeKey(scope)
+  return withMultisigStorageLock(async () => {
+    await assertNoMultisigRecoveryConflictLocked(
+      scope as {
+        network: 'mainnet' | 'testnet'
+        walletId: string
+        accountId: string
+      }
+    )
+    await assertAuthorized()
+    const before = await readRawMap(MULTISIG_VAULT_RECORDS_STORAGE_KEY)
+    const current = parseSealedVaultRecord(before[key])
+    if (!current || !sealedVaultRecordEquals(current, previous))
+      throw new Error('Vault recovery record changed')
+    await chrome.storage.local.set({
+      [MULTISIG_VAULT_RECORDS_STORAGE_KEY]: { ...before, [key]: checked }
+    })
+    const after = await readRawMap(MULTISIG_VAULT_RECORDS_STORAGE_KEY)
+    const stored = parseSealedVaultRecord(after[key])
+    if (stored && sealedVaultRecordEquals(stored, checked)) return
+    await chrome.storage.local.set({
+      [MULTISIG_VAULT_RECORDS_STORAGE_KEY]: { ...after, [key]: before[key] }
+    })
+    throw new Error('Vault recovery record could not be saved')
   })
 }
 

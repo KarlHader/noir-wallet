@@ -202,8 +202,20 @@ import {
   removeCreationOperation
 } from '@/lib/multisig-creation-storage'
 import { withUndeletedWalletAccountMetadata, WALLET_STATE_KEY } from '@/lib/wallet-metadata-storage'
-import { writeMultisigGroup } from '@/lib/multisig-group-storage'
-import { readVaultRecord, saveVaultRecordVerified } from '@/lib/multisig-vault-storage'
+import { writeMultisigGroup, withMultisigStorageLock } from '@/lib/multisig-group-storage'
+import { assertNoMultisigRecoveryConflictLocked } from '@/lib/multisig-transaction-guard'
+import {
+  readPendingPhoneRecovery,
+  savePendingPhoneRecovery,
+  removePendingPhoneRecovery,
+  readPhoneRecoveryGeneration,
+  invalidatePendingPhoneRecoveries
+} from '@/lib/multisig-recovery-storage'
+import {
+  readVaultRecord,
+  saveVaultRecordVerified,
+  replaceVaultRecordForRecovery
+} from '@/lib/multisig-vault-storage'
 import { readMultisigGroup } from '@/lib/multisig-group-storage'
 import { authorizeMultichainExtensionCommand } from './multichain-rpc-policy'
 import {
@@ -6126,6 +6138,34 @@ const multisigVault = createMultisigVaultHandler({
   readRecord: readVaultRecord,
   saveRecord: saveVaultRecordVerified,
   readGroupId: async scope => (await readMultisigGroup(scope))?.groupId ?? null,
+  recovery: {
+    readGeneration: readPhoneRecoveryGeneration,
+    readPending: readPendingPhoneRecovery,
+    savePending: savePendingPhoneRecovery,
+    removePending: removePendingPhoneRecovery,
+    assertSafe: scope =>
+      withMultisigStorageLock(() =>
+        assertNoMultisigRecoveryConflictLocked({
+          ...scope,
+          network: scope.network as 'mainnet' | 'testnet'
+        })
+      ),
+    withScope: (scope, operation) =>
+      withUndeletedWalletAccountMetadata(
+        scope.walletId,
+        scope.accountId,
+        scope.network as 'mainnet' | 'testnet',
+        operation
+      ),
+    readCreationReady: async (scope, groupId) => {
+      const operation = await readCreationOperation(scope)
+      return operation?.phase === 'ready' && operation.groupId === groupId
+    },
+    invalidateSigning: async scope => {
+      await multisigSend.invalidate({ mode: 'scope', scope })
+    },
+    replaceRecord: replaceVaultRecordForRecovery
+  },
   creation: {
     withMutation: async (walletId, operation) => {
       syncScheduler.pauseForTx()
@@ -6214,6 +6254,9 @@ const multisigSend = createMultisigSendHandler({
 })
 accountContextTransition.registerInvalidator({
   invalidate: request => multisigSend.invalidate(request)
+})
+accountContextTransition.registerInvalidator({
+  invalidate: () => invalidatePendingPhoneRecoveries()
 })
 void multisigSend.recoverPending().catch(() => {})
 
@@ -6582,6 +6625,8 @@ function resumeFrostAccountAfterCredentialBinding(): void {
 }
 
 async function performWalletUnlock(password: string): Promise<any> {
+  // An explicit unlock starts fresh consent; Background reconstruction retains its session.
+  await invalidatePendingPhoneRecoveries()
   syncScheduler.pauseForTx()
   syncScheduler.abortSync()
   try {
@@ -6739,6 +6784,7 @@ function handleWalletCreated(
         await backgroundZcashWalletRuntime.initialize()
         await backgroundZcashWalletRuntime.lock()
         const credentials = await credentialLifecycle.synchronizeRetainedV1(password)
+        await invalidatePendingPhoneRecoveries()
         await credentialSession.unlock(password)
         const unlocked = await backgroundZcashWalletRuntime.unlock(password, {
           skipFailCount: true
@@ -6842,6 +6888,7 @@ async function performWalletLockState(): Promise<void> {
 
     const workerResults = await Promise.allSettled([
       credentialSession.lock(),
+      invalidatePendingPhoneRecoveries(),
       confidentialFundingStore.clearAllSessions(),
       forwardKeyringRpcToOffscreen<boolean>('worker.recreate', { walletId: '__global_lock__' })
     ])
@@ -6853,6 +6900,7 @@ async function performWalletLockState(): Promise<void> {
         throw new Error('Unable to confirm that all keyring Workers were locked')
       }
     }
+    if (workerResults[1].status === 'rejected') throw workerResults[1].reason
     if (zcashResult.status === 'rejected') throw zcashResult.reason
     if (syncIdleResult.status === 'rejected') throw syncIdleResult.reason
     if (!syncIdleResult.value) throw new Error('Wallet sync did not stop before lock')

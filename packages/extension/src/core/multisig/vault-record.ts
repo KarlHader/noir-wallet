@@ -4,7 +4,13 @@
  */
 import { base64ToBytes, bytesToBase64 } from '@/lib/bytes'
 import { isBase64Text, isDkgShape } from './dkg-protocol'
-import { parseRosterManifest, type RosterManifest } from './roster'
+import {
+  buildRoster,
+  parseRosterManifest,
+  QR_TRANSPORT_PUBLIC_KEY,
+  type RosterManifest
+} from './roster'
+import { parseIdentityPublicKey } from './identity'
 
 export type VaultNetwork = 'mainnet' | 'testnet'
 
@@ -33,6 +39,7 @@ export type VaultRecordHeaderV2 = Omit<VaultRecordHeaderV1, 'version'> &
   VaultRecordBinding & {
     version: 2
     ownerWalletId: string
+    recoveredPhoneIdentityPublicKey?: string
   }
 export type VaultRecordHeader = VaultRecordHeaderV1 | VaultRecordHeaderV2
 export type VaultRecordScope = {
@@ -225,6 +232,7 @@ export function isVaultRecordHeaderV2(header: VaultRecordHeader): header is Vaul
 
 function parseHeader(value: unknown): VaultRecordHeader | null {
   if (isRecord(value) && value.version === 2) {
+    const recoveredPhoneIdentityPublicKey = value.recoveredPhoneIdentityPublicKey
     if (
       !hasExactKeys(value, [
         ...HEADER_KEYS,
@@ -232,12 +240,23 @@ function parseHeader(value: unknown): VaultRecordHeader | null {
         'ownerWalletId',
         'birthdayHeight',
         'rosterVersion',
-        'roster'
+        'roster',
+        ...(recoveredPhoneIdentityPublicKey === undefined
+          ? []
+          : ['recoveredPhoneIdentityPublicKey'])
       ]) ||
       !isVaultWalletId(value.ownerWalletId)
     )
       return null
-    const { accountId, ownerWalletId, birthdayHeight, rosterVersion, roster, ...legacy } = value
+    const {
+      accountId,
+      ownerWalletId,
+      birthdayHeight,
+      rosterVersion,
+      roster,
+      recoveredPhoneIdentityPublicKey: _recovered,
+      ...legacy
+    } = value
     const base = parseHeader({ ...legacy, version: 1 })
     const binding = parseVaultRecordBinding({ accountId, birthdayHeight, rosterVersion, roster })
     if (
@@ -248,7 +267,25 @@ function parseHeader(value: unknown): VaultRecordHeader | null {
       binding.roster.participants.length !== base.participants
     )
       return null
-    return { ...base, version: 2, ownerWalletId, ...binding }
+    if (recoveredPhoneIdentityPublicKey !== undefined) {
+      if (typeof recoveredPhoneIdentityPublicKey !== 'string') return null
+      const parsedIdentity = parseIdentityPublicKey(recoveredPhoneIdentityPublicKey)
+      if (
+        base.participants !== 2 ||
+        base.threshold !== 2 ||
+        !parsedIdentity ||
+        bytesToBase64(parsedIdentity.bytes) !== recoveredPhoneIdentityPublicKey ||
+        recoveredPhoneIdentityPublicKey === binding.roster.participants[0].identityPublicKey
+      )
+        return null
+    }
+    return {
+      ...base,
+      version: 2,
+      ownerWalletId,
+      ...binding,
+      ...(recoveredPhoneIdentityPublicKey === undefined ? {} : { recoveredPhoneIdentityPublicKey })
+    }
   }
   if (!isRecord(value) || !hasExactKeys(value, HEADER_KEYS)) return null
   const {
@@ -288,6 +325,24 @@ function parseHeader(value: unknown): VaultRecordHeader | null {
     address,
     fingerprint
   }
+}
+
+/** Keep the DKG roster intact for creation evidence; only signing adopts a restored phone. */
+export function effectiveSigningRoster(header: VaultRecordHeaderV2): RosterManifest {
+  if (!header.recoveredPhoneIdentityPublicKey) return header.roster
+  if (header.participants !== 2 || header.threshold !== 2) throw new Error('Invalid vault record')
+  return buildRoster({
+    groupId: header.groupId,
+    threshold: header.threshold,
+    identities: new Map([
+      [0, header.roster.participants[0].identityPublicKey],
+      [1, header.recoveredPhoneIdentityPublicKey]
+    ]),
+    transportPublicKeys: new Map([
+      [0, header.roster.participants[0].transportPublicKey],
+      [1, QR_TRANSPORT_PUBLIC_KEY]
+    ])
+  })
 }
 
 function isShareLength(share: Uint8Array): boolean {

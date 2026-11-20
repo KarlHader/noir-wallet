@@ -113,6 +113,19 @@ export function createEnvelopeUREncoder(
   return createEnvelopesUREncoder([envelope], maxFragmentLength)
 }
 
+/** Recovery uses the same opaque ur:bytes framing as the phone. */
+export function createBytesUREncoder(
+  bytes: Uint8Array,
+  maxFragmentLength = MULTISIG_UR_FRAGMENT_LENGTH
+): UREncoder {
+  if (bytes.length === 0) throw new RangeError('A code carries at least one byte')
+  return new UREncoder(new UR(encodeCborByteString(bytes), MULTISIG_UR_TYPE), maxFragmentLength)
+}
+
+export function decodeBytesUR(ur: UR): Uint8Array | null {
+  return ur.type === MULTISIG_UR_TYPE ? decodeCborByteString(ur.cbor) : null
+}
+
 /**
  * Decode a scanned UR back into an envelope. Scanned QR content is untrusted, so
  * every failure (wrong UR type, not a byte string, invalid UTF-8 or JSON, not an
