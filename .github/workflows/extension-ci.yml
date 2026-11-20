@@ -30,6 +30,7 @@ on:
       - '.github/workflows/extension-ci.yml'
       - '.github/workflows/extension-release.yml'
       - '.github/workflows/extension-preview-comment.yml'
+      - '.github/workflows/extension-preview-config.yml'
 
 concurrency:
   group: extension-ci-${{ github.event.pull_request.number }}
@@ -37,6 +38,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   HUSKY: 0
@@ -47,6 +49,25 @@ jobs:
     env:
       PREVIEW_BUILD_CHANNEL: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'beta' || 'development' }}
     steps:
+      - name: Download public preview configuration
+        if: github.event.pull_request.head.repo.full_name != github.repository && github.repository == 'NoirWallet/noir-wallet'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_ids=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/extension-preview-config.yml/runs?branch=main&status=success&per_page=100" \
+            --jq '.workflow_runs[] | select(
+              (.event == "push" or .event == "workflow_dispatch" or .event == "schedule") and
+              .head_repository.id == .repository.id
+            ) | .id')
+          run_id=${run_ids%%$'\n'*}
+          if [[ -z "$run_id" ]]; then
+            echo '::warning::Public preview configuration has not been published; building without RHEA Swap'
+          else
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name extension-public-preview-config \
+              --dir "$RUNNER_TEMP/noir-public-preview-config"
+          fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           path: wallet
@@ -71,19 +92,40 @@ jobs:
         working-directory: wallet
       - run: pnpm test
         working-directory: wallet
-      - name: Build and type-check extension
+      - name: Build and type-check fork extension
+        if: github.event.pull_request.head.repo.full_name != github.repository
         working-directory: wallet
         env:
-          BUILD_CHANNEL: ${{ env.PREVIEW_BUILD_CHANNEL }}
-          GA_API_SECRET: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GA_API_SECRET || '' }}
-          CUSTOM_ANALYTICS_PASSWORD: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.CUSTOM_ANALYTICS_PASSWORD || '' }}
-          EVM_HISTORY_API_ORIGIN: ${{ vars.EVM_HISTORY_API_ORIGIN }}
-          RHEA_SWAP_ACCESS_TOKEN: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.RHEA_SWAP_ACCESS_TOKEN || '' }}
-          RHEA_SWAP_PUBLIC_TOKEN: ${{ env.PREVIEW_BUILD_CHANNEL == 'development' && vars.RHEA_SWAP_PUBLIC_TOKEN || '' }}
+          BUILD_CHANNEL: development
         run: |
-          if [ "$BUILD_CHANNEL" = 'development' ]; then
-            export RHEA_SWAP_ACCESS_TOKEN="$RHEA_SWAP_PUBLIC_TOKEN"
-          elif [ -z "${RHEA_SWAP_ACCESS_TOKEN//[[:space:]]/}" ]; then
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process'
+          import { existsSync, readFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          const file = join(process.env.RUNNER_TEMP, 'noir-public-preview-config', 'fork-build-env.json')
+          const config = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
+          const allowed = new Set(['RHEA_SWAP_ACCESS_TOKEN', 'EVM_HISTORY_API_ORIGIN'])
+          if (!config || typeof config !== 'object' || Array.isArray(config) ||
+              Object.entries(config).some(([key, value]) => !allowed.has(key) || typeof value !== 'string')) {
+            throw new Error('Invalid public preview configuration')
+          }
+          const result = spawnSync('pnpm', ['build:extension'], {
+            env: { ...process.env, RHEA_SWAP_ACCESS_TOKEN: '', ...config }, stdio: 'inherit'
+          })
+          if (result.error) throw result.error
+          process.exitCode = result.status ?? 1
+          NODE
+      - name: Build and type-check repository extension
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        working-directory: wallet
+        env:
+          BUILD_CHANNEL: beta
+          GA_API_SECRET: ${{ secrets.GA_API_SECRET }}
+          CUSTOM_ANALYTICS_PASSWORD: ${{ secrets.CUSTOM_ANALYTICS_PASSWORD }}
+          EVM_HISTORY_API_ORIGIN: ${{ vars.EVM_HISTORY_API_ORIGIN }}
+          RHEA_SWAP_ACCESS_TOKEN: ${{ vars.RHEA_SWAP_ACCESS_TOKEN }}
+        run: |
+          if [ -z "${RHEA_SWAP_ACCESS_TOKEN//[[:space:]]/}" ]; then
             echo '::error::RHEA_SWAP_ACCESS_TOKEN is required for repository preview builds'
             exit 1
           fi

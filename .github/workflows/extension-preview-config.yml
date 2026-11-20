@@ -1,0 +1,33 @@
+name: Extension Public Preview Config
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/extension-preview-config.yml']
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 1 * *'
+
+permissions: {}
+
+jobs:
+  publish:
+    if: github.repository == 'NoirWallet/noir-wallet' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export public client configuration
+        env:
+          RHEA_SWAP_ACCESS_TOKEN: ${{ vars.RHEA_SWAP_ACCESS_TOKEN }}
+          EVM_HISTORY_API_ORIGIN: ${{ vars.EVM_HISTORY_API_ORIGIN }}
+        run: |
+          jq -ne '
+            env | if (.RHEA_SWAP_ACCESS_TOKEN | test("\\S")) then
+              { RHEA_SWAP_ACCESS_TOKEN, EVM_HISTORY_API_ORIGIN }
+            else error("Missing RHEA_SWAP_ACCESS_TOKEN") end
+          ' > fork-build-env.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: extension-public-preview-config
+          path: fork-build-env.json
+          retention-days: 90
+          if-no-files-found: error

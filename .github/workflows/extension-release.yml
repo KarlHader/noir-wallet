@@ -121,7 +121,7 @@ jobs:
           CUSTOM_ANALYTICS_PASSWORD: ${{ secrets.CUSTOM_ANALYTICS_PASSWORD }}
 
           EVM_HISTORY_API_ORIGIN: ${{ vars.EVM_HISTORY_API_ORIGIN }}
-          RHEA_SWAP_ACCESS_TOKEN: ${{ secrets.RHEA_SWAP_ACCESS_TOKEN }}
+          RHEA_SWAP_ACCESS_TOKEN: ${{ vars.RHEA_SWAP_ACCESS_TOKEN }}
         run: pnpm build:extension
       - name: Stage wallet ZIPs
         run: |
