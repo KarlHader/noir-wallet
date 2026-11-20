@@ -17,7 +17,7 @@ import {
   startMultisigSend
 } from '@/popup/services/multisig-send-client'
 import type { VaultSendProgress, VaultSendReview } from '@/core/multisig/send-rpc'
-import type { MultisigGroupRecord } from '@/core/multisig/types'
+import type { MultisigGroupRecord, MultisigTransportKind } from '@/core/multisig/types'
 import type { MultisigEnvelope } from '@/core/multisig/messages'
 import type { VaultSendTransaction } from '@/core/multisig/send-rpc'
 import { SendTransactionResult } from './SendTransactionResult'
@@ -26,6 +26,8 @@ import { SendSigningActive } from './SendSigningActive'
 
 interface SendSigningProps {
   review: VaultSendReview
+  /** The transport this signing session was prepared for, chosen per transfer. */
+  transport: MultisigTransportKind
   group: MultisigGroupRecord
   onClose: () => void
   onSessionClosed: () => void
@@ -43,6 +45,7 @@ type SigningView =
 
 export function SendSigning({
   review,
+  transport: signingTransport,
   group,
   onClose,
   onSessionClosed,
@@ -72,11 +75,11 @@ export function SendSigning({
   const effectGeneration = useRef(0)
   const notifyPhones = useCallback(
     async (transaction: VaultSendTransaction) => {
-      if (group.transportKind !== 'ble' || !transaction.outbound.length) return
+      if (signingTransport !== 'ble' || !transaction.outbound.length) return
       if (!bleTransport.current) throw new Error('Bluetooth signing connection ended')
       await bleTransport.current.send(transaction.outbound)
     },
-    [group.transportKind]
+    [signingTransport]
   )
   const submission = useMultisigSendSubmission(review, authority, notifyPhones)
 
@@ -154,7 +157,7 @@ export function SendSigning({
         return
       }
       if (next.outbound.length) {
-        if (group.transportKind === 'qr') {
+        if (signingTransport === 'qr') {
           transport.current?.setOutbound(next.outbound)
           setOutbound(transport.current?.getOutbound() ?? [])
           setIsScanning(false)
@@ -171,7 +174,7 @@ export function SendSigning({
       }
       setView('active')
     },
-    [group.transportKind, onSigned, review.binding, stop]
+    [signingTransport, onSigned, review.binding, stop]
   )
 
   const handleEnvelope = useCallback(
@@ -196,7 +199,7 @@ export function SendSigning({
     isDisposed.current = false
     isTerminal.current = false
     hasSigned.current = false
-    if (group.transportKind === 'qr') {
+    if (signingTransport === 'qr') {
       transport.current = createQrSigningTransport({
         binding: review.binding,
         onEnvelope: handleEnvelope
@@ -259,7 +262,7 @@ export function SendSigning({
         else if (!isTerminal.current) void cancelMultisigSend(authority).catch(() => {})
       })
     }
-  }, [applyProgress, authority, group.transportKind, handleEnvelope, review.binding, stop])
+  }, [applyProgress, authority, signingTransport, handleEnvelope, review.binding, stop])
 
   const connectPhone = (slot: number) => {
     if (view !== 'connecting' || connectingSlot !== null || !bleTransport.current) return
@@ -413,7 +416,7 @@ export function SendSigning({
       </div>
       <div className="page-footer space-y-3">
         {feedback && <InlineError message={feedback} />}
-        {isActive && group.transportKind === 'qr' && (
+        {isActive && signingTransport === 'qr' && (
           <FlowButton variant="outline" onClick={() => setIsScanning(value => !value)}>
             <Icon icon={isScanning ? 'lucide:qr-code' : 'lucide:scan'} aria-hidden="true" />
             {isScanning ? 'Show code' : 'Scan phone response'}

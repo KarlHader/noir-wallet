@@ -5,10 +5,11 @@ import { PageHeader } from '@/popup/components/common/PageHeader'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { FlowButton } from '@/popup/components/multisig/FlowButton'
 import type { VaultSendReview } from '@/core/multisig/send-rpc'
-import type { MultisigGroupRecord } from '@/core/multisig/types'
+import type { MultisigGroupRecord, MultisigTransportKind } from '@/core/multisig/types'
 
 interface SendReviewProps {
   review: VaultSendReview
+  transport: MultisigTransportKind
   group: MultisigGroupRecord
   isCancelling: boolean
   feedback: string | null
@@ -18,6 +19,7 @@ interface SendReviewProps {
 
 export function SendReview({
   review,
+  transport,
   group,
   isCancelling,
   feedback,
@@ -43,6 +45,7 @@ export function SendReview({
     ['Amount', `${formatBaseUnitDecimalAmount(review.summary.amount, ZEC_DECIMALS)} ZEC`],
     ['Network fee', `${formatBaseUnitDecimalAmount(review.summary.fee, ZEC_DECIMALS)} ZEC`],
     ['Signers', selectedPhones],
+    ['Signing method', transport === 'ble' ? 'Bluetooth' : 'QR code'],
     ['Network', review.binding.network === 'mainnet' ? 'Mainnet' : 'Testnet'],
     ['Review expires', expiresAt]
   ]

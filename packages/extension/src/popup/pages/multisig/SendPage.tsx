@@ -12,6 +12,7 @@ import { PageHeader } from '@/popup/components/common/PageHeader'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { FlowButton } from '@/popup/components/multisig/FlowButton'
 import { DeviceCard } from '@/popup/components/multisig/DeviceCard'
+import { SegmentedToggle } from '@/popup/components/multisig/SegmentedToggle'
 import {
   SendAmountInputCard,
   SendAssetHeader,
@@ -30,13 +31,24 @@ import {
   resolveMultisigSendContext
 } from './send-model'
 import type { MultisigSendContext } from './send-model'
-import type { DeviceSlot } from '@/core/multisig/types'
+import type { DeviceSlot, MultisigTransportKind } from '@/core/multisig/types'
 import type { VaultSendReview } from '@/core/multisig/send-rpc'
 import { SendReview } from './SendReview'
 import { SendSigning } from './SendSigning'
 import { SendPendingTransactions } from './SendPendingTransactions'
 import { useMultisigSendTransactions } from './useMultisigSendTransactions'
 import { getUnresolvedMultisigTransactions } from './send-model'
+
+const SIGNING_TRANSPORT_OPTIONS: { value: MultisigTransportKind; label: string }[] = [
+  { value: 'ble', label: 'Bluetooth' },
+  { value: 'qr', label: 'QR code' }
+]
+
+interface PreparedTransfer {
+  review: VaultSendReview
+  // The Background binds the signing session to this transport, so it travels with the review.
+  transport: MultisigTransportKind
+}
 
 function SendLayout({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
   return (
@@ -125,10 +137,14 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
   const [amount, setAmount] = useState('')
   const [memo, setMemo] = useState('')
   const [selectedPhone, setSelectedPhone] = useState<DeviceSlot | null>(null)
+  // Signing does not depend on how the group was created; that transport is only the default.
+  const [signingTransport, setSigningTransport] = useState<MultisigTransportKind>(
+    group.transportKind
+  )
   const [isPreparing, setIsPreparing] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
-  const [review, setReview] = useState<VaultSendReview | null>(null)
+  const [prepared, setPrepared] = useState<PreparedTransfer | null>(null)
   const [isApproved, setIsApproved] = useState(false)
   const [isInvalidated, setIsInvalidated] = useState(false)
   const invalidated = useRef(false)
@@ -202,6 +218,7 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
   const prepareTransfer = async () => {
     if (!canPrepare || !amountZats || !selectedSlots || attempt.current) return
     const controller = new AbortController()
+    const transport = signingTransport
     attempt.current = controller
     setIsPreparing(true)
     setFeedback(null)
@@ -237,7 +254,7 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
             amountZats,
             ...(memo ? { memo } : {}),
             selectedSlots,
-            transport: group.transportKind
+            transport
           },
           assertCurrent
         ),
@@ -247,7 +264,7 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
       assertCurrent()
       if (result.available) {
         activeReview.current = result
-        setReview(result)
+        setPrepared({ review: result, transport })
       } else {
         setFeedback(
           result.reason === 'fee_quote_unavailable'
@@ -270,12 +287,13 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
   const clearFeedback = () => setFeedback(null)
 
   const cancelReview = async () => {
+    const review = prepared?.review
     if (!review || isCancelling) return
     setIsCancelling(true)
     try {
       await cancelMultisigSend(authorityFromReview(review))
       activeReview.current = null
-      setReview(null)
+      setPrepared(null)
       setFeedback(null)
     } catch {
       setFeedback('Unable to close this review. Please try again or wait for it to expire.')
@@ -298,10 +316,11 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
     )
   }
 
-  if (review && isApproved) {
+  if (prepared && isApproved) {
     return (
       <SendSigning
-        review={review}
+        review={prepared.review}
+        transport={prepared.transport}
         group={group}
         onClose={() => window.close()}
         onSessionClosed={handleSessionClosed}
@@ -310,10 +329,12 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
     )
   }
 
-  if (review) {
+  if (prepared) {
+    const { review } = prepared
     return (
       <SendReview
         review={review}
+        transport={prepared.transport}
         group={group}
         isCancelling={isCancelling}
         feedback={feedback}
@@ -477,6 +498,19 @@ function MultisigSendForm({ context }: { context: MultisigSendContext }) {
                 )
               })}
             </div>
+          </div>
+          <div className="space-y-2" role="group" aria-labelledby="multisig-signing-method">
+            <h2 id="multisig-signing-method" className="text-sm font-medium">
+              Signing method
+            </h2>
+            <SegmentedToggle
+              options={SIGNING_TRANSPORT_OPTIONS}
+              value={signingTransport}
+              onChange={value => {
+                setSigningTransport(value)
+                clearFeedback()
+              }}
+            />
           </div>
         </fieldset>
       </div>
