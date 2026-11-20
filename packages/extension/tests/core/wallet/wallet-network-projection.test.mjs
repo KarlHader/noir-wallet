@@ -119,3 +119,29 @@ test.describe('Wallet network projection', () => {
     expect(hasKeystoneWalletMissingNetworkProjection([software, keystone], 'testnet')).toBe(false)
   })
 })
+test('external projections never borrow addresses or birthdays from the other network', () => {
+  const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
+  const account = {
+    id: 'external',
+    source,
+    addresses: { transparent: '', shielded: 'u1external' },
+    birthdayHeight: 100,
+    networkAddresses: {
+      mainnet: { transparent: '', shielded: 'u1external' },
+      testnet: { transparent: '', shielded: 'utest1untrusted' }
+    },
+    networkBirthdayHeights: { mainnet: 100, testnet: 200 }
+  }
+  const projected = projectWalletNetwork({ id: 'parent', accounts: [account] }, 'testnet')
+    .accounts[0]
+  expect(projected.addresses).toEqual({ transparent: '', shielded: '' })
+  expect(projected.birthdayHeight).toBe(0)
+  expect(projected.networkAddresses.mainnet).toEqual(account.networkAddresses.mainnet)
+  expect(withNetworkAddresses(account, 'testnet').addresses).toEqual(projected.addresses)
+  const { networkAddresses, networkBirthdayHeights, ...withoutProjection } = account
+  const hydrated = withNetworkAddresses(withoutProjection, 'testnet')
+  const restored = projectWalletNetwork({ id: 'parent', accounts: [hydrated] }, 'mainnet')
+    .accounts[0]
+  expect(restored.addresses).toEqual(account.addresses)
+  expect(restored.birthdayHeight).toBe(100)
+})

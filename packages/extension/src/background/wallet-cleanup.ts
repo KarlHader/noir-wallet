@@ -40,6 +40,8 @@ import {
   completeAccountMetadataDeletion,
   completeWalletMetadataDeletion,
   getAccountDeletionRecord,
+  isAccountRuntimeCleanupComplete,
+  markAccountRuntimeCleanupComplete,
   getLegacyPendingCleanups,
   getPendingAccountCleanups,
   getPendingWalletCleanups,
@@ -50,6 +52,16 @@ import {
   resetWalletMetadata
 } from '@/lib/wallet-metadata-storage'
 import { blockWalletRecords, getBlockedWalletIds, unblockWalletRecords } from '@/lib/indexed-db'
+import {
+  deleteMultisigDataForAccount,
+  deleteMultisigDataForWallet
+} from '@/lib/multisig-vault-storage'
+import { clearMultisigData, withMultisigStorageLock } from '@/lib/multisig-group-storage'
+import { assertNoUnresolvedMultisigTransactionsLocked } from '@/lib/multisig-transaction-guard'
+import {
+  deleteProtectedMultisigSnapshotsForAccount,
+  deleteProtectedMultisigSnapshotsForWallet
+} from '@/lib/multisig-transaction-snapshot'
 import { dappHandler } from './dapp-handler'
 import { syncScheduler } from './sync-scheduler'
 import { transactionMonitor } from './transaction-monitor'
@@ -321,6 +333,12 @@ export class WalletCleanupCoordinator {
   private async resumeLegacyWalletRemoval(walletId: string): Promise<void> {
     await this.enqueue(async () => {
       await this.hydrateStores()
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          transactionWalletId => transactionWalletId === walletId,
+          [walletId]
+        )
+      )
       await blockWalletWrites(walletId)
       await syncScheduler.prepareWalletRemoval(walletId)
       await backgroundZcashWalletRuntime.removeWalletAuthoritatively(walletId, [])
@@ -340,6 +358,7 @@ export class WalletCleanupCoordinator {
         )
         await accountData.deleteWalletData(network, walletId, [...accountIds])
       }
+      await this.removeMultisigWalletData(walletId)
       await completeWalletMetadataDeletion(walletId)
       await completeLegacyPendingCleanup(walletId)
     })
@@ -355,6 +374,14 @@ export class WalletCleanupCoordinator {
   ): Promise<void> {
     await this.enqueue(async () => {
       await this.hydrateStores()
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          (transactionWalletId, transactionAccountId) =>
+            transactionWalletId === walletId &&
+            accounts.some(account => account.accountId === transactionAccountId),
+          [walletId]
+        )
+      )
       const previous = this.getActiveAccount()
       await syncScheduler.prepareAccountRemoval(walletId)
       await blockWalletWrites(walletId)
@@ -377,6 +404,7 @@ export class WalletCleanupCoordinator {
           )
         }
         await dappHandler.removeAccountReferences(walletId, account.accountId)
+        await this.removeMultisigAccountData(walletId, account.accountId)
       }
       await finalizeLegacyAccountMetadataDeletion(walletId, accounts)
       await unblockWalletWrites(walletId)
@@ -392,6 +420,13 @@ export class WalletCleanupCoordinator {
   ): Promise<void> {
     return this.enqueue(async () => {
       await this.hydrateStores()
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          (transactionWalletId, transactionAccountId) =>
+            transactionWalletId === walletId && transactionAccountId === accountId,
+          [walletId]
+        )
+      )
       const previous = this.getActiveAccount()
       const wallet = useWalletStore.getState().getWallet(walletId)
       const account = wallet?.accounts.find(candidate => candidate.id === accountId)
@@ -411,11 +446,27 @@ export class WalletCleanupCoordinator {
                 await syncScheduler.prepareAccountRemoval(walletId)
                 await blockWalletWrites(walletId)
                 await this.removeMultichainAccountData(walletId, accountId)
-                await backgroundZcashWalletRuntime.finishAccountRemovalCleanup(
-                  walletId,
-                  accountId,
-                  derivationIndex
-                )
+                const network = backgroundZcashWalletRuntime.getNetwork()
+                if (
+                  !(await isAccountRuntimeCleanupComplete(
+                    walletId,
+                    accountId,
+                    network,
+                    derivationIndex
+                  ))
+                ) {
+                  await backgroundZcashWalletRuntime.finishAccountRemovalCleanup(
+                    walletId,
+                    accountId,
+                    derivationIndex
+                  )
+                  await markAccountRuntimeCleanupComplete(
+                    walletId,
+                    accountId,
+                    network,
+                    derivationIndex
+                  )
+                }
                 const credentialRemoval = await this.credentialRemoval.removeAccount(
                   walletId,
                   accountId,
@@ -429,6 +480,7 @@ export class WalletCleanupCoordinator {
                 }
                 await unblockWalletWrites(walletId)
                 await this.resumeAfterMutation(previous, true)
+                await this.removeMultisigAccountData(walletId, accountId)
                 await completeAccountMetadataDeletion(
                   walletId,
                   accountId,
@@ -473,7 +525,7 @@ export class WalletCleanupCoordinator {
               walletId,
               accountId,
               backgroundZcashWalletRuntime.getNetwork(),
-              account.derivationIndex
+              account.source ?? account.derivationIndex
             )
           } catch (error) {
             await unblockWalletWrites(walletId)
@@ -516,9 +568,15 @@ export class WalletCleanupCoordinator {
             await backgroundZcashWalletRuntime.finishAccountRemovalCleanup(
               walletId,
               accountId,
-              account.derivationIndex
+              account.source ?? account.derivationIndex
             )
           }
+          await markAccountRuntimeCleanupComplete(
+            walletId,
+            accountId,
+            backgroundZcashWalletRuntime.getNetwork(),
+            account.source ?? account.derivationIndex
+          )
           const credentialRemoval = await this.credentialRemoval.removeAccount(
             walletId,
             accountId,
@@ -534,8 +592,11 @@ export class WalletCleanupCoordinator {
           await this.refreshCredentialSessionAfterWalletRemoval(sessionPassword)
         }
         await this.resumeAfterMutation(previous, !removesWallet)
-        if (removesWallet) await completeWalletMetadataDeletion(walletId)
-        else {
+        if (removesWallet) {
+          await this.removeMultisigWalletData(walletId)
+          await completeWalletMetadataDeletion(walletId)
+        } else {
+          await this.removeMultisigAccountData(walletId, accountId)
           await completeAccountMetadataDeletion(
             walletId,
             accountId,
@@ -549,6 +610,12 @@ export class WalletCleanupCoordinator {
   removeWallet(walletId: string, verification?: WalletBackupVerification): Promise<void> {
     return this.enqueue(async () => {
       await this.hydrateStores()
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          transactionWalletId => transactionWalletId === walletId,
+          [walletId]
+        )
+      )
       const previous = this.getActiveAccount()
       const wallet = useWalletStore.getState().getWallet(walletId)
       if (!wallet) {
@@ -589,6 +656,7 @@ export class WalletCleanupCoordinator {
           await this.credentialRemoval.removeWallet(walletId)
           await this.refreshCredentialSessionAfterWalletRemoval(sessionPassword)
           await this.resumeAfterMutation(previous, false)
+          await this.removeMultisigWalletData(walletId)
           await completeWalletMetadataDeletion(walletId)
         }
       )
@@ -739,13 +807,26 @@ export class WalletCleanupCoordinator {
     return this.enqueue(async () => {
       await this.hydrateStores()
       const wallets = useWalletStore.getState().wallets
-      await accountContextTransition.runActiveOperation(async () => {
+      await withMultisigStorageLock(() =>
+        assertNoUnresolvedMultisigTransactionsLocked(
+          () => true,
+          wallets.map(wallet => wallet.id)
+        )
+      )
+      const scopes = wallets.flatMap(wallet =>
+        wallet.accounts.map(account => ({ walletId: wallet.id, accountId: account.id }))
+      )
+      await accountContextTransition.runScopedMutation(scopes, async () => {
+        await credentialSession.lock()
         for (const wallet of wallets) {
           await syncScheduler.prepareWalletRemoval(wallet.id)
           await blockWalletWrites(wallet.id)
         }
-        await credentialSession.lock()
-        await resetWalletMetadata()
+        await resetWalletMetadata(async () => {
+          for (const wallet of wallets)
+            for (const network of ['mainnet', 'testnet'] as const)
+              await deleteProtectedMultisigSnapshotsForWallet({ network, walletId: wallet.id })
+        })
         await this.clearPendingMultichainTransfers()
         await Promise.all([
           transactionMonitor.clear(),
@@ -753,6 +834,7 @@ export class WalletCleanupCoordinator {
           dappHandler.clearConnections()
         ])
         await Promise.all([
+          this.resetMultisigData(),
           deleteIndexedDbTransactionPersistence(),
           deleteIndexedDbPortfolioCache(),
           deleteIndexedDbBitcoinDiscovery(),
@@ -815,6 +897,23 @@ export class WalletCleanupCoordinator {
     ])
   }
 
+  // Feature flags cannot retain credentials or account state after authoritative removal.
+  private async removeMultisigAccountData(walletId: string, accountId: string): Promise<void> {
+    for (const network of ['mainnet', 'testnet'] as const)
+      await deleteProtectedMultisigSnapshotsForAccount({ network, walletId, accountId })
+    await deleteMultisigDataForAccount(walletId, accountId)
+  }
+
+  private async removeMultisigWalletData(walletId: string): Promise<void> {
+    for (const network of ['mainnet', 'testnet'] as const)
+      await deleteProtectedMultisigSnapshotsForWallet({ network, walletId })
+    await deleteMultisigDataForWallet(walletId)
+  }
+
+  private async resetMultisigData(): Promise<void> {
+    await clearMultisigData()
+  }
+
   private async removeNativeStorageV2Wallet(
     walletId: string,
     previous: ActiveAccount
@@ -865,6 +964,7 @@ export class WalletCleanupCoordinator {
           await this.notifyAccountSwitched()
           if (cleanupIncomplete)
             throw new Error('Wallet removal cleanup is incomplete; retry removal')
+          await this.removeMultisigWalletData(walletId)
           await completeWalletMetadataDeletion(walletId)
         } catch (error) {
           if (!committed) await syncScheduler.cancelWalletRemoval(walletId)

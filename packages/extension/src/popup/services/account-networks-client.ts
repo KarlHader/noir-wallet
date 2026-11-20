@@ -1,10 +1,19 @@
-import { parseAccountId, type AccountId } from '@/core/accounts/domain'
+import {
+  accountSourceEquals,
+  isFrostAccount,
+  parseAccountId,
+  parseAccountIndex,
+  parseAccountSource
+} from '@/core/accounts/domain'
+import { accountSupportsChain } from '@/core/accounts/application/account-capability-policy'
+import type { AccountId, AccountSource } from '@/core/accounts/domain'
 import { parseSupportedBitcoinAddress } from '@/core/chains/bitcoin'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import {
   createBuildAddressGatedChainRegistry,
   createInitialProductChainRegistry,
+  getZcashChainId,
   type AddressGatedChainRegistry,
   type ChainDefinition
 } from '@/core/chains/registry'
@@ -20,6 +29,7 @@ import { getActiveChainEndpointSettings } from '@/core/chains/chain-endpoint-set
 import { parseStorageV2GenerationId } from '@/infrastructure/persistence/schema'
 import type { StorageV2GenerationId } from '@/ports/repositories'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
+import type { AccountData, Network } from '@/types'
 
 const ADDRESS_PRIVACY = new Set(['transparent', 'shielded', 'mixed'])
 
@@ -37,7 +47,7 @@ export interface AccountNetworkView {
   readonly privateExecutionAddress?: string
 }
 
-export interface AccountNetworksView {
+interface AccountNetworksViewCommon {
   readonly walletId: KeyDomainId
   readonly walletDisplayName: string
   readonly walletCreatedAt?: number
@@ -51,9 +61,18 @@ export interface AccountNetworksView {
     | Readonly<{ readonly kind: 'hardware'; readonly hardware: HardwareCredentialMetadata }>
   readonly accountId: AccountId
   readonly accountDisplayName: string
-  readonly accountIndex: number
   readonly active: boolean
   readonly networks: readonly AccountNetworkView[]
+}
+
+export type AccountNetworksView = AccountNetworksViewCommon &
+  (
+    | { readonly source?: never; readonly accountIndex: number }
+    | { readonly source: AccountSource; readonly accountIndex?: never }
+  )
+
+export interface AccountNetworksQueryOptions {
+  readonly deriveMissingAddresses?: boolean
 }
 
 export interface AccountNetworksCatalogView {
@@ -265,6 +284,7 @@ function parseCatalog(
     const accountKeys = new Set<string>()
     const accounts = catalog.accounts.map(value => {
       const account = readRecord(value, 'Account networks entry')
+      const hasSource = Object.prototype.hasOwnProperty.call(account, 'source')
       assertExactKeys(
         account,
         [
@@ -276,7 +296,7 @@ function parseCatalog(
           'walletSource',
           'accountId',
           'accountDisplayName',
-          'accountIndex',
+          hasSource ? 'source' : 'accountIndex',
           'active',
           'networks'
         ],
@@ -287,6 +307,9 @@ function parseCatalog(
       }
       const walletId = parseKeyDomainId(account.walletId)
       const accountId = parseAccountId(account.accountId)
+      const accountIdentity = hasSource
+        ? { source: parseAccountSource(account.source) }
+        : { accountIndex: parseAccountIndex(account.accountIndex) }
       if (
         typeof account.walletDisplayName !== 'string' ||
         account.walletDisplayName.length === 0 ||
@@ -299,8 +322,6 @@ function parseCatalog(
         account.accountDisplayName.length === 0 ||
         account.accountDisplayName.length > 128 ||
         account.accountDisplayName.trim() !== account.accountDisplayName ||
-        !Number.isSafeInteger(account.accountIndex) ||
-        (account.accountIndex as number) < 0 ||
         typeof account.active !== 'boolean'
       ) {
         throw new Error('Invalid Account networks metadata')
@@ -352,6 +373,16 @@ function parseCatalog(
       accountKeys.add(key)
 
       const networks = account.networks.map(network => parseNetwork(network, chains))
+      if (
+        accountIdentity.source &&
+        (walletSource.kind !== 'software' ||
+          networks.some(
+            network =>
+              !accountSupportsChain(accountIdentity, network.chain) ||
+              network.accountDerivationPath !== undefined
+          ))
+      )
+        throw new Error('Invalid independent Account networks')
       if (new Set(networks.map(network => network.chain.id)).size !== networks.length) {
         throw new Error('Duplicate Account network chain')
       }
@@ -364,7 +395,7 @@ function parseCatalog(
         walletSource,
         accountId,
         accountDisplayName: account.accountDisplayName,
-        accountIndex: account.accountIndex as number,
+        ...accountIdentity,
         active: account.active,
         networks: Object.freeze(networks)
       })
@@ -382,6 +413,60 @@ function parseCatalog(
     if (error instanceof AccountNetworksClientError) throw error
     throw new AccountNetworksClientError('invalid-response', 'Invalid Account networks response')
   }
+}
+
+/** A retained receive projection cannot borrow a parent or another network's address. */
+export function resolveRetainedFrostReceiveNetwork(
+  account: AccountData | undefined,
+  network: Network,
+  chains: AddressGatedChainRegistry = resolveProductionChains()
+): AccountNetworkView | null {
+  if (!account || !isFrostAccount(account) || account.source.network !== network) return null
+  const shielded = account.networkAddresses?.[network]?.shielded
+  if (!shielded) return null
+  try {
+    return parseNetwork(
+      {
+        chainId: getZcashChainId(network),
+        addresses: [
+          {
+            value: shielded,
+            scheme: 'zcash-shielded-unified',
+            privacy: 'shielded',
+            preferredForReceive: true
+          }
+        ]
+      },
+      chains
+    )
+  } catch {
+    return null
+  }
+}
+
+export function resolveAccountReceiveNetworks(
+  account: AccountNetworksView,
+  expectedSource: AccountSource | undefined,
+  network: Network
+): readonly AccountNetworkView[] {
+  if (!accountSourceEquals(account.source, expectedSource)) return []
+  if (!expectedSource) return account.networks
+  if (expectedSource.network !== network) return []
+  return account.networks.flatMap(entry => {
+    if (!accountSupportsChain(account, entry.chain)) return []
+    const addresses = entry.addresses.filter(address => address.privacy === 'shielded')
+    return addresses.length ? [{ ...entry, addresses }] : []
+  })
+}
+
+export function resolveZcashReceivePrivacy(
+  source: AccountSource | undefined,
+  requestedPrivacy: string | null,
+  mode: 'private' | 'public'
+): 'shielded' | 'transparent' {
+  if (source?.kind === 'frost-vault') return 'shielded'
+  if (requestedPrivacy === 'shielded' || requestedPrivacy === 'transparent') return requestedPrivacy
+  return mode === 'private' ? 'shielded' : 'transparent'
 }
 
 export function createAccountNetworksClient(

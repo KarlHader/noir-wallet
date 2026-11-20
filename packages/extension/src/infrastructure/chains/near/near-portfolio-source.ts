@@ -1,10 +1,12 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { ChainAccount } from '@/core/accounts/domain'
 import type { AssetRegistry } from '@/core/chains/registry'
 import type { PortfolioReadErrorCode, PortfolioSourceSnapshot } from '@/core/portfolio'
 
 import { readNearBalances } from './near-balance-reader'
 import { readNearAccountId } from './near-rpc-codecs'
-import { NearRpcError, type NearReadRpc, type NearRpcErrorCode } from './near-rpc-types'
+import { NearRpcError } from './near-rpc-types'
+import type { NearReadRpc, NearRpcErrorCode } from './near-rpc-types'
 import type { NearAccountTokenInventoryClient } from './near-fastnear-client'
 
 export interface ReadNearPortfolioSourceInput {
@@ -41,6 +43,7 @@ function mapErrorCode(code: NearRpcErrorCode): PortfolioReadErrorCode {
 }
 
 function parseAccountId(chainAccount: ChainAccount): string {
+  if (!isDerivedAccount(chainAccount)) throw new Error('Portfolio requires a derived ChainAccount')
   if (chainAccount.identity.kind !== 'account-identifier') {
     throw new Error('NEAR Portfolio requires an account-identifier binding')
   }

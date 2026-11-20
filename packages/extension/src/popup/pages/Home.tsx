@@ -21,6 +21,19 @@ import { useSpeedUp } from '../hooks/useSpeedUp'
 import { useResyncZcash } from '../hooks/useResyncZcash'
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { ExtensionUpdateBanner } from '../components/common/ExtensionUpdateBanner'
+import { MultisigBadge } from '../components/multisig/MultisigBadge'
+import { MultisigBanner } from '../components/multisig/MultisigBanner'
+import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
+import { isFrostAccount } from '@/core/accounts/domain'
+import { isSidePanelSurface } from '@/lib/extension-display-mode'
+import {
+  openMultisigCreateTab,
+  openMultisigSendTab,
+  openMultisigRecoverTab
+} from '@/lib/multisig-tab'
+import { RecoverPhoneDialog } from '../components/multisig/RecoverPhoneDialog'
+import { useMultisigGroup, useMultisigGroupStore } from '../multisig/group-store'
+import { dismissMultisigBanner, isMultisigBannerDismissed } from '@/lib/multisig-group-storage'
 import { LegacyPoolPrivacyNotice } from '../components/common/LegacyPoolPrivacyNotice'
 import { useLegacyPoolPrivacyNotice } from '../hooks/useLegacyPoolPrivacyNotice'
 import { hasLegacyOrchardBalance } from '@/lib/legacy-pool-privacy-notice'
@@ -150,6 +163,7 @@ export function Home() {
   } = useActiveAccountNetworks()
 
   const currentAccount = getCurrentAccount()
+  const isIndependentMultisig = Boolean(currentAccount && isFrostAccount(currentAccount))
   const currentWallet = getCurrentWallet()
   const showV1NetworkGuide = isRetainedV1ZcashOnlyAccount(
     currentWallet,
@@ -267,6 +281,48 @@ export function Home() {
           accountDisplayNames
         )
       : 'Account 1')
+  const multisigScope = useMemo(
+    () =>
+      currentWalletId && currentAccountId
+        ? { network: currentNetwork, walletId: currentWalletId, accountId: currentAccountId }
+        : null,
+    [currentNetwork, currentWalletId, currentAccountId]
+  )
+  const multisigGroup = useMultisigGroup(multisigScope)
+  const multisigGroupsLoaded = useMultisigGroupStore(state => state.loaded)
+  // Starts true so the banner stays hidden until the stored flag has been read.
+  const [multisigBannerDismissed, setMultisigBannerDismissed] = useState(true)
+  useEffect(() => {
+    if (!multisigScope || !isMultisigUiEnabled()) return
+    // The flag is per account, so hide the banner again while the new account's flag loads.
+    setMultisigBannerDismissed(true)
+    let cancelled = false
+    isMultisigBannerDismissed(multisigScope)
+      .then(dismissed => {
+        if (!cancelled) setMultisigBannerDismissed(dismissed)
+      })
+      .catch(error => console.error('Failed to read the multisig banner flag', error))
+    return () => {
+      cancelled = true
+    }
+  }, [multisigScope])
+  // Multisig starts from a recovery phrase, so hardware and private-key wallets never see it.
+  const isHardwareWallet =
+    storageV2Account?.walletSource.kind === 'hardware' ||
+    isZcashHardwareKeySource(currentWallet?.keySource)
+  const multisigWalletEligible =
+    !isIndependentMultisig &&
+    !isHardwareWallet &&
+    currentWallet?.keySource !== 'private-key' &&
+    storageV2Account?.walletSource.kind !== 'private-key'
+  const multisigBannerScope =
+    isMultisigUiEnabled() &&
+    multisigWalletEligible &&
+    multisigGroupsLoaded &&
+    multisigGroup === null &&
+    !multisigBannerDismissed
+      ? multisigScope
+      : null
   const supportsZcash =
     storageV2Account?.networks.some(network => network.chain.family === 'zcash') ??
     Boolean(currentAccount)
@@ -311,6 +367,20 @@ export function Home() {
       ? privateMode && evmOperationsEnabled
       : (assetDomain === 'public' || assetDomain === 'private') && canMoveEvm
   const openSend = () => {
+    if (currentAccount && isFrostAccount(currentAccount)) {
+      if (
+        !isMultisigUiEnabled() ||
+        !multisigScope ||
+        currentAccount.source.network !== currentNetwork
+      ) {
+        toast.error('Multisig sending is unavailable for this account and network.')
+        return
+      }
+      void openMultisigSendTab(multisigScope).catch(() => {
+        toast.error('Unable to open multisig send', 'Please try again.')
+      })
+      return
+    }
     const sendPath =
       assetDomain === 'public' && publicSendSource
         ? publicSendSource.chain.chain.family === 'zcash'
@@ -417,6 +487,10 @@ export function Home() {
     navigate.navigate(`/transfer?mode=${privateMode ? 'private' : 'public'}`)
   }
   const openShieldAction = (action: ShieldAction) => {
+    if (action === 'send' && isIndependentMultisig) {
+      openSend()
+      return
+    }
     navigate.navigate(`/shield-funds?action=${action}&mode=${privateMode ? 'private' : 'public'}`)
   }
   const { isSyncing, syncProgress, currentHeight, latestHeight, etaMs, syncReason } =
@@ -845,10 +919,59 @@ export function Home() {
               ))}
             </PopoverContent>
           </Popover>
+          {isMultisigUiEnabled() && multisigGroup && (
+            <MultisigBadge
+              threshold={multisigGroup.threshold}
+              onClick={
+                multisigScope &&
+                isIndependentMultisig &&
+                !multisigGroup.mock &&
+                multisigGroup.threshold === '2-of-2'
+                  ? () => {
+                      const scope = multisigScope
+                      void openModal({
+                        title: 'Restore phone',
+                        showCloseButton: true,
+                        body: (_resolve, close) => (
+                          <RecoverPhoneDialog
+                            onClose={close}
+                            onSelect={transport => {
+                              void openMultisigRecoverTab(scope, transport)
+                                .then(() => {
+                                  close()
+                                  if (!isSidePanelSurface(window.location.search)) window.close()
+                                })
+                                .catch(() => toast.error('Unable to open phone recovery'))
+                            }}
+                          />
+                        )
+                      })
+                    }
+                  : undefined
+              }
+            />
+          )}
         </div>
       </header>
 
       <ExtensionUpdateBanner />
+      {multisigBannerScope && (
+        <div className="px-4 py-2">
+          <MultisigBanner
+            onClick={() => {
+              openMultisigCreateTab(multisigBannerScope)
+              // The side panel stays open; only the popup closes after opening the tab.
+              if (!isSidePanelSurface(window.location.search)) window.close()
+            }}
+            onDismiss={() => {
+              setMultisigBannerDismissed(true)
+              dismissMultisigBanner(multisigBannerScope).catch(error =>
+                console.error('Failed to save the multisig banner dismissal', error)
+              )
+            }}
+          />
+        </div>
+      )}
 
       <div
         data-testid="home-scroll-container"
@@ -919,7 +1042,7 @@ export function Home() {
           data-layout={isTestnet ? 'centered' : 'distributed'}
           className={`${showShieldIntro ? 'mb-1' : 'mb-5'} flex justify-evenly gap-[13px] px-4`}
         >
-          {actionDomain === 'public' && (
+          {(actionDomain === 'public' || isIndependentMultisig) && (
             <>
               <WalletActionButton
                 icon={<WalletActionIcon action="send" />}
@@ -933,14 +1056,15 @@ export function Home() {
               />
             </>
           )}
-          {showMove && (
+          {!isIndependentMultisig && showMove && (
             <WalletActionButton
               icon={<WalletActionIcon action="move" />}
               label="Move"
               onClick={openTransfer}
             />
           )}
-          {actionDomain === 'shield' &&
+          {!isIndependentMultisig &&
+            actionDomain === 'shield' &&
             (['send', 'receive', 'move'] as const).map(action => (
               <WalletActionButton
                 key={action}
@@ -949,7 +1073,8 @@ export function Home() {
                 onClick={() => openShieldAction(action)}
               />
             ))}
-          {!isTestnet &&
+          {!isIndependentMultisig &&
+            !isTestnet &&
             supportsSwap &&
             (assetDomain !== 'shield' || shieldActions.providersFor('swap').length > 0) && (
               <WalletActionButton
@@ -958,28 +1083,30 @@ export function Home() {
                 onClick={openSwap}
               />
             )}
-          <div
-            className={
-              showShieldIntro
-                ? 'relative flex min-w-0 flex-1 rounded-xl ring-2 ring-[#00d18a]/45'
-                : 'relative flex min-w-0 flex-1'
-            }
-          >
-            <WalletActionButton
-              icon={<WalletShieldFundsIcon />}
-              label="Shield"
-              active={showShieldIntro}
-              onClick={() => {
-                if (showV1NetworkGuide && currentWalletId && currentAccountId) {
-                  setShieldIntroSeen(true)
-                  void chrome.storage.local.set({
-                    [`v1_shield_intro_seen:${currentWalletId}:${currentAccountId}`]: true
-                  })
-                }
-                navigate.navigate(`/shield-funds?mode=${privateMode ? 'private' : 'public'}`)
-              }}
-            />
-          </div>
+          {!isIndependentMultisig && (
+            <div
+              className={
+                showShieldIntro
+                  ? 'relative flex min-w-0 flex-1 rounded-xl ring-2 ring-[#00d18a]/45'
+                  : 'relative flex min-w-0 flex-1'
+              }
+            >
+              <WalletActionButton
+                icon={<WalletShieldFundsIcon />}
+                label="Shield"
+                active={showShieldIntro}
+                onClick={() => {
+                  if (showV1NetworkGuide && currentWalletId && currentAccountId) {
+                    setShieldIntroSeen(true)
+                    void chrome.storage.local.set({
+                      [`v1_shield_intro_seen:${currentWalletId}:${currentAccountId}`]: true
+                    })
+                  }
+                  navigate.navigate(`/shield-funds?mode=${privateMode ? 'private' : 'public'}`)
+                }}
+              />
+            </div>
+          )}
         </div>
         {showShieldIntro && (
           <div className="relative mx-4 mb-5 min-h-[97px]">

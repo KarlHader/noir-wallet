@@ -1,4 +1,12 @@
-import { findWasmAccountIdByHdIndex, mapWasmAccountIdsByHdIndex } from './account-resolution'
+import {
+  findWasmAccountIdByHdIndex,
+  mapWasmAccountIdsByHdIndex,
+  registerExternalWasmAccount,
+  resolveExternalWasmAccount,
+  type ExternalWasmAccountPort
+} from './account-resolution'
+import { parseAccountSource } from '../accounts/domain/account-source'
+import { openVaultRecord, isVaultWalletId } from '../multisig/vault-record'
 /**
  * Zcash Web Worker
  *
@@ -22,9 +30,33 @@ import init, {
   mnemonic_to_seed_fingerprint,
   parse_unified_address,
   sign_message_with_transparent,
-  WebVotingSession
+  WebVotingSession,
+  Dkg,
+  DkgRelay,
+  MessageSet,
+  EnvelopeCodec,
+  Keyset,
+  Sealed,
+  ShareBackup,
+  Coordinator,
+  Signer,
+  PcztTools,
+  Verification
 } from '../../lib/wasm-pkg/zcash_wallet_wasm'
 import { loadPinnedZcashWasmBinary } from '../zcash/pinned-wasm'
+import { createVaultDkgRpcHandler } from '../multisig/dkg-rpc'
+import { createSigningWorkerRpcHandler } from '../multisig/signing-worker-rpc'
+import { decodeMultisigRecipient } from '../multisig/recipient'
+import {
+  assertFreshMultisigReview,
+  getVerifiedMultisigChainTip,
+  prepareProductionMultisigPayment
+} from '../multisig/production-review'
+import { reviewPreparedPczt } from '../multisig/pczt-review'
+import { finalizeSignedPczt, submitStoredTransaction } from '../multisig/worker-transaction'
+import type { SigningReviewBinding } from '../multisig/signing-coordinator'
+import type { VaultRecordHeader } from '../multisig/vault-record'
+import { createIndexedDbIdentityStore } from '../../lib/multisig-identity-storage'
 import { findExactBlockHeightByTime } from '../zcash/block-time'
 
 import type {
@@ -36,9 +68,10 @@ import type {
   ZcashCredentialCapsule
 } from './types'
 import type { Network } from '../../types'
-import { bytesToBase64, base64ToBytes, hexToBytes } from '../../lib/bytes'
+import { bytesToBase64, base64ToBytes, hexToBytes, bytesToHex } from '../../lib/bytes'
 import { mapWasmAccountBalanceToZcashBalance, zeroZcashBalance } from '../wallet/balance-summary'
 import { DEFAULT_EXPIRY_DELTA_BLOCKS } from '../../config/fee'
+import { getNetworkConfig } from '../../lib/runtime-network'
 import { fetchStandardMarginalFee } from '../../infrastructure/chains/rpc-registry-client'
 import { FeeQuoteRegistry, type FeeQuoteContext } from '../zcash/fee-quotes'
 import { resolveOneClickExpiryDeltaBlocks } from '../zcash/transaction-expiry'
@@ -565,6 +598,224 @@ const debugLogsEnabled = typeof __DEBUG_LOGS__ !== 'boolean' || __DEBUG_LOGS__
 
 let activeWalletId: string | undefined
 
+// The wasm-bindgen classes bind to the module lazily, so the handler can exist before init runs;
+// every message awaits initializeWasm() before reaching it. The share is sealed under the bound
+// wallet's mnemonic, so a ceremony for a locked wallet fails at round 2.
+const vaultDkg = createVaultDkgRpcHandler(
+  {
+    Dkg,
+    DkgRelay,
+    MessageSet,
+    EnvelopeCodec,
+    Keyset,
+    Sealed,
+    ShareBackup
+  },
+  walletId => resolveWalletMnemonic(walletId)
+)
+
+async function assertVaultSigningAccount(
+  binding: Pick<SigningReviewBinding, 'walletId' | 'accountId' | 'groupId' | 'network'>,
+  header: VaultRecordHeader,
+  wallet: WebWallet
+): Promise<number> {
+  if (
+    header.version !== 2 ||
+    header.ownerWalletId !== binding.walletId ||
+    header.accountId !== binding.accountId ||
+    header.groupId !== binding.groupId ||
+    header.network !== binding.network ||
+    wallets.get(binding.walletId)?.network !== binding.network
+  )
+    throw new Error('External signing account changed')
+  const port: ExternalWasmAccountPort = {
+    findByName: async name => {
+      try {
+        return await wallet.get_account_id_by_name(name)
+      } catch (error) {
+        if (String(error).includes('Account with given name not found')) return null
+        throw error
+      }
+    },
+    getHdIndex: id => wallet.get_account_hd_index(id),
+    getAddresses: id => wallet.get_unified_addresses(id),
+    importAccount: async () => {
+      throw new Error('External signing account cannot be imported during a transfer')
+    }
+  }
+  const accountId = await resolveExternalWasmAccount(
+    port,
+    {
+      walletId: binding.walletId,
+      accountId: binding.accountId,
+      groupId: binding.groupId,
+      network: binding.network
+    },
+    header.address
+  )
+  if (accountId === null) throw new Error('External signing account is unavailable')
+  return accountId
+}
+
+function getVaultSigningWallet(walletId: string): WebWallet {
+  const wallet = wallets.get(walletId)?.instance
+  if (!wallet) throw new Error('Wallet is not initialized')
+  return wallet
+}
+
+const vaultSigning = createSigningWorkerRpcHandler(
+  { Coordinator, Signer, EnvelopeCodec, PcztTools, Verification, ShareBackup, Keyset },
+  {
+    credential: walletId => sessionCredentials.get(walletId),
+    network: walletId => {
+      const network = wallets.get(walletId)?.network
+      return network === 'mainnet' || network === 'testnet' ? network : undefined
+    },
+    identity: () => createIndexedDbIdentityStore().load(),
+    reviewProvider: {
+      available: true,
+      prepare: async ({ scope, source, header, intent, assertAuthorized }) =>
+        runForWallet(scope.walletId, async () => {
+          assertAuthorized()
+          if (
+            source.kind !== 'frost-vault' ||
+            source.network !== scope.network ||
+            source.groupId !== scope.groupId
+          )
+            throw new Error('Invalid external signing source')
+          const wallet = getVaultSigningWallet(scope.walletId)
+          const expectedRecipientRaw = decodeMultisigRecipient(intent.recipient, scope.network)
+          const accountId = await assertVaultSigningAccount(scope, header, wallet)
+          assertAuthorized()
+          const selectedFee = approvedFee(
+            scope.walletId,
+            accountId,
+            intent.marginalFeeZats,
+            intent.feeQuoteId
+          )
+          if (selectedFee.marginalFeeZats !== intent.marginalFeeZats)
+            throw new Error('Network fee changed')
+          return runWithFreshCommitmentTrees(scope.walletId, wallet, async () => {
+            assertAuthorized()
+            const currentAccountId = await assertVaultSigningAccount(scope, header, wallet)
+            assertAuthorized()
+            if (currentAccountId !== accountId) throw new Error('External signing account changed')
+            approvedFee(scope.walletId, accountId, intent.marginalFeeZats, intent.feeQuoteId)
+            const chainTip = await getVerifiedMultisigChainTip(
+              scope.network,
+              getNetworkConfig(scope.network).nodeRpcUrl
+            )
+            assertAuthorized()
+            const prepared = await prepareProductionMultisigPayment({ PcztTools }, wallet, {
+              accountId,
+              network: scope.network,
+              recipient: intent.recipient,
+              expectedRecipientRaw,
+              amountZats: intent.amount,
+              memo: intent.memo,
+              marginalFeeZats: intent.marginalFeeZats,
+              fvk: base64ToBytes(header.fvk),
+              groupVerifyingKey: hexToBytes(header.groupVerifyingKey),
+              chainTip,
+              assertAuthorized
+            })
+            try {
+              assertAuthorized()
+              if ((await assertVaultSigningAccount(scope, header, wallet)) !== accountId)
+                throw new Error('External signing account changed')
+              assertAuthorized()
+              approvedFee(scope.walletId, accountId, intent.marginalFeeZats, intent.feeQuoteId)
+              return prepared
+            } catch (error) {
+              prepared.pczt.fill(0)
+              throw error
+            }
+          })
+        })
+    },
+    finalize: async ({
+      binding,
+      header,
+      signedPczt,
+      reviewedChainPolicy,
+      reviewedSummary,
+      assertAuthorized
+    }) =>
+      runForWallet(binding.walletId, async () => {
+        assertAuthorized()
+        const wallet = getVaultSigningWallet(binding.walletId)
+        await assertVaultSigningAccount(binding, header, wallet)
+        assertAuthorized()
+        const chainTip = await getVerifiedMultisigChainTip(
+          binding.network,
+          getNetworkConfig(binding.network).nodeRpcUrl
+        )
+        assertAuthorized()
+        const reviewed = reviewPreparedPczt(
+          { PcztTools },
+          {
+            pczt: signedPczt,
+            fvk: base64ToBytes(header.fvk),
+            groupVerifyingKey: hexToBytes(header.groupVerifyingKey),
+            network: binding.network,
+            chainTipHeight: chainTip.height,
+            recipient: reviewedSummary.recipient,
+            expectedRecipientRaw: decodeMultisigRecipient(
+              reviewedSummary.recipient,
+              binding.network
+            ),
+            amountZats: reviewedSummary.amount,
+            memo: reviewedSummary.memo,
+            maxFeeZats: reviewedSummary.fee
+          }
+        )
+        if (
+          reviewed.expiryHeight !== reviewedChainPolicy.expiryHeight ||
+          chainTip.consensusBranchId !== reviewedChainPolicy.consensusBranchId ||
+          reviewed.summary.fee !== reviewedSummary.fee
+        )
+          throw new Error('Signed multisig review changed')
+        await assertVaultSigningAccount(binding, header, wallet)
+        assertAuthorized()
+        return finalizeSignedPczt(
+          { Pczt, PcztTools },
+          wallet,
+          signedPczt,
+          binding.network,
+          assertAuthorized,
+          async () => {
+            assertAuthorized()
+            await assertFreshMultisigReview(
+              binding.network,
+              getNetworkConfig(binding.network).nodeRpcUrl,
+              reviewedChainPolicy
+            )
+            assertAuthorized()
+            await assertVaultSigningAccount(binding, header, wallet)
+            assertAuthorized()
+          }
+        )
+      }),
+    submit: async ({ receipt, binding, header, reviewedChainPolicy, assertAuthorized }) =>
+      runForWallet(binding.walletId, async () => {
+        assertAuthorized()
+        const wallet = getVaultSigningWallet(binding.walletId)
+        await assertVaultSigningAccount(binding, header, wallet)
+        assertAuthorized()
+        if (receipt.network !== binding.network) throw new Error('Signing network changed')
+        await assertFreshMultisigReview(
+          binding.network,
+          getNetworkConfig(binding.network).nodeRpcUrl,
+          reviewedChainPolicy
+        )
+        assertAuthorized()
+        await assertVaultSigningAccount(binding, header, wallet)
+        assertAuthorized()
+        return submitStoredTransaction(wallet, receipt, assertAuthorized)
+      })
+  }
+)
+
 function forwardLog(level: 'log' | 'warn' | 'error' | 'info', ...args: any[]) {
   if (!debugLogsEnabled) return
   const walletId = activeWalletId
@@ -674,6 +925,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
 
     switch (method) {
       case 'credential.bind': {
+        vaultSigning.invalidate()
         const {
           walletId,
           keyDomainId,
@@ -729,6 +981,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
         break
       }
       case 'credential.lockAll': {
+        vaultSigning.invalidate()
         const { globalUnlockEpoch } = payload as RPCSchema['credential.lockAll']['request']
         for (const [walletId, credential] of sessionCredentials) {
           if (credential.globalUnlockEpoch === globalUnlockEpoch)
@@ -740,6 +993,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       case 'init': {
         const { walletId, network, lightwalletdUrl, compactBlockCdn, dbBytes, zeroIndexerOptions } =
           payload as RPCSchema['init']['request']
+        if (wallets.get(walletId)?.network !== network) vaultSigning.invalidate(walletId)
         result = await runForWallet(walletId, async () => {
           console.log(
             `[Worker] Init called walletId=${walletId}, network=${network}, dbBytes=${dbBytes ? dbBytes.length + ' bytes' : 'none'}`
@@ -773,6 +1027,8 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             }
             return true
           }
+
+          vaultSigning.invalidate(walletId)
           if (configUnchanged) {
             console.warn(
               `[Worker] Blank wallet instance for ${walletId} cannot shadow persisted db, rebuilding from snapshot`
@@ -936,6 +1192,30 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
         result = generate_mnemonic(wordCount)
         break
       }
+      // FROST vault DKG: the coordinator's share lives in this Worker, keyed by DKG session id.
+      case 'vault.dkg.open':
+      case 'vault.dkg.acceptRound1':
+      case 'vault.dkg.acceptRound2':
+      case 'vault.dkg.confirmRound1':
+      case 'vault.dkg.close':
+      case 'vault.record.summary':
+      case 'vault.record.recoverPrepare': {
+        result = await vaultDkg.handle(method, payload)
+        break
+      }
+      case 'vault.sign.worker.prepare':
+      case 'vault.sign.worker.start':
+      case 'vault.sign.worker.ingest':
+      case 'vault.sign.worker.advance':
+      case 'vault.sign.worker.status':
+      case 'vault.sign.worker.roster':
+      case 'vault.sign.worker.finalize':
+      case 'vault.sign.worker.submit':
+      case 'vault.sign.worker.close':
+      case 'vault.sign.worker.invalidate': {
+        result = await vaultSigning.handle(method, payload)
+        break
+      }
       case 'mnemonic.validate': {
         const { phrase } = payload as RPCSchema['mnemonic.validate']['request']
         try {
@@ -962,6 +1242,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       // --- Wallet ---
       case 'wallet.reset': {
         const { walletId: resetId } = payload as RPCSchema['wallet.reset']['request']
+        vaultSigning.invalidate(resetId)
         if (resetId) {
           result = await runForWallet(resetId, async () => {
             const entry = wallets.get(resetId)
@@ -1301,6 +1582,94 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             : null
 
           return plainSummary
+        })
+        break
+      }
+
+      case 'wallet.resolveFrostAccount':
+      case 'wallet.registerFrostAccount':
+      case 'wallet.preflightFrostAccount': {
+        const request = payload as RPCSchema['wallet.registerFrostAccount']['request']
+        const source = parseAccountSource(request.source)
+        if (
+          source.network !== wallets.get(request.walletId)?.network ||
+          !isVaultWalletId(request.accountId)
+        ) {
+          throw new Error('Invalid external account scope')
+        }
+        result = await runForWallet(request.walletId, async () => {
+          const w = getWallet(request.walletId)
+          const identity = {
+            walletId: request.walletId,
+            accountId: request.accountId,
+            groupId: source.groupId,
+            network: source.network
+          }
+          const port: ExternalWasmAccountPort = {
+            findByName: async name => {
+              try {
+                return await w.get_account_id_by_name(name)
+              } catch (error) {
+                if (String(error).includes('Account with given name not found')) return null
+                throw error
+              }
+            },
+            getHdIndex: id => w.get_account_hd_index(id),
+            getAddresses: id => w.get_unified_addresses(id),
+            importAccount: async () => {
+              throw new Error('External import not authorized')
+            }
+          }
+          const mnemonic = resolveWalletMnemonic(request.walletId)
+          const opened = await openVaultRecord(request.sealedRecord, mnemonic, {
+            ownerWalletId: request.walletId,
+            accountId: request.accountId,
+            groupId: source.groupId,
+            network: source.network
+          })
+          try {
+            if (resolveWalletMnemonic(request.walletId) !== mnemonic)
+              throw new Error('Wallet credential session changed')
+            const { header } = opened
+            if (
+              header.version !== 2 ||
+              header.ownerWalletId !== request.walletId ||
+              header.accountId !== request.accountId ||
+              header.groupId !== source.groupId ||
+              header.network !== source.network
+            ) {
+              throw new Error('Invalid external account binding')
+            }
+            const ak = hexToBytes(header.groupVerifyingKey)
+            ShareBackup.from_bytes(opened.share, ak, 0).free()
+            if (
+              !Keyset.ufvk_matches_ak(header.ufvk, ak) ||
+              bytesToHex(Keyset.fvk_from_ufvk(header.ufvk)) !==
+                bytesToHex(base64ToBytes(header.fvk)) ||
+              bytesToHex(
+                Keyset.fingerprint_from_ufvk(header.ufvk, source.network === 'mainnet')
+              ) !== header.fingerprint
+            )
+              throw new Error('Invalid external account keyset')
+            if (method === 'wallet.resolveFrostAccount')
+              return resolveExternalWasmAccount(port, identity, header.address)
+            const birthday = request.birthdayHeight ?? header.birthdayHeight
+            if (
+              !Number.isSafeInteger(birthday) ||
+              birthday <= 0 ||
+              birthday !== header.birthdayHeight
+            )
+              throw new Error('Invalid external account birthday')
+            if (method === 'wallet.preflightFrostAccount') return true
+            port.importAccount = name =>
+              w.create_account_ufvk_external(name, header.ufvk, birthday, 'frost-vault')
+            const id = await registerExternalWasmAccount(port, identity, header.address)
+            blankInstances.delete(request.walletId)
+            lastSummaryCache.delete(request.walletId)
+            return id
+          } finally {
+            opened.share.fill(0)
+          }
         })
         break
       }

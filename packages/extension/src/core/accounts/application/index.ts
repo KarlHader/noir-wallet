@@ -29,3 +29,8 @@ export {
   listKeySourceAllowedAccountScopes,
   resolveKeyDomain
 } from './key-source-chain-policy'
+export {
+  accountSupportsChain,
+  assertAccountOperationAllowed,
+  type AccountOperation
+} from './account-capability-policy'

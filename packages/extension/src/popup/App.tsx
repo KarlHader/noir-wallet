@@ -105,6 +105,16 @@ const LedgerConnectPage = lazy(() =>
 const LedgerSignPage = lazy(() =>
   import('./pages/hardware/LedgerSignPage').then(module => ({ default: module.LedgerSignPage }))
 )
+// This must test the define literal rather than isMultisigUiEnabled(): only a constant
+// `false ? … : null` lets the bundler drop the dynamic import, and with it the whole multisig
+// chunk (mock transport included), from builds that leave the flag off.
+const MultisigRoutes = __FROST_MULTISIG_UI__
+  ? lazy(() =>
+      import('./pages/multisig/MultisigRoutes').then(module => ({
+        default: module.MultisigRoutes
+      }))
+    )
+  : null
 import { useActiveAccountNetworks } from './hooks/useActiveAccountNetworks'
 
 const multichainSendEnabled =
@@ -290,6 +300,18 @@ function AppRoutes() {
       <Route path="/hardware/bitcoin-sign" element={<KeystoneBitcoinSignPage />} />
       <Route path="/hardware/evm-sign" element={<KeystoneEvmSignPage />} />
 
+      {/* Multisig create flow (opened in a full browser tab) */}
+      {MultisigRoutes && (
+        <Route
+          path="/multisig/*"
+          element={
+            <Suspense fallback={<RouteLoadingSkeleton title="Multisig" />}>
+              <MultisigRoutes />
+            </Suspense>
+          }
+        />
+      )}
+
       <Route path="/dapp-connections" element={<DAppConnections />} />
       <Route path="/shield-provider" element={<ShieldProviderDetail />} />
       <Route path="/shield-funds" element={<ShieldFundsPage />} />
@@ -415,6 +437,7 @@ function AppContent() {
         location.pathname !== '/add-wallet' &&
         location.pathname !== '/import-wallet' &&
         !location.pathname.startsWith('/hardware/') &&
+        !location.pathname.startsWith('/multisig') &&
         !(
           location.pathname === '/view-seed-phrase' &&
           new URLSearchParams(location.search).get('backup') === '1'

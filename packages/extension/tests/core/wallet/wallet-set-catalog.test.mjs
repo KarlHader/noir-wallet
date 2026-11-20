@@ -42,6 +42,39 @@ function register(catalog, keyDomainId, accountId) {
 }
 
 test.describe('Wallet Set catalog', () => {
+  test('keeps multiple external groups distinct without assigning a derived index', () => {
+    const hd = account('key-domain:a', 'account:a:0')
+    const external = groupId => {
+      const { accountIndex, ...common } = hd
+      return {
+        ...common,
+        id: groupId,
+        source: { kind: 'frost-vault', version: 1, groupId, network: 'mainnet' }
+      }
+    }
+    const input = {
+      keyDomains: [keyDomain(hd.keyDomainId)],
+      accounts: [hd, external('one'), external('two')],
+      mainKeyDomainId: hd.keyDomainId,
+      activeAccount: null
+    }
+    expect(createWalletSetCatalog(input).accounts).toEqual(input.accounts)
+    expect(() =>
+      createWalletSetCatalog({
+        ...input,
+        accounts: [hd, external('one'), { ...external('one'), id: 'duplicate-group' }]
+      })
+    ).toThrow()
+    expect(() =>
+      createWalletSetCatalog({
+        ...input,
+        keyDomains: [
+          keyDomain(hd.keyDomainId, { source: { kind: 'private-key', chainFamily: 'eip155' } })
+        ]
+      })
+    ).toThrow()
+  })
+
   test('registers provisioned metadata and makes only the first Wallet Set main', () => {
     const empty = createWalletSetCatalog()
     const first = register(empty, 'key-domain:a', 'account:a:0')

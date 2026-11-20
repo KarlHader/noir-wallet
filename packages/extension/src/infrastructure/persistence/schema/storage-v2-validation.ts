@@ -1,4 +1,5 @@
-import { parseAccountId } from '@/core/accounts/domain'
+import { parseAccountId, isFrostAccount } from '@/core/accounts/domain'
+import { getZcashChainId } from '@/core/chains/registry'
 import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
 import { STORAGE_V2_LIMITS } from './storage-v2'
 import {
@@ -228,7 +229,16 @@ export function parseStorageV2Snapshot(value: unknown): StorageV2Snapshot {
     if (!keyDomainIds.has(account.keyDomainId)) {
       throw new Error('Storage V2 Account references an unknown KeyDomain')
     }
-    const indexKey = `${encodeURIComponent(account.keyDomainId)}:${account.accountIndex}`
+    if (
+      isFrostAccount(account) &&
+      keyDomains.find(domain => domain.id === account.keyDomainId)?.source.kind !== 'software'
+    ) {
+      throw new Error('FROST Account requires a software KeyDomain')
+    }
+    const indexKey = JSON.stringify([
+      account.keyDomainId,
+      isFrostAccount(account) ? account.source : account.accountIndex
+    ])
     if (accountIndexes.has(indexKey)) {
       throw new Error('Duplicate Account index within KeyDomain')
     }
@@ -253,6 +263,17 @@ export function parseStorageV2Snapshot(value: unknown): StorageV2Snapshot {
     const account = accountsById.get(chainAccount.scope.accountId)
     if (account?.keyDomainId !== chainAccount.scope.keyDomainId) {
       throw new Error('Storage V2 ChainAccount scope crosses KeyDomains')
+    }
+    if (account && (isFrostAccount(account) || isFrostAccount(chainAccount))) {
+      if (
+        !isFrostAccount(account) ||
+        !isFrostAccount(chainAccount) ||
+        account.source.groupId !== chainAccount.source.groupId ||
+        account.source.network !== chainAccount.source.network ||
+        chainAccount.scope.chainId !== getZcashChainId(account.source.network)
+      ) {
+        throw new Error('External ChainAccount source does not match its Account and network')
+      }
     }
     const scopeKey = [
       chainAccount.scope.keyDomainId,

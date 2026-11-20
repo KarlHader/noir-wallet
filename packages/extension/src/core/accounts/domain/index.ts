@@ -3,6 +3,8 @@ export {
   parseAccountId,
   parseAccountIndex,
   type Account,
+  type DerivedAccount,
+  type FrostAccount,
   type AccountId,
   type AccountIndex
 } from './account'
@@ -18,6 +20,16 @@ export {
   chainAccountsEqual,
   parseChainAccountId,
   type ChainAccount,
+  type DerivedChainAccount,
+  type FrostChainAccount,
   type ChainAccountId,
   type ChainAccountScope
 } from './chain-account'
+export {
+  parseAccountSource,
+  accountSourceEquals,
+  isFrostAccount,
+  isDerivedAccount,
+  compareAccounts,
+  type AccountSource
+} from './account-source'

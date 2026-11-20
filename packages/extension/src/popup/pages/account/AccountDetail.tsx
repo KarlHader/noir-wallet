@@ -1,4 +1,5 @@
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
+import { isDerivedAccount, isFrostAccount } from '@/core/accounts/domain/account-source'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
@@ -67,7 +68,7 @@ export function AccountDetail() {
       icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
       action: () => navigate(`/addresses-list?accountId=${accountId}&walletId=${walletId}`)
     },
-    !isHardwareWallet && wallet.keySource !== 'private-key'
+    isDerivedAccount(account) && !isHardwareWallet && wallet.keySource !== 'private-key'
       ? {
           label: 'Networks',
           value: undefined,
@@ -79,20 +80,27 @@ export function AccountDetail() {
         }
       : null,
     // Hardware wallets are watch-only: there is no seed phrase on this device
-    isHardwareWallet
+    isFrostAccount(account)
       ? {
           label: 'Wallet type',
-          value: `${wallet?.keySource === 'ledger' ? 'Ledger' : 'Keystone'} (hardware)`,
+          value: 'Multisig',
           icon: undefined,
           action: undefined
         }
-      : {
-          label: 'Seed Phrase',
-          value: undefined,
-          icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
-          action: () => navigate(`/view-seed-phrase?accountId=${accountId}&walletId=${walletId}`)
-        },
-    !isHardwareWallet
+      : isHardwareWallet
+        ? {
+            label: 'Wallet type',
+            value: `${wallet?.keySource === 'ledger' ? 'Ledger' : 'Keystone'} (hardware)`,
+            icon: undefined,
+            action: undefined
+          }
+        : {
+            label: 'Seed Phrase',
+            value: undefined,
+            icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
+            action: () => navigate(`/view-seed-phrase?accountId=${accountId}&walletId=${walletId}`)
+          },
+    isDerivedAccount(account) && !isHardwareWallet
       ? {
           label: 'Private Key',
           value: undefined,

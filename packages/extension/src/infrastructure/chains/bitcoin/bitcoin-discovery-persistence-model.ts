@@ -1,24 +1,25 @@
-import {
-  parseAccountId,
-  parseAccountIndex,
-  type AccountId,
-  type AccountIndex,
-  type ChainAccount
+import { isDerivedAccount } from '@/core/accounts/domain'
+import { parseAccountId, parseAccountIndex } from '@/core/accounts/domain'
+import type {
+  AccountId,
+  AccountIndex,
+  ChainAccount,
+  DerivedChainAccount
 } from '@/core/accounts/domain'
 import {
   BITCOIN_DISCOVERY_CHECKPOINT_SCHEMA_VERSION,
   BITCOIN_MAXIMUM_ADDRESSES_PER_TARGET,
   BITCOIN_MAXIMUM_GAP_LIMIT,
-  parseSupportedBitcoinAddress,
-  type BitcoinAddressObservation,
-  type BitcoinDiscoveryCheckpoint
+  parseSupportedBitcoinAddress
 } from '@/core/chains/bitcoin'
+import type { BitcoinAddressObservation, BitcoinDiscoveryCheckpoint } from '@/core/chains/bitcoin'
 import { parseChainId } from '@/core/chains/registry'
-import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
+import { parseKeyDomainId } from '@/core/keyring/domain'
+import type { KeyDomainId } from '@/core/keyring/domain'
 import { parseStorageV2ChainAccount } from '@/infrastructure/persistence/schema'
 
 export interface BitcoinDiscoveryScope {
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly accountIndex: AccountIndex
 }
 
@@ -58,6 +59,8 @@ export interface BitcoinDiscoveryRepository {
 
 export function bitcoinChainAccountsMatch(left: ChainAccount, right: ChainAccount): boolean {
   return (
+    isDerivedAccount(left) &&
+    isDerivedAccount(right) &&
     left.id === right.id &&
     left.scope.keyDomainId === right.scope.keyDomainId &&
     left.scope.accountId === right.scope.accountId &&
@@ -74,7 +77,7 @@ export interface StoredScanRecord {
   readonly schemaVersion: 1
   readonly chainAccountId: string
   readonly accountKey: string
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly accountIndex: AccountIndex
   readonly checkpoint: BitcoinDiscoveryCheckpoint
   readonly updatedAt: number
@@ -147,6 +150,7 @@ export function parseScope(value: unknown): BitcoinDiscoveryScope {
     throw new Error('Invalid Bitcoin discovery scope')
   }
   const chainAccount = parseStorageV2ChainAccount(value.chainAccount)
+  if (!isDerivedAccount(chainAccount)) throw new Error('Bitcoin requires a derived ChainAccount')
   const accountIndex = parseAccountIndex(value.accountIndex)
   const chainId = parseChainId(chainAccount.scope.chainId).id
   if (

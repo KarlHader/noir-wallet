@@ -15,8 +15,8 @@ import {
 } from './lib/wasm-package-integrity.mjs'
 
 const SOURCE_REPOSITORY = 'https://github.com/NoirWallet/zcash-wallet-wasm.git'
-const SOURCE_COMMIT = 'cb8da9dc60d51dbf3958657be35427210d544541'
-const ABI_VERSION = 'zcash-wallet-cb8da9d-v1'
+const SOURCE_COMMIT = '1b4f11327685a11a0536da473942dbc270062cee'
+const ABI_VERSION = 'zcash-wallet-1b4f113-v1'
 const RUST_TOOLCHAIN = 'nightly-2026-10-20'
 const RUST_VERSION = '1.101.0-nightly'
 const WASM_PACK_VERSION = '0.14.0'
@@ -39,6 +39,7 @@ const CAPABILITIES = Object.freeze(
     'zcash.sync',
     'zcash.transaction.orchard-zero-indexer-broadcast',
     'zcash.transaction.sign',
+    'zcash.vault.frost',
     'zcash.voting.shielded'
   ].sort()
 )
@@ -321,7 +322,7 @@ export async function syncWasmPkg({ sourceDir, clangPath, wasmOptPath, cargoTarg
         '--out-dir',
         buildDir,
         '--features',
-        'voting,wasm-parallel',
+        'voting,wasm-parallel,frost-vault',
         '-Z',
         'build-std=panic_abort,std',
         '--locked'

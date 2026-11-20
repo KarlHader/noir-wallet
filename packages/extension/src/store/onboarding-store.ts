@@ -9,7 +9,7 @@ import {
   provisionAdditionalSoftwareWallet
 } from '@/core/wallet/software-wallet-provisioning-client'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
-import { rehydrateWalletStore } from '@/store/wallet-store'
+import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
 import {
   selectDifferentVerificationIndices,
   type VerificationWordOption
@@ -19,6 +19,11 @@ import type { ImportZcashHistorySelection } from '@/popup/services/import-zcash-
 import type { AccountNetworkFamily } from '@/core/wallet/account-network-selection'
 
 export type FlowMode = 'onboarding' | 'addWallet'
+
+export interface CreatedWallet {
+  walletId: string
+  accountId: string
+}
 
 export interface OnboardingState {
   flowMode: FlowMode
@@ -40,6 +45,11 @@ export interface OnboardingState {
   isLoading: boolean
   error: string | null
   dappRequestId: string | null // Store dApp request ID if onboarding triggered by dApp
+  /**
+   * The wallet the last successful create provisioned. Adding a wallet does not make it current,
+   * so follow-up actions on the success page must target this one, not the current wallet.
+   */
+  createdWallet: CreatedWallet | null
 
   // Actions
   setFlowMode: (mode: FlowMode) => void
@@ -70,6 +80,13 @@ export interface OnboardingState {
 
 const importAttempts = new LatestAttempt()
 const generationAttempts = new LatestAttempt()
+
+// Reads the rehydrated wallet store; provisioning creates each wallet with its first account.
+function createdWalletFor(walletId: string | null): CreatedWallet | null {
+  if (!walletId) return null
+  const accountId = useWalletStore.getState().getWallet(walletId)?.accounts[0]?.id
+  return accountId ? { walletId, accountId } : null
+}
 
 function clearedSensitiveOnboardingState(): Pick<
   OnboardingState,
@@ -124,6 +141,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   isLoading: false,
   error: null,
   dappRequestId: null,
+  createdWallet: null,
 
   setFlowMode: flowMode => {
     generationAttempts.invalidate()
@@ -264,7 +282,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   },
 
   createWallet: async () => {
-    set({ isLoading: true, error: null })
+    set({ isLoading: true, error: null, createdWallet: null })
     try {
       const {
         seedPhrase,
@@ -288,7 +306,9 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       await rehydrateWalletStore()
       sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, { params: { method: 'create' } })
 
-      set(clearedSensitiveOnboardingState())
+      // The primary wallet is the first one, so provisioning makes it current; it returns no id.
+      const createdWallet = createdWalletFor(useWalletStore.getState().currentWalletId)
+      set({ ...clearedSensitiveOnboardingState(), createdWallet })
       return true
     } catch (err) {
       const { userMessage } = classifyError(err)
@@ -375,12 +395,13 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       verificationPassed: false,
       isLoading: false,
       error: null,
-      dappRequestId: currentDappRequestId // Keep dappRequestId
+      dappRequestId: currentDappRequestId, // Keep dappRequestId
+      createdWallet: null
     })
   },
 
   addWallet: async () => {
-    set({ isLoading: true, error: null })
+    set({ isLoading: true, error: null, createdWallet: null })
     try {
       const {
         seedPhrase,
@@ -393,7 +414,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
         throw new Error('Confirm your recovery phrase before creating the wallet')
       }
       if (!selectedNetworkFamilies?.length) throw new Error('Select at least one network')
-      await provisionAdditionalSoftwareWallet({
+      const walletId = await provisionAdditionalSoftwareWallet({
         mode: 'create',
         mnemonic: seedPhrase.join(' '),
         accountName: normalizeAccountName(accountName),
@@ -402,7 +423,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       await rehydrateWalletStore()
       sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, { params: { method: 'create' } })
 
-      set(clearedSensitiveOnboardingState())
+      set({ ...clearedSensitiveOnboardingState(), createdWallet: createdWalletFor(walletId) })
       return true
     } catch (err) {
       const { userMessage } = classifyError(err)

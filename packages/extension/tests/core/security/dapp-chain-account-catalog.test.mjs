@@ -165,3 +165,48 @@ test('rechecks saved software selections for an active dApp context', async () =
     else Reflect.deleteProperty(globalThis, 'navigator')
   }
 })
+
+test('keeps FROST accounts out of direct dApp signing even under a software parent', async () => {
+  const source = { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'mainnet' }
+  const chainAccount = {
+    id: 'frost-chain',
+    source,
+    scope: { keyDomainId: 'wallet-1', accountId: 'frost-1', chainId: 'zcash-test' },
+    identity: { kind: 'account-identifier', value: 'private-address' },
+    createdAt: 1
+  }
+  let addressReads = 0
+  const accounts = await listDAppChainAccounts({
+    repository: {
+      getActivePointer: async () => ({ generationId: 'g', sourceFingerprint: 'f' }),
+      getSnapshot: async () => ({
+        manifest: { status: 'verified', generationId: 'g', sourceFingerprint: 'f' },
+        keyDomains: [
+          { id: 'wallet-1', displayName: 'Wallet 1', source: { kind: 'software' }, createdAt: 1 }
+        ],
+        accounts: [
+          { id: 'frost-1', displayName: 'Multisig', keyDomainId: 'wallet-1', source, createdAt: 1 }
+        ],
+        chainAccounts: [chainAccount],
+        addresses: []
+      })
+    },
+    chainId: 'zcash-test',
+    family: 'zcash',
+    resolveAddress: () => {
+      addressReads += 1
+      return 'private-address'
+    }
+  })
+  expect(accounts).toEqual([])
+  expect(addressReads).toBe(0)
+  await expect(
+    filterEnabledDAppContext(
+      {
+        keyDomainSource: { kind: 'software' },
+        chainAccount
+      },
+      'zcash'
+    )
+  ).resolves.toBeNull()
+})

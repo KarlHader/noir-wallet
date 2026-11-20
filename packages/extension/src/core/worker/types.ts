@@ -6,6 +6,12 @@ import type { FundingSource, Network, ZcashBalance } from '@/types'
 import type { TransferEstimate, TransferResult } from '@/core/zcash/transfer-result'
 import type { FeeQuote, QuotedFeeEstimate } from '@/config/fee'
 import type { ZeroIndexerOptions } from '@/core/zcash/zero-indexer'
+import type { VaultDkgSchema } from '@/core/multisig/dkg-rpc'
+import type { VaultGroupSchema } from '@/core/multisig/vault-group-rpc'
+import type { SigningWorkerSchema } from '@/core/multisig/signing-worker-rpc'
+import type { VaultSendSchema } from '@/core/multisig/send-rpc'
+import type { AccountSource } from '@/core/accounts/domain/account-source'
+import type { SealedVaultRecord } from '@/core/multisig/vault-record'
 import type {
   BallotDecision,
   PreparedVotingRound,
@@ -93,7 +99,29 @@ export type WasmUnifiedAddresses = {
   address_index?: number | null
 }
 
-export interface RPCSchema {
+export interface RPCSchema
+  extends VaultDkgSchema, VaultGroupSchema, SigningWorkerSchema, VaultSendSchema {
+  'wallet.registerFrostAccount': {
+    request: WalletRouted & {
+      accountId: string
+      source: AccountSource
+      sealedRecord: SealedVaultRecord
+      birthdayHeight?: number
+    }
+    response: number
+  }
+  'wallet.preflightFrostAccount': {
+    request: RPCSchema['wallet.registerFrostAccount']['request']
+    response: true
+  }
+  'wallet.resolveFrostAccount': {
+    request: WalletRouted & {
+      accountId: string
+      source: AccountSource
+      sealedRecord: SealedVaultRecord
+    }
+    response: number | null
+  }
   'credential.bind': {
     request: {
       walletId: string

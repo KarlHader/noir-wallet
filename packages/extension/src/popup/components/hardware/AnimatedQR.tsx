@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
+import type { UREncoder } from '@ngraveio/bc-ur'
 import {
   createBitcoinPsbtUREncoder,
   createKeystoneEthereumSignRequestUREncoder,
@@ -123,6 +124,45 @@ export function EthereumSignRequestAnimatedQR({
       <QRCodeSVG value={frame.toUpperCase()} size={size} level={level} marginSize={4} />
       {encoder.fragmentsLength > 1 && (
         <p className="mt-2 text-xs text-gray-500">
+          Keep the QR in view — it cycles through {encoder.fragmentsLength} frames
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Animated QR for an already-built encoder (e.g. a multisig `ur:bytes` envelope).
+ * The frame loop deliberately mirrors the components above instead of sharing it,
+ * so the hardware-signing path is left untouched.
+ */
+export function EncoderAnimatedQR({
+  encoder,
+  size = 300,
+  level = 'M',
+  intervalMs = DEFAULT_FRAME_INTERVAL_MS
+}: {
+  readonly encoder: UREncoder
+  size?: number
+  level?: QRLevel
+  intervalMs?: number
+}) {
+  const [frame, setFrame] = useState(() => encoder.nextPart())
+
+  useEffect(() => {
+    if (encoder.fragmentsLength <= 1) {
+      setFrame(encoder.nextPart())
+      return
+    }
+    const interval = setInterval(() => setFrame(encoder.nextPart()), intervalMs)
+    return () => clearInterval(interval)
+  }, [encoder, intervalMs])
+
+  return (
+    <div className="flex flex-col items-center">
+      <QRCodeSVG value={frame.toUpperCase()} size={size} level={level} marginSize={4} />
+      {encoder.fragmentsLength > 1 && (
+        <p className="mt-2 text-xs text-muted">
           Keep the QR in view — it cycles through {encoder.fragmentsLength} frames
         </p>
       )}

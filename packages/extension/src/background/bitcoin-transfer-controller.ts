@@ -1,3 +1,4 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { BitcoinSupportedAddressType } from '@/core/chains/bitcoin'
 import type { SigningSummary } from '@/core/keyring/domain'
 import {
@@ -5,23 +6,24 @@ import {
   parseRheaSwapTransactionBinding,
   parseNetworkFeeTier,
   parseTransactionId,
-  parseTransactionSegmentId,
-  type TransactionAccountScope,
-  type TransactionGraph
+  parseTransactionSegmentId
 } from '@/core/transactions/domain'
+import type { TransactionAccountScope, TransactionGraph } from '@/core/transactions/domain'
 import {
   parseBitcoinTransferIntent,
   parseBitcoinAddressType,
   parseBitcoinFeeRate,
-  bitcoinFeeTargetBlocks,
-  type ActiveBitcoinDiscoveryContext,
-  type BitcoinDiscoveryState,
-  type BitcoinTransferOrchestrator,
-  type BitcoinTransferPreparationCoordinator,
-  type BitcoinExternalSigningRequest,
-  type BitcoinTransferApprovalResult,
-  type BitcoinTransferSubmission,
-  type PreparedBitcoinTransferApproval
+  bitcoinFeeTargetBlocks
+} from '@/infrastructure/chains/bitcoin'
+import type {
+  ActiveBitcoinDiscoveryContext,
+  BitcoinDiscoveryState,
+  BitcoinTransferOrchestrator,
+  BitcoinTransferPreparationCoordinator,
+  BitcoinExternalSigningRequest,
+  BitcoinTransferApprovalResult,
+  BitcoinTransferSubmission,
+  PreparedBitcoinTransferApproval
 } from '@/infrastructure/chains/bitcoin'
 import { accountContextTransition } from './account-context-transition'
 
@@ -317,6 +319,8 @@ export class BackgroundBitcoinTransferController {
 
   private async requireActiveContext(): Promise<ActiveBitcoinDiscoveryContext> {
     const context = await this.options.loadActiveContext()
+    if (context && !isDerivedAccount(context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (!context) throw new Error('The active Account has no Bitcoin ChainAccount')
     return context
   }

@@ -1,6 +1,22 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { closeConnection, inspectWalletDbEntry, saveWalletDb } from '../../../src/lib/indexed-db.ts'
+import { createWalletPersistenceQuarantineRecord } from '../../../src/lib/indexed-db-quarantine.ts'
+
+test('multisig finalization failure quarantines future snapshot writes without deleting evidence', () => {
+  const record = createWalletPersistenceQuarantineRecord({
+    key: 'testnet_wallet',
+    network: 'testnet',
+    walletId: 'wallet',
+    reason: 'multisig-finalization-failed',
+    snapshotQuarantined: false,
+    journalQuarantined: true,
+    detectedAt: 1
+  })
+  assert.equal(record.snapshotQuarantined, false)
+  assert.equal(record.journalQuarantined, true)
+  assert.deepEqual(record.reasons, ['multisig-finalization-failed'])
+})
 
 test('wallet snapshots require real, nonempty bytes and consistent positive chunks', async () => {
   const metadata = { version: 1 }

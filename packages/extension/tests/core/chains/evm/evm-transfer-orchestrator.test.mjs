@@ -1812,3 +1812,20 @@ test('fails the graph when a stored review summary no longer matches the prepare
   await expect(testHarness.repository.get(scope, prepared.graph.root.id)).resolves.toBeNull()
   expect(testHarness.calls.map(call => call[0])).toEqual(['prepare', 'cancel'])
 })
+
+test('an execution address cannot enable EVM signing for an external FROST account', async () => {
+  const { orchestrator, calls } = harness()
+  const { derivation, ...publicAccount } = account
+  const external = {
+    ...publicAccount,
+    source: { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'mainnet' }
+  }
+  await expect(
+    orchestrator.prepare({
+      chainAccount: external,
+      executionAccount: { address: from, addressIndex: 0 },
+      intent: { chainId, contractAddress: recipient, valueRaw: '0', calldata: '0x' }
+    })
+  ).rejects.toThrow('External accounts')
+  expect(calls).toEqual([])
+})

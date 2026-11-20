@@ -12,6 +12,8 @@ import {
 const isPlaywrightBuild = process.env.PLAYWRIGHT_E2E === '1'
 const isTestnetBuild = process.env.NETWORK_MODE === 'testnet'
 const isProductionChannel = process.env.BUILD_CHANNEL === 'production'
+// Must agree with vite.config.ts, which refuses FROST_MULTISIG_UI on the production channel.
+const multisigMockAllowed = !isProductionChannel && process.env.FROST_MULTISIG_UI === '1'
 const networkMode = isTestnetBuild ? 'testnet' : 'mainnet'
 const e2eBuildProfile = process.env.E2E_BUILD_PROFILE ?? `${networkMode}-default`
 if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(e2eBuildProfile)) {
@@ -77,7 +79,7 @@ await Promise.all([
     moduleName: 'zcash_wallet_wasm',
     engine: 'zcash',
     schemaVersion: 3,
-    sourceCommit: 'cb8da9dc60d51dbf3958657be35427210d544541'
+    sourceCommit: '1b4f11327685a11a0536da473942dbc270062cee'
   }),
   verifyPackagedWasm({
     directory: path.join(extensionDirectory, 'src/infrastructure/generated/wasm/multichain'),
@@ -105,6 +107,7 @@ async function collectFiles(directory, prefix = '') {
 const files = await collectFiles(outputDirectory)
 const fileSet = new Set(files)
 let containsConformanceRoute = false
+let containsMultisigMock = false
 const productionDiagnosticFiles = []
 function containsExecutableDiagnostic(source, fileName) {
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true)
@@ -143,6 +146,7 @@ for (const relativePath of files) {
   if (!textExtensions.has(path.extname(relativePath))) continue
   const content = await readFile(path.join(outputDirectory, relativePath), 'utf8')
   if (content.includes(conformanceMarker)) containsConformanceRoute = true
+  if (content.includes('noir-multisig-mock')) containsMultisigMock = true
   if (
     isProductionChannel &&
     path.extname(relativePath) === '.js' &&
@@ -167,6 +171,9 @@ if (isPlaywrightBuild) {
 ) {
   throw new Error('Production build contains an E2E-only surface')
 }
+if (!multisigMockAllowed && containsMultisigMock) {
+  throw new Error('Build contains the multisig mock transport')
+}
 if (productionDiagnosticFiles.length > 0) {
   throw new Error(
     `Production build contains diagnostic code: ${productionDiagnosticFiles.join(', ')}`
@@ -179,6 +186,7 @@ console.log(
       ? 'Verified E2E-only Multichain conformance surface'
       : 'Verified production build excludes E2E-only surfaces',
     'Verified packaged Zcash and Multichain WASM integrity',
-    ...(isProductionChannel ? ['Verified production build excludes diagnostic code'] : [])
+    ...(isProductionChannel ? ['Verified production build excludes diagnostic code'] : []),
+    ...(multisigMockAllowed ? [] : ['Verified build excludes the multisig mock transport'])
   ].join('\n')
 )

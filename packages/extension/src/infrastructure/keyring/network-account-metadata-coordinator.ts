@@ -1,14 +1,10 @@
-import {
-  parseAccountId,
-  parseAddressId,
-  parseChainAccountId,
-  type AccountId,
-  type Address,
-  type ChainAccount
-} from '@/core/accounts/domain'
+import { isDerivedAccount } from '@/core/accounts/domain'
+import { parseAccountId, parseAddressId, parseChainAccountId } from '@/core/accounts/domain'
+import type { AccountId, Address, DerivedChainAccount } from '@/core/accounts/domain'
 import { bytesToHex } from '@/lib/bytes'
 import { commitCredentialBoundStorageV2Pointer } from '@/core/keyring/application'
-import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
+import { parseKeyDomainId } from '@/core/keyring/domain'
+import type { KeyDomainId } from '@/core/keyring/domain'
 import { parseChainId } from '@/core/chains/registry'
 import type { DerivedBitcoinAddress } from '@/core/chains/bitcoin'
 import {
@@ -23,11 +19,11 @@ import {
   parseStorageV2Snapshot,
   parseStorageV2SourceFingerprint
 } from '@/infrastructure/persistence/schema'
-import {
-  STORAGE_V2_SCHEMA_VERSION,
-  type CredentialRepository,
-  type StorageV2GenerationId,
-  type StorageV2Repository
+import { STORAGE_V2_SCHEMA_VERSION } from '@/ports/repositories'
+import type {
+  CredentialRepository,
+  StorageV2GenerationId,
+  StorageV2Repository
 } from '@/ports/repositories'
 
 export interface NetworkAccountMetadataInput {
@@ -72,7 +68,7 @@ interface NetworkAddressDefinition {
   readonly value: string
   readonly scheme: Address['scheme']
   readonly purpose: Address['purpose']
-  readonly derivation?: ChainAccount['derivation']
+  readonly derivation?: DerivedChainAccount['derivation']
   readonly rotatable: boolean
   readonly preferredForReceive: boolean
   readonly privacy: Address['privacy']
@@ -82,7 +78,7 @@ interface NetworkAddressDefinition {
 interface NetworkChainAccountDefinition {
   readonly chainId: string
   readonly role: string
-  readonly derivation: ChainAccount['derivation']
+  readonly derivation: DerivedChainAccount['derivation']
   readonly identity: string
   readonly addresses: readonly NetworkAddressDefinition[]
   readonly reconcileExisting?: boolean
@@ -271,7 +267,12 @@ export class NetworkAccountMetadataCoordinator {
       for (const input of inputs) {
         const keyDomain = keyDomains.get(input.keyDomainId)
         const account = accounts.get(`${input.keyDomainId}:${input.accountId}`)
-        if (!keyDomain || keyDomain.source.kind !== 'software' || !account) {
+        if (
+          !keyDomain ||
+          keyDomain.source.kind !== 'software' ||
+          !account ||
+          !isDerivedAccount(account)
+        ) {
           throw new Error('Network Account metadata does not match a software Wallet')
         }
         if (account.accountIndex !== input.accountIndex) {
@@ -410,6 +411,7 @@ export class NetworkAccountMetadataCoordinator {
           const existing = existingScopes.get(scopeKey)
           if (existing) {
             if (
+              !isDerivedAccount(existing) ||
               existing.identity.kind !== 'account-identifier' ||
               existing.derivation.scheme !== definition.derivation.scheme ||
               existing.derivation.path !== definition.derivation.path

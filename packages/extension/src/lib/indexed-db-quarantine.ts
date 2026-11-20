@@ -7,6 +7,7 @@ export const WALLET_PERSISTENCE_QUARANTINE_REASONS = [
   'journal-replay-aborted',
   'journal-replay-failed',
   'reorg-rewind-failed',
+  'multisig-finalization-failed',
   'unsupported-proto-version'
 ] as const
 

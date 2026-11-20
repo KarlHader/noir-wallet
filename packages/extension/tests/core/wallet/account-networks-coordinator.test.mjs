@@ -171,6 +171,99 @@ function repository(value = snapshot()) {
 }
 
 test.describe('Account networks coordinator', () => {
+  test('external accounts cannot inherit other chains or the other network from a software parent', () => {
+    const external = {
+      source: { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'mainnet' }
+    }
+    expect(isAccountNetworkEnabled(external, 'mainnet', 'zcash')).toBe(true)
+    expect(isAccountNetworkEnabled(external, 'testnet', 'zcash')).toBe(false)
+    for (const family of ['evm', 'bitcoin', 'solana', 'near', 'tron']) {
+      expect(isAccountNetworkEnabled(external, 'mainnet', family)).toBe(false)
+    }
+  })
+
+  test('catalog preserves external source without deriving parent keys or exposing an HD index', async () => {
+    const value = snapshot()
+    const source = { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'testnet' }
+    value.accounts[0].source = source
+    delete value.accounts[0].accountIndex
+    const zcash = value.chainAccounts.find(item => item.scope.chainId === zcashChainId)
+    zcash.source = source
+    delete zcash.derivation
+    let derived = false
+    const coordinator = new AccountNetworksCoordinator({
+      repository: repository(value),
+      chains,
+      bitcoinDerivation: {
+        deriveAddress() {
+          derived = true
+          throw Error('Forbidden')
+        }
+      },
+      evmPeaDerivation: {
+        deriveGlobalPea() {
+          derived = true
+          throw Error('Forbidden')
+        }
+      }
+    })
+    const result = (await coordinator.readCatalog()).accounts[0]
+    expect(derived).toBe(false)
+    expect(result.source).toEqual(source)
+    expect(Object.hasOwn(result, 'accountIndex')).toBe(false)
+    expect(result.networks.map(item => item.chainId)).toEqual([zcashChainId])
+    expect(Object.hasOwn(result.networks[0], 'accountDerivationPath')).toBe(false)
+  })
+
+  test('projects a previously stored FROST receive address without changing its verified snapshot', async () => {
+    const value = snapshot()
+    const source = { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'testnet' }
+    value.accounts[0].source = source
+    delete value.accounts[0].accountIndex
+    const zcash = value.chainAccounts.find(item => item.scope.chainId === zcashChainId)
+    zcash.id = `frost-chain:${accountId}`
+    zcash.source = source
+    zcash.identity.value = 'utest1shieldedfixture'
+    delete zcash.derivation
+    value.addresses = [
+      {
+        id: `frost-address:${accountId}`,
+        chainAccountId: zcash.id,
+        value: 'utest1shieldedfixture',
+        scheme: 'zcash-unified',
+        purpose: 'receive',
+        rotatable: true,
+        preferredForReceive: true,
+        privacy: 'shielded',
+        walletCompatibility: 'limited'
+      }
+    ]
+    value.manifest.counts.addresses = 1
+    const before = structuredClone(value)
+    const coordinator = new AccountNetworksCoordinator({
+      repository: repository(value),
+      chains,
+      getZcashShieldedReceiveAddress: () => 'utest1rotatedfixture'
+    })
+    const catalog = await coordinator.readCatalog()
+    expect(catalog.accounts[0].networks[0].addresses).toEqual([
+      {
+        value: 'utest1rotatedfixture',
+        scheme: 'zcash-shielded-unified',
+        privacy: 'shielded',
+        preferredForReceive: true
+      }
+    ])
+    expect(await coordinator.readActiveAccount()).toEqual({
+      reference: { walletId, accountId },
+      chainIds: []
+    })
+    expect(value).toEqual(before)
+
+    value.addresses[0].id = 'unrelated-address'
+    await expect(coordinator.readCatalog()).rejects.toThrow(/no displayable Address/)
+  })
+
   test('uses 12-word defaults and hides unselected Zcash from catalog and dApp chains', async () => {
     const defaults = getDefaultImportNetworkFamilies(12, ['zcash', 'evm', 'bitcoin'])
     expect(defaults).toEqual(['evm', 'bitcoin'])

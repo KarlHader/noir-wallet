@@ -88,6 +88,7 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        data-position={position}
         className={cn(
           'bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed z-50 w-full shadow-lg duration-200 outline-none [&>*]:min-w-0',
           scrollableBody

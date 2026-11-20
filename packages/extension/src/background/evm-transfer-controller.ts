@@ -1,29 +1,34 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { ChainId } from '@/core/chains/domain'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { SigningSummary } from '@/core/keyring/domain'
 import {
   parseTransactionId,
   parseNearIntentsTransactionBinding,
-  parseRheaSwapTransactionBinding,
-  type RheaSwapTransactionBinding,
-  type TransactionAccountScope,
-  type TransactionGraph
+  parseRheaSwapTransactionBinding
+} from '@/core/transactions/domain'
+import type {
+  RheaSwapTransactionBinding,
+  TransactionAccountScope,
+  TransactionGraph
 } from '@/core/transactions/domain'
 import {
   parseEvmContractCallIntent,
   parseEvmFeeSelection,
   parseEvmTransferIntent,
-  type EvmFeeSelection,
-  type EvmFeeEstimate,
-  type EvmNonceRecoveryState,
-  type ActiveEvmPortfolioContext,
-  type EvmExternalSigningRequest,
-  type PeaEvmExecutionAccount,
-  type EvmTransferOrchestrator,
-  type EvmTransferApprovalResult,
-  type EvmTransferSubmission,
-  type PreparedEvmTransferApproval,
   parseEvmAccountBinding
+} from '@/infrastructure/chains/evm'
+import type {
+  EvmFeeSelection,
+  EvmFeeEstimate,
+  EvmNonceRecoveryState,
+  ActiveEvmPortfolioContext,
+  EvmExternalSigningRequest,
+  PeaEvmExecutionAccount,
+  EvmTransferOrchestrator,
+  EvmTransferApprovalResult,
+  EvmTransferSubmission,
+  PreparedEvmTransferApproval
 } from '@/infrastructure/chains/evm'
 import { accountContextTransition } from './account-context-transition'
 import { traceDebugStage } from '@/lib/debug-performance'
@@ -691,6 +696,8 @@ export class BackgroundEvmTransferController {
 
   private async requireActiveContext(): Promise<ActiveEvmPortfolioContext> {
     const context = await this.loadActiveContext()
+    if (context && !isDerivedAccount(context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (!context) throw new Error('The active Account has no EVM ChainAccount')
     return context
   }

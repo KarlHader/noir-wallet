@@ -1,3 +1,4 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { parseAddressId, parseChainAccountId } from '@/core/accounts/domain'
 import { bytesToHex } from '@/lib/bytes'
 import { commitCredentialBoundStorageV2Pointer } from '@/core/keyring/application'
@@ -8,11 +9,11 @@ import {
   parseStorageV2Snapshot,
   parseStorageV2SourceFingerprint
 } from '@/infrastructure/persistence/schema'
-import {
-  STORAGE_V2_SCHEMA_VERSION,
-  type CredentialRepository,
-  type StorageV2GenerationId,
-  type StorageV2Repository
+import { STORAGE_V2_SCHEMA_VERSION } from '@/ports/repositories'
+import type {
+  CredentialRepository,
+  StorageV2GenerationId,
+  StorageV2Repository
 } from '@/ports/repositories'
 
 export interface EvmNetworkMetadataCoordinatorOptions {
@@ -99,14 +100,17 @@ export class EvmNetworkMetadataCoordinator {
       const newAddresses: (typeof source.addresses)[number][] = []
 
       for (const account of source.accounts) {
+        if (!isDerivedAccount(account)) continue
         const keyDomain = keyDomainById.get(account.keyDomainId)
         if (!keyDomain || !keySourceSupportsAddressFamily(keyDomain.source, 'evm')) continue
-        const evmAccounts = source.chainAccounts.filter(
-          chainAccount =>
-            chainAccount.scope.keyDomainId === account.keyDomainId &&
-            chainAccount.scope.accountId === account.id &&
-            chainAccount.scope.chainId.startsWith('eip155:')
-        )
+        const evmAccounts = source.chainAccounts
+          .filter(isDerivedAccount)
+          .filter(
+            chainAccount =>
+              chainAccount.scope.keyDomainId === account.keyDomainId &&
+              chainAccount.scope.accountId === account.id &&
+              chainAccount.scope.chainId.startsWith('eip155:')
+          )
         if (evmAccounts.length === 0) continue
         const identities = new Set(
           evmAccounts.map(chainAccount =>

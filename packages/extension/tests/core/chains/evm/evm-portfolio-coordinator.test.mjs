@@ -6,6 +6,8 @@ import {
   createEvmBitcoinChainRegistry,
   getBundledEvmAssetDefinitions
 } from '../../../../src/core/chains/registry/index.ts'
+import { loadActiveEvmPortfolioContext } from '../../../../src/infrastructure/chains/evm/evm-portfolio-coordinator.ts'
+import { parseEvmAccountBinding } from '../../../../src/infrastructure/chains/evm/evm-account.ts'
 import { EvmPortfolioCoordinator } from '../../../../src/infrastructure/chains/evm/index.ts'
 
 const chains = createEvmBitcoinChainRegistry('mainnet')
@@ -50,7 +52,15 @@ const snapshot = {
       createdAt: 1_000
     }
   ],
-  accounts: [],
+  accounts: [
+    {
+      id: chainAccount.scope.accountId,
+      keyDomainId: chainAccount.scope.keyDomainId,
+      accountIndex: 0,
+      displayName: 'Account 1',
+      createdAt: 1000
+    }
+  ],
   chainAccounts: [chainAccount],
   addresses: []
 }
@@ -364,4 +374,21 @@ test.describe('EVM active Portfolio coordinator', () => {
     )
     expect(privateAddressCalls).toBe(0)
   })
+})
+
+test('external FROST accounts cannot resolve an EVM context or bind a signing path', async () => {
+  const source = { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'mainnet' }
+  const { accountIndex, ...owner } = snapshot.accounts[0]
+  const externalSnapshot = { ...snapshot, accounts: [{ ...owner, source }] }
+  // Even stray derived EVM projections under the external owner must remain inaccessible.
+  await expect(
+    loadActiveEvmPortfolioContext(
+      storage({ getSnapshot: async () => externalSnapshot }),
+      'eip155:1'
+    )
+  ).resolves.toBeNull()
+  const { derivation, ...publicBinding } = chainAccount
+  expect(() => parseEvmAccountBinding({ ...publicBinding, source }, 'eip155:1')).toThrow(
+    'derived ChainAccount'
+  )
 })

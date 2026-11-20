@@ -26,6 +26,16 @@ const signerId = '0x1111111111111111111111111111111111111111'
 const peaAddress = '0x2222222222222222222222222222222222222222'
 const now = 1_000
 
+function derivedEvmChainAccount(chainId, accountId = scope.accountId) {
+  return {
+    id: `chain-account:${accountId}:${chainId}`,
+    scope: { ...scope, accountId, chainId },
+    derivation: { scheme: 'bip44', path: "m/44'/60'/0'/0/0" },
+    identity: { kind: 'account-identifier', value: signerId },
+    createdAt: now
+  }
+}
+
 class SignedTransactionRepository extends InMemoryTransactionRepository {
   async create(graph) {
     assertPersistableTransactionGraph(parseTransactionGraph(graph))
@@ -288,9 +298,7 @@ async function harness(
         peaAddress,
         addressIndex: 0,
         context: {
-          chainAccount: {
-            scope: { ...scope, accountId: state.identityAccount, chainId: 'eip155:1' }
-          }
+          chainAccount: derivedEvmChainAccount('eip155:1', state.identityAccount)
         }
       }
     },
@@ -442,9 +450,7 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
         address: signerId,
         peaAddress,
         addressIndex: 0,
-        context: {
-          chainAccount: { scope: { ...scope, accountId: state.identityAccount, chainId } }
-        }
+        context: { chainAccount: derivedEvmChainAccount(chainId, state.identityAccount) }
       }
     },
     prepareTransaction: async () => {
@@ -545,7 +551,10 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
       get: id =>
         id === assetId
           ? nativeAsset
-          : { asset: { id, chainId: id.split('/')[0] }, metadata: { decimals: id === zcashAssetId ? 8 : 18 } },
+          : {
+              asset: { id, chainId: id.split('/')[0] },
+              metadata: { decimals: id === zcashAssetId ? 8 : 18 }
+            },
       list: () => [nativeAsset]
     },
     evmNetworks: [],
@@ -1025,7 +1034,10 @@ test.describe('confidential funding persisted recovery', () => {
     })
 
     h.coordinator.rpcByChain.set('eip155:1', rpc)
-    const changedAmount = { ...privateCluster, source: { ...privateCluster.source, amountRaw: '63' } }
+    const changedAmount = {
+      ...privateCluster,
+      source: { ...privateCluster.source, amountRaw: '63' }
+    }
     const changedReview = await h.coordinator.prepare(changedAmount)
     expect(changedReview.sourceAmountRaw).toBe('63')
     expect(h.state.formalQuotes).toBe(2)
@@ -1305,7 +1317,7 @@ test.describe('confidential funding persisted recovery', () => {
         address: signerId,
         peaAddress,
         addressIndex: 0,
-        context: { chainAccount: { scope: { ...scope, chainId: 'eip155:1' } } }
+        context: { chainAccount: derivedEvmChainAccount('eip155:1') }
       }),
       prepareTransaction: async ({ prepared }) => {
         state.prepared = prepared

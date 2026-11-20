@@ -1,4 +1,13 @@
 import type { Network, WalletItem } from '@/types'
+import { withMultisigStorageLock } from './multisig-group-storage'
+import { assertNoUnresolvedMultisigTransactionsLocked } from './multisig-transaction-guard'
+import {
+  isDerivedAccount,
+  isFrostAccount,
+  parseAccountSource,
+  accountSourceEquals,
+  type AccountSource
+} from '@/core/accounts/domain'
 import {
   isAccountChainEnabled,
   isAccountNetworkEnabled,
@@ -14,6 +23,7 @@ const DELETED_WALLET_RECORDS_KEY = 'wallet_deleted_records'
 const DELETED_ACCOUNTS_KEY = 'wallet_deleted_account_keys'
 const DELETED_ACCOUNT_INDEXES_KEY = 'wallet_deleted_account_indexes'
 const PENDING_ACCOUNT_CLEANUP_KEY = 'wallet_pending_account_cleanup'
+const ACCOUNT_RUNTIME_CLEANUP_KEY = 'wallet_account_runtime_cleanup_complete_v1'
 const LEGACY_PENDING_CLEANUP_KEY = 'wallet_cleanup_pending_ids'
 const METADATA_LOCK = 'noir-wallet-metadata'
 const HYDRATION_LOCK = 'noir-wallet-hydration'
@@ -46,6 +56,19 @@ function parseSnapshot(value: unknown): WalletSnapshot | null {
   ) {
     throw new Error('Wallet metadata is unavailable')
   }
+  for (const wallet of parsed.state.wallets) {
+    for (const account of wallet.accounts) {
+      if (Object.prototype.hasOwnProperty.call(account, 'source')) {
+        parseAccountSource(account.source)
+        if (
+          Object.prototype.hasOwnProperty.call(account, 'derivationIndex') ||
+          (wallet.keySource !== undefined && wallet.keySource !== 'software')
+        ) {
+          throw new Error('Invalid external account metadata')
+        }
+      }
+    }
+  }
   return parsed as WalletSnapshot
 }
 
@@ -76,23 +99,30 @@ function parseDeletionRecords(value: unknown): Record<string, string[]> {
   return records as Record<string, string[]>
 }
 
-function parsePendingAccounts(value: unknown): Record<string, number> {
+export type AccountDeletionIdentity = number | AccountSource
+
+function parsePendingAccounts(value: unknown): Record<string, AccountDeletionIdentity> {
   if (value == null) return {}
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Pending account cleanup records are unavailable')
   }
   const records = value as Record<string, unknown>
-  if (
-    Object.entries(records).some(
-      ([key, index]) =>
-        !/^(mainnet|testnet)_[^_]+_.+$/.test(key) ||
-        !Number.isSafeInteger(index) ||
-        (index as number) < 0
-    )
-  ) {
-    throw new Error('Pending account cleanup records are unavailable')
+  const parsed: Record<string, AccountDeletionIdentity> = {}
+  for (const [key, identity] of Object.entries(records)) {
+    if (!/^(mainnet|testnet)_[^_]+_.+$/.test(key))
+      throw new Error('Pending account cleanup records are unavailable')
+    if (typeof identity === 'number') {
+      if (!Number.isSafeInteger(identity) || identity < 0)
+        throw new Error('Pending account cleanup records are unavailable')
+      parsed[key] = identity
+    } else {
+      const source = parseAccountSource(identity)
+      if (!key.startsWith(`${source.network}_`))
+        throw new Error('Pending account cleanup network mismatch')
+      parsed[key] = source
+    }
   }
-  return records as Record<string, number>
+  return parsed
 }
 
 function filterDeleted(
@@ -280,6 +310,38 @@ function preserveAccountNetworkSelections(
   }
 }
 
+function preserveCommittedFrostAccounts(
+  incoming: WalletSnapshot,
+  current: WalletSnapshot | null
+): WalletSnapshot {
+  if (!current) return incoming
+  const priorWallets = new Map(current.state.wallets.map(wallet => [wallet.id, wallet]))
+  return {
+    ...incoming,
+    state: {
+      ...incoming.state,
+      wallets: incoming.state.wallets.map(wallet => {
+        const saved = priorWallets.get(wallet.id)
+        if (
+          !saved ||
+          saved.createdAt !== wallet.createdAt ||
+          saved.seedPhraseKey !== wallet.seedPhraseKey ||
+          (wallet.keySource !== undefined && wallet.keySource !== 'software')
+        ) {
+          return wallet
+        }
+        const incomingIds = new Set(wallet.accounts.map(account => account.id))
+        const omitted = saved.accounts.filter(
+          account => isFrostAccount(account) && !incomingIds.has(account.id)
+        )
+        return omitted.length > 0
+          ? { ...wallet, accounts: [...wallet.accounts, ...omitted] }
+          : wallet
+      })
+    }
+  }
+}
+
 export async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
   if (!navigator.locks) throw new Error('Wallet storage coordination is unavailable')
   return navigator.locks.request(METADATA_LOCK, operation)
@@ -422,10 +484,26 @@ export function writeWalletMetadata(value: unknown): Promise<void> {
       DELETED_ACCOUNTS_KEY
     ])
     const current = parseSnapshot(saved[WALLET_STATE_KEY])
+    for (const wallet of snapshot.state.wallets) {
+      const previous = current?.state.wallets.find(item => item.id === wallet.id)
+      for (const account of wallet.accounts) {
+        const prior = previous?.accounts.find(item => item.id === account.id)
+        if (
+          prior &&
+          (isFrostAccount(prior) || isFrostAccount(account)) &&
+          !accountSourceEquals(prior.source, account.source)
+        ) {
+          throw new Error('Account origin cannot be changed')
+        }
+      }
+    }
     await chrome.storage.local.set({
       [WALLET_STATE_KEY]: filterDeleted(
         preserveAccountNetworkSelections(
-          preserveRetainedNames(preserveBackupVerification(snapshot, current), current),
+          preserveRetainedNames(
+            preserveBackupVerification(preserveCommittedFrostAccounts(snapshot, current), current),
+            current
+          ),
           current
         ),
         parseDeletedIds(saved[DELETED_WALLETS_KEY]),
@@ -463,6 +541,14 @@ export function setAccountNetworkSelection(
     const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
     if (!snapshot || !wallet?.accounts.some(account => account.id === accountId)) {
       throw new Error('Wallet Account metadata is unavailable')
+    }
+    const target = wallet.accounts.find(account => account.id === accountId)
+    if (
+      target &&
+      isFrostAccount(target) &&
+      (target.source.network !== network || selected.length !== 1 || selected[0] !== 'zcash')
+    ) {
+      throw new Error('FROST account networks cannot be changed')
     }
     await chrome.storage.local.set({
       [WALLET_STATE_KEY]: {
@@ -640,6 +726,12 @@ export function commitWalletMetadataDeletion(
   accountIds?: readonly string[]
 ): Promise<void> {
   return withMetadataLock(async () => {
+    await withMultisigStorageLock(() =>
+      assertNoUnresolvedMultisigTransactionsLocked(
+        transactionWalletId => transactionWalletId === walletId,
+        [walletId]
+      )
+    )
     const saved = await chrome.storage.local.get([
       WALLET_STATE_KEY,
       DELETED_WALLETS_KEY,
@@ -667,12 +759,27 @@ export function commitAccountMetadataDeletion(
   walletId: string,
   accountId: string,
   network: 'mainnet' | 'testnet',
-  derivationIndex: number
+  identity: AccountDeletionIdentity
 ): Promise<void> {
-  if (!Number.isSafeInteger(derivationIndex) || derivationIndex < 0) {
+  if (typeof identity === 'number' && (!Number.isSafeInteger(identity) || identity < 0)) {
     return Promise.reject(new Error('Invalid account derivation index'))
   }
+  if (typeof identity !== 'number') {
+    try {
+      identity = parseAccountSource(identity)
+      if (identity.network !== network) throw new Error('Account deletion network mismatch')
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
   return withMetadataLock(async () => {
+    await withMultisigStorageLock(() =>
+      assertNoUnresolvedMultisigTransactionsLocked(
+        (transactionWalletId, transactionAccountId) =>
+          transactionWalletId === walletId && transactionAccountId === accountId,
+        [walletId]
+      )
+    )
     const saved = await chrome.storage.local.get([
       WALLET_STATE_KEY,
       DELETED_WALLETS_KEY,
@@ -682,6 +789,16 @@ export function commitAccountMetadataDeletion(
     ])
     const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
     if (!snapshot) throw new Error('Wallet metadata is unavailable')
+    const account = snapshot.state.wallets
+      .find(wallet => wallet.id === walletId)
+      ?.accounts.find(item => item.id === accountId)
+    if (
+      account &&
+      (isFrostAccount(account) || typeof identity !== 'number') &&
+      !accountSourceEquals(account.source, typeof identity === 'number' ? undefined : identity)
+    ) {
+      throw new Error('Account deletion source mismatch')
+    }
     const deletedAccounts = parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
     const accountKey = `${network}_${walletId}_${accountId}`
     deletedAccounts.add(accountKey)
@@ -693,9 +810,18 @@ export function commitAccountMetadataDeletion(
       throw new Error('Deleted account indexes are unavailable')
     }
     const indexes = { ...(storedIndexes as Record<string, number> | undefined) }
-    indexes[accountKey] = derivationIndex
+    if (typeof identity === 'number') indexes[accountKey] = identity
     const pending = parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])
-    pending[accountKey] = derivationIndex
+    const previous = pending[accountKey]
+    if (
+      previous !== undefined &&
+      (typeof previous === 'number'
+        ? previous !== identity
+        : typeof identity === 'number' || !accountSourceEquals(previous, identity))
+    ) {
+      throw new Error('Account deletion identity cannot be changed')
+    }
+    pending[accountKey] = identity
     await chrome.storage.local.set({
       [DELETED_ACCOUNTS_KEY]: [...deletedAccounts],
       [DELETED_ACCOUNT_INDEXES_KEY]: indexes,
@@ -733,7 +859,7 @@ export function getAccountDeletionRecord(
   walletId: string,
   accountId: string,
   network: 'mainnet' | 'testnet'
-): Promise<number | null> {
+): Promise<AccountDeletionIdentity | null> {
   return withMetadataLock(async () => {
     const saved = await chrome.storage.local.get(PENDING_ACCOUNT_CLEANUP_KEY)
     const key = `${network}_${walletId}_${accountId}`
@@ -741,19 +867,100 @@ export function getAccountDeletionRecord(
   })
 }
 
+function deletionIdentityEquals(
+  left: AccountDeletionIdentity,
+  right: AccountDeletionIdentity
+): boolean {
+  return typeof left === 'number'
+    ? left === right
+    : typeof right !== 'number' && accountSourceEquals(left, right)
+}
+
+/** A completion marker is valid only while its exact deletion intent remains authoritative. */
+export function isAccountRuntimeCleanupComplete(
+  walletId: string,
+  accountId: string,
+  network: Network,
+  identity: AccountDeletionIdentity
+): Promise<boolean> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      PENDING_ACCOUNT_CLEANUP_KEY,
+      ACCOUNT_RUNTIME_CLEANUP_KEY,
+      DELETED_ACCOUNTS_KEY
+    ])
+    const key = `${network}_${walletId}_${accountId}`
+    const pending = parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])[key]
+    const completed = parsePendingAccounts(saved[ACCOUNT_RUNTIME_CLEANUP_KEY])[key]
+    return (
+      pending !== undefined &&
+      completed !== undefined &&
+      parseDeletedIds(saved[DELETED_ACCOUNTS_KEY]).has(key) &&
+      deletionIdentityEquals(pending, identity) &&
+      deletionIdentityEquals(pending, completed)
+    )
+  })
+}
+
+export function markAccountRuntimeCleanupComplete(
+  walletId: string,
+  accountId: string,
+  network: Network,
+  identity: AccountDeletionIdentity
+): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      PENDING_ACCOUNT_CLEANUP_KEY,
+      ACCOUNT_RUNTIME_CLEANUP_KEY,
+      DELETED_ACCOUNTS_KEY
+    ])
+    const key = `${network}_${walletId}_${accountId}`
+    const pending = parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])[key]
+    if (
+      pending === undefined ||
+      !parseDeletedIds(saved[DELETED_ACCOUNTS_KEY]).has(key) ||
+      !deletionIdentityEquals(pending, identity)
+    ) {
+      throw new Error('Account cleanup intent is unavailable')
+    }
+    const completed = parsePendingAccounts(saved[ACCOUNT_RUNTIME_CLEANUP_KEY])
+    completed[key] = pending
+    await chrome.storage.local.set({ [ACCOUNT_RUNTIME_CLEANUP_KEY]: completed })
+    const verified = await chrome.storage.local.get([
+      PENDING_ACCOUNT_CLEANUP_KEY,
+      ACCOUNT_RUNTIME_CLEANUP_KEY,
+      DELETED_ACCOUNTS_KEY
+    ])
+    const retained = parsePendingAccounts(verified[PENDING_ACCOUNT_CLEANUP_KEY])[key]
+    const marker = parsePendingAccounts(verified[ACCOUNT_RUNTIME_CLEANUP_KEY])[key]
+    if (
+      retained === undefined ||
+      marker === undefined ||
+      !parseDeletedIds(verified[DELETED_ACCOUNTS_KEY]).has(key) ||
+      !deletionIdentityEquals(pending, retained) ||
+      !deletionIdentityEquals(pending, marker)
+    ) {
+      throw new Error('Account runtime cleanup completion could not be saved')
+    }
+  })
+}
+
 export function getPendingAccountCleanups(): Promise<
-  { walletId: string; accountId: string; network: 'mainnet' | 'testnet'; derivationIndex: number }[]
+  ({ walletId: string; accountId: string; network: 'mainnet' | 'testnet' } & (
+    | { derivationIndex: number; source?: never }
+    | { source: AccountSource; derivationIndex?: never }
+  ))[]
 > {
   return withMetadataLock(async () => {
     const saved = await chrome.storage.local.get(PENDING_ACCOUNT_CLEANUP_KEY)
     return Object.entries(parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])).map(
-      ([key, derivationIndex]) => {
+      ([key, identity]) => {
         const [network, walletId, ...accountId] = key.split('_')
         return {
           network: network as 'mainnet' | 'testnet',
           walletId,
           accountId: accountId.join('_'),
-          derivationIndex
+          ...(typeof identity === 'number' ? { derivationIndex: identity } : { source: identity })
         }
       }
     )
@@ -816,12 +1023,14 @@ export function getLegacyPendingCleanups(): Promise<
               account &&
               typeof account.id === 'string' &&
               account.id.length > 0 &&
-              Number.isSafeInteger(account.derivationIndex) &&
-              account.derivationIndex >= 0
+              (isFrostAccount(account) ||
+                (isDerivedAccount(account) &&
+                  Number.isSafeInteger(account.derivationIndex) &&
+                  account.derivationIndex >= 0))
           ) &&
           new Set(wallet.accounts.map(account => account.id)).size === wallet.accounts.length &&
-          new Set(wallet.accounts.map(account => account.derivationIndex)).size ===
-            wallet.accounts.length,
+          new Set(wallet.accounts.filter(isDerivedAccount).map(account => account.derivationIndex))
+            .size === wallet.accounts.filter(isDerivedAccount).length,
         accounts
       }
     })
@@ -876,10 +1085,18 @@ export function completeAccountMetadataDeletion(
   network: 'mainnet' | 'testnet'
 ): Promise<void> {
   return withMetadataLock(async () => {
-    const saved = await chrome.storage.local.get(PENDING_ACCOUNT_CLEANUP_KEY)
+    const saved = await chrome.storage.local.get([
+      PENDING_ACCOUNT_CLEANUP_KEY,
+      ACCOUNT_RUNTIME_CLEANUP_KEY
+    ])
     const pending = parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])
+    const completed = parsePendingAccounts(saved[ACCOUNT_RUNTIME_CLEANUP_KEY])
     delete pending[`${network}_${walletId}_${accountId}`]
-    await chrome.storage.local.set({ [PENDING_ACCOUNT_CLEANUP_KEY]: pending })
+    delete completed[`${network}_${walletId}_${accountId}`]
+    await chrome.storage.local.set({
+      [PENDING_ACCOUNT_CLEANUP_KEY]: pending,
+      [ACCOUNT_RUNTIME_CLEANUP_KEY]: completed
+    })
   })
 }
 
@@ -913,42 +1130,56 @@ export function completeWalletMetadataDeletion(walletId: string): Promise<void> 
   return withMetadataLock(async () => {
     const saved = await chrome.storage.local.get([
       DELETED_WALLET_RECORDS_KEY,
-      PENDING_ACCOUNT_CLEANUP_KEY
+      PENDING_ACCOUNT_CLEANUP_KEY,
+      ACCOUNT_RUNTIME_CLEANUP_KEY
     ])
     const records = parseDeletionRecords(saved[DELETED_WALLET_RECORDS_KEY])
     const pending = parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])
+    const completed = parsePendingAccounts(saved[ACCOUNT_RUNTIME_CLEANUP_KEY])
     delete records[walletId]
     for (const key of Object.keys(pending)) {
       if (key.startsWith(`mainnet_${walletId}_`) || key.startsWith(`testnet_${walletId}_`)) {
         delete pending[key]
       }
     }
+    for (const key of Object.keys(completed)) {
+      if (key.startsWith(`mainnet_${walletId}_`) || key.startsWith(`testnet_${walletId}_`))
+        delete completed[key]
+    }
     await chrome.storage.local.set({
       [DELETED_WALLET_RECORDS_KEY]: records,
-      [PENDING_ACCOUNT_CLEANUP_KEY]: pending
+      [PENDING_ACCOUNT_CLEANUP_KEY]: pending,
+      [ACCOUNT_RUNTIME_CLEANUP_KEY]: completed
     })
   })
 }
 
-export function resetWalletMetadata(): Promise<void> {
+export function resetWalletMetadata(deleteProtectedSnapshots?: () => Promise<void>): Promise<void> {
   return withMetadataLock(async () => {
-    const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
-    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
-    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
-    for (const wallet of snapshot?.state.wallets ?? []) deleted.add(wallet.id)
-    await chrome.storage.local.set({
-      [DELETED_WALLETS_KEY]: [...deleted],
-      [WALLET_STATE_KEY]: {
-        version: snapshot?.version ?? 0,
-        state: {
-          ...snapshot?.state,
-          wallets: [],
-          currentWalletId: null,
-          currentAccountId: null,
-          accountDisplayNames: {},
-          zecPrice: 0
+    await withMultisigStorageLock(async () => {
+      const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
+      const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+      await assertNoUnresolvedMultisigTransactionsLocked(
+        () => true,
+        snapshot?.state.wallets.map(wallet => wallet.id) ?? []
+      )
+      const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+      for (const wallet of snapshot?.state.wallets ?? []) deleted.add(wallet.id)
+      await deleteProtectedSnapshots?.()
+      await chrome.storage.local.set({
+        [DELETED_WALLETS_KEY]: [...deleted],
+        [WALLET_STATE_KEY]: {
+          version: snapshot?.version ?? 0,
+          state: {
+            ...snapshot?.state,
+            wallets: [],
+            currentWalletId: null,
+            currentAccountId: null,
+            accountDisplayNames: {},
+            zecPrice: 0
+          }
         }
-      }
+      })
     })
   })
 }

@@ -22,6 +22,9 @@ function isolated(profile, features, options = {}) {
 
 const projects = {
   extension: isolated('mainnet-zcash-regression', '', { workers: 4 }),
+  multisig: isolated('mainnet-zcash-regression', '', {
+    env: { FROST_MULTISIG_UI: '1' }
+  }),
   'production-dist': {
     build: true,
     workers: 1,
@@ -102,6 +105,8 @@ function projectEnvironment(config) {
     E2E_BUILD_PROFILE: config.profile,
     ENABLED_CHAIN_FEATURE_FLAGS: config.features,
     EXTENSION_DEV_SERVER: undefined,
+    // A developer's exported flag must not change which UI surface the E2E build ships.
+    FROST_MULTISIG_UI: undefined,
     ...config.env
   }
 }

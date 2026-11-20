@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { WalletMetadataCoordinator } from '../../../src/infrastructure/keyring/wallet-metadata-coordinator.ts'
+import { FrostAccountMetadataCoordinator } from '../../../src/infrastructure/keyring/frost-account-metadata-coordinator.ts'
+import { installStorageEnv } from '../multisig/helpers/storage-env.ts'
 
 const CREATED_AT = 1_700_000_000_000
 const SOURCE_GENERATION_ID = 'storage-v2:generation:source'
@@ -100,6 +102,97 @@ function coordinator(repository, commitPointer) {
 }
 
 test.describe('Wallet metadata coordinator', () => {
+  test('commits an independent FROST account through credential-bound pointer and retries without duplicating its HD parent', async () => {
+    const env = installStorageEnv()
+    try {
+      const source = structuredClone(sourceSnapshot())
+      source.keyDomains[0].source = { kind: 'software', mnemonicWordCount: 12 }
+      const walletId = source.keyDomains[0].id
+      source.chainAccounts = [
+        {
+          id: 'hd-zcash',
+          scope: { keyDomainId: walletId, accountId: source.accounts[0].id, chainId: 'zcash:main' },
+          derivation: { scheme: 'zip32', path: "m/32'/133'/0'" },
+          identity: { kind: 'account-identifier', value: 'hd-address' },
+          createdAt: CREATED_AT
+        }
+      ]
+      source.manifest.counts.chainAccounts = 1
+      const repository = new MemoryStorageV2Repository(source)
+      const credentials = {
+        validateForActivation: async () => ({
+          status: 'active',
+          record: {
+            manifest: {
+              source: 'software',
+              mnemonicWordCount: 12,
+              engines: { zcash: { verificationAnchorRef: 'chain-account:hd-zcash' } }
+            }
+          }
+        })
+      }
+      const account = {
+        id: 'independent-account',
+        name: 'Multisig',
+        source: { kind: 'frost-vault', version: 1, groupId: 'new-group', network: 'mainnet' },
+        birthdayHeight: 123,
+        addresses: { shielded: 'u1-independent', transparent: '' },
+        isPinned: false,
+        isHidden: false
+      }
+      const operation = {
+        version: 1,
+        operationId: 'operation',
+        scope: { network: 'mainnet', walletId, accountId: account.id },
+        parentAccountId: source.accounts[0].id,
+        groupId: 'new-group',
+        threshold: '2-of-3',
+        birthdayHeight: 123,
+        createdAt: CREATED_AT + 1,
+        phase: 'external_imported'
+      }
+      env.store.set('wallet_state', {
+        state: {
+          wallets: [
+            {
+              id: walletId,
+              keySource: 'software',
+              accounts: [{ id: source.accounts[0].id, derivationIndex: 0, name: 'Original' }]
+            }
+          ],
+          unrelated: 'preserved'
+        }
+      })
+      const metadata = new FrostAccountMetadataCoordinator(credentials, repository)
+      const commit = repository.commit.bind(repository)
+      repository.commit = async () => 'active-generation-changed'
+      await expect(metadata.commit(operation, account, async () => {})).rejects.toThrow(
+        'Account metadata could not be committed'
+      )
+      expect(repository.pointer.generationId).toBe(SOURCE_GENERATION_ID)
+      expect(env.store.get('wallet_state').state.wallets[0].accounts).toHaveLength(1)
+      repository.commit = commit
+      await metadata.commit(operation, account, async () => {})
+      await metadata.commit(operation, account, async () => {})
+      const target = await repository.getSnapshot(repository.pointer.generationId)
+      expect(target.accounts).toHaveLength(2)
+      expect(target.accounts[0]).toEqual(source.accounts[0])
+      expect(target.accounts[1]).not.toHaveProperty('accountIndex')
+      expect(target.chainAccounts[1]).not.toHaveProperty('derivation')
+      expect(target.keyDomains).toEqual(source.keyDomains)
+      expect(target.addresses[0].scheme).toBe('zcash-shielded-unified')
+      const retained = env.store.get('wallet_state')
+      expect(retained.state.wallets[0].accounts).toHaveLength(2)
+      expect(retained.state.wallets[0].accounts[0]).toEqual({
+        id: source.accounts[0].id,
+        derivationIndex: 0,
+        name: 'Original'
+      })
+      expect(retained.state.unrelated).toBe('preserved')
+    } finally {
+      env.restore()
+    }
+  })
   test('renames a hardware Wallet in an immutable credential-bound generation', async () => {
     const repository = new MemoryStorageV2Repository()
     const result = await coordinator(repository).renameWallet({

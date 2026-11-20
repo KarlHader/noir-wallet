@@ -1,9 +1,11 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type {
   DeriveBitcoinAddressInput,
   DeriveBitcoinAddressesInput,
   DerivedBitcoinAddress
 } from '@/core/chains/bitcoin'
-import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
+import { parseKeyDomainId } from '@/core/keyring/domain'
+import type { KeyDomainId } from '@/core/keyring/domain'
 import type { StoredHardwareCredential } from '@/core/wallet/hardware-wallet-data'
 import { deriveLedgerBitcoinAddress } from '@/lib/ledger/bitcoin-model'
 import {
@@ -95,6 +97,7 @@ export class BitcoinAddressDerivationRouter implements BitcoinAddressDerivationP
       )
       if (
         chainAccounts.length !== 1 ||
+        !isDerivedAccount(chainAccounts[0]) ||
         chainAccounts[0].derivation.scheme !== 'bip84' ||
         chainAccounts[0].derivation.path !== `${matches[0].derivationPath}/0/0` ||
         chainAccounts[0].identity.value !== matches[0].address
@@ -217,6 +220,13 @@ export class BitcoinAddressDerivationRouter implements BitcoinAddressDerivationP
     if (snapshot.manifest.activeAccount?.keyDomainId !== keyDomainId) {
       throw new Error('Bitcoin derivation is not bound to the active Wallet')
     }
+    const activeAccount = snapshot.accounts.find(
+      account =>
+        account.id === snapshot.manifest.activeAccount?.accountId &&
+        account.keyDomainId === keyDomainId
+    )
+    if (!activeAccount || !isDerivedAccount(activeAccount))
+      throw new Error('Bitcoin derivation requires a derived Account')
     const matches = snapshot.keyDomains.filter(candidate => candidate.id === keyDomainId)
     if (matches.length !== 1) throw new Error('Active Bitcoin KeyDomain is missing or ambiguous')
     const source = matches[0].source

@@ -1,4 +1,5 @@
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
+import { isDerivedAccount, isFrostAccount } from '@/core/accounts/domain/account-source'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import { connectionAuthorizesAccount, dappManager } from '../core/dapp/dapp-manager'
 import { shouldAutoConnectDApp } from '@/core/dapp/first-party-policy'
@@ -631,6 +632,7 @@ export class DAppHandler {
   }
 
   private isZcashEnabled(wallet: WalletItem, account: AccountData): Promise<boolean> {
+    if (isFrostAccount(account)) return Promise.resolve(false)
     if (
       wallet.keySource === 'private-key' &&
       !account.addresses.transparent &&
@@ -1079,6 +1081,8 @@ export class DAppHandler {
     const bound = await this.ensurePermission(origin)
     const { walletId, accountId, account } = bound
 
+    if (!isDerivedAccount(account)) return null
+
     return this.runBoundZcashOperation(walletId, accountId, async () => {
       await this.ensureApprovedAccountContext(origin, walletId, accountId, bound.revision)
       const walletCore = await backgroundZcashWalletRuntime.getWalletCore(walletId, accountId)
@@ -1266,7 +1270,9 @@ export class DAppHandler {
       const accountKey = buildAccountKey(network, walletId, accountId)
 
       const sourceAccount = useWalletStore.getState().getAccount(walletId, accountId)
-      if (!sourceAccount) throw new Error('Wallet account no longer available')
+      if (!sourceAccount || !isDerivedAccount(sourceAccount)) {
+        throw new Error('Wallet account is unavailable for direct signing')
+      }
       const approvedAccountIndex = sourceAccount.derivationIndex
       const fromAddress = sourceAccount?.addresses[fundingSource] || ''
       let txPaused = false
@@ -1597,7 +1603,9 @@ export class DAppHandler {
       const walletCore = await backgroundZcashWalletRuntime.getWalletCore(walletId, accountId)
       await this.ensureApprovedAccountContext(origin, walletId, accountId, authorizationRevision)
       const approvedAccount = useWalletStore.getState().getAccount(walletId, accountId)
-      if (!approvedAccount) throw new Error('Wallet account no longer available')
+      if (!approvedAccount || !isDerivedAccount(approvedAccount)) {
+        throw new Error('Wallet account is unavailable for direct signing')
+      }
       const approvedAccountIndex = approvedAccount.derivationIndex
       const promise = signApprovedDAppMessage(
         walletCore,
@@ -1682,7 +1690,9 @@ export class DAppHandler {
       let txPaused = false
       const accountKey = buildAccountKey(currentNetwork, walletId, accountId)
       const approvedAccount = useWalletStore.getState().getAccount(walletId, accountId)
-      if (!approvedAccount) throw new Error('Wallet account no longer available')
+      if (!approvedAccount || !isDerivedAccount(approvedAccount)) {
+        throw new Error('Wallet account is unavailable for direct signing')
+      }
       const approvedAccountIndex = approvedAccount.derivationIndex
       let transactionId: string | undefined
       let broadcastHash: string | undefined
@@ -1851,7 +1861,8 @@ export class DAppHandler {
   ): Promise<string> {
     const wallet = useWalletStore.getState().getWallet(walletId)
     const account = wallet?.accounts.find(candidate => candidate.id === accountId)
-    if (!account) throw new Error('Zcash lending account is unavailable')
+    if (!account || !isDerivedAccount(account))
+      throw new Error('Zcash lending account is unavailable')
     const walletCore = await backgroundZcashWalletRuntime.getWalletCore(walletId, accountId)
     const identityMode: IdentitySigningMode =
       mode === 'legacy' ? 'legacy_index0' : mode === 'derived' ? 'derived' : 'current'

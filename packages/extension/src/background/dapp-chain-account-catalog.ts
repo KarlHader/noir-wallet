@@ -1,5 +1,6 @@
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import type { Account, Address, ChainAccount } from '@/core/accounts/domain'
+import { isFrostAccount } from '@/core/accounts/domain/account-source'
 import type { ChainDefinition } from '@/core/chains/registry'
 import type { AccountRef } from '@/core/dapp/dapp-manager'
 import { formatWalletNameAtIndex, getAccountDisplayName } from '@/lib/format'
@@ -52,6 +53,7 @@ export async function filterEnabledDAppContext<
   }
 >(context: T | null, family: AccountNetworkFamily): Promise<T | null> {
   if (!context) return null
+  if (isFrostAccount(context.chainAccount)) return null
   return (await isStoredAccountNetworkEnabledForSource(
     context.keyDomainSource,
     context.chainAccount.scope.keyDomainId,
@@ -105,6 +107,7 @@ export async function listDAppChainAccounts(
       left.createdAt - right.createdAt || String(left.id).localeCompare(String(right.id))
   )
   for (const account of snapshot.accounts) {
+    if (isFrostAccount(account)) continue
     const keyDomain = resolveKeyDomain(snapshot.keyDomains, account.keyDomainId)
     if (!keySourceSupportsChainFamily(keyDomain.source, options.family)) continue
     const candidates = snapshot.chainAccounts.filter(
@@ -130,6 +133,7 @@ export async function listDAppChainAccounts(
       continue
     }
     const chainAccount = candidates[0]
+    if (isFrostAccount(chainAccount)) continue
     const address = await options.resolveAddress({
       account,
       chainAccount,

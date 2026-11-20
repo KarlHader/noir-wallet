@@ -22,6 +22,12 @@ import { discoverV1Metadata } from '@/infrastructure/persistence/migrations'
 import { IndexedDbCredentialRepository } from '@/infrastructure/persistence/repositories'
 import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
 import type { StorageV2ActivePointer, StorageV2GenerationId } from '@/ports/repositories'
+import { loadOrCreateDeviceIdentity } from '@/core/multisig/identity'
+import { createIndexedDbIdentityStore } from '@/lib/multisig-identity-storage'
+import {
+  beginFinalizationBarrier,
+  type FinalizationBarrierStorage
+} from '@/lib/multisig-finalization-barrier'
 
 const KEY_DOMAIN_ID = 'wallet:credential-repository-e2e'
 const GENERATION_ID = 'generation:credential-repository-e2e'
@@ -1683,6 +1689,47 @@ async function corruptAndRead(databaseName: string) {
 
 Object.assign(globalThis, {
   credentialRepositoryIntegration: Object.freeze({
+    async multisigIdentityPublicKey() {
+      const identity = await loadOrCreateDeviceIdentity(createIndexedDbIdentityStore())
+      return Array.from(identity.publicKey)
+    },
+    async failMultisigBarrierReadback(walletId: string, accountId: string) {
+      const sessionId = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))))
+      const token = crypto.randomUUID()
+      let written = false
+      const storage: FinalizationBarrierStorage = {
+        async read(key) {
+          if (written) return undefined
+          return (await chrome.storage.local.get(key))[key]
+        },
+        async write(key, value) {
+          await chrome.storage.local.set({ [key]: value })
+          written = true
+        },
+        async remove(key) {
+          await chrome.storage.local.remove(key)
+        },
+        async runExclusive(key, operation) {
+          return navigator.locks.request(key, operation)
+        }
+      }
+      try {
+        await beginFinalizationBarrier(
+          {
+            network: 'mainnet',
+            walletId,
+            accountId,
+            reviewId: 'mv3-readback-failure',
+            sessionId
+          },
+          token,
+          storage
+        )
+        return { error: 'accepted', sessionId, token }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error), sessionId, token }
+      }
+    },
     reset: deleteDatabase,
     stageAfterInterruption,
     resumeAndVerify,

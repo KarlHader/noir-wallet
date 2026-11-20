@@ -6,6 +6,15 @@ import {
 } from '@/core/zcash/wallet-core'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import {
+  isFrostAccount,
+  isDerivedAccount,
+  accountSourceEquals,
+  parseAccountSource,
+  type AccountSource
+} from '@/core/accounts/domain/account-source'
+import { readVaultRecord } from '@/lib/multisig-vault-storage'
+import type { SealedVaultRecord } from '@/core/multisig/vault-record'
+import {
   createLedgerHardwareCredential,
   isZcashHardwareKeySource,
   legacyZcashHardwareWalletData,
@@ -255,7 +264,8 @@ const JOURNAL_CHECKPOINT_BATCHES = 10
 
 type AccountMappingEntry = {
   wasmAccountId: number
-  hdIndex: number
+  hdIndex?: number
+  source?: AccountSource
 }
 
 type WalletSummaryCacheEntry = {
@@ -344,6 +354,7 @@ export class BackgroundZcashWalletRuntime {
   private password: string | null = null
   private passwordGeneration = 0
   private sessionCredentialWalletId: string | null = null
+  private credentialRestoreGeneration = 0
   private isInitialized: boolean = false
   private network: Network = DEFAULT_NETWORK
   private currentWalletId: string | null = null
@@ -778,6 +789,10 @@ export class BackgroundZcashWalletRuntime {
     core: ZcashWalletCore,
     credential: WalletCredential
   ): Promise<void> {
+    if (isFrostAccount(account)) {
+      await this.registerFrostAccount(walletId, account)
+      return
+    }
     try {
       if (credential.kind === 'hardware') {
         await core.createAccountFromUfvk({
@@ -802,7 +817,7 @@ export class BackgroundZcashWalletRuntime {
       // the same WASM instance. The duplicate is rejected, but the account
       // exists, so adopt it instead of failing the optimistic unlock.
       if (isAccountAlreadyExistsError(msg)) {
-        const restored = await core.restoreFromDB(account.derivationIndex)
+        const restored = await this.restoreAccountFromDB(core, account)
         if (!restored) throw e
         this.bindCredentialToCore(core, credential, account.derivationIndex)
         logger.log('Adopted concurrently-created account', walletId, account.id)
@@ -828,18 +843,122 @@ export class BackgroundZcashWalletRuntime {
   }
 
   private accountMappingKey(walletId: string, accountId: string): string {
-    return `${this.network}:${walletId}:${accountId}`
+    return JSON.stringify([this.network, walletId, accountId])
+  }
+
+  private async frostResolveRequest(
+    walletId: string,
+    account: AccountData,
+    sealedRecord?: SealedVaultRecord
+  ) {
+    if (!isFrostAccount(account) || account.source.network !== this.network) {
+      throw new Error('External account network mismatch')
+    }
+    const record =
+      sealedRecord ??
+      (await readVaultRecord({ network: this.network, walletId, accountId: account.id }))
+    if (!record || record.version !== 2)
+      throw new Error('Authenticated external account record is required')
+    return {
+      accountId: account.id,
+      source: account.source,
+      sealedRecord: record
+    }
+  }
+
+  private async restoreAccountFromDB(
+    core: ZcashWalletCore,
+    account: AccountData
+  ): Promise<boolean> {
+    if (!isFrostAccount(account)) return core.restoreFromDB(account.derivationIndex)
+    const accountId = account.id
+    const source = parseAccountSource(account.source)
+    const restored = await core.restoreFrostAccount(
+      await this.frostResolveRequest(core.walletId, { ...account, id: accountId, source })
+    )
+    if (!restored) return false
+    if (
+      core.accountId === null ||
+      !Number.isSafeInteger(core.accountId) ||
+      core.accountId < 0 ||
+      account.id !== accountId ||
+      source.network !== this.network ||
+      !accountSourceEquals(core.accountSource, source) ||
+      !accountSourceEquals(account.source, source)
+    )
+      throw new Error('External account identity mismatch')
+    this.setAccountMapping(core.walletId, accountId, core.accountId, source)
+    return true
+  }
+
+  async registerFrostAccount(
+    walletId: string,
+    account: AccountData,
+    sealedRecord?: SealedVaultRecord
+  ): Promise<AccountAddresses> {
+    const wallet = this.store.getWallet(walletId)
+    if (
+      !wallet ||
+      (wallet.keySource !== undefined && wallet.keySource !== 'software') ||
+      !isFrostAccount(account) ||
+      account.source.network !== this.network
+    ) {
+      throw new Error('Invalid external account owner')
+    }
+    const record =
+      sealedRecord ??
+      (await readVaultRecord({ network: this.network, walletId, accountId: account.id }))
+    if (!record || record.version !== 2)
+      throw new Error('Authenticated external account record is required')
+    const core = this.getOrCreateWalletCore(walletId)
+    await core.ensureInitialized(`${this.network}_${walletId}`)
+    const id = await core.registerFrostAccount({
+      accountId: account.id,
+      source: account.source,
+      sealedRecord: record,
+      birthdayHeight: account.birthdayHeight || undefined
+    })
+    await this.persistWalletDb(walletId)
+    this.setAccountMapping(walletId, account.id, id, account.source)
+    return core.getUnifiedAddresses(id)
+  }
+
+  private async preflightFrostAccounts(
+    walletId: string,
+    accounts: readonly AccountData[]
+  ): Promise<void> {
+    const external = accounts.filter(isFrostAccount)
+    if (!external.length) return
+    const core = this.getOrCreateWalletCore(walletId)
+    await core.ensureInitialized(`${this.network}_${walletId}`)
+    for (const account of external) {
+      if (account.source.network !== this.network) continue
+      const record = await readVaultRecord({
+        network: this.network,
+        walletId,
+        accountId: account.id
+      })
+      if (!record || record.version !== 2)
+        throw new Error('Authenticated external account record is required')
+      await core.preflightFrostAccount({
+        ...(await this.frostResolveRequest(walletId, account, record)),
+        sealedRecord: record,
+        birthdayHeight: account.birthdayHeight || undefined
+      })
+    }
   }
 
   private setAccountMapping(
     walletId: string,
     accountId: string,
     wasmAccountId: number,
-    hdIndex: number
+    identity: number | AccountSource
   ): void {
     this.accountMappingCache.set(this.accountMappingKey(walletId, accountId), {
       wasmAccountId,
-      hdIndex
+      ...(typeof identity === 'number'
+        ? { hdIndex: identity }
+        : { source: parseAccountSource(identity) })
     })
   }
 
@@ -886,9 +1005,9 @@ export class BackgroundZcashWalletRuntime {
       return
     }
     for (const key of [...this.accountMappingCache.keys()]) {
-      const parts = key.split(':')
-      if (parts[1] !== walletId) continue
-      if (accountId && parts[2] !== accountId) continue
+      const [, mappedWalletId, mappedAccountId] = JSON.parse(key) as [Network, string, string]
+      if (mappedWalletId !== walletId) continue
+      if (accountId && mappedAccountId !== accountId) continue
       this.accountMappingCache.delete(key)
     }
   }
@@ -1274,7 +1393,11 @@ export class BackgroundZcashWalletRuntime {
               return
             }
             const accountId = this.store.currentAccountId
-            if (accountId) await this.refreshCachedBalancesAfterReady(walletId, accountId, core)
+            const account = accountId ? this.store.getAccount(walletId, accountId) : null
+            // A sealed FROST record needs the Worker credential, which the unlock
+            // coordinator binds after this non-blocking initialization completes.
+            if (accountId && account && !isFrostAccount(account))
+              await this.refreshCachedBalancesAfterReady(walletId, accountId, core)
           })().catch(() => {
             logger.warn('Cached balance refresh after initialization failed', walletId)
           })
@@ -1412,7 +1535,7 @@ export class BackgroundZcashWalletRuntime {
     await this.withWalletCoreLock(walletId, async () => {
       if (!canApply() || core.hasAccount()) return
       const account = this.store.getAccount(walletId, accountId)
-      if (account) await core.restoreFromDB(account.derivationIndex)
+      if (account) await this.restoreAccountFromDB(core, account)
     })
 
     if (!canApply() || !core.hasAccount()) return
@@ -1879,6 +2002,16 @@ export class BackgroundZcashWalletRuntime {
         }
       }
 
+      if (isFrostAccount(unlockAccount)) {
+        logger.refreshCache(this.store.wallets)
+        return {
+          success: true,
+          ...(recovered
+            ? { recoveredWalletId: storeWalletId, recoveredAccountId: currentAccount.id }
+            : {})
+        }
+      }
+
       // Optimistic Unlock: Do not await WASM heavy operations, allow immediate UI access
       // createAccount runs in background Worker, UI will show cached balance/addresses initially
       const restoreAbort = new AbortController()
@@ -1916,7 +2049,8 @@ export class BackgroundZcashWalletRuntime {
             'Unlock: wallet RPC deferred, skipping account restore for now',
             this.currentWalletId || undefined
           )
-          this.bindCredentialToCore(this.getOrCreateWalletCore(storeWalletId), credential, index)
+          if (!isFrostAccount(unlockAccount))
+            this.bindCredentialToCore(this.getOrCreateWalletCore(storeWalletId), credential, index)
           return
         }
         if (err.message?.includes('Unsupported proto version')) {
@@ -2072,7 +2206,7 @@ export class BackgroundZcashWalletRuntime {
       )
       const derivationIndex = selectNextZcashAccountIndex(
         [
-          ...wallet.accounts.map(account => account.derivationIndex),
+          ...wallet.accounts.filter(isDerivedAccount).map(account => account.derivationIndex),
           ...(await getDeletedAccountIndexes(walletId)),
           ...(await getBlockedAccountIndexes(walletId))
         ],
@@ -2144,7 +2278,7 @@ export class BackgroundZcashWalletRuntime {
       )
       const nextIndex = selectNextZcashAccountIndex(
         [
-          ...wallet.accounts.map(account => account.derivationIndex),
+          ...wallet.accounts.filter(isDerivedAccount).map(account => account.derivationIndex),
           ...(await getDeletedAccountIndexes(walletId)),
           ...(await getBlockedAccountIndexes(walletId))
         ],
@@ -2377,6 +2511,7 @@ export class BackgroundZcashWalletRuntime {
   }
 
   beginLock(): void {
+    this.credentialRestoreGeneration += 1
     this.setSessionPassword(null)
     this.sessionCredentialWalletId = null
     this.cancelActiveRestore(undefined, true)
@@ -2413,13 +2548,14 @@ export class BackgroundZcashWalletRuntime {
     }
 
     const derived: Record<string, AccountAddresses> = {}
-    for (const account of wallet.accounts) {
+    for (const account of wallet.accounts.filter(isDerivedAccount)) {
       if (credential.kind === 'seed') {
-        derived[account.id] = await this.getOrCreateWalletCore(walletId).getAddresses(
+        const addresses = await getWorkerClient(walletId).mnemonicToAddresses(
           credential.seedPhrase,
-          network,
-          account.derivationIndex
+          account.derivationIndex,
+          network
         )
+        derived[account.id] = mapWasmAccountAddresses(addresses)
       } else {
         const addresses = await getWorkerClient(walletId).getSessionAddresses(
           account.derivationIndex,
@@ -2486,6 +2622,32 @@ export class BackgroundZcashWalletRuntime {
     return this.passwordGeneration === generation + 1 && !this.isLocked()
   }
 
+  /** Start a selected FROST restore only after Background binds the Worker credential. */
+  async resumeDeferredFrostRestore(): Promise<boolean> {
+    const walletId = this.store.currentWalletId
+    const accountId = this.store.currentAccountId
+    const account = walletId && accountId ? this.store.getAccount(walletId, accountId) : null
+    if (
+      !walletId ||
+      !accountId ||
+      !account ||
+      !isFrostAccount(account) ||
+      !isAccountNetworkEnabled(account, this.network, 'zcash')
+    )
+      return false
+    const previousGeneration = this.credentialRestoreGeneration
+    const restored = await this.restoreFromCredentialSession(walletId, accountId)
+    if (
+      restored &&
+      this.credentialRestoreGeneration === previousGeneration + 1 &&
+      this.store.currentWalletId === walletId &&
+      this.store.currentAccountId === accountId &&
+      !this.isLocked()
+    )
+      this.requestSync()
+    return restored
+  }
+
   /**
    * Restore after Background memory loss using the attested Offscreen session.
    * Software credentials must already be bound directly to the Zcash Worker.
@@ -2503,6 +2665,7 @@ export class BackgroundZcashWalletRuntime {
       return this.restoreHardwareFromCredentialSession(wallet, account)
     }
 
+    const restoreGeneration = ++this.credentialRestoreGeneration
     this.cancelActiveRestore()
     for (const [otherWalletId, otherCore] of this.walletCores) {
       if (otherWalletId !== walletId && otherCore.isSessionCredentialReady()) {
@@ -2518,15 +2681,28 @@ export class BackgroundZcashWalletRuntime {
     }
     this.sessionCredentialWalletId = walletId
     this.currentWalletId = walletId
+    const passwordGeneration = this.passwordGeneration
+    const isCurrentRestore = () =>
+      this.credentialRestoreGeneration === restoreGeneration &&
+      this.passwordGeneration === passwordGeneration &&
+      this.sessionCredentialWalletId === walletId
 
     try {
       await this.withWalletCoreLock(walletId, async () => {
         const core = this.getOrCreateWalletCore(walletId)
         const dbKey = `${this.network}_${walletId}`
         await core.ensureInitialized(dbKey)
+        if (!isCurrentRestore()) throw new Error('Wallet credential session changed')
+        if (isFrostAccount(account)) {
+          const restored = await this.restoreAccountFromDB(core, account)
+          if (!isCurrentRestore()) throw new Error('Wallet credential session changed')
+          if (!restored) await this.registerFrostAccount(walletId, account)
+          return
+        }
 
         if (!(await core.hasAccountForDerivation(account.derivationIndex))) {
-          const restored = await core.restoreFromDB(account.derivationIndex)
+          const restored = await this.restoreAccountFromDB(core, account)
+          if (!isCurrentRestore()) throw new Error('Wallet credential session changed')
           if (!restored) {
             try {
               await core.createAccountFromSession(
@@ -2536,7 +2712,7 @@ export class BackgroundZcashWalletRuntime {
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error)
               if (!isAccountAlreadyExistsError(message)) throw error
-              const adopted = await core.restoreFromDB(account.derivationIndex)
+              const adopted = await this.restoreAccountFromDB(core, account)
               if (!adopted) throw error
             }
             if (!account.birthdayHeight) {
@@ -2557,13 +2733,25 @@ export class BackgroundZcashWalletRuntime {
           await flushWalletStore()
         }
       })
+      if (!isCurrentRestore()) throw new Error('Wallet credential session changed')
+      if (
+        isFrostAccount(account) &&
+        this.store.currentWalletId === walletId &&
+        this.store.currentAccountId === account.id &&
+        !this.isLocked()
+      ) {
+        const core = this.getOrCreateWalletCore(walletId)
+        void this.refreshCachedBalancesAfterReady(walletId, account.id, core).catch(() => {
+          logger.warn('Cached balance refresh after FROST restore failed', walletId)
+        })
+      }
       logger.refreshCache(this.store.wallets)
       return true
     } catch (error) {
-      if (this.sessionCredentialWalletId === walletId) {
+      if (isCurrentRestore()) {
         this.sessionCredentialWalletId = null
+        this.walletCores.get(walletId)?.clearSession()
       }
-      this.walletCores.get(walletId)?.clearSession()
       throw error
     }
   }
@@ -2867,6 +3055,12 @@ export class BackgroundZcashWalletRuntime {
     const account = this.store.getAccount(walletId, accountId)
     if (!account) return null
 
+    if (isFrostAccount(account)) {
+      if (account.source.network !== this.network) return null
+      const id = await core.resolveFrostAccount(await this.frostResolveRequest(walletId, account))
+      if (id !== null) this.setAccountMapping(walletId, accountId, id, account.source)
+      return id
+    }
     const cached = this.getAccountMapping(walletId, accountId)
     if (cached?.hdIndex === account.derivationIndex) {
       return cached.wasmAccountId
@@ -3153,8 +3347,30 @@ export class BackgroundZcashWalletRuntime {
     if (targetAccountId) {
       const account = this.store.getAccount(targetWalletId, targetAccountId)
       if (!account) throw new Error('Account not found')
+      const mapping = this.getAccountMapping(targetWalletId, targetAccountId)
 
-      if (await core.hasAccountForDerivation(account.derivationIndex)) {
+      if (
+        isFrostAccount(account) &&
+        account.source.network === this.network &&
+        isAccountNetworkEnabled(account, this.network, 'zcash') &&
+        core.isReady() &&
+        core.hasWasmInitialized() &&
+        mapping &&
+        Number.isSafeInteger(mapping.wasmAccountId) &&
+        mapping.wasmAccountId >= 0 &&
+        mapping.wasmAccountId === core.accountId &&
+        accountSourceEquals(mapping.source, account.source) &&
+        accountSourceEquals(core.accountSource, account.source)
+      ) {
+        // Identity was already verified for this selected native account. A
+        // repeat lookup would queue read-only fees behind a long sync batch.
+        return core
+      }
+
+      if (
+        isDerivedAccount(account) &&
+        (await core.hasAccountForDerivation(account.derivationIndex))
+      ) {
         if (!core.isReady() && !this.isLocked()) {
           await this.restoreSessionToCore(targetWalletId, core, account.derivationIndex)
         }
@@ -3162,9 +3378,10 @@ export class BackgroundZcashWalletRuntime {
       }
 
       await this.ensureWalletCoreAccount(targetWalletId, targetAccountId)
-      if (!(await core.hasAccountForDerivation(account.derivationIndex))) {
-        throw new Error('Active Zcash account could not be restored')
-      }
+      const selected = isFrostAccount(account)
+        ? accountSourceEquals(core.accountSource, account.source)
+        : await core.hasAccountForDerivation(account.derivationIndex)
+      if (!selected) throw new Error('Active Zcash account could not be restored')
     }
 
     return core
@@ -3218,7 +3435,7 @@ export class BackgroundZcashWalletRuntime {
 
     for (const account of enabledAccounts) {
       try {
-        const restored = await core.restoreFromDB(account.derivationIndex)
+        const restored = await this.restoreAccountFromDB(core, account)
         if (!restored) {
           missingAccounts.push(account)
         }
@@ -3238,7 +3455,9 @@ export class BackgroundZcashWalletRuntime {
         walletId
       )
       for (const account of missingAccounts) {
-        if (credential) {
+        if (isFrostAccount(account)) {
+          await this.registerFrostAccount(walletId, account)
+        } else if (credential) {
           await this.createWasmAccount(walletId, account, core, credential)
         } else {
           await core.createAccountFromSession(account.derivationIndex, account.birthdayHeight || 0)
@@ -3257,9 +3476,14 @@ export class BackgroundZcashWalletRuntime {
     const firstAccount =
       enabledAccounts.find(account => account.id === this.store.currentAccountId) ??
       enabledAccounts[0]
-    if (firstAccount && !(await core.hasAccountForDerivation(firstAccount.derivationIndex))) {
+    if (firstAccount && isFrostAccount(firstAccount)) {
+      await this.restoreAccountFromDB(core, firstAccount)
+    } else if (
+      firstAccount &&
+      !(await core.hasAccountForDerivation(firstAccount.derivationIndex))
+    ) {
       // Credential binding changes the derivation index, but does not select the WASM account.
-      const restored = await core.restoreFromDB(firstAccount.derivationIndex)
+      const restored = await this.restoreAccountFromDB(core, firstAccount)
       if (!restored) throw new Error('Active Zcash account could not be restored')
       if (credential) {
         this.bindCredentialToCore(core, credential, firstAccount.derivationIndex)
@@ -3386,6 +3610,11 @@ export class BackgroundZcashWalletRuntime {
       if (!account) return
       if (!isAccountNetworkEnabled(account, this.network, 'zcash')) return
 
+      if (isFrostAccount(account)) {
+        const restored = await this.restoreAccountFromDB(core, account)
+        if (!restored && !this.isLocked()) await this.registerFrostAccount(wid, account)
+        return
+      }
       if (await core.hasAccountForDerivation(account.derivationIndex)) {
         if (!core.isReady() && !this.isLocked()) {
           await this.restoreSessionToCore(wid, core, account.derivationIndex)
@@ -3403,7 +3632,7 @@ export class BackgroundZcashWalletRuntime {
 
       let restored = false
       try {
-        restored = await core.restoreFromDB(account.derivationIndex)
+        restored = await this.restoreAccountFromDB(core, account)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         if (isRetryableWalletRpcError(msg)) {
@@ -3445,7 +3674,7 @@ export class BackgroundZcashWalletRuntime {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           if (!isAccountAlreadyExistsError(message)) throw error
-          const adopted = await core.restoreFromDB(account.derivationIndex)
+          const adopted = await this.restoreAccountFromDB(core, account)
           if (!adopted) throw error
         }
         if (!account.birthdayHeight) {
@@ -3459,7 +3688,7 @@ export class BackgroundZcashWalletRuntime {
 
       const existingIds = await core.getAllAccountIds()
       if (existingIds.length > 0) {
-        const retryRestore = await core.restoreFromDB(account.derivationIndex)
+        const retryRestore = await this.restoreAccountFromDB(core, account)
         if (retryRestore) {
           if (core.accountId != null) {
             this.setAccountMapping(wid, account.id, core.accountId, account.derivationIndex)
@@ -3558,6 +3787,8 @@ export class BackgroundZcashWalletRuntime {
     if (!wallet) throw new Error('No wallet data found')
     const account = wallet.accounts.find(a => a.id === accountId)
     if (!account) throw new Error('Account not found')
+    if (isFrostAccount(account) && account.source.network !== this.network)
+      throw new Error('External account network mismatch')
     if (!options?.automatic && walletId !== this.store.currentWalletId) {
       throw new Error('Switch to this wallet before resyncing Zcash')
     }
@@ -3568,6 +3799,8 @@ export class BackgroundZcashWalletRuntime {
 
     const credential = await this.loadWalletCredential(walletId, this.password)
     if (!credential) throw new Error('Failed to load wallet credential')
+
+    await this.preflightFrostAccounts(walletId, wallet.accounts)
 
     if (!options?.automatic) {
       this.automaticResyncAttemptedWalletIds.delete(walletId)
@@ -3601,9 +3834,15 @@ export class BackgroundZcashWalletRuntime {
     const ZERO_BALANCE: ZcashBalance = zeroZcashBalance()
 
     for (const acc of wallet.accounts) {
-      await this.createWasmAccount(walletId, { ...acc, birthdayHeight }, core, credential)
+      if (isFrostAccount(acc) && acc.source.network !== this.network) continue
+      await this.createWasmAccount(
+        walletId,
+        isFrostAccount(acc) ? acc : { ...acc, birthdayHeight },
+        core,
+        credential
+      )
 
-      if (acc.birthdayHeight !== birthdayHeight) {
+      if (isDerivedAccount(acc) && acc.birthdayHeight !== birthdayHeight) {
         this.store.updateAccountInWallets(walletId, acc.id, { birthdayHeight })
       }
 
@@ -3617,10 +3856,12 @@ export class BackgroundZcashWalletRuntime {
       )
     }
 
-    if (!(await core.restoreFromDB(account.derivationIndex))) {
+    if (!(await this.restoreAccountFromDB(core, account))) {
       throw new Error('Active Zcash account could not be restored after resync')
     }
-    this.bindCredentialToCore(core, credential, account.derivationIndex)
+    if (isDerivedAccount(account)) {
+      this.bindCredentialToCore(core, credential, account.derivationIndex)
+    }
 
     logger.log('Zcash resync: triggering wallet sync...', walletId, accountId)
     await this.persistWalletDb(walletId).catch(err => {
@@ -3958,16 +4199,15 @@ export class BackgroundZcashWalletRuntime {
       await this.removeWalletAuthoritatively(walletId)
       return 'wallet'
     } else {
-      const derivationIndex = wallet.accounts[accountIndex].derivationIndex
+      const removingAccount = wallet.accounts[accountIndex]
+      const identity = isFrostAccount(removingAccount)
+        ? removingAccount.source
+        : removingAccount.derivationIndex
       const core = this.walletCores.get(walletId)
-      const wasmAccountId = await resolveAccountIdForRemoval(
-        this.getAccountMapping(walletId, accountId),
-        derivationIndex,
-        core?.hasWasmInitialized()
-          ? () => this.resolveWasmAccountId(walletId, accountId, core)
-          : undefined
-      )
-      await this.finishAccountRemovalCleanup(walletId, accountId, derivationIndex, wasmAccountId)
+      const wasmAccountId = core?.hasWasmInitialized()
+        ? await this.resolveWasmAccountId(walletId, accountId, core)
+        : undefined
+      await this.finishAccountRemovalCleanup(walletId, accountId, identity, wasmAccountId)
       this.store.removeAccount(walletId, accountId)
       this.currentWalletId = this.store.currentWalletId
       await flushWalletStore()
@@ -3998,9 +4238,28 @@ export class BackgroundZcashWalletRuntime {
   async finishAccountRemovalCleanup(
     walletId: string,
     accountId: string,
-    derivationIndex?: number,
+    identity?: number | AccountSource,
     wasmAccountId?: number | null
   ): Promise<void> {
+    const derivationIndex = typeof identity === 'number' ? identity : undefined
+    if (
+      identity &&
+      typeof identity !== 'number' &&
+      identity.network === this.network &&
+      wasmAccountId === undefined
+    ) {
+      const core = this.walletCores.get(walletId)
+      if (core?.hasWasmInitialized()) {
+        const sealedRecord = await readVaultRecord({ network: this.network, walletId, accountId })
+        if (!sealedRecord || sealedRecord.version !== 2)
+          throw new Error('External account cleanup requires its authenticated record')
+        wasmAccountId = await core.resolveFrostAccount({
+          accountId,
+          source: identity,
+          sealedRecord
+        })
+      }
+    }
     this.recipientRecovery.cancel(walletId, accountId)
     await Promise.all([
       blockAccountRecords('mainnet', walletId, accountId),
@@ -4009,7 +4268,12 @@ export class BackgroundZcashWalletRuntime {
     if (wasmAccountId === undefined && derivationIndex !== undefined) {
       const core = this.walletCores.get(walletId)
       wasmAccountId = await resolveAccountIdForRemoval(
-        this.getAccountMapping(walletId, accountId),
+        this.getAccountMapping(walletId, accountId)?.hdIndex === derivationIndex
+          ? {
+              wasmAccountId: this.getAccountMapping(walletId, accountId)!.wasmAccountId,
+              hdIndex: derivationIndex
+            }
+          : undefined,
         derivationIndex,
         core?.hasWasmInitialized()
           ? async () => {
@@ -4051,9 +4315,15 @@ export class BackgroundZcashWalletRuntime {
         const core = this.getOrCreateWalletCore(walletId)
         const dbKey = `${this.network}_${walletId}`
         const firstAccount = wallet.accounts[0]
-        const derivationIndex = firstAccount?.derivationIndex || 0
+        if (isFrostAccount(firstAccount)) {
+          await core.ensureInitialized(dbKey)
+          if (!(await this.restoreAccountFromDB(core, firstAccount)))
+            await this.registerFrostAccount(walletId, firstAccount)
+          return
+        }
+        const derivationIndex = firstAccount.derivationIndex
 
-        if (!core.hasAccount()) {
+        if (!core.hasAccount() || core.accountSource) {
           await core.ensureInitialized(dbKey)
 
           let restored = false
@@ -4921,8 +5191,7 @@ export class BackgroundZcashWalletRuntime {
                   const account = wallet?.accounts.find(
                     (a: { id: string }) => a.id === syncAccountId
                   )
-                  const derivationIndex = account?.derivationIndex || 0
-                  await core.restoreFromDB(derivationIndex)
+                  if (account) await this.restoreAccountFromDB(core, account)
                 }
               }
               logger.log('Reinitialized after RPC timeout', syncWalletId, syncAccountId)
@@ -5028,8 +5297,7 @@ export class BackgroundZcashWalletRuntime {
                   const account = wallet?.accounts.find(
                     (a: { id: string }) => a.id === syncAccountId
                   )
-                  const derivationIndex = account?.derivationIndex || 0
-                  await core.restoreFromDB(derivationIndex)
+                  if (account) await this.restoreAccountFromDB(core, account)
                 }
               }
               logger.log('Reinitialized after worker loss', syncWalletId, syncAccountId)
@@ -5767,6 +6035,15 @@ export class BackgroundZcashWalletRuntime {
     const accountIds = await core.getAllAccountIds()
     if (!accountIds.length) return
 
+    const externalIds = new Set<number>()
+    for (const account of this.store.getWallet(walletId)?.accounts.filter(isFrostAccount) ?? []) {
+      if (account.source.network !== this.network) continue
+      const id = await this.resolveWasmAccountId(walletId, account.id, core)
+      if (id === null) continue
+      if (externalIds.has(id)) throw new Error('Ambiguous external account mapping')
+      externalIds.add(id)
+    }
+
     const byDerivation = new Map<number, number[]>()
     for (const id of accountIds) {
       const hdIndex = await core.getAccountHdIndex(id)
@@ -5871,6 +6148,28 @@ export class BackgroundZcashWalletRuntime {
       const updatedAccountIds = new Set<string>()
 
       for (const [wasmAccountId, wasmBalance] of accountBalances) {
+        const externalMatches: AccountData[] = []
+        for (const candidate of wallet.accounts.filter(isFrostAccount)) {
+          if (
+            candidate.source.network === this.network &&
+            (await this.resolveWasmAccountId(walletId, candidate.id, core)) === wasmAccountId
+          )
+            externalMatches.push(candidate)
+        }
+        if (externalMatches.length > 1) throw new Error('Ambiguous external account mapping')
+        if (externalMatches.length === 1) {
+          const external = externalMatches[0]
+          if (updatedAccountIds.has(external.id))
+            throw new Error('Duplicate external account balance')
+          if (options && !options.canApply()) return
+          this.setBalanceFor(
+            walletId,
+            external.id,
+            mapWasmAccountBalanceToZcashBalance(wasmBalance)
+          )
+          updatedAccountIds.add(external.id)
+          continue
+        }
         let derivationIndex: number | null = null
         try {
           const preMatched = wallet.accounts.find(a => {
@@ -5879,7 +6178,7 @@ export class BackgroundZcashWalletRuntime {
           })
           if (preMatched) {
             const mapping = this.getAccountMapping(walletId, preMatched.id)!
-            derivationIndex = mapping.hdIndex
+            derivationIndex = mapping.hdIndex ?? null
           } else {
             derivationIndex = await core.getAccountHdIndex(wasmAccountId)
           }
@@ -5889,7 +6188,7 @@ export class BackgroundZcashWalletRuntime {
             wasmBalance.sapling_balance +
             wasmBalance.unshielded_balance
           const matchedAccount = wallet.accounts.find(
-            a => a.derivationIndex === Number(derivationIndex)
+            a => isDerivedAccount(a) && a.derivationIndex === Number(derivationIndex)
           )
           logger.log(
             `WASM AccountId ${wasmAccountId} → derivation ${derivationIndex}, balance: ${zatoshis} zatoshis`,
@@ -5907,7 +6206,7 @@ export class BackgroundZcashWalletRuntime {
         }
 
         const matchedAccount = wallet.accounts.find(
-          a => a.derivationIndex === Number(derivationIndex)
+          a => isDerivedAccount(a) && a.derivationIndex === Number(derivationIndex)
         )
         if (!matchedAccount) {
           logger.log(

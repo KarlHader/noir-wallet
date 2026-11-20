@@ -1,4 +1,5 @@
 import { MARKET_ASSETS } from '@/config/asset-market-assets'
+import { SendEntryGuard } from '@/popup/components/multisig/SendEntryGuard'
 import {
   useCallback,
   useDeferredValue,
@@ -467,6 +468,23 @@ export function Send({
 }: {
   readonly multiChainEnabled: boolean
   readonly initialZcashProvider?: boolean
+}) {
+  return (
+    <SendEntryGuard>
+      <SingleSignSend
+        multiChainEnabled={multiChainEnabled}
+        initialZcashProvider={initialZcashProvider}
+      />
+    </SendEntryGuard>
+  )
+}
+
+function SingleSignSend({
+  multiChainEnabled,
+  initialZcashProvider
+}: {
+  readonly multiChainEnabled: boolean
+  readonly initialZcashProvider: boolean
 }) {
   const [searchParams] = useSearchParams()
   if (!multiChainEnabled || (initialZcashProvider && searchParams.get('move') === '1')) {

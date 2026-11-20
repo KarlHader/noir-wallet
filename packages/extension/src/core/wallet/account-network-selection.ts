@@ -1,5 +1,6 @@
 import type { ChainDefinition } from '@/core/chains/registry'
 import type { AccountData, Network, WalletItem } from '@/types'
+import { isFrostAccount } from '@/core/accounts/domain/account-source'
 
 export type AccountNetworkFamily = ChainDefinition['family']
 
@@ -41,6 +42,7 @@ export function isAccountNetworkEnabled(
   family: AccountNetworkFamily
 ): boolean {
   if (!FAMILIES.has(family)) throw new Error('Unsupported network family')
+  if (isFrostAccount(account)) return account.source.network === network && family === 'zcash'
   const selections = account.networkSelections
   if (selections === undefined) return true
   if (

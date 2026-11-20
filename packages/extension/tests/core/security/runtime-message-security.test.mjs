@@ -1411,6 +1411,18 @@ test.describe('Runtime message security', () => {
     expect(parseTrustedExtensionRuntimeMessage({ type: 'GET_ACCOUNT_NETWORKS' })).toEqual({
       type: 'GET_ACCOUNT_NETWORKS'
     })
+    for (const deriveMissingAddresses of [false, true]) {
+      const request = { type: 'GET_ACCOUNT_NETWORKS', deriveMissingAddresses }
+      expect(parseTrustedExtensionRuntimeMessage(request)).toEqual(request)
+    }
+    for (const deriveMissingAddresses of ['false', 0, null]) {
+      expect(() =>
+        parseTrustedExtensionRuntimeMessage({
+          type: 'GET_ACCOUNT_NETWORKS',
+          deriveMissingAddresses
+        })
+      ).toThrow(/schema/i)
+    }
     expect(parseTrustedExtensionRuntimeMessage({ type: 'GET_BITCOIN_ADDRESS_BALANCES' })).toEqual({
       type: 'GET_BITCOIN_ADDRESS_BALANCES'
     })

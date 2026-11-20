@@ -54,7 +54,13 @@ export interface SwitcherGroup {
 interface AccountDisplayOrder {
   readonly isPinned: boolean
   readonly createdAt: number
-  readonly accountIndex: number
+  /** Absent for independent multisig accounts. */
+  readonly accountIndex?: number
+}
+
+// An account without an HD index (an independent multisig account) keeps its stored order.
+function compareAccountIndex(left: number | undefined, right: number | undefined): number {
+  return left === undefined || right === undefined ? 0 : left - right
 }
 
 function compareAccountDisplayOrder(left: AccountDisplayOrder, right: AccountDisplayOrder): number {
@@ -423,10 +429,11 @@ export function buildVisibleAccountList(input: {
               : 0)
         )
       } else {
-        group.accounts.sort(
-          (left, right) =>
-            (left.kind === 'retained' ? left.account.derivationIndex : left.account.accountIndex) -
-            (right.kind === 'retained' ? right.account.derivationIndex : right.account.accountIndex)
+        group.accounts.sort((left, right) =>
+          compareAccountIndex(
+            left.kind === 'retained' ? left.account.derivationIndex : left.account.accountIndex,
+            right.kind === 'retained' ? right.account.derivationIndex : right.account.accountIndex
+          )
         )
       }
       return Object.freeze({ ...group, accounts: Object.freeze(group.accounts) })

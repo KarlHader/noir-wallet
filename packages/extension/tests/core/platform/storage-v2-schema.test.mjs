@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
+import { getZcashChainId } from '../../../src/core/chains/registry/index.ts'
 
 import {
   STORAGE_V2_ACTIVE_POINTER_KEY,
@@ -80,6 +81,78 @@ function createSnapshot() {
 }
 
 test.describe('Storage V2 schema', () => {
+  test('round-trips independent FROST accounts without accepting an HD index or path', () => {
+    const snapshot = createSnapshot()
+    const source = { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'mainnet' }
+    const external = { ...snapshot.accounts[0], id: 'frost-account', source }
+    delete external.accountIndex
+    const chain = {
+      ...snapshot.chainAccounts[0],
+      id: 'frost-chain',
+      source,
+      scope: {
+        ...snapshot.chainAccounts[0].scope,
+        accountId: external.id,
+        chainId: getZcashChainId('mainnet')
+      },
+      identity: { kind: 'account-identifier', value: 'u1-frost-identity' }
+    }
+    delete chain.derivation
+    snapshot.accounts.push(external)
+    snapshot.chainAccounts.push(chain)
+    snapshot.manifest.counts.accounts++
+    snapshot.manifest.counts.chainAccounts++
+    const parsed = parseStorageV2Snapshot(snapshot)
+    expect(parsed.accounts[1]).toEqual(external)
+    expect(parsed.chainAccounts[1]).toEqual(chain)
+    expect(() =>
+      parseStorageV2Snapshot({
+        ...snapshot,
+        accounts: [snapshot.accounts[0], { ...external, accountIndex: 0 }]
+      })
+    ).toThrow()
+    expect(() =>
+      parseStorageV2Snapshot({
+        ...snapshot,
+        chainAccounts: [
+          snapshot.chainAccounts[0],
+          { ...chain, derivation: snapshot.chainAccounts[0].derivation }
+        ]
+      })
+    ).toThrow()
+    for (const badSource of [
+      { ...source, version: 2 },
+      { ...source, network: 'wrong' },
+      { ...source, groupId: '' },
+      { ...source, ufvk: 'private' }
+    ]) {
+      expect(() =>
+        parseStorageV2Snapshot({
+          ...snapshot,
+          accounts: [snapshot.accounts[0], { ...external, source: badSource }]
+        })
+      ).toThrow()
+    }
+    expect(() =>
+      parseStorageV2Snapshot({
+        ...snapshot,
+        chainAccounts: [
+          snapshot.chainAccounts[0],
+          { ...chain, scope: { ...chain.scope, chainId: 'eip155:1' } }
+        ]
+      })
+    ).toThrow()
+    expect(() =>
+      parseStorageV2Snapshot({
+        ...snapshot,
+        chainAccounts: [
+          snapshot.chainAccounts[0],
+          { ...chain, source: { ...source, network: 'testnet' } }
+        ]
+      })
+    ).toThrow()
+  })
+
   test('parses a complete staged generation and freezes its records', () => {
     const parsed = parseStorageV2Snapshot(createSnapshot())
 

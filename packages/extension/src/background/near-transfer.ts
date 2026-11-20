@@ -1,3 +1,4 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { resolveKeyDomain } from '@/core/accounts/application'
 import { nearPublicKeyFromImplicitAccountId } from '@/core/chains/near'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
@@ -6,9 +7,9 @@ import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-setting
 import {
   createAssetRegistry,
   createInitialProductChainRegistry,
-  getBundledInitialProductAssetDefinitions,
-  type AssetDefinitionInput
+  getBundledInitialProductAssetDefinitions
 } from '@/core/chains/registry'
+import type { AssetDefinitionInput } from '@/core/chains/registry'
 import {
   ChromeSessionNearPendingTransferStore,
   createConfiguredNearRpcClient,
@@ -29,10 +30,8 @@ import {
   isSelectedTransferScope,
   requireSelectedTransferNetwork
 } from './transfer-account-network-selection'
-import {
-  BackgroundNearTransferController,
-  type ActiveNearTransferContext
-} from './near-transfer-controller'
+import { BackgroundNearTransferController } from './near-transfer-controller'
+import type { ActiveNearTransferContext } from './near-transfer-controller'
 
 type NearTransferStorageRepository = Pick<
   StorageV2ReadRepository,
@@ -60,6 +59,7 @@ export async function loadActiveNearTransferContext(
     account => account.keyDomainId === active.keyDomainId && account.id === active.accountId
   )
   if (accounts.length !== 1) throw new Error('Active Account metadata is missing or ambiguous')
+  if (!isDerivedAccount(accounts[0])) return null
   const chainAccounts = snapshot.chainAccounts.filter(
     chainAccount =>
       chainAccount.scope.keyDomainId === active.keyDomainId &&
@@ -75,6 +75,7 @@ export async function loadActiveNearTransferContext(
       /^[0-9a-f]{64}$/.test(address.value)
   )?.value
   if (!implicitAddress) throw new Error('Active NEAR Account has no derived implicit address')
+  if (!isDerivedAccount(chainAccounts[0])) return null
   const keyDomain = resolveKeyDomain(snapshot.keyDomains, active.keyDomainId)
   return Object.freeze({
     chainAccount: chainAccounts[0],

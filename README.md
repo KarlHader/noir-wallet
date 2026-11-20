@@ -1,6 +1,6 @@
 # Noir Wallet
 
-A privacy-focused Zcash and multichain Chrome wallet with a dApp SDK.
+A privacy-focused Zcash and multichain Chrome wallet with a dApp SDK
 
 ## Project Structure
 

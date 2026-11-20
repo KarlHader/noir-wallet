@@ -1,12 +1,12 @@
-import type { AccountId, AccountIndex, ChainAccount } from '@/core/accounts/domain'
+import type { AccountId, AccountIndex, DerivedChainAccount } from '@/core/accounts/domain'
 import {
   BITCOIN_MAXIMUM_ADDRESSES_PER_TARGET,
-  parseSupportedBitcoinAddress,
-  type BitcoinSupportedAddressType,
-  type DerivedBitcoinAddress
+  parseSupportedBitcoinAddress
 } from '@/core/chains/bitcoin'
+import type { BitcoinSupportedAddressType, DerivedBitcoinAddress } from '@/core/chains/bitcoin'
 import type { KeyDomainId } from '@/core/keyring/domain'
-import { parseTransactionId, type TransactionId } from '@/core/transactions/domain'
+import { parseTransactionId } from '@/core/transactions/domain'
+import type { TransactionId } from '@/core/transactions/domain'
 import {
   accountKey,
   hasExactKeys,
@@ -27,7 +27,7 @@ export const BITCOIN_CHANGE_RESERVATION_STATES = Object.freeze([
 export type BitcoinChangeReservationState = (typeof BITCOIN_CHANGE_RESERVATION_STATES)[number]
 
 export interface BitcoinChangeReservationScope {
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly accountIndex: AccountIndex
   readonly addressType: BitcoinSupportedAddressType
 }

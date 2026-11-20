@@ -1,5 +1,6 @@
 import {
   parseAccountId,
+  compareAccounts,
   parseAddressId,
   parseChainAccountId,
   type AccountId,
@@ -144,9 +145,7 @@ export class IndexedDbStorageV2Repository implements StorageV2Repository {
     return Object.freeze(
       snapshot.accounts
         .filter(account => account.keyDomainId === parsedKeyDomainId)
-        .sort(
-          (left, right) => left.accountIndex - right.accountIndex || left.id.localeCompare(right.id)
-        )
+        .sort(compareAccounts)
     )
   }
 

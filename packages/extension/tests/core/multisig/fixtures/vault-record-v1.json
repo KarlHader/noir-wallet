@@ -1,0 +1,36 @@
+{
+  "note": "Computed independently from the design doc (section 6.2), not by the implementation. PBKDF2-HMAC-SHA512 BIP39 seed, HKDF-SHA256, AES-256-GCM, AAD = JSON [1, network, groupId].",
+  "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "record": {
+    "version": 1,
+    "network": "testnet",
+    "groupId": "11111111-2222-4333-8444-555555555555",
+    "salt": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "iv": "8PHy8/T19vf4+fr7",
+    "ciphertext": "nUc9Q4rJWrcyQdPL9nYevLmhZJwmB8falGE5xeoUjLEaTKBfydJXqPPAzkgDrDJrPUjnO3qJd47lyT0iqMyZU7AtQkBGa1c497bh71kgo9vPk7dkDPTOZymlk4Zl+r3ovO1YJgv/++gnoZ/D0x6B7DeWG/PMPQpsx5sVLZAPElO/WVJvKxbVJ5KfxsQAhFvkQmRcx+uc/vMbshtFfSnyTUOW5Fg1KeSmQT2ykoxW7Vosw/SjO3/Y3s7GKnMBJQ6RvwOUeITUiwUWktJpmi7SHQ+k0fAPmxDo+D9UwC19o8BZR99rpcgNdGYHVN3b8osgZ7dY52pIFAhd+Uwf4Gh/cgsy+6O4zyFycKHFXKn5uLwk8xXqDDKGX+WrD2Xg8T05OmgTSVBmhjIWmGURzOPPbeISqkLtozcjlQ2Q0mmHedo5k/iNleSh807kznQu6kMjMqkzR8jGGsBjY2amdBQqEuZOfgs2A1C9me614+GlN4/ZIflPPmVFaAaaOpfaXHu7EeW4nUbPJt1yF/SmxCO3UoaUtkkl3pr4dTkcCHenFxHH7iHc8l+0e/JtWqqNlmJg/fXE6YieshD+n0g9i47hOdCfyQ+QyN+jpXDvFgBihNaMJZQ10qFOHKpa+tGch0EpDPjqIhIkMh+vn7aTUaIJSFEQ3kdcVdNIEeDhGm2zN3dJNxV8AErHpMsy0EYfZaoHj81RGQmZV5lPAKi34sHFUx+rRUT6LHb3/wXeO2Mxw6EZo9e7kMDqrZziYy2F3CWz6VLsuZ2QKOaidRd/mueGiF0r/kUMn2tIe53h6EmiLx/fi9bASecnn8VEEireRkyjlDpP4e4AR/dbsYrwSIeCILKHv/sjyamLchyE6FckPkwIKQ4tsTl8ljiGjL5+210F9DmXRVnvNeN5Pgc+D/AU2lzHKk0T+64DePIgpHQ/B1o6x2qedh1PxJijusxCxGN1nx/+5j2KInDkszQ0ofGfCZyG2RbX/qXOVlQUIjaKd874aCuLpdVqUxabHtSWR0JuhmDKbPTagLZ8JydTWA6hfTINOmW63EKUpA/WvwekeUTqpIFpUB07rINj5CVIA5YoeqXMAcFpOtJStWlSvtuGo/5i4oZtExRaw2vLewJ1UoWlmbAaSmTfVDlj6PgWfxhrrrXkkXFGCvWuXzFBOK/5YlM35wt9p4Cc0NXzdNAdHVbF5zSJdYIqc45dIfbHsMl4zRRAxJE8SQkEo9qVsl7/Z36uzEsteGIXs6eO3jRKQ9C10sBR8gw3/51uC6glbpHt8TUQLKRC6mWl573amGQWuEfTTkJ5FU4gpYbK1YNi0fBn+SqrxnuK7gGDe0EPZr0B0XxDwTR6ZgyCXsIvm0kzZpmlFu/Lv2hL8J3eGzjSPuOFBjYrOTsoGXZdSDJLsrTlaBNVLmSpwcQmfDUYSFjduhseP5IvRIGH/C6Lk7TsCS1NBw=="
+  },
+  "header": {
+    "version": 1,
+    "groupId": "11111111-2222-4333-8444-555555555555",
+    "network": "testnet",
+    "participants": 3,
+    "threshold": 2,
+    "rosterSlot": 0,
+    "groupVerifyingKey": "abababababababababababababababababababababababababababababababab",
+    "publicKeyPackage": "AAMGCQwPEhUYGx4hJCcqLTAzNjk8P0JFSEtOUVRXWl1gY2ZpbG9ydXh7foGEh4qNkJOWmZyfoqWoq66xtLe6vcDDxsnMz9LV2Nve4eTn6u3w8/b5/P8CBQgLDhEUFxodICMmKSwvMjU4Oz5BREdKTVBTVllcX2JlaGtucXR3en2Ag4aJjI+SlZibnqGkp6qtsLO2uby/wsXIy87R1Nfa3eDj5uns7/L1+Pv+AQQHCg0QExYZHB8iJSgrLjE0Nzo9QENGSUxPUlVYW15hZGdqbXBzdnl8f4KFiIuOkZSXmp2go6aprK+ytQ==",
+    "fvk": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9g",
+    "ufvk": "uviewtest1vector",
+    "address": "utest1vector",
+    "fingerprint": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+  },
+  "share": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4+rx+P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2/QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd",
+  "mismatchedRecord": {
+    "version": 1,
+    "network": "testnet",
+    "groupId": "11111111-2222-4333-8444-555555555555",
+    "salt": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "iv": "oKGio6Slpqeoqaqr",
+    "ciphertext": "oKgpYMHBtl2cyQGFyMxa7Hz39zKOSztU5acry5yWRWpWDsV46kgedS/I1zifKeDznGKZAt/l8L968fWvPKUg6k4GE3MHhnVqeaEElymT+XaFiW7FaJ+HkmhWYvCX/CLy2l7kG2w5oq8xWHaJoaZExjdoypYeZGhVHnUevYzjB1wVx8Z+z5XYHaXTGYgJV8TB8dF4YHm08Qh4qCIrJ7xpMTutR7wcdakVYz7mwNmKHMGbhwSw6Y05iAJxHDBFAWCXWJCJUb5IbFoUrlF55xjGvG7YQbDwrzKTlvwUe0R0glUofaMnxI73ZXxXGuhNy/NN92S99q8K+0oXtGzdpIXvM7xwvSzaL7DC+V/WVdCENUm2EGtz9g+mh6NFBPPMy+qHH3e/0lWPuHffQn5+5Kx6CX4KXvFwu6yMHWAXVfprqqKjgOhdN4WMfmhWj23n08NbOzbMWawxBVTYNIpezVubB3Tv9vEvgXhciA4334WDrbNnnCbeYADCZRYAQNCkaph+eG20gDvPfcrEKazTOaJzkY1noI+tfqC3/vfAnmNnIEcgxHNPNez7YmbgZk4po0EMNdhcaHPdi4qk/389Yy0IPFVzCRQhpX7HhZdsY3yDWaKeF7Cb2COzEjQOzXYubHp9F2uWBygzkjapnSZ4bO4Iv3GqAKGzbIF2Wz0TrzHSGWcLvKXd54CDgFTcI9W4l9tcbsdmuQC0pY/ZaonSvRSN2+6eYR0L7Yvw/pdHB1iBIzCd6xnKW/RcavbmTLmtkkUdQxITj9IJ5O+DPVVz4DexgV3jMiW1saxJl5sYWqCk+LczOfq4xGh/iMD3Psml7TDpShbk6rhSunTaUCbKI+UQRsIbvcibMiXpIEJ0HwtZCaE4QQ4i669wKaeEnMxHqt54wfWCsCccrMtEkkrXvObWiHE4BUgO3vv/yfI1XsBHUCgR3PFoPuCaQXG/8DwlqULWUdvb5zILgcS5ZXbQqynEcwUfKnIbVjqmvE/Dd5pj+elKMaj+ZKT85AIZHGrSCNKRl93c2PctTZ2qulWbRkzA95oYqRkiGd4LVQpQ8PKheYSfErQGQjJACj4drG0cBjN3c7BYH0Ecut7HZlJ18BFxm4w+w9aLqfe/Bqw6g2TA4CA6mfZtpDuw4C2jueFes0TURt9oiJpfFHdJvgceBg1cvzayD91TnuLmGxKcDYh2sNk8GcEg5h8nsswKaxwbkvc/ycWlfDsM1HVz/MpSFrzDyrLuOpFtkzej8TRtglt7RJpFzhCyPsATzzI1A0AO2BOYgoaP6LnGH2hLmangOmqWfPD85D9N8tPazs1ckdvRLW3x+kUchJQeWYzymYo2vHp8sdZHM6a/iLxDpauo3+KQQ1db4rTv7STW9QNQAJ4c8dPLpYdE7+EqC7GQ5n1D1y6AfTl6MkRrPDWwp+cy67ETf6ir49FNupVRtA4tr63BUj/84w=="
+  },
+  "mismatchedNote": "Authenticates under the same entry (same AAD), but the header inside names another groupId. openVaultRecord must refuse it."
+}

@@ -1,4 +1,6 @@
-import { parseAccountIndex, type AccountIndex, type ChainAccount } from '@/core/accounts/domain'
+import { isDerivedAccount } from '@/core/accounts/domain'
+import { parseAccountIndex } from '@/core/accounts/domain'
+import type { AccountIndex, ChainAccount, DerivedChainAccount } from '@/core/accounts/domain'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import type { KeyDomainSource } from '@/core/keyring/domain'
 import type {
@@ -37,7 +39,7 @@ export type BitcoinDiscoveryStorageRepository = Pick<
 
 export interface ActiveBitcoinDiscoveryContext {
   readonly generationId: StorageV2GenerationId
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly accountIndex: AccountIndex
   readonly keyDomainSource: KeyDomainSource
 }
@@ -94,7 +96,7 @@ function parseMinimumRefreshInterval(value: number | undefined): number {
 function assertBitcoinChainAccount(
   chainAccount: ChainAccount,
   accountIndex: AccountIndex
-): ChainAccount {
+): DerivedChainAccount {
   return parseScope({ chainAccount, accountIndex }).chainAccount
 }
 
@@ -130,6 +132,7 @@ export async function loadActiveBitcoinDiscoveryContext(
   if (accounts.length !== 1) {
     throw new Error('Active Account metadata is missing or ambiguous')
   }
+  if (!isDerivedAccount(accounts[0])) return null
   const accountIndex = parseAccountIndex(accounts[0].accountIndex)
   const candidates = snapshot.chainAccounts.filter(
     chainAccount =>

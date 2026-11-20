@@ -2,12 +2,17 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import {
   commitWalletMetadataDeletion,
+  commitAccountMetadataDeletion,
+  getAccountDeletionRecord,
+  getDeletedAccountIndexes,
+  getPendingAccountCleanups,
   getWalletDeletionRecord,
   markWalletBackupVerified,
   migrateRetainedV1NetworkSelections,
   readWalletMetadata,
   renameRetainedAccountMetadata,
   renameRetainedWalletMetadata,
+  resetWalletMetadata,
   setAccountNetworkSelection,
   writeWalletMetadata
 } from '../../../src/lib/wallet-metadata-storage.ts'
@@ -143,6 +148,101 @@ test.describe('Wallet metadata persistence', () => {
     }
   })
 
+  test('rejects malformed external metadata and stale changes to its immutable account origin', async () => {
+    const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
+    const external = { id: 'external-account', source }
+    const state = { state: { wallets: [{ ...wallet, accounts: [external] }] } }
+    const storage = mockStorage({ wallet_state: state })
+    try {
+      const changed = structuredClone(state)
+      changed.state.wallets[0].accounts[0].source.groupId = 'other-group'
+      await expect(writeWalletMetadata(changed)).rejects.toThrow()
+      const invalid = structuredClone(state)
+      invalid.state.wallets[0].accounts[0].derivationIndex = 0
+      await expect(Promise.resolve().then(() => writeWalletMetadata(invalid))).rejects.toThrow()
+      expect(storage.values.wallet_state).toEqual(state)
+    } finally {
+      storage.restore()
+    }
+  })
+
+  test('a stale store write retains a newly committed external account until deletion', async () => {
+    const source = { kind: 'frost-vault', version: 1, groupId: 'new-group', network: 'mainnet' }
+    const external = { id: 'external-account', source }
+    const stale = { state: { wallets: [wallet], currentWalletId: wallet.id } }
+    const committed = {
+      state: {
+        wallets: [{ ...wallet, accounts: [...wallet.accounts, external] }],
+        currentWalletId: wallet.id,
+        accountDisplayNames: { [`${wallet.id}_${external.id}`]: 'Shared funds' }
+      }
+    }
+    const storage = mockStorage({ wallet_state: committed })
+    try {
+      await writeWalletMetadata(stale)
+      expect((await readWalletMetadata()).state.wallets[0].accounts).toEqual([
+        ...wallet.accounts,
+        external
+      ])
+      expect((await readWalletMetadata()).state.accountDisplayNames).toEqual({
+        [`${wallet.id}_${external.id}`]: 'Shared funds'
+      })
+      await commitAccountMetadataDeletion(wallet.id, external.id, 'mainnet', source)
+      await writeWalletMetadata(stale)
+      expect((await readWalletMetadata()).state.wallets[0].accounts).toEqual(wallet.accounts)
+      expect((await readWalletMetadata()).state.accountDisplayNames).toEqual({})
+    } finally {
+      storage.restore()
+    }
+  })
+
+  test('external deletion retains its source for recovery without reserving an HD index', async () => {
+    const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
+    const external = { id: 'external-account', source }
+    const state = { state: { wallets: [{ ...wallet, accounts: [...wallet.accounts, external] }] } }
+    const storage = mockStorage({ wallet_state: state })
+    try {
+      await expect(
+        commitAccountMetadataDeletion(wallet.id, external.id, 'mainnet', 0)
+      ).rejects.toThrow()
+      await expect(
+        commitAccountMetadataDeletion(wallet.id, external.id, 'mainnet', {
+          ...source,
+          groupId: 'other'
+        })
+      ).rejects.toThrow()
+      await commitAccountMetadataDeletion(wallet.id, external.id, 'mainnet', source)
+      expect(await getAccountDeletionRecord(wallet.id, external.id, 'mainnet')).toEqual(source)
+      expect(await getDeletedAccountIndexes(wallet.id)).toEqual([])
+      expect(await getPendingAccountCleanups()).toEqual([
+        { walletId: wallet.id, accountId: external.id, network: 'mainnet', source }
+      ])
+      expect((await readWalletMetadata()).state.wallets[0].accounts).toEqual(wallet.accounts)
+      await expect(
+        commitAccountMetadataDeletion(wallet.id, external.id, 'testnet', source)
+      ).rejects.toThrow()
+    } finally {
+      storage.restore()
+    }
+  })
+
+  test('external network selections cannot enable another chain or network', async () => {
+    const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
+    const state = { state: { wallets: [{ ...wallet, accounts: [{ id: 'external', source }] }] } }
+    const storage = mockStorage({ wallet_state: state })
+    try {
+      await expect(
+        setAccountNetworkSelection(wallet.id, 'external', 'mainnet', ['zcash', 'evm'])
+      ).rejects.toThrow()
+      await expect(
+        setAccountNetworkSelection(wallet.id, 'external', 'testnet', ['zcash'])
+      ).rejects.toThrow()
+      expect(storage.values.wallet_state).toEqual(state)
+    } finally {
+      storage.restore()
+    }
+  })
+
   test('propagates storage faults without replacing existing wallet metadata', async () => {
     const initial = { wallet_state: { state: { wallets: [wallet] } } }
     const storage = mockStorage(initial)
@@ -168,6 +268,49 @@ test.describe('Wallet metadata persistence', () => {
       expect((await readWalletMetadata()).state.wallets).toEqual([])
       expect(storage.values.wallet_deleted_ids).toContain(wallet.id)
       expect(await getWalletDeletionRecord(wallet.id)).toEqual(['account:0'])
+    } finally {
+      storage.restore()
+    }
+  })
+
+  test('reset deletes protected snapshots under both locks before tombstoning wallets', async () => {
+    const snapshot = { state: { wallets: [wallet], currentWalletId: wallet.id } }
+    const storage = mockStorage({ wallet_state: snapshot })
+    const held = []
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          async request(name, action) {
+            held.push(name)
+            try {
+              return await action()
+            } finally {
+              held.pop()
+            }
+          }
+        }
+      }
+    })
+    try {
+      await expect(
+        resetWalletMetadata(async () => {
+          expect(held).toEqual(['noir-wallet-metadata', 'noir-multisig-storage'])
+          expect(storage.values.wallet_state).toEqual(snapshot)
+          throw new Error('protected snapshot cleanup failed')
+        })
+      ).rejects.toThrow('protected snapshot cleanup failed')
+      expect(storage.values.wallet_state).toEqual(snapshot)
+      expect(storage.values.wallet_deleted_ids).toBeUndefined()
+
+      let deleted = false
+      await resetWalletMetadata(async () => {
+        deleted = true
+        expect(held).toEqual(['noir-wallet-metadata', 'noir-multisig-storage'])
+      })
+      expect(deleted).toBe(true)
+      expect(storage.values.wallet_deleted_ids).toContain(wallet.id)
+      expect(storage.values.wallet_state.state.wallets).toEqual([])
     } finally {
       storage.restore()
     }

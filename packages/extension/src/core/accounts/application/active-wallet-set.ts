@@ -1,4 +1,6 @@
 import type { Account, Address, ChainAccount } from '@/core/accounts/domain'
+import { isDerivedAccount, isFrostAccount } from '@/core/accounts/domain/account-source'
+import { accountSupportsChain } from './account-capability-policy'
 import {
   hasAvailableAddressCapability,
   hasCompleteChainCapabilities,
@@ -14,6 +16,7 @@ import {
   keySourceSupportsChainFamily,
   resolveKeyDomain
 } from './key-source-chain-policy'
+import { projectLegacyFrostAddressScheme } from './legacy-frost-address'
 
 type ActiveWalletSetRepository = Pick<StorageV2ReadRepository, 'getActivePointer' | 'getSnapshot'>
 
@@ -45,7 +48,10 @@ function requireAvailableChainAccount(
   chainAccount: ChainAccount,
   addresses: readonly Address[]
 ): AvailableChainAccount {
-  if (!chain.capabilities.address.derivationSchemes.includes(chainAccount.derivation.scheme)) {
+  if (
+    isDerivedAccount(chainAccount) &&
+    !chain.capabilities.address.derivationSchemes.includes(chainAccount.derivation.scheme)
+  ) {
     throw new Error('Active ChainAccount uses an unavailable derivation scheme')
   }
   if (addresses.length === 0 || !addresses.some(address => address.preferredForReceive)) {
@@ -113,14 +119,29 @@ async function loadActiveWalletSetForCapability(
         if (
           !chain ||
           !activeKeyDomain ||
+          !activeAccount ||
+          !accountSupportsChain(activeAccount, chain) ||
+          (isFrostAccount(activeAccount) &&
+            (!isFrostAccount(chainAccount) ||
+              chainAccount.source.groupId !== activeAccount.source.groupId ||
+              chainAccount.source.network !== activeAccount.source.network)) ||
+          !accountSupportsChain(chainAccount, chain) ||
           !input.sourceSupports(activeKeyDomain.source, chain.family) ||
           !input.isAvailable(chain)
         ) {
           return []
         }
-        const addresses = snapshot.addresses.filter(
-          address => address.chainAccountId === chainAccount.id
-        )
+        const addresses = snapshot.addresses
+          .filter(address => address.chainAccountId === chainAccount.id)
+          .map(address => {
+            const scheme = projectLegacyFrostAddressScheme(
+              activeAccount,
+              chainAccount,
+              chain,
+              address
+            )
+            return scheme === address.scheme ? address : Object.freeze({ ...address, scheme })
+          })
         return [requireAvailableChainAccount(chain, chainAccount, addresses)]
       })
     : []

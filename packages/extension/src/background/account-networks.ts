@@ -1,8 +1,14 @@
-import type { AccountId } from '@/core/accounts/domain'
+import {
+  isDerivedAccount,
+  isFrostAccount,
+  type AccountSource,
+  type AccountId
+} from '@/core/accounts/domain'
 import {
   keySourceSupportsAddressFamily,
   loadActiveReceiveWalletSet,
-  resolveKeyDomain
+  resolveKeyDomain,
+  accountSupportsChain
 } from '@/core/accounts/application'
 import type { WalletDAppActiveAccount } from './wallet-dapp-connection'
 import {
@@ -22,6 +28,7 @@ import { parseEvmAccountBinding } from '@/infrastructure/chains/evm'
 import type { StorageV2GenerationId, StorageV2ReadRepository } from '@/ports/repositories'
 import type { AccountNetworkFamily } from '@/core/wallet/account-network-selection'
 import { isStoredAccountNetworkEnabled } from '@/lib/wallet-metadata-storage'
+import { projectLegacyFrostAddressScheme } from '@/core/accounts/application/legacy-frost-address'
 
 type AccountNetworksRepository = Pick<StorageV2ReadRepository, 'getActivePointer' | 'getSnapshot'>
 
@@ -39,7 +46,7 @@ export interface AccountNetworkSummary {
   readonly privateExecutionAddress?: string
 }
 
-export interface AccountNetworksSummary {
+interface AccountNetworksSummaryCommon {
   readonly walletId: KeyDomainId
   readonly walletDisplayName: string
   readonly walletCreatedAt: number
@@ -53,10 +60,15 @@ export interface AccountNetworksSummary {
     | Readonly<{ readonly kind: 'hardware'; readonly hardware: HardwareCredentialMetadata }>
   readonly accountId: AccountId
   readonly accountDisplayName: string
-  readonly accountIndex: number
   readonly active: boolean
   readonly networks: readonly AccountNetworkSummary[]
 }
+
+export type AccountNetworksSummary = AccountNetworksSummaryCommon &
+  (
+    | { readonly source?: never; readonly accountIndex: number }
+    | { readonly source: AccountSource; readonly accountIndex?: never }
+  )
 
 export interface AccountNetworksCatalog {
   readonly generationId: StorageV2GenerationId
@@ -98,6 +110,12 @@ export class AccountNetworksCoordinator {
     })
     const selection = active?.catalog.activeAccount
     if (!selection) return null
+    if (active.activeAccount && isFrostAccount(active.activeAccount)) {
+      return {
+        reference: { walletId: selection.keyDomainId, accountId: selection.accountId },
+        chainIds: []
+      }
+    }
     return {
       reference: { walletId: selection.keyDomainId, accountId: selection.accountId },
       chainIds: (
@@ -164,7 +182,15 @@ export class AccountNetworksCoordinator {
               )
               .map(async chainAccount => {
                 const chain = this.options.chains.get(chainAccount.scope.chainId)
-                if (!chain || !keySourceSupportsAddressFamily(keyDomain.source, chain.family))
+                if (
+                  !chain ||
+                  !keySourceSupportsAddressFamily(keyDomain.source, chain.family) ||
+                  !accountSupportsChain(account, chain) ||
+                  !accountSupportsChain(chainAccount, chain) ||
+                  (isFrostAccount(account) &&
+                    (!isFrostAccount(chainAccount) ||
+                      chainAccount.source.groupId !== account.source.groupId))
+                )
                   return []
                 if (
                   !(await this.networkEnabled(
@@ -191,29 +217,38 @@ export class AccountNetworksCoordinator {
                       address.chainAccountId === chainAccount.id &&
                       address.purpose !== 'change' &&
                       (address.purpose === 'receive' || address.preferredForReceive) &&
-                      chain.capabilities.address.addressSchemes.includes(address.scheme)
+                      chain.capabilities.address.addressSchemes.includes(
+                        projectLegacyFrostAddressScheme(account, chainAccount, chain, address)
+                      )
                   )
                   .sort(
                     (left, right) =>
                       Number(right.preferredForReceive) - Number(left.preferredForReceive)
                   )
-                  .map(address =>
-                    Object.freeze({
+                  .map(address => {
+                    const scheme = projectLegacyFrostAddressScheme(
+                      account,
+                      chainAccount,
+                      chain,
+                      address
+                    )
+                    return Object.freeze({
                       value:
                         selectedShielded &&
-                        address.scheme === 'zcash-shielded-unified' &&
+                        scheme === 'zcash-shielded-unified' &&
                         address.preferredForReceive
                           ? selectedShielded
                           : address.value,
-                      scheme: address.scheme,
+                      scheme,
                       privacy: address.privacy,
                       preferredForReceive: address.preferredForReceive
                     })
-                  )
+                  })
 
                 const bitcoinDerivation = this.options.bitcoinDerivation
                 if (
                   chain.family === 'bitcoin' &&
+                  isDerivedAccount(account) &&
                   keyDomain.source.kind === 'software' &&
                   bitcoinDerivation &&
                   deriveMissingAddresses
@@ -267,6 +302,7 @@ export class AccountNetworksCoordinator {
                 const evmPeaDerivation = this.options.evmPeaDerivation
                 if (
                   chain.family === 'evm' &&
+                  isDerivedAccount(account) &&
                   supportsEvmPrivateExecution(keyDomain.source) &&
                   evmPeaDerivation &&
                   deriveMissingAddresses
@@ -300,7 +336,7 @@ export class AccountNetworksCoordinator {
                   Object.freeze({
                     chainId: chain.id,
                     addresses: Object.freeze(addresses),
-                    ...(chain.family === 'zcash'
+                    ...(chain.family === 'zcash' && isDerivedAccount(chainAccount)
                       ? { accountDerivationPath: chainAccount.derivation.path }
                       : {}),
                     ...(privateExecutionAddress === undefined ? {} : { privateExecutionAddress })
@@ -341,7 +377,9 @@ export class AccountNetworksCoordinator {
                   }),
           accountId: account.id,
           accountDisplayName: account.displayName,
-          accountIndex: account.accountIndex,
+          ...(isFrostAccount(account)
+            ? { source: account.source }
+            : { accountIndex: account.accountIndex }),
           active:
             snapshot.manifest.activeAccount?.keyDomainId === account.keyDomainId &&
             snapshot.manifest.activeAccount.accountId === account.id,

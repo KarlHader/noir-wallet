@@ -266,7 +266,7 @@ html[data-surface='side-panel'] #root {
   color: var(--color-private);
 }
 
-/* Full browser tab (hardware wallet flows): show the app as a centered card */
+/* Full browser tab (hardware wallet and multisig flows): show the app as a centered card */
 @media (min-width: 600px) {
   html:not([data-surface='side-panel']),
   html:not([data-surface='side-panel']) body,
@@ -287,7 +287,7 @@ html[data-surface='side-panel'] #root {
     overflow: hidden;
   }
 
-  /* Hardware flows open in a full browser tab: fill the tab with the app
+  /* Hardware and multisig flows open in a full browser tab: fill the tab with the app
      background (no floating card) and center content in a readable column. */
   html:not([data-surface='side-panel']) .page-container--tab {
     max-width: 100%;
@@ -302,6 +302,15 @@ html[data-surface='side-panel'] #root {
   html:not([data-surface='side-panel']) .page-container--tab > .page-content,
   html:not([data-surface='side-panel']) .page-container--tab > .page-footer {
     width: 100%;
+    max-width: 440px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* Dialogs portal to <body>, outside the tab page, so a bottom sheet repeats the column here. */
+  html:not([data-surface='side-panel'])
+    body:has(.page-container--tab)
+    [data-slot='dialog-content'][data-position='bottom'] {
     max-width: 440px;
     margin-left: auto;
     margin-right: auto;

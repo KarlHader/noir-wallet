@@ -3,6 +3,7 @@ import { expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { proveHardwarePczt } from '../../../src/core/zcash/hardware-pczt.ts'
+import { isDerivedAccount } from '../../../src/core/accounts/domain/account-source.ts'
 
 import {
   consumePreparedHardwareSignRequest,
@@ -89,6 +90,7 @@ function loadHardwarePcztBuild(walletCore, keySource = 'ledger') {
   return new Function(
     'assertActiveBackgroundAccountScope',
     'useWalletStore',
+    'isDerivedAccount',
     'isZcashHardwareKeySource',
     'readLedgerProvisioningCredential',
     'withTxSyncPause',
@@ -102,6 +104,7 @@ function loadHardwarePcztBuild(walletCore, keySource = 'ledger') {
   )(
     async () => {},
     { getState: () => ({ getWallet: () => ({ keySource, accounts: [account] }) }) },
+    isDerivedAccount,
     source => source === 'ledger' || source === 'keystone',
     async () => ({}),
     async (_, task) => task(),

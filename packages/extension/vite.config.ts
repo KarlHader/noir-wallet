@@ -65,6 +65,15 @@ if (rheaSwapAccessToken.length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(rhe
 }
 const historyApiOrigin = resolveHistoryApiOrigin(process.env.EVM_HISTORY_API_ORIGIN, buildChannel)
 const isExtensionDevServer = process.env.EXTENSION_DEV_SERVER === '1' && !isPlaywrightBuild
+// The multisig mock transport must stay out of release builds; FROST_MULTISIG_UI=1 opts a build in.
+// scripts/verify-build-surface.mjs enforces the same rule on the output, so keep the two in step.
+if (buildChannel === 'production' && process.env.FROST_MULTISIG_UI === '1') {
+  throw new Error('FROST_MULTISIG_UI cannot be enabled on the production channel')
+}
+const frostMultisigUiEnabled =
+  buildChannel !== 'production' &&
+  (process.env.FROST_MULTISIG_UI === '1' ||
+    (process.env.FROST_MULTISIG_UI === undefined && isExtensionDevServer))
 const extensionUpdatesEnabled = buildChannel === 'production' || isPlaywrightBuild
 const e2eBuildProfile = process.env.E2E_BUILD_PROFILE ?? `${networkMode}-default`
 if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(e2eBuildProfile)) {
@@ -166,6 +175,7 @@ export default defineConfig({
       process.env.CONFIDENTIAL_ONE_CLICK_API_URL ?? ''
     ),
     __ENABLED_CHAIN_FEATURE_FLAGS__: JSON.stringify(enabledChainFeatureFlags),
+    __FROST_MULTISIG_UI__: JSON.stringify(frostMultisigUiEnabled),
     'import.meta.env.NOIR_PROVIDER_ICON_DATA_URL': JSON.stringify(providerIconDataUrl),
     'import.meta.env.NOIR_WALLET_RDNS': JSON.stringify(NOIR_WALLET_RDNS),
     'import.meta.env.NOIR_APP_VERSION': JSON.stringify(version),
@@ -320,6 +330,11 @@ export default defineConfig({
     },
     {
       name: 'configure-headers',
+      buildStart() {
+        this.info(
+          `[Noir Wallet] Chrome extension directory: ${path.resolve(__dirname, buildOutDir)}`
+        )
+      },
       configureServer(server) {
         server.config.logger.info(
           `[Noir Wallet] Chrome extension directory: ${path.resolve(__dirname, buildOutDir)}`

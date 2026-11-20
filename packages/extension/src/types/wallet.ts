@@ -5,6 +5,7 @@
 export type Network = 'mainnet' | 'testnet'
 
 import type { AccountNetworkFamily } from '@/core/wallet/account-network-selection'
+import type { AccountSource } from '@/core/accounts/domain/account-source'
 
 export type AddressType = 'transparent' | 'shielded'
 export type FundingSource = AddressType
@@ -46,7 +47,7 @@ export interface ShieldedReceiveAddress {
 /**
  * Account data
  */
-export interface AccountData {
+interface AccountDataCommon {
   id: string
   name: string
   /** Network-scoped Zcash addresses. `addresses` is the active-network projection. */
@@ -64,11 +65,15 @@ export interface AccountData {
   /** V1 migration input; promoted into the network-scoped history on hydration. */
   shieldedAddressHistory?: ShieldedReceiveAddress[]
   addresses: AccountAddresses
-  derivationIndex: number
   birthdayHeight: number
   isPinned: boolean
   isHidden: boolean
 }
+
+export type AccountData = AccountDataCommon &
+  ({ source?: never; derivationIndex: number } | { source: AccountSource; derivationIndex?: never })
+export type DerivedAccountData = Extract<AccountData, { source?: never }>
+export type FrostAccountData = Extract<AccountData, { source: AccountSource }>
 
 export type KeySource = 'software' | 'private-key' | 'keystone' | 'ledger'
 

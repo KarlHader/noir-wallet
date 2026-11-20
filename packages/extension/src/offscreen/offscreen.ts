@@ -11,11 +11,23 @@ import {
   zcashWorkerBroadcastResult
 } from '@/lib/transaction-replacement'
 import {
+  getWalletPersistenceQuarantine,
   loadWalletDb,
   mutateTransactions,
   quarantineWalletPersistence,
   saveWalletDb
 } from '@/lib/indexed-db'
+import {
+  saveVerifiedMultisigSnapshot,
+  verifyMultisigSnapshot
+} from '@/lib/multisig-transaction-snapshot'
+import { createMultisigFinalizationBridgeClient } from './multisig-finalization-bridge-client'
+import {
+  createMultisigFinalizationExclusion,
+  finalizeMultisigWithSnapshot,
+  saveAndReadbackMainWalletSnapshot,
+  submitMultisigOnce
+} from './multisig-finalization'
 import {
   registerOffscreenSyncAbortListener,
   isSyncAbortRequested,
@@ -23,7 +35,7 @@ import {
   signalSyncAbort
 } from '@/lib/sync-abort'
 import { WALLET_CONFIG } from '@/config/wallet'
-import { TimeoutError } from '@/lib/async-utils'
+import { TimeoutError, withTimeout } from '@/lib/async-utils'
 import { sanitizeDiagnosticMessage } from '@/lib/diagnostic-log'
 import { logDebugTiming } from '@/lib/debug-performance'
 import type { Network } from '@/types'
@@ -180,6 +192,11 @@ const activeSyncSessionByWallet = new Map<string, SyncSessionEntry>()
 const syncOwnerByWallet = new Map<string, SyncOwner>()
 const walletGenerationByWallet = new Map<string, number>()
 const dirtyWalletsByWallet = new Set<string>()
+const multisigFinalization = createMultisigFinalizationExclusion()
+const multisigFinalizationBridge = createMultisigFinalizationBridgeClient()
+const unsafeMultisigWallets = new Set<string>()
+const checkedMultisigWallets = new Map<string, Promise<boolean>>()
+const activeWalletOperations = new Map<string, Set<Promise<unknown>>>()
 const PENDING_INIT_STALE_MS = WALLET_CONFIG.SYNC.ORPHAN_SESSION_TTL_MS
 const syncSessionStartedAt = new Map<string, number>()
 
@@ -192,6 +209,76 @@ type WalletLaneEntry = {
 }
 
 const walletLaneByWallet = new Map<string, WalletLaneEntry>()
+
+function trackWalletOperation<T>(walletId: string, operation: Promise<T>): Promise<T> {
+  const active = activeWalletOperations.get(walletId) ?? new Set<Promise<unknown>>()
+  active.add(operation)
+  activeWalletOperations.set(walletId, active)
+  void operation
+    .finally(() => {
+      active.delete(operation)
+      if (active.size === 0) activeWalletOperations.delete(walletId)
+    })
+    .catch(() => {})
+  return operation
+}
+
+async function waitForWalletOperations(walletId: string): Promise<void> {
+  await Promise.allSettled([...(activeWalletOperations.get(walletId) ?? [])])
+}
+
+async function isMultisigWalletUnsafe(walletId: string): Promise<boolean> {
+  if (unsafeMultisigWallets.has(walletId)) return true
+  let checked = checkedMultisigWallets.get(walletId)
+  if (!checked) {
+    checked = (async () => {
+      for (const network of ['mainnet', 'testnet'] as const) {
+        if (await multisigFinalizationBridge.hasBarrier({ network, walletId })) {
+          unsafeMultisigWallets.add(walletId)
+          return true
+        }
+        const quarantine = await getWalletPersistenceQuarantine(`${network}_${walletId}`)
+        if (quarantine?.reasons.includes('multisig-finalization-failed')) {
+          unsafeMultisigWallets.add(walletId)
+          return true
+        }
+      }
+      return false
+    })()
+    checkedMultisigWallets.set(walletId, checked)
+    void checked.catch(() => checkedMultisigWallets.delete(walletId))
+  }
+  return checked
+}
+
+async function assertNoPendingFinalizationBarrier(walletId: string): Promise<void> {
+  if (unsafeMultisigWallets.has(walletId))
+    throw new Error('Multisig wallet requires verified recovery')
+  for (const network of ['mainnet', 'testnet'] as const)
+    if (await multisigFinalizationBridge.hasBarrier({ network, walletId }))
+      throw new Error('Multisig wallet requires verified recovery')
+}
+
+async function quarantineFailedMultisigFinalization(
+  walletId: string,
+  network: 'mainnet' | 'testnet'
+) {
+  unsafeMultisigWallets.add(walletId)
+  markWalletDirty(walletId)
+  try {
+    await quarantineWalletPersistence({
+      key: `${network}_${walletId}`,
+      network,
+      walletId,
+      reason: 'multisig-finalization-failed',
+      snapshot: false,
+      journal: true
+    })
+  } finally {
+    // A timed-out finalizer may still be mutating its MemoryWalletDb.
+    await credentialSessionHost.invalidateForWorkerRestart()
+  }
+}
 
 function getWalletLane(walletId: string): WalletLaneEntry | undefined {
   return walletLaneByWallet.get(walletId)
@@ -969,6 +1056,7 @@ async function restoreWalletFromPersistedDb(walletId: string): Promise<boolean> 
 }
 
 async function persistWalletDbAfterTransaction(walletId: string): Promise<void> {
+  await assertNoPendingFinalizationBarrier(walletId)
   const payload = initPayloadsByWallet.get(walletId) ?? null
   if (!payload?.dbKey) {
     offscreenWarn('No persisted DB key available after transaction', walletId)
@@ -1024,15 +1112,24 @@ async function persistBroadcastHashSafely(
 
 zcashWorkerClient.onLateTransactionResult = async event => {
   const { method, walletId, transactionContext, response } = event
-  const error = response.error ? decodeWorkerRpcError(response as { error: string }) : undefined
-  if (!error) {
-    await persistBroadcastHashSafely(method, walletId, transactionContext, response.result)
-  }
-  if (!error || isTransactionSubmissionUnknown(error)) {
-    await persistWalletDbAfterTransaction(walletId).catch(() => {
-      offscreenWarn('Failed to persist wallet after late transaction result', walletId)
-    })
-  }
+  return trackWalletOperation(
+    walletId,
+    (async () => {
+      const error = response.error ? decodeWorkerRpcError(response as { error: string }) : undefined
+      if (!error) {
+        await persistBroadcastHashSafely(method, walletId, transactionContext, response.result)
+      }
+      if (!error || isTransactionSubmissionUnknown(error)) {
+        try {
+          if (multisigFinalization.isBusy(walletId) || (await isMultisigWalletUnsafe(walletId)))
+            return
+          await persistWalletDbAfterTransaction(walletId)
+        } catch {
+          offscreenWarn('Failed to persist wallet after late transaction result', walletId)
+        }
+      }
+    })()
+  )
 }
 
 function sendRetryableError(
@@ -1060,8 +1157,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ error: 'Invalid Worker RPC message' })
     return true
   }
-  message = rpcMessage
-  const transactionContext = rpcMessage.transactionContext
+  const walletId = getMessageWalletId(rpcMessage)
+  if (typeof walletId === 'string' && walletId.length > 0) {
+    void isMultisigWalletUnsafe(walletId)
+      .then(unsafe => {
+        if (unsafe || unsafeMultisigWallets.has(walletId)) {
+          sendResponse({ error: 'Multisig wallet requires verified recovery' })
+          return
+        }
+        dispatchTrackedWalletRpc(rpcMessage, walletId, sendResponse)
+      })
+      .catch(() => sendResponse({ error: 'Multisig wallet recovery state is unavailable' }))
+    return true
+  }
+  return dispatchTrustedWorkerRpc(rpcMessage, sendResponse)
+})
+
+function dispatchTrackedWalletRpc(
+  message: any,
+  walletId: string,
+  sendResponse: (response: unknown) => void
+): void {
+  if (
+    message.method === 'vault.sign.worker.finalize' ||
+    message.method === 'vault.sign.worker.submit'
+  ) {
+    dispatchTrustedWorkerRpc(message, sendResponse)
+    return
+  }
+  let complete!: () => void
+  const pending = new Promise<void>(resolve => {
+    complete = resolve
+  })
+  void trackWalletOperation(walletId, pending)
+  try {
+    dispatchTrustedWorkerRpc(message, response => {
+      complete()
+      sendResponse(response)
+    })
+  } catch (error) {
+    complete()
+    throw error
+  }
+}
+
+function dispatchTrustedWorkerRpc(
+  message: any,
+  sendResponse: (response: unknown) => void
+): boolean {
+  const transactionContext = message.transactionContext
 
   if (message.method === 'session.unlock') {
     if (!hasExactRuntimeKeys(message.payload, ['input'])) {
@@ -1247,6 +1391,222 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ? message.payload.debugRequestId
       : undefined
   const diagnosticStartedAt = performance.now()
+
+  if (
+    typeof rpcWalletId === 'string' &&
+    multisigFinalization.isBusy(rpcWalletId) &&
+    message.method !== 'vault.sign.worker.finalize'
+  ) {
+    sendRetryableError(sendResponse, 'MULTISIG_FINALIZATION_BUSY', rpcWalletId)
+    return true
+  }
+
+  if (message.method === 'vault.sign.worker.finalize') {
+    const walletId = rpcWalletId
+    if (
+      typeof walletId !== 'string' ||
+      !hasExactRuntimeKeys(message.payload, ['walletId', 'accountId', 'reviewId', 'sessionId']) ||
+      typeof message.payload.accountId !== 'string'
+    ) {
+      sendResponse({ error: 'Invalid multisig finalization request' })
+      return true
+    }
+    if (multisigFinalization.isBusy(walletId)) {
+      sendRetryableError(sendResponse, 'MULTISIG_FINALIZATION_BUSY', walletId)
+      return true
+    }
+    const payload = initPayloadsByWallet.get(walletId)
+    if (
+      !payload ||
+      (payload.network !== 'mainnet' && payload.network !== 'testnet') ||
+      payload.dbKey !== `${payload.network}_${walletId}`
+    ) {
+      sendResponse({ error: 'Multisig wallet snapshot is unavailable' })
+      return true
+    }
+    void multisigFinalization
+      .run(walletId, async () => {
+        if (await isMultisigWalletUnsafe(walletId))
+          throw new Error('Multisig wallet requires recovery')
+        const generation = getWalletGeneration(walletId)
+        await withTimeout(
+          waitForSyncOperationsWithGeneration(walletId, generation),
+          30_000,
+          'Multisig finalization sync wait'
+        )
+        await withTimeout(
+          waitForWalletOperations(walletId),
+          30_000,
+          'Multisig finalization operation wait'
+        )
+        assertWalletGeneration(walletId, generation)
+        if (isWalletDirty(walletId)) throw new Error('Multisig wallet requires recovery')
+        const finalizationRef = {
+          network: payload.network,
+          walletId,
+          accountId: message.payload.accountId,
+          reviewId: message.payload.reviewId,
+          sessionId: message.payload.sessionId
+        }
+        let barrierAttempted = false
+        try {
+          const result = await finalizeMultisigWithSnapshot(
+            { walletId, accountId: message.payload.accountId, network: payload.network },
+            {
+              beginBarrier: () => {
+                barrierAttempted = true
+                return multisigFinalizationBridge.beginBarrier(finalizationRef)
+              },
+              finalize: () => {
+                return zcashWorkerClient.requestToWorker(
+                  'vault.sign.worker.finalize',
+                  message.payload
+                )
+              },
+              recordReceipt: (receipt, marker) =>
+                multisigFinalizationBridge.recordReceipt(finalizationRef, marker, {
+                  txId: receipt.txId,
+                  rawTxSha256: receipt.rawTxSha256,
+                  rawTxLen: receipt.rawTxLen
+                }),
+              snapshot: async () =>
+                toDbChunks(
+                  await zcashWorkerClient.requestToWorker('wallet.dbToBytes', { walletId })
+                ),
+              saveVerifiedSnapshot: saveVerifiedMultisigSnapshot,
+              recordProtectedSnapshot: (receipt, marker) =>
+                multisigFinalizationBridge.recordProtected(finalizationRef, marker, {
+                  txId: receipt.txId,
+                  snapshotSha256: receipt.snapshotSha256
+                }),
+              saveVerifiedMainSnapshot: ({ chunks }) =>
+                saveAndReadbackMainWalletSnapshot(payload.dbKey!, chunks, {
+                  saveWalletDb,
+                  loadWalletDb
+                }),
+              assertStable: () => assertWalletGeneration(walletId, generation),
+              recordDurableFinalization: (receipt, marker) =>
+                multisigFinalizationBridge.recordDurable(finalizationRef, marker, {
+                  txId: receipt.txId,
+                  snapshotSha256: receipt.snapshotSha256
+                }),
+              clearBarrier: marker =>
+                multisigFinalizationBridge.clearBarrier(finalizationRef, marker)
+            }
+          )
+          assertWalletGeneration(walletId, generation)
+          return result
+        } catch (error) {
+          if (barrierAttempted)
+            await quarantineFailedMultisigFinalization(walletId, payload.network)
+          throw error
+        }
+      })
+      .then(result => sendResponse({ result }))
+      .catch(() => {
+        if (unsafeMultisigWallets.has(walletId)) {
+          sendResponse({ error: 'Multisig finalization failed; wallet recovery is required' })
+          return
+        }
+        sendRetryableError(sendResponse, 'MULTISIG_FINALIZATION_BUSY', walletId)
+      })
+    return true
+  }
+
+  if (message.method === 'vault.sign.worker.submit') {
+    const walletId = rpcWalletId
+    if (
+      typeof walletId !== 'string' ||
+      !hasExactRuntimeKeys(message.payload, [
+        'walletId',
+        'accountId',
+        'reviewId',
+        'sessionId',
+        'txId',
+        'rawTxSha256',
+        'rawTxLen',
+        'network',
+        'snapshotSha256'
+      ]) ||
+      typeof message.payload.accountId !== 'string'
+    ) {
+      sendResponse({ error: 'Invalid multisig submission request' })
+      return true
+    }
+    if (multisigFinalization.isBusy(walletId)) {
+      sendRetryableError(sendResponse, 'MULTISIG_FINALIZATION_BUSY', walletId)
+      return true
+    }
+    const payload = initPayloadsByWallet.get(walletId)
+    if (
+      !payload?.dbKey ||
+      (payload.network !== 'mainnet' && payload.network !== 'testnet') ||
+      payload.dbKey !== `${payload.network}_${walletId}` ||
+      message.payload.network !== payload.network
+    ) {
+      sendResponse({ error: 'Multisig submission outcome is unknown' })
+      return true
+    }
+    void multisigFinalization
+      .run(walletId, async () => {
+        if (await isMultisigWalletUnsafe(walletId))
+          throw new Error('Multisig wallet requires recovery')
+        const generation = getWalletGeneration(walletId)
+        await withTimeout(
+          waitForSyncOperationsWithGeneration(walletId, generation),
+          30_000,
+          'Multisig submission sync wait'
+        )
+        await withTimeout(
+          waitForWalletOperations(walletId),
+          30_000,
+          'Multisig submission operation wait'
+        )
+        assertWalletGeneration(walletId, generation)
+        try {
+          await verifyMultisigSnapshot({
+            network: payload.network,
+            walletId,
+            accountId: message.payload.accountId,
+            txId: message.payload.txId,
+            snapshotSha256: message.payload.snapshotSha256
+          })
+          const result = await submitMultisigOnce({
+            submit: async () => {
+              const submitted = await zcashWorkerClient.requestToWorker(
+                'vault.sign.worker.submit',
+                message.payload
+              )
+              if (
+                !submitted ||
+                !['broadcast', 'submission_unknown'].includes(submitted.phase) ||
+                submitted.txId !== message.payload.txId ||
+                !Array.isArray(submitted.outbound)
+              )
+                throw new Error('Invalid multisig submission result')
+              return submitted
+            },
+            saveMainSnapshot: async () => {
+              const chunks = toDbChunks(
+                await zcashWorkerClient.requestToWorker('wallet.dbToBytes', { walletId })
+              )
+              await saveAndReadbackMainWalletSnapshot(payload.dbKey!, chunks, {
+                saveWalletDb,
+                loadWalletDb
+              })
+            }
+          })
+          assertWalletGeneration(walletId, generation)
+          return result
+        } catch (error) {
+          await quarantineFailedMultisigFinalization(walletId, payload.network)
+          throw error
+        }
+      })
+      .then(result => sendResponse({ result }))
+      .catch(() => sendResponse({ error: 'Multisig submission outcome is unknown' }))
+    return true
+  }
 
   if (message.method === 'worker.recreate') {
     void credentialSessionHost
@@ -1633,7 +1993,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       key: string
       allowDuringSyncSession?: boolean
     }
-    ;(async () => {
+    const persistOperation = (async () => {
       if (walletId && !allowDuringSyncSession) {
         const generationBefore = getWalletGeneration(walletId)
         try {
@@ -1671,6 +2031,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             : `persistDb: saving ${totalBytes} bytes for key: ${key}`,
           walletId
         )
+        await assertNoPendingFinalizationBarrier(walletId)
         await saveWalletDb(key, chunks)
         sendResponse({ result: true })
       } catch (error: any) {
@@ -1678,6 +2039,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ error: error?.message || String(error) })
       }
     })()
+    if (walletId) void trackWalletOperation(walletId, persistOperation).catch(() => {})
     return true
   }
 
@@ -1714,7 +2076,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
 
-  ;(async () => {
+  const rpcOperation = (async () => {
     if (rpcWalletId && message.method !== 'wallet.reset' && isWalletDirty(rpcWalletId)) {
       const isMutation = isTransactionMutation(message.method)
       // Transaction mutations must never run on a stale in-memory wallet, so we
@@ -1867,9 +2229,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     }
   })()
+  if (rpcWalletId) void trackWalletOperation(rpcWalletId, rpcOperation).catch(() => {})
 
   return true
-})
+}
 
 setTimeout(() => {
   setupLogForwarding()

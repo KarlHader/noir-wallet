@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 
 import {
   listKeySourceAllowedAccountScopes,
+  assertAccountOperationAllowed,
   loadActiveReceiveWalletSet,
   loadActiveWalletSet
 } from '../../../src/core/accounts/application/index.ts'
@@ -224,6 +225,46 @@ function repository(activeSnapshot = snapshot(), pointerOverrides = {}) {
 }
 
 test.describe('Active Wallet Set reader', () => {
+  test('external accounts expose only their own Zcash network and no HD path', async () => {
+    const value = snapshot()
+    const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
+    delete value.accounts[0].accountIndex
+    value.accounts[0].source = source
+    delete value.chainAccounts[0].derivation
+    value.chainAccounts[0].source = source
+    const result = await loadActiveReceiveWalletSet({
+      repository: repository(value),
+      chainRegistry: activeAddressRegistry(['chain.zcash', 'chain.evm', 'chain.bitcoin'])
+    })
+    expect(result.availableChainAccounts.map(item => item.chain.family)).toEqual(['zcash'])
+    value.chainAccounts[0].source = { ...source, network: 'testnet' }
+    expect(
+      (
+        await loadActiveReceiveWalletSet({
+          repository: repository(value),
+          chainRegistry: activeAddressRegistry(['chain.zcash'])
+        })
+      ).availableChainAccounts
+    ).toEqual([])
+    for (const operation of ['receive', 'balance', 'history', 'sync', 'multisig-send']) {
+      expect(() => assertAccountOperationAllowed({ source }, operation, 'mainnet')).not.toThrow()
+      expect(() => assertAccountOperationAllowed({ source }, operation, 'testnet')).toThrow()
+    }
+    for (const operation of [
+      'send',
+      'shield',
+      'unshield',
+      'sign-message',
+      'dapp-sign',
+      'lending',
+      'swap',
+      'derive'
+    ]) {
+      expect(() => assertAccountOperationAllowed({ source }, operation, 'mainnet')).toThrow()
+      expect(() => assertAccountOperationAllowed({}, operation, 'mainnet')).not.toThrow()
+    }
+  })
+
   test('loads the generation-bound active Account and only released ChainAccounts', async () => {
     const result = await loadActiveWalletSet({
       repository: repository(),

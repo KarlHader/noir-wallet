@@ -1,6 +1,8 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { ChainAccount } from '@/core/accounts/domain'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm/evm-account'
-import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
+import { parseKeyDomainId } from '@/core/keyring/domain'
+import type { KeyDomainId } from '@/core/keyring/domain'
 import type { KeystoneHardwareCredential } from '@/core/wallet/hardware-wallet-data'
 import { projectKeystoneMultiCoinAccounts } from '@/lib/keystone'
 import type {
@@ -37,6 +39,8 @@ export class KeystoneEvmSigningContextResolver {
   constructor(private readonly options: KeystoneEvmSigningContextResolverOptions) {}
 
   async resolve(chainAccount: ChainAccount): Promise<KeystoneEvmSigningContext> {
+    if (!isDerivedAccount(chainAccount))
+      throw new Error('Hardware signing requires a derived ChainAccount')
     if (!(await this.options.credentials.hasUnlockSession())) throw new Error('Wallet is locked')
     const keyDomainId = parseKeyDomainId(chainAccount.scope.keyDomainId)
     const { snapshot, generationId } = await this.loadActiveContext(chainAccount)
@@ -89,6 +93,8 @@ export class KeystoneEvmSigningContextResolver {
   private async loadActiveContext(
     chainAccount: ChainAccount
   ): Promise<{ readonly snapshot: StorageV2Snapshot; readonly generationId: string }> {
+    if (!isDerivedAccount(chainAccount))
+      throw new Error('Hardware signing requires a derived ChainAccount')
     const pointer = await this.options.storageRepository.getActivePointer()
     if (!pointer) throw new Error('Storage V2 is not active')
     const snapshot = await this.options.storageRepository.getSnapshot(pointer.generationId)
@@ -102,6 +108,13 @@ export class KeystoneEvmSigningContextResolver {
     ) {
       throw new Error('Active Storage V2 generation does not match the EVM signing Account')
     }
+    const owner = snapshot.accounts.find(
+      account =>
+        account.id === chainAccount.scope.accountId &&
+        account.keyDomainId === chainAccount.scope.keyDomainId
+    )
+    if (!owner || !isDerivedAccount(owner))
+      throw new Error('Hardware signing requires a derived Account')
     const domains = snapshot.keyDomains.filter(
       candidate => candidate.id === chainAccount.scope.keyDomainId
     )

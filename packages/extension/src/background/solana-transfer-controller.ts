@@ -1,23 +1,20 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { ChainId } from '@/core/chains/domain'
 import type { KeyDomainSource, SigningSummary } from '@/core/keyring/domain'
-import {
-  parseNearIntentsTransactionBinding,
-  parseTransactionId,
-  type TransactionAccountScope,
-  type TransactionGraph
-} from '@/core/transactions/domain'
-import {
-  parseSolanaPublicKey,
-  type PreparedSolanaTransferApproval,
-  type SolanaTransferOrchestrator,
-  type SolanaTransferSubmission
+import { parseNearIntentsTransactionBinding, parseTransactionId } from '@/core/transactions/domain'
+import type { TransactionAccountScope, TransactionGraph } from '@/core/transactions/domain'
+import { parseSolanaPublicKey } from '@/infrastructure/chains/solana'
+import type {
+  PreparedSolanaTransferApproval,
+  SolanaTransferOrchestrator,
+  SolanaTransferSubmission
 } from '@/infrastructure/chains/solana'
-import type { ChainAccount, Account } from '@/core/accounts/domain'
+import type { DerivedChainAccount, DerivedAccount } from '@/core/accounts/domain'
 import { accountContextTransition } from './account-context-transition'
 
 export interface ActiveSolanaTransferContext {
-  readonly chainAccount: ChainAccount
-  readonly accountIndex: Account['accountIndex']
+  readonly chainAccount: DerivedChainAccount
+  readonly accountIndex: DerivedAccount['accountIndex']
   readonly keyDomainSource: KeyDomainSource
 }
 
@@ -230,6 +227,8 @@ export class BackgroundSolanaTransferController {
 
   private async requireActiveContext(): Promise<ActiveSolanaTransferContext> {
     const context = await this.options.loadActiveContext()
+    if (context && !isDerivedAccount(context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (!context) throw new Error('The active Account has no Solana ChainAccount')
     if (
       (context.keyDomainSource.kind === 'hardware' &&

@@ -1,7 +1,24 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { decideMonitorSignal, isExpiredAtTip } from '../../../src/background/tx-monitor-policy.ts'
+import {
+  decideMonitorSignal,
+  isExpiredAtTip,
+  shouldRestoreZcashOriginMonitor
+} from '../../../src/background/tx-monitor-policy.ts'
+
+test('multisig Activity stays under journal monitoring across restart', () => {
+  const send = {
+    id: 'multisig_review-1',
+    type: 'send',
+    status: 'pending',
+    txHash: 'a'.repeat(64)
+  }
+  assert.equal(shouldRestoreZcashOriginMonitor(send), false)
+  assert.equal(shouldRestoreZcashOriginMonitor({ ...send, status: 'confirming' }), false)
+  assert.equal(shouldRestoreZcashOriginMonitor({ ...send, status: 'failed' }), false)
+  assert.equal(shouldRestoreZcashOriginMonitor({ ...send, id: 'tx_local' }), true)
+})
 
 function decide(overrides) {
   return decideMonitorSignal({

@@ -1,16 +1,16 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { address, networks, Transaction } from 'bitcoinjs-lib'
 import { Buffer } from 'buffer'
-import { parseAccountIndex, type AccountIndex, type ChainAccount } from '@/core/accounts/domain'
+import { parseAccountIndex } from '@/core/accounts/domain'
+import type { AccountIndex, DerivedChainAccount } from '@/core/accounts/domain'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import type { BitcoinAddressObservation } from '@/core/chains/bitcoin'
 import { parseChainId } from '@/core/chains/registry'
 import type { TransactionAccountScope } from '@/core/transactions/domain'
 import type { StorageV2ReadRepository } from '@/ports/repositories'
 import { createRefreshedBitcoinDiscoveryCheckpoint } from './bitcoin-discovery-refresh'
-import {
-  parseBitcoinInputOutpoints,
-  type BitcoinInputOutpoint
-} from './bitcoin-input-reservation-model'
+import { parseBitcoinInputOutpoints } from './bitcoin-input-reservation-model'
+import type { BitcoinInputOutpoint } from './bitcoin-input-reservation-model'
 import type { BitcoinTransactionObservation } from './bitcoin-transaction-observer'
 import type {
   BitcoinDiscoveryRepository,
@@ -27,7 +27,7 @@ type BitcoinBalanceStorageRepository = Pick<
 >
 
 interface BitcoinDiscoveryContext {
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly accountIndex: AccountIndex
 }
 
@@ -324,6 +324,7 @@ export class BitcoinOwnedTransactionBalanceUpdater {
       if (accounts.length !== 1) {
         throw new Error('Bitcoin Account metadata is missing or ambiguous')
       }
+      if (!isDerivedAccount(accounts[0]) || !isDerivedAccount(chainAccount)) continue
       const accountIndex = parseAccountIndex(accounts[0].accountIndex)
       contexts.push(
         Object.freeze({

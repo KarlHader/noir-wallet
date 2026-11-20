@@ -1,3 +1,4 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { resolveKeyDomain } from '@/core/accounts/application'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { resolveSolanaRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
@@ -5,9 +6,9 @@ import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-setting
 import {
   createAssetRegistry,
   createInitialProductChainRegistry,
-  getBundledInitialProductAssetDefinitions,
-  type AssetDefinitionInput
+  getBundledInitialProductAssetDefinitions
 } from '@/core/chains/registry'
+import type { AssetDefinitionInput } from '@/core/chains/registry'
 import {
   ChromeSessionSolanaPendingTransferStore,
   createConfiguredSolanaRpcClient,
@@ -27,10 +28,8 @@ import {
   isSelectedTransferScope,
   requireSelectedTransferNetwork
 } from './transfer-account-network-selection'
-import {
-  BackgroundSolanaTransferController,
-  type ActiveSolanaTransferContext
-} from './solana-transfer-controller'
+import { BackgroundSolanaTransferController } from './solana-transfer-controller'
+import type { ActiveSolanaTransferContext } from './solana-transfer-controller'
 
 type SolanaTransferStorageRepository = Pick<
   StorageV2ReadRepository,
@@ -58,6 +57,7 @@ export async function loadActiveSolanaTransferContext(
     account => account.keyDomainId === active.keyDomainId && account.id === active.accountId
   )
   if (accounts.length !== 1) throw new Error('Active Account metadata is missing or ambiguous')
+  if (!isDerivedAccount(accounts[0])) return null
   const chainAccounts = snapshot.chainAccounts.filter(
     chainAccount =>
       chainAccount.scope.keyDomainId === active.keyDomainId &&
@@ -67,6 +67,7 @@ export async function loadActiveSolanaTransferContext(
   if (chainAccounts.length === 0) return null
   if (chainAccounts.length !== 1)
     throw new Error('Active Account has ambiguous Solana ChainAccounts')
+  if (!isDerivedAccount(chainAccounts[0])) return null
   const keyDomain = resolveKeyDomain(snapshot.keyDomains, active.keyDomainId)
   return Object.freeze({
     chainAccount: chainAccounts[0],

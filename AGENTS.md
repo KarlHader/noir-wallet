@@ -11,6 +11,7 @@ This is the shared guide for coding agents. `CLAUDE.md` points here without dupl
 - Published wallet guides cover stable tasks, essential constraints, and necessary safety actions; provider guides cover contracts that integrators rely on. Do not use them as implementation inventories or changelogs. When an edit is necessary, correct the smallest affected statement or step without expanding adjacent topics or cataloging every control, validation rule, or recovery branch.
 - Verify changed claims against code, configuration, types, tests, or actual execution. Make necessary corrections in the same change, replacing misleading guidance and repairing affected links. Preserve historical decisions and audits as historical records rather than treating them as usage instructions.
 - Keep plans, progress, and delivery summaries in chat unless a user or established workflow requires a durable record. Do not import private project plans, reviews, or audit records into public maintenance documentation. Maintained comments, public API JSDoc, and public maintenance docs use English.
+- Put new user-requested standalone Markdown documents in `docs/superpowers/specs/` and use English filenames. Continue updating existing authoritative documentation in place.
 - Product UI should show information needed for the current action or decision. Express business constraints through controls, validation, confirmation, and failure feedback instead of standing explanatory copy.
 
 ## Architecture
