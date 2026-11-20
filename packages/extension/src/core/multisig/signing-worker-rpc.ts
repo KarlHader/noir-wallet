@@ -641,6 +641,7 @@ export function createSigningWorkerRpcHandler(
           keyPackage: key,
           publicKeyPackage: base64ToBytes(opened.header.publicKeyPackage),
           groupVerifyingKey: hexToBytes(opened.header.groupVerifyingKey),
+          keysetFingerprint: opened.header.fingerprint,
           pczt: entry.pczt,
           transport: entry.request.transport,
           persistNoncePhase: phase => {

@@ -378,6 +378,9 @@ test('restored phone identity is pinned for both review and signing ingress', as
         acknowledgement: { ...progress.persistence, persisted: true }
       })
     expect(progress.outbound).toHaveLength(1)
+    expect(JSON.parse(progress.outbound[0].encrypted_payload).walletFingerprint).toBe(
+      rig.fingerprint.slice(0, 32)
+    )
     const signer = new rig.wasm.Signer(
       base64ToBytes(ref.sessionId),
       1,

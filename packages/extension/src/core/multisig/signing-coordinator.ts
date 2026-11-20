@@ -43,6 +43,8 @@ export interface SigningCoordinatorOptions {
   keyPackage: Uint8Array
   publicKeyPackage: Uint8Array
   groupVerifyingKey: Uint8Array
+  /** The vault header's keyset fingerprint, 64 lowercase hex. */
+  keysetFingerprint: string
   pczt: Uint8Array
   transport: 'qr' | 'ble'
   persistNoncePhase: PersistNoncePhase
@@ -81,6 +83,7 @@ export class SigningCoordinatorSession {
   private readonly signingIndices: Uint8Array
   private readonly sessionId: Uint8Array
   private readonly envelopeSigner: EnvelopeSigner
+  private readonly walletFingerprint: string
   private readonly transport: 'qr' | 'ble'
   private readonly persist: PersistNoncePhase
   private readonly now: () => number
@@ -120,6 +123,7 @@ export class SigningCoordinatorSession {
       scope.rosterVersion < 1 ||
       !this.binding.reviewId ||
       !/^[0-9a-f]{64}$/.test(this.binding.pcztDigest) ||
+      !/^[0-9a-f]{64}$/.test(options.keysetFingerprint) ||
       !Number.isSafeInteger(this.binding.expiresAt) ||
       (options.transport !== 'qr' && options.transport !== 'ble') ||
       roster.participants[0].identityPublicKey !== bytesToBase64(identityBytes) ||
@@ -145,6 +149,10 @@ export class SigningCoordinatorSession {
     this.roster = roster
     this.now = options.now ?? Date.now
     this.persist = options.persistNoncePhase
+    // One extension identity signs for every wallet it holds, so a phone cannot tell from the
+    // signature which wallet a request is for. The fingerprint's first 16 bytes match the phone's
+    // vault id and let it refuse another wallet's request at SIGN_INIT.
+    this.walletFingerprint = options.keysetFingerprint.slice(0, 32)
     this.transport = options.transport
     this.keyPackage = options.keyPackage.slice()
     this.publicKeyPackage = options.publicKeyPackage.slice()
@@ -257,6 +265,7 @@ export class SigningCoordinatorSession {
   ): Promise<MultisigEnvelope> {
     const envelope = await this.envelopeSigner.next(type, `device-${slot + 1}`, {
       envelope: bytesToBase64(inner),
+      ...(type === 'SIGN_INIT' ? { walletFingerprint: this.walletFingerprint } : {}),
       ...(pczt ? { pczt: bytesToBase64(pczt) } : {})
     })
     this.live()

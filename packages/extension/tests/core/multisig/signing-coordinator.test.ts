@@ -87,6 +87,7 @@ async function rig(shape: Shape = { participants: 2, threshold: 2 }, selectedSlo
     keyPackage,
     publicKeyPackage: base64ToBytes(opened.header.publicKeyPackage),
     groupVerifyingKey: hexToBytes(opened.header.groupVerifyingKey),
+    keysetFingerprint: opened.header.fingerprint,
     pczt: fixture,
     transport: 'qr',
     persistNoncePhase: async phase => {
@@ -216,12 +217,23 @@ for (const [participants, threshold, selected] of [
     const session = await signing.SigningCoordinatorSession.open(r.cryptoBoundaryWasm, r.options)
     const started = await session.start()
     assert.deepEqual(r.markers, ['created', 'committed'])
-    for (const envelope of started.outbound)
+    for (const envelope of started.outbound) {
       assert(await verifyEnvelope(envelope, r.identities[0].publicKey.slice(1, 33)))
+      // Phones match this against their vault id before committing a nonce.
+      assert.equal(
+        JSON.parse(envelope.encrypted_payload).walletFingerprint,
+        r.options.keysetFingerprint.slice(0, 32)
+      )
+    }
     const commitments = await r.commitments(started.outbound)
     let step = started
     for (const envelope of commitments) step = await session.ingest(envelope)
     assert.deepEqual(r.markers, ['created', 'committed', 'consumed'])
+    assert(
+      step.outbound.every(
+        envelope => !('walletFingerprint' in JSON.parse(envelope.encrypted_payload))
+      )
+    )
     const shares = await r.shares(step.outbound)
     for (const envelope of shares) step = await session.ingest(envelope)
     assert.equal(step.status.phase, 'signed')
@@ -246,7 +258,8 @@ test('scope or reviewed PCZT changes are refused before any nonce', async () => 
   const r = await rig()
   for (const options of [
     { ...r.options, scope: { ...r.options.scope, accountId: 'other' } },
-    { ...r.options, binding: { ...r.options.binding, pcztDigest: '0'.repeat(64) } }
+    { ...r.options, binding: { ...r.options.binding, pcztDigest: '0'.repeat(64) } },
+    { ...r.options, keysetFingerprint: r.options.keysetFingerprint.slice(0, 32) }
   ])
     await assert.rejects(signing.SigningCoordinatorSession.open(r.cryptoBoundaryWasm, options))
   await assert.rejects(signing.SigningCoordinatorSession.open(wasm, r.options)) // real fixture has different ak
