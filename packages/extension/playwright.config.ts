@@ -1,7 +1,4 @@
 import { defineConfig } from '@playwright/test'
-import { loadLocalTestWalletEnvironment } from './scripts/lib/test-wallet-env.mjs'
-
-loadLocalTestWalletEnvironment()
 
 export default defineConfig({
   testDir: './tests',

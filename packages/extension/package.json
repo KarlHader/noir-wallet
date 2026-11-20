@@ -14,7 +14,6 @@
     "test": "node scripts/run-tests.mjs",
     "wallets:provision:evm": "node scripts/provision-evm-live-test-wallet.mjs",
     "wallets:provision:bitcoin": "node scripts/provision-bitcoin-live-test-wallet.mjs",
-    "wallets:check": "node scripts/check-test-wallets.mjs",
     "icons:from-logo": "node scripts/generate-icons-from-logo.mjs"
   },
   "dependencies": {
