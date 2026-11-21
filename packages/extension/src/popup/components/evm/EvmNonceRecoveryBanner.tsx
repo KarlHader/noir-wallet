@@ -4,6 +4,10 @@ import { parseEvmPriorityFeeGwei, type EvmFeeSelection } from '@/infrastructure/
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { openMultichainHardwareSignTab } from '@/lib/hardware-tab'
 import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wallet-client'
+import {
+  estimateNetworkFeeTierPreviews,
+  type NetworkFeePreviews
+} from '@/popup/services/network-fee-presentation'
 import { openModal } from '@/popup/provider/ModalManager'
 import { toast } from '@/store/toast-store'
 import { formatBaseUnitAmount } from '@/lib/number-format'
@@ -29,15 +33,44 @@ type RecoveryState = NonNullable<Awaited<ReturnType<typeof evmWalletClient.getNo
 const RECOVERY_CHECK_INTERVAL_MS = 30_000
 
 function NonceRecoveryFeeForm({
+  chainId,
+  executionMode,
+  feeSymbol,
+  feeDecimals,
   onContinue,
   onCancel
 }: {
+  readonly chainId: string
+  readonly executionMode: 'main' | 'private'
+  readonly feeSymbol: string
+  readonly feeDecimals: number
   readonly onContinue: (selection: EvmFeeSelection) => void
   readonly onCancel: () => void
 }) {
   const [feeMode, setFeeMode] = useState<'fast' | 'standard' | 'custom'>('fast')
   const [customPriorityFee, setCustomPriorityFee] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [previews, setPreviews] = useState<NetworkFeePreviews>({})
+  useEffect(() => {
+    let active = true
+    void estimateNetworkFeeTierPreviews(
+      async tier =>
+        tier === 'low'
+          ? null
+          : (
+              await evmWalletClient.estimateNonceRecoveryFee(chainId, executionMode, {
+                kind: 'tier',
+                tier
+              })
+            ).maximumFeeWei,
+      { symbol: feeSymbol, decimals: feeDecimals }
+    ).then(result => {
+      if (active) setPreviews(result)
+    })
+    return () => {
+      active = false
+    }
+  }, [chainId, executionMode, feeSymbol, feeDecimals])
   const continueWithFee = () => {
     try {
       onContinue(
@@ -69,8 +102,16 @@ function NonceRecoveryFeeForm({
               }
             }}
           >
-            <DropdownMenuRadioItem value="fast">Fast</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="standard">Standard</DropdownMenuRadioItem>
+            {(['fast', 'standard'] as const).map(tier => (
+              <DropdownMenuRadioItem key={tier} value={tier}>
+                <span className="flex w-full items-center justify-between gap-3">
+                  <span>{tier === 'fast' ? 'Fast' : 'Standard'}</span>
+                  {previews[tier] && (
+                    <AmountDisplay value={previews[tier].amount} symbol={feeSymbol} profile="fee" />
+                  )}
+                </span>
+              </DropdownMenuRadioItem>
+            ))}
             <DropdownMenuRadioItem value="custom">Custom</DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
@@ -202,7 +243,14 @@ export function EvmNonceRecoveryBanner({
       const selection = await openModal<EvmFeeSelection | null>({
         title: 'Network fee',
         body: resolve => (
-          <NonceRecoveryFeeForm onContinue={resolve} onCancel={() => resolve(null)} />
+          <NonceRecoveryFeeForm
+            chainId={chainId}
+            executionMode={executionMode}
+            feeSymbol={feeSymbol}
+            feeDecimals={feeDecimals}
+            onContinue={resolve}
+            onCancel={() => resolve(null)}
+          />
         )
       })
       if (!selection) return

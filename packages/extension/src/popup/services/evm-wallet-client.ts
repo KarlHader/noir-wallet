@@ -203,6 +203,18 @@ export interface EvmWalletClient {
     executionMode?: 'main' | 'private',
     feeSelection?: EvmFeeSelection
   ) => Promise<EvmTransferReview>
+  readonly estimateReplacementFee: (
+    action: 'cancel' | 'speed-up',
+    chainId: string,
+    originalTransactionId: TransactionId,
+    executionMode: 'main' | 'private',
+    feeSelection: EvmFeeSelection
+  ) => Promise<EvmFeeEstimate>
+  readonly estimateNonceRecoveryFee: (
+    chainId: string,
+    executionMode: 'main' | 'private',
+    feeSelection: EvmFeeSelection
+  ) => Promise<EvmFeeEstimate>
   readonly getNonceRecovery: (
     chainId: string,
     executionMode?: 'main' | 'private'
@@ -1294,6 +1306,57 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
           }
           return prepared
         }
+      )
+    },
+    estimateReplacementFee: async (
+      action: 'cancel' | 'speed-up',
+      chainId: string,
+      originalTransactionId: TransactionId,
+      executionMode: 'main' | 'private',
+      feeSelection: EvmFeeSelection
+    ) => {
+      const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
+      const parsedTransactionId = parseClientInput(() => parseTransactionId(originalTransactionId))
+      const parsedFeeSelection = parseClientInput(() => parseEvmFeeSelection(feeSelection))
+      if (!parsedChainId.startsWith('eip155:') || (action !== 'cancel' && action !== 'speed-up')) {
+        throw new EvmWalletClientError(
+          'invalid-request',
+          'Invalid EVM replacement estimate request'
+        )
+      }
+      return send(
+        {
+          type: 'ESTIMATE_EVM_REPLACEMENT_FEE',
+          action,
+          chainId: parsedChainId,
+          originalTransactionId: parsedTransactionId,
+          executionMode,
+          feeSelection: parsedFeeSelection
+        },
+        value => parseFeeEstimate(value, parsedChainId, false)
+      )
+    },
+    estimateNonceRecoveryFee: async (
+      chainId: string,
+      executionMode: 'main' | 'private',
+      feeSelection: EvmFeeSelection
+    ) => {
+      const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
+      const parsedFeeSelection = parseClientInput(() => parseEvmFeeSelection(feeSelection))
+      if (!parsedChainId.startsWith('eip155:')) {
+        throw new EvmWalletClientError(
+          'invalid-request',
+          'Invalid EVM nonce recovery estimate request'
+        )
+      }
+      return send(
+        {
+          type: 'ESTIMATE_EVM_NONCE_RECOVERY_FEE',
+          chainId: parsedChainId,
+          executionMode,
+          feeSelection: parsedFeeSelection
+        },
+        value => parseFeeEstimate(value, parsedChainId, false)
       )
     },
     getNonceRecovery: async (chainId: string, executionMode: 'main' | 'private' = 'main') => {

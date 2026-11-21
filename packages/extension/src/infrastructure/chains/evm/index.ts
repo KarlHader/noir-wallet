@@ -234,6 +234,7 @@ export {
   buildEvmNonceRecoveryTransaction,
   buildEvmSpeedUpTransaction,
   buildEvmTransfer,
+  estimateBuiltEvmTransactionFee,
   estimateEvmContractCallFee,
   estimateEvmTransferFee,
   computeEvmSigningPayloadFingerprint,

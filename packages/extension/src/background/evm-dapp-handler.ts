@@ -77,6 +77,7 @@ export interface EvmDAppApprovalPort {
     options?: {
       readonly onNetworkFeeTierChange?: (tier: 'low' | 'standard' | 'fast') => Promise<unknown>
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
+      readonly onEvmFeeTierPreviews?: () => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
     }
   ) => Promise<{
@@ -1100,6 +1101,35 @@ export class BackgroundEvmDAppHandler {
           }
         }
       }
+      const estimateFeeTierPreviews = async () => {
+        if (!approvalActive || sendPrivately) throw new Error('Fee preview is unavailable')
+        await this.requireUnchangedExecutionIdentity(origin, active)
+        const tiers = ['low', 'standard', 'fast'] as const
+        const results = await Promise.allSettled(
+          tiers.map(tier =>
+            isContractCall
+              ? transferController.estimateContractCallFee(
+                  parsed.intent,
+                  { kind: 'tier', tier },
+                  'main',
+                  executionAccount
+                )
+              : transferController.estimateTransferFee(
+                  parsed.intent,
+                  { kind: 'tier', tier },
+                  'main',
+                  executionAccount
+                )
+          )
+        )
+        await this.requireUnchangedExecutionIdentity(origin, active)
+        if (!approvalActive || sendPrivately) throw new Error('Fee preview is unavailable')
+        return Object.fromEntries(
+          results.flatMap((result, index) =>
+            result.status === 'fulfilled' ? [[tiers[index], result.value.maximumFeeWei]] : []
+          )
+        )
+      }
       const changeTransferPrivacy = async (enabled: boolean) => {
         if (!approvalActive || !privateTransferInput || !this.options.privateTransfer) {
           throw new Error('Private transfer selection is unavailable.')
@@ -1157,6 +1187,7 @@ export class BackgroundEvmDAppHandler {
           {
             onNetworkFeeTierChange: tier => reprepareForFeeSelection({ kind: 'tier', tier }),
             onEvmFeeSelectionChange: reprepareForFeeSelection,
+            onEvmFeeTierPreviews: estimateFeeTierPreviews,
             ...(privateTransferInput && this.options.privateTransfer
               ? { onEvmTransferPrivacyChange: changeTransferPrivacy }
               : {})

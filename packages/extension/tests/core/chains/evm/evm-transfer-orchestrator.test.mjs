@@ -1666,6 +1666,43 @@ test('reviews a same-payload speed up and rejects approval after the origin fina
   ).rejects.toMatchObject({ code: 'stale-nonce' })
 })
 
+test('replacement previews match reviews without creating drafts, including an active review', async () => {
+  for (const action of ['cancel', 'speed-up']) {
+    let pendingNonce = '7'
+    const testHarness = harness({
+      rpc: rpc({
+        getPendingNonce: async () => pendingNonce,
+        getTransactionCount: async () => '7',
+        getTransactionLocation: async () => ({ status: 'pending' })
+      })
+    })
+    const original = await prepare(testHarness.orchestrator)
+    await testHarness.orchestrator.approve({
+      scope,
+      transactionId: original.graph.root.id,
+      payloadFingerprint: original.signing.payloadFingerprint.digestHex
+    })
+    pendingNonce = '8'
+    const request = {
+      action,
+      chainAccount: account,
+      originalTransactionId: original.graph.root.id,
+      feeSelection: { kind: 'tier', tier: 'low' }
+    }
+    const before = await testHarness.pendingStore.list()
+    const estimate = await testHarness.orchestrator.estimateReplacementFee(request)
+    expect(await testHarness.pendingStore.list()).toEqual(before)
+    const review =
+      await testHarness.orchestrator[action === 'cancel' ? 'prepareCancel' : 'prepareSpeedUp'](
+        request
+      )
+    expect(estimate.maximumFeeWei).toBe(review.signing.summary.fields.maximumFeeWei)
+    const duringReview = await testHarness.orchestrator.estimateReplacementFee(request)
+    expect(duringReview.maximumFeeWei).toBe(review.signing.summary.fields.maximumFeeWei)
+    expect(await testHarness.pendingStore.list()).toHaveLength(before.length + 1)
+  }
+})
+
 test('requires a funding plan check before preparing a Shield origin speed up', async () => {
   const testHarness = harness()
   const original = localBroadcastGraph(7, 'transaction:evm:shield-speed-up')

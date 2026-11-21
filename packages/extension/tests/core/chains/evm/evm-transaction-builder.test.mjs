@@ -20,6 +20,7 @@ import {
   buildEvmContractCall,
   buildEvmSpeedUpTransaction,
   buildEvmTransfer,
+  estimateBuiltEvmTransactionFee,
   createEvmSigningSummary,
   createEvmSigningPreparePayload,
   createEvmTransferGraph,
@@ -497,6 +498,63 @@ test.describe('EVM transfer builder', () => {
     expect(BigInt(prepared.transaction.maxPriorityFeePerGas)).toBeGreaterThan(
       BigInt(original.maxPriorityFeePerGas)
     )
+  })
+
+  test('previews replacement floors without requiring the fee balance', async () => {
+    const original = {
+      type: 'eip1559',
+      chainId: '1',
+      nonce: '7',
+      maxFeePerGas: '20000000000',
+      maxPriorityFeePerGas: '5000000000',
+      gasLimit: '52000',
+      to: recipient,
+      value: '123',
+      input: '0x12345678',
+      accessList: []
+    }
+    const rpc = transactionRpc({
+      getNativeBalance: async () => '0',
+      getPendingNonce: async () => '7',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+    const input = {
+      chainId,
+      chainAccount: account,
+      assets,
+      rpc,
+      feeSelection: { kind: 'tier', tier: 'low' },
+      estimateOnly: true
+    }
+    const speedUp = await buildEvmSpeedUpTransaction({
+      ...input,
+      original: { transactionHash: `0x${'a'.repeat(64)}`, transaction: original }
+    })
+    const cancel = await buildEvmCancelTransaction({
+      ...input,
+      original: {
+        transactionHash: `0x${'a'.repeat(64)}`,
+        nonce: original.nonce,
+        maxFeePerGasWei: original.maxFeePerGas,
+        maxPriorityFeePerGasWei: original.maxPriorityFeePerGas
+      }
+    })
+    for (const prepared of [speedUp, cancel]) {
+      const estimate = estimateBuiltEvmTransactionFee(prepared)
+      expect(BigInt(estimate.maxFeePerGasWei)).toBeGreaterThanOrEqual(22_500_000_000n)
+      expect(BigInt(estimate.maxPriorityFeePerGasWei)).toBeGreaterThanOrEqual(5_625_000_000n)
+      expect(BigInt(estimate.maximumFeeWei)).toBe(
+        BigInt(prepared.transaction.gasLimit) * BigInt(estimate.maxFeePerGasWei)
+      )
+    }
+    expect(speedUp.transaction.gasLimit).toBe(original.gasLimit)
+    await expect(
+      buildEvmSpeedUpTransaction({
+        ...input,
+        estimateOnly: false,
+        original: { transactionHash: `0x${'a'.repeat(64)}`, transaction: original }
+      })
+    ).rejects.toMatchObject({ code: 'insufficient-funds' })
   })
 
   test('binds PEA preflight and signing to the private execution address', async () => {

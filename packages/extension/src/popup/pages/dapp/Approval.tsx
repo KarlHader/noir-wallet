@@ -49,6 +49,10 @@ import {
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { EvmGasFundingApproval } from '@/popup/components/dapp/EvmGasFundingApproval'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
+import {
+  estimateNetworkFeeTierPreviews,
+  type NetworkFeePreviews
+} from '@/popup/services/network-fee-presentation'
 import { parseNetworkFeeTier, type NetworkFeeTier } from '@/core/transactions/domain'
 import { parseEvmFeeSelection, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { NETWORKS } from '@/config/networks'
@@ -426,6 +430,44 @@ export function Approval() {
       return { kind: 'tier' as const, tier: 'standard' as const }
     }
   })()
+  const loadEvmFeeTierPreviews = useCallback(async (): Promise<NetworkFeePreviews> => {
+    if (!requestId) throw new Error('Approval request is unavailable')
+    const response: unknown = await chrome.runtime.sendMessage({
+      type: 'DAPP_EVM_FEE_TIER_PREVIEWS',
+      requestId
+    })
+    if (!response || typeof response !== 'object' || Array.isArray(response)) {
+      throw new Error('Fee preview is unavailable')
+    }
+    const error = Reflect.get(response, 'error')
+    if (typeof error === 'string') throw new Error(error)
+    const values = Reflect.get(response, 'previews')
+    if (!values || typeof values !== 'object' || Array.isArray(values)) {
+      throw new Error('Invalid fee preview')
+    }
+    const decimals =
+      Number.isInteger(data.nativeCurrency?.decimals) &&
+      data.nativeCurrency.decimals >= 0 &&
+      data.nativeCurrency.decimals <= 255
+        ? data.nativeCurrency.decimals
+        : 18
+    const symbol =
+      typeof data.nativeCurrency?.symbol === 'string' ? data.nativeCurrency.symbol : 'Native'
+    return estimateNetworkFeeTierPreviews(
+      async tier => {
+        const raw = Reflect.get(values, tier)
+        return typeof raw === 'string' && /^(0|[1-9]\d{0,77})$/.test(raw) ? raw : null
+      },
+      { symbol, decimals },
+      dappEvmFeeSelection.kind === 'tier' ? dappEvmFeeSelection.tier : undefined
+    )
+  }, [
+    requestId,
+    data.nativeCurrency?.decimals,
+    data.nativeCurrency?.symbol,
+    data.feeSelection,
+    data.feeTier
+  ])
 
   const fetchedRequestId = useRef<string | null>(null)
 
@@ -1558,6 +1600,7 @@ export function Approval() {
               symbol={nativeSymbol}
               onTierChange={handleNetworkFeeTierChange}
               onSelectionChange={handleEvmFeeSelectionChange}
+              loadTierPreviews={loadEvmFeeTierPreviews}
               disabled={isLoading}
             />
           ) : undefined

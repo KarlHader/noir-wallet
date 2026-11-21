@@ -206,6 +206,7 @@ export interface BuildEvmCancelInput {
   readonly feeSelection?: EvmFeeSelection
   readonly signal?: AbortSignal
   readonly now?: () => number
+  readonly estimateOnly?: boolean
 }
 
 export interface BuildEvmSpeedUpInput {
@@ -222,6 +223,7 @@ export interface BuildEvmSpeedUpInput {
   readonly allowUnknownAtNonce?: boolean
   readonly signal?: AbortSignal
   readonly now?: () => number
+  readonly estimateOnly?: boolean
 }
 
 export interface BuildEvmNonceRecoveryInput {
@@ -234,6 +236,7 @@ export interface BuildEvmNonceRecoveryInput {
   readonly feeSelection?: EvmFeeSelection
   readonly signal?: AbortSignal
   readonly now?: () => number
+  readonly estimateOnly?: boolean
 }
 
 const MAXIMUM_UINT64 = (1n << 64n) - 1n
@@ -1261,7 +1264,7 @@ export async function buildEvmSpeedUpTransaction(
   const nativeBalance = parseRpcUint256(nativeBalanceRaw, 'EVM native balance')
   const maximumGasCost = BigInt(transaction.gasLimit) * maximumFeePerGas
   const requiredNativeBalance = BigInt(transaction.value) + maximumGasCost
-  if (nativeBalance < requiredNativeBalance) {
+  if (!input.estimateOnly && nativeBalance < requiredNativeBalance) {
     insufficientFunds({
       requiredNativeBalanceRaw: requiredNativeBalance.toString(),
       availableNativeBalanceRaw: nativeBalance.toString(),
@@ -1381,7 +1384,7 @@ async function buildEvmSelfTransaction(
     throw new EvmTransactionError('fee-overflow', 'EVM cancel fee exceeds signer limits')
   }
   const maximumGasCost = gasLimit * maxFeePerGas
-  if (nativeBalance < maximumGasCost) {
+  if (!input.estimateOnly && nativeBalance < maximumGasCost) {
     insufficientFunds({
       requiredNativeBalanceRaw: maximumGasCost.toString(),
       availableNativeBalanceRaw: nativeBalance.toString(),
@@ -1416,6 +1419,21 @@ async function buildEvmSelfTransaction(
       accessList: Object.freeze([])
     }),
     createdAt: parseTimestamp((input.now ?? Date.now)())
+  })
+}
+
+export function estimateBuiltEvmTransactionFee(prepared: PreparedEvmTransfer): EvmFeeEstimate {
+  const transaction = prepared.transaction
+  const legacy = transaction.type === 'legacy'
+  const maxFeePerGasWei = legacy ? transaction.gasPrice : transaction.maxFeePerGas
+  return Object.freeze({
+    chainId: prepared.chainId,
+    transactionType: transaction.type,
+    maximumFeeWei: (BigInt(transaction.gasLimit) * BigInt(maxFeePerGasWei)).toString(),
+    maxFeePerGasWei,
+    maxPriorityFeePerGasWei: legacy ? '0' : transaction.maxPriorityFeePerGas,
+    gasPriceWei: legacy ? transaction.gasPrice : null,
+    gasLimit: transaction.gasLimit
   })
 }
 

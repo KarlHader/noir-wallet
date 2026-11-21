@@ -3335,6 +3335,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'DAPP_APPROVAL_RESULT' ||
     message.type === 'DAPP_NETWORK_FEE_TIER_CHANGE' ||
     message.type === 'DAPP_EVM_FEE_SELECTION_CHANGE' ||
+    message.type === 'DAPP_EVM_FEE_TIER_PREVIEWS' ||
     message.type === 'DAPP_EVM_TRANSFER_PRIVACY_CHANGE' ||
     message.type === 'HW_SIGN_RESULT' ||
     message.type === 'UNLOCK_SUCCESS' ||
@@ -4653,6 +4654,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'GET_EVM_TOKEN_BALANCE' ||
     message.type === 'PREPARE_EVM_CANCEL' ||
     message.type === 'PREPARE_EVM_SPEED_UP' ||
+    message.type === 'ESTIMATE_EVM_REPLACEMENT_FEE' ||
+    message.type === 'ESTIMATE_EVM_NONCE_RECOVERY_FEE' ||
     message.type === 'GET_EVM_NONCE_RECOVERY' ||
     message.type === 'PREPARE_EVM_NONCE_RECOVERY' ||
     message.type === 'GET_PENDING_EVM_TRANSFER' ||
@@ -4738,57 +4741,76 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   message.executionMode,
                   debugRequestId
                 )
-              : message.type === 'PREPARE_EVM_CANCEL' || message.type === 'PREPARE_EVM_SPEED_UP'
-                ? evmTransferRouter[
-                    message.type === 'PREPARE_EVM_CANCEL' ? 'prepareCancel' : 'prepareSpeedUp'
-                  ](
+              : message.type === 'ESTIMATE_EVM_REPLACEMENT_FEE'
+                ? evmTransferRouter.estimateReplacementFee(
+                    message.action,
                     message.chainId,
                     message.originalTransactionId,
                     message.executionMode,
                     message.feeSelection
                   )
-                : message.type === 'GET_EVM_TOKEN_ALLOWANCE'
-                  ? evmTransferRouter.getTokenAllowance(
+                : message.type === 'ESTIMATE_EVM_NONCE_RECOVERY_FEE'
+                  ? evmTransferRouter.estimateNonceRecoveryFee(
                       message.chainId,
-                      message.token,
-                      message.spender,
-                      message.expectedOwner,
-                      message.executionMode
+                      message.executionMode,
+                      message.feeSelection
                     )
-                  : message.type === 'GET_EVM_TOKEN_BALANCE'
-                    ? evmTransferRouter.getTokenBalance(
+                  : message.type === 'PREPARE_EVM_CANCEL' || message.type === 'PREPARE_EVM_SPEED_UP'
+                    ? evmTransferRouter[
+                        message.type === 'PREPARE_EVM_CANCEL' ? 'prepareCancel' : 'prepareSpeedUp'
+                      ](
                         message.chainId,
-                        message.token,
-                        message.walletId,
-                        message.accountId,
-                        message.executionMode
+                        message.originalTransactionId,
+                        message.executionMode,
+                        message.feeSelection
                       )
-                    : message.type === 'GET_EVM_NONCE_RECOVERY'
-                      ? evmTransferRouter.getNonceRecovery(message.chainId, message.executionMode)
-                      : message.type === 'PREPARE_EVM_NONCE_RECOVERY'
-                        ? evmTransferRouter.prepareNonceRecovery(
+                    : message.type === 'GET_EVM_TOKEN_ALLOWANCE'
+                      ? evmTransferRouter.getTokenAllowance(
+                          message.chainId,
+                          message.token,
+                          message.spender,
+                          message.expectedOwner,
+                          message.executionMode
+                        )
+                      : message.type === 'GET_EVM_TOKEN_BALANCE'
+                        ? evmTransferRouter.getTokenBalance(
                             message.chainId,
-                            message.executionMode,
-                            message.feeSelection
+                            message.token,
+                            message.walletId,
+                            message.accountId,
+                            message.executionMode
                           )
-                        : message.type === 'GET_PENDING_EVM_TRANSFER'
-                          ? evmTransferRouter.getPendingApproval(message.transactionId)
-                          : message.type === 'APPROVE_EVM_TRANSFER'
-                            ? evmTransferRouter.approve(
-                                message.transactionId,
-                                message.payloadFingerprint
+                        : message.type === 'GET_EVM_NONCE_RECOVERY'
+                          ? evmTransferRouter.getNonceRecovery(
+                              message.chainId,
+                              message.executionMode
+                            )
+                          : message.type === 'PREPARE_EVM_NONCE_RECOVERY'
+                            ? evmTransferRouter.prepareNonceRecovery(
+                                message.chainId,
+                                message.executionMode,
+                                message.feeSelection
                               )
-                            : message.type === 'GET_KEYSTONE_EVM_SIGNING_REQUEST'
-                              ? evmTransferRouter.getExternalSigningRequest(message.transactionId)
-                              : message.type === 'SUBMIT_KEYSTONE_EVM_SIGNATURE'
-                                ? evmTransferRouter.submitExternalSignature(
+                            : message.type === 'GET_PENDING_EVM_TRANSFER'
+                              ? evmTransferRouter.getPendingApproval(message.transactionId)
+                              : message.type === 'APPROVE_EVM_TRANSFER'
+                                ? evmTransferRouter.approve(
                                     message.transactionId,
-                                    message.payloadFingerprint,
-                                    message.signatureCborBase64
+                                    message.payloadFingerprint
                                   )
-                                : message.type === 'REJECT_EVM_TRANSFER'
-                                  ? evmTransferRouter.reject(message.transactionId)
-                                  : evmTransferRouter.resumeBroadcast(message.transactionId)
+                                : message.type === 'GET_KEYSTONE_EVM_SIGNING_REQUEST'
+                                  ? evmTransferRouter.getExternalSigningRequest(
+                                      message.transactionId
+                                    )
+                                  : message.type === 'SUBMIT_KEYSTONE_EVM_SIGNATURE'
+                                    ? evmTransferRouter.submitExternalSignature(
+                                        message.transactionId,
+                                        message.payloadFingerprint,
+                                        message.signatureCborBase64
+                                      )
+                                    : message.type === 'REJECT_EVM_TRANSFER'
+                                      ? evmTransferRouter.reject(message.transactionId)
+                                      : evmTransferRouter.resumeBroadcast(message.transactionId)
     void operation
       .then(result => {
         if (debugRequestId) {

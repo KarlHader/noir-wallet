@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ActivityItem } from '@/core/activity'
 import { parseTransactionId } from '@/core/transactions/domain'
 import { formatSortAddress } from '@/lib/format'
@@ -12,6 +12,7 @@ import {
   type EvmTransferReview
 } from '@/popup/services/evm-wallet-client'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
+import { estimateNetworkFeeTierPreviews } from '@/popup/services/network-fee-presentation'
 import { toast } from '@/store/toast-store'
 import { Button } from '../ui/button'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
@@ -56,6 +57,8 @@ function ReplacementReviewContent({
   action,
   item,
   initialReview,
+  chainId,
+  executionMode,
   amountMetadata,
   feeDecimals,
   feeSymbol,
@@ -65,6 +68,8 @@ function ReplacementReviewContent({
   readonly action: PendingAction
   readonly item: ActivityItem
   readonly initialReview: EvmTransferReview
+  readonly chainId: string
+  readonly executionMode: 'main' | 'private'
   readonly amountMetadata?: Readonly<{ readonly decimals: number; readonly symbol: string }>
   readonly feeDecimals: number
   readonly feeSymbol: string
@@ -75,6 +80,24 @@ function ReplacementReviewContent({
   const [selection, setSelection] = useState<EvmFeeSelection>({ kind: 'tier', tier: 'fast' })
   const [updating, setUpdating] = useState(false)
   const [ready, setReady] = useState(true)
+  const loadTierPreviews = useCallback(
+    () =>
+      estimateNetworkFeeTierPreviews(
+        async tier =>
+          (
+            await evmWalletClient.estimateReplacementFee(
+              action,
+              chainId,
+              parseTransactionId(item.id),
+              executionMode,
+              { kind: 'tier', tier }
+            )
+          ).maximumFeeWei,
+        { decimals: feeDecimals, symbol: feeSymbol },
+        selection.kind === 'tier' ? selection.tier : undefined
+      ),
+    [action, chainId, item.id, executionMode, feeDecimals, feeSymbol, selection]
+  )
   const summary = displayReview.review.summary
   if (summary.schema !== 'evm.transaction.v1') return null
   const fields = summary.fields
@@ -129,6 +152,7 @@ function ReplacementReviewContent({
             symbol={feeSymbol}
             onTierChange={tier => changeFee({ kind: 'tier', tier })}
             onSelectionChange={changeFee}
+            loadTierPreviews={loadTierPreviews}
             disabled={updating}
             feeModel={fields.transactionType === 'legacy' ? 'legacy' : 'eip1559'}
             fixedGasLimit
@@ -299,6 +323,8 @@ export function EvmPendingTransactionActions({
             action={action}
             item={item}
             initialReview={review!}
+            chainId={chainId}
+            executionMode={executionMode}
             amountMetadata={amountMetadata}
             feeDecimals={feeDecimals}
             feeSymbol={feeSymbol ?? item.snapshot?.feeLimit?.metadata?.symbol ?? 'native token'}

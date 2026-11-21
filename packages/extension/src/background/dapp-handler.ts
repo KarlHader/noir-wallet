@@ -2029,6 +2029,7 @@ export class DAppHandler {
     options?: {
       readonly onNetworkFeeTierChange?: (tier: 'low' | 'standard' | 'fast') => Promise<unknown>
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
+      readonly onEvmFeeTierPreviews?: () => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
     }
@@ -2101,6 +2102,7 @@ export class DAppHandler {
     options?: {
       readonly onNetworkFeeTierChange?: (tier: 'low' | 'standard' | 'fast') => Promise<unknown>
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
+      readonly onEvmFeeTierPreviews?: () => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
     }
@@ -2147,6 +2149,7 @@ export class DAppHandler {
     options?: {
       readonly onNetworkFeeTierChange?: (tier: 'low' | 'standard' | 'fast') => Promise<unknown>
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
+      readonly onEvmFeeTierPreviews?: () => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
     },
@@ -2396,6 +2399,29 @@ export class DAppHandler {
                   }
                   sendResponse({
                     error: error instanceof Error ? error.message : 'Transfer privacy update failed'
+                  })
+                })
+              return true
+            }
+
+            if (
+              typeof msg === 'object' &&
+              msg !== null &&
+              !Array.isArray(msg) &&
+              Reflect.get(msg, 'type') === 'DAPP_EVM_FEE_TIER_PREVIEWS' &&
+              Reflect.get(msg, 'requestId') === requestId &&
+              options?.onEvmFeeTierPreviews
+            ) {
+              void Promise.resolve()
+                .then(() => options.onEvmFeeTierPreviews?.())
+                .then(previews => {
+                  sendResponse(
+                    finished ? { error: 'Approval request is no longer active' } : { previews }
+                  )
+                })
+                .catch(error => {
+                  sendResponse({
+                    error: error instanceof Error ? error.message : 'Fee preview failed'
                   })
                 })
               return true
