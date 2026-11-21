@@ -10,6 +10,7 @@ import {
 import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { ChainIcon } from '../common/ChainIcon'
 import { ShieldProviderLogo, SHIELD_PROVIDERS } from '../portfolio/shield-providers'
+import { BalanceSkeleton } from '../ui/skeleton'
 import { TransferMaximumButton, type TransferMaximumControl } from './SendInputCards'
 
 export interface BalanceTransferAmountInput {
@@ -25,11 +26,13 @@ export function BalanceTransferAmount({
   amount,
   asset,
   balance,
+  balanceLoading,
   max
 }: {
   readonly amount?: BalanceTransferAmountInput
   readonly asset: ReactNode
   readonly balance?: string
+  readonly balanceLoading?: boolean
   readonly max?: TransferMaximumControl
 }) {
   return (
@@ -54,9 +57,13 @@ export function BalanceTransferAmount({
       {asset}
       {balance !== undefined && (
         <div className="flex max-w-full items-center gap-2 text-xs text-muted">
-          <span className="truncate" title={balance}>
-            {formatTokenQuantity(balance)}
-          </span>
+          {balanceLoading ? (
+            <BalanceSkeleton />
+          ) : (
+            <span className="truncate" title={balance}>
+              {formatTokenQuantity(balance)}
+            </span>
+          )}
           {max && <TransferMaximumButton {...max} appearance="compact" />}
         </div>
       )}

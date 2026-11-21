@@ -642,7 +642,7 @@ export function AccountSwitcher({
             </DialogPrimitive.Close>
             <div
               ref={accountList}
-              className="min-h-0 flex-1 overflow-y-auto"
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
               onScroll={() => {
                 cancelPreviewTimer()
                 positionPreview()

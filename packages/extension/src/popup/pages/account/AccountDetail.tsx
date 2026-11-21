@@ -3,7 +3,13 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { PageHeader } from '../../components/common/PageHeader'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
 import { Button } from '../../components/ui/button'
 import {
@@ -349,27 +355,29 @@ export function AccountDetail() {
             maxLength={128}
             onChange={event => setRenameDraft(event.target.value)}
           />
-          <Button
-            disabled={!renameDraft.trim()}
-            isLoading={renaming}
-            onClick={async () => {
-              setRenaming(true)
-              try {
-                await zcashWalletRuntimeClient.renameAccount(
-                  wallet.id,
-                  account.id,
-                  renameDraft.trim()
-                )
-                setRenameOpen(false)
-              } catch (error) {
-                toast.error(error instanceof Error ? error.message : 'Unable to rename account')
-              } finally {
-                setRenaming(false)
-              }
-            }}
-          >
-            Save
-          </Button>
+          <DialogFooter>
+            <Button
+              disabled={!renameDraft.trim()}
+              isLoading={renaming}
+              onClick={async () => {
+                setRenaming(true)
+                try {
+                  await zcashWalletRuntimeClient.renameAccount(
+                    wallet.id,
+                    account.id,
+                    renameDraft.trim()
+                  )
+                  setRenameOpen(false)
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : 'Unable to rename account')
+                } finally {
+                  setRenaming(false)
+                }
+              }}
+            >
+              Save
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

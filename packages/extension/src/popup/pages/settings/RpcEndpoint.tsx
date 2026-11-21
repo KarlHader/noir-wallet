@@ -27,6 +27,7 @@ import { Input } from '../../components/ui/input'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogDescription,
   DialogHeader,
   DialogTitle
@@ -436,15 +437,11 @@ export function RpcEndpoint({ chainId }: { readonly chainId: string }) {
           }
         }}
       >
-        <DialogContent
-          position="bottom"
-          className="max-h-[88vh] overflow-y-auto"
-          aria-describedby={undefined}
-        >
+        <DialogContent position="bottom" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>{editingRegistryGroup?.label} RPC</DialogTitle>
           </DialogHeader>
-          <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+          <div className="space-y-2 pr-1">
             <button
               type="button"
               aria-label="Use automatic Zcash RPC"
@@ -534,7 +531,7 @@ export function RpcEndpoint({ chainId }: { readonly chainId: string }) {
       </Dialog>
 
       <Dialog open={editing !== null} onOpenChange={open => !open && !saving && setEditing(null)}>
-        <DialogContent position="bottom" className="flex max-h-[92vh] flex-col gap-3 p-5">
+        <DialogContent position="bottom" scroll="body" className="gap-3 p-5">
           <DialogHeader className="shrink-0">
             <DialogTitle>
               {adding ? `Add ${editing?.label} RPC` : `${editing?.label} RPC`}
@@ -634,24 +631,18 @@ export function RpcEndpoint({ chainId }: { readonly chainId: string }) {
             )}
           </div>
           {adding && (
-            <div className="grid shrink-0 grid-cols-2 gap-2">
+            <DialogFooter>
               <Button
                 variant="outline"
-                className="h-11"
                 disabled={saving}
                 onClick={() => editing && openEditor(editing)}
               >
                 Cancel
               </Button>
-              <Button
-                className="h-11"
-                isLoading={saving}
-                disabled={!url.trim()}
-                onClick={() => void apply(url)}
-              >
+              <Button isLoading={saving} disabled={!url.trim()} onClick={() => void apply(url)}>
                 Verify & Add
               </Button>
-            </div>
+            </DialogFooter>
           )}
         </DialogContent>
       </Dialog>
@@ -671,14 +662,14 @@ export function RpcEndpoint({ chainId }: { readonly chainId: string }) {
                 : 'This endpoint will be removed from your saved RPC list.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-2">
+          <DialogFooter>
             <Button variant="outline" disabled={saving} onClick={() => setDeleteTarget(null)}>
               Cancel
             </Button>
             <Button variant="destructive" isLoading={saving} onClick={() => void remove()}>
               Remove
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

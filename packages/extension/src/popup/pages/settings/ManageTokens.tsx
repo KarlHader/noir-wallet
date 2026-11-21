@@ -22,6 +22,7 @@ import { Switch } from '../../components/ui/switch'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogDescription,
   DialogHeader,
   DialogTitle
@@ -404,7 +405,7 @@ export function ManageTokens() {
                 className="size-5 text-muted"
               />
             </div>
-            <p className="text-sm font-medium">
+            <p className="text-sm font-medium text-muted">
               {selectedNetworkId && !searchQuery.trim()
                 ? 'No Tokens on this network'
                 : searchQuery.trim() || availableManagedAssets.length > 0
@@ -497,7 +498,7 @@ export function ManageTokens() {
       </div>
 
       <Dialog open={addOpen} onOpenChange={setAddDialogOpen}>
-        <DialogContent position="bottom" className="max-h-[88vh] overflow-y-auto">
+        <DialogContent position="bottom">
           <DialogHeader className="mb-6">
             <DialogTitle>Add Token</DialogTitle>
           </DialogHeader>
@@ -571,28 +572,24 @@ export function ManageTokens() {
           </div>
 
           {candidate ? (
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant="outline"
-                className="h-11"
-                disabled={adding}
-                onClick={() => setCandidate(null)}
-              >
+            <DialogFooter>
+              <Button variant="outline" disabled={adding} onClick={() => setCandidate(null)}>
                 Edit
               </Button>
-              <Button className="h-11" isLoading={adding} onClick={() => void add()}>
+              <Button isLoading={adding} onClick={() => void add()}>
                 Add Token
               </Button>
-            </div>
+            </DialogFooter>
           ) : (
-            <Button
-              className="h-11 w-full"
-              isLoading={inspecting}
-              disabled={!selectedNetwork || !contractAddress.trim()}
-              onClick={() => void inspect()}
-            >
-              Verify Token
-            </Button>
+            <DialogFooter>
+              <Button
+                isLoading={inspecting}
+                disabled={!selectedNetwork || !contractAddress.trim()}
+                onClick={() => void inspect()}
+              >
+                Verify Token
+              </Button>
+            </DialogFooter>
           )}
           <ChainSelector
             open={networkSelectorOpen}
@@ -618,24 +615,18 @@ export function ManageTokens() {
               This only hides the Token from Noir Wallet. It does not move or delete your balance.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              variant="outline"
-              className="h-11"
-              disabled={removeInProgress}
-              onClick={() => setRemoving(null)}
-            >
+          <DialogFooter>
+            <Button variant="outline" disabled={removeInProgress} onClick={() => setRemoving(null)}>
               Cancel
             </Button>
             <Button
               variant="destructive"
-              className="h-11"
               isLoading={removeInProgress}
               onClick={() => void remove()}
             >
               Remove
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

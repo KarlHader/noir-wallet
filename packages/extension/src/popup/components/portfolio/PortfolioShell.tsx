@@ -62,18 +62,20 @@ interface PortfolioShellProps {
 function StatePanel({
   icon,
   title,
-  description
+  description,
+  tone = 'empty'
 }: {
   readonly icon: string
   readonly title: string
   readonly description?: string
+  readonly tone?: 'empty' | 'error'
 }) {
   return (
     <div className="flex min-h-40 flex-1 flex-col items-center justify-center px-6 py-8 text-center">
       <div className="mb-3 flex size-12 items-center justify-center rounded-full bg-foreground/5">
         <Icon icon={icon} width={24} height={24} className="text-muted" />
       </div>
-      <p className="text-sm font-medium">{title}</p>
+      <p className={cn('text-sm font-medium', tone === 'empty' && 'text-muted')}>{title}</p>
       {description && (
         <p className="mt-1 max-w-[260px] text-xs leading-5 text-muted">{description}</p>
       )}
@@ -411,6 +413,7 @@ export function PortfolioShell({
             icon="lucide:wifi-off"
             title="Unable to load portfolio"
             description="Noir Wallet is reconnecting automatically."
+            tone="error"
           />
         ) : model.status === 'empty' && visibleConfidential.length === 0 ? (
           <StatePanel

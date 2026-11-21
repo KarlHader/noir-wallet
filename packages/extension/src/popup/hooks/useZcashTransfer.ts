@@ -12,6 +12,7 @@ import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { carryQuotePreview } from '@/popup/hooks/useQuoteReview'
 import { rheaQuoteTerms } from '@/popup/services/quote-review'
+import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { openHardwareSignAndWait, openHardwareSignTab } from '@/lib/hardware-tab'
 import { isSidePanelSurface } from '@/lib/extension-display-mode'
 import { toast } from '@/store/toast-store'
@@ -1027,6 +1028,8 @@ export function useZcashTransfer({
     loading: displayedFeeLoading
   }
   const privateRoute = privatePreviewReady ? privatePreview : null
+  const privatePreviewNotice = getSwapQuoteNotice(privatePreviewError)
+  const moveQuoteNotice = getSwapQuoteNotice(moveQuoteError)
   return {
     available: Boolean(currentAccount),
     networkName,
@@ -1155,7 +1158,11 @@ export function useZcashTransfer({
           : null,
       error: sendPrivately
         ? privatePreviewError
-          ? { message: privatePreviewError, onRetry: retryPrivatePreview }
+          ? {
+              message: privatePreviewNotice ?? privatePreviewError,
+              tone: privatePreviewNotice ? ('muted' as const) : undefined,
+              onRetry: retryPrivatePreview
+            }
           : null
         : !amountErrorCopy && feeError
           ? { message: feeErrorMessage, onRetry: retryFeeEstimate }
@@ -1195,8 +1202,17 @@ export function useZcashTransfer({
       error:
         isConfidentialMove && !moveReviewReady && !moveReviewStatus.acceptLabel
           ? {
-              message: moveQuoteError ?? (moveQuote ? 'Quote expired.' : 'Refreshing quote…'),
-              onRetry: moveQuoteError || moveQuote ? retryMoveQuote : undefined
+              message: moveQuoteLoading
+                ? 'Refreshing quote…'
+                : (moveQuoteNotice ??
+                  moveQuoteError ??
+                  (moveQuote ? 'Quote expired.' : 'Refreshing quote…')),
+              tone:
+                moveQuoteLoading || !moveQuoteError || moveQuoteNotice
+                  ? ('muted' as const)
+                  : undefined,
+              onRetry:
+                !moveQuoteLoading && (moveQuoteError || moveQuote) ? retryMoveQuote : undefined
             }
           : reviewInsufficient && amountErrorCopy
             ? { message: amountErrorCopy }

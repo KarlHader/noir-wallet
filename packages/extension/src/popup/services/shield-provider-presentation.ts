@@ -39,11 +39,8 @@ export const shieldSupportAdapters: Record<
   })
 }
 
-export function formatShieldProviderFiat(
-  fiat: string | null | undefined,
-  { hidden, loading }: { readonly hidden: boolean; readonly loading: boolean }
-): string {
+export function formatShieldProviderFiat(fiat: string | null | undefined, hidden: boolean): string {
   if (hidden) return '••••'
-  if (fiat == null) return loading ? '…' : '—'
+  if (fiat == null) return '—'
   return formatFiatAmount(fiat, { showSign: true })
 }

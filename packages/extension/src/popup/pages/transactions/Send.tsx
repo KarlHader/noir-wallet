@@ -499,6 +499,8 @@ function ZcashSendForm({
     await openModal<string>({
       title: 'Select Recipient',
       showCloseButton: true,
+      scroll: 'body',
+      fixedHeight: true,
       body: (resolve, close) => (
         <RecipientSelector
           chainId={recipient.chainId}

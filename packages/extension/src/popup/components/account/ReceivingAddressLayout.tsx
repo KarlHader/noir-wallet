@@ -33,7 +33,7 @@ export function ReceivingAddressLayout({
     <div
       role="region"
       aria-label={title}
-      className="flex h-full min-h-0 w-full flex-col bg-background text-foreground"
+      className="flex min-h-0 w-full flex-1 flex-col bg-background text-foreground"
     >
       <header className="relative flex h-14 shrink-0 items-center justify-center px-12">
         <button
@@ -47,7 +47,7 @@ export function ReceivingAddressLayout({
         <h1 className="truncate text-lg font-medium leading-[23px]">{title}</h1>
         {headerAction && <div className="absolute right-3">{headerAction}</div>}
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-5">
         <div className="mx-auto flex w-full max-w-[440px] flex-col items-center">
           {identity && (
             <div className="mt-6 flex w-full items-center justify-center">{identity}</div>

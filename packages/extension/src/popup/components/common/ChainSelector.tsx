@@ -85,7 +85,8 @@ export function ChainSelector({
       <DialogContent
         position="bottom"
         showCloseButton={false}
-        className="inset-0 flex h-full max-h-none max-w-none flex-col gap-0 rounded-none border-0 bg-background p-0 shadow-none"
+        scroll="body"
+        className="gap-0 p-0"
         onOpenAutoFocus={event => event.preventDefault()}
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>

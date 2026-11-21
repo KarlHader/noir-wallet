@@ -210,14 +210,10 @@ export function MarketPriceChart({
         ) : null}
       </div>
 
-      {showRanges && (
-        <div
-          className="mt-2 flex h-7 items-center gap-1"
-          aria-label={error ? undefined : 'Price history range'}
-        >
-          {error ? (
-            <InlineError message={error} onRetry={onRetry} className="w-full" />
-          ) : availableRanges.length > 0 ? (
+      {error && <InlineError message={error} tone="muted" onRetry={onRetry} className="mt-2" />}
+      {showRanges && (availableRanges.length > 0 || loading) && (
+        <div className="mt-2 flex h-7 items-center gap-1" aria-label="Price history range">
+          {availableRanges.length > 0 ? (
             availableRanges.map(item => (
               <button
                 key={item}

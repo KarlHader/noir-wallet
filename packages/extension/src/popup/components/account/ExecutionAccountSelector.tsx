@@ -10,6 +10,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle
 } from '@/popup/components/ui/dialog'
@@ -302,20 +303,22 @@ export function ExecutionAccountSelectorDialog({
               Custom address
             </button>
           )}
-          {privateAvailable && onFundPrivate && (
+        </div>
+        {privateAvailable && onFundPrivate && (
+          <DialogFooter className="px-4 pb-5">
             <button
               type="button"
               onClick={() => {
                 onOpenChange(false)
                 onFundPrivate()
               }}
-              className="flex h-10 w-full items-center justify-center gap-2 rounded-xl text-sm font-medium text-private transition-colors hover:bg-private/10"
+              className="flex items-center justify-center gap-2 rounded-xl text-sm font-medium text-private transition-colors hover:bg-private/10"
             >
               <Icon icon="lucide:plus" width={15} height={15} />
               Transfer to Private
             </button>
-          )}
-        </div>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   )

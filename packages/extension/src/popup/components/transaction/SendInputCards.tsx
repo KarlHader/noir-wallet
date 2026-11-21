@@ -9,6 +9,7 @@ import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { ChainIcon } from '../common/ChainIcon'
 import { AmountDisplay } from '../common/AmountDisplay'
+import { BalanceSkeleton } from '../ui/skeleton'
 
 export interface TransferMaximumControl {
   readonly onClick?: () => void
@@ -53,6 +54,7 @@ export interface SendFormAdapter {
   readonly balance: {
     readonly value: string | null
     readonly hidden?: boolean
+    readonly loading?: boolean
     readonly testId?: string
   }
   readonly maximum: TransferMaximumControl
@@ -201,11 +203,15 @@ function SendAmountRow({
               data-testid={balance.testId}
               title={balance.hidden ? undefined : (balance.value ?? undefined)}
             >
-              {balance.hidden
-                ? '••••'
-                : balance.value === null
-                  ? '—'
-                  : formatTokenQuantity(balance.value)}
+              {balance.hidden ? (
+                '••••'
+              ) : balance.loading ? (
+                <BalanceSkeleton />
+              ) : balance.value === null ? (
+                '—'
+              ) : (
+                formatTokenQuantity(balance.value)
+              )}
             </span>
           </span>
           <TransferMaximumButton {...maximum} />

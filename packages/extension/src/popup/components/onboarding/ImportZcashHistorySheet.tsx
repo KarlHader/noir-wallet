@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '../ui/dialog'
 import { InlineError } from '../common/InlineError'
 import {
   ZcashHistoryFields,
@@ -145,11 +152,8 @@ export function ImportZcashHistorySheet({ onClose }: { readonly onClose: () => v
         if (!open && !(flowMode === 'addWallet' && isImporting)) onClose()
       }}
     >
-      <DialogContent
-        position="bottom"
-        className="max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 p-0"
-      >
-        <DialogHeader className="px-5 pb-4 pt-5">
+      <DialogContent position="bottom" scroll="body" className="gap-0 p-0">
+        <DialogHeader className="shrink-0 px-5 pb-4 pt-5">
           <DialogTitle className="sr-only">Zcash account setup</DialogTitle>
           <DialogDescription className="pr-8">
             Has this phrase received ZEC before?
@@ -158,7 +162,7 @@ export function ImportZcashHistorySheet({ onClose }: { readonly onClose: () => v
 
         <fieldset
           disabled={flowMode === 'addWallet' && isImporting}
-          className="min-h-0 min-w-0 overflow-y-auto px-5 pb-4"
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-4"
         >
           <ZcashHistoryFields
             historyMode={historyMode}
@@ -178,7 +182,7 @@ export function ImportZcashHistorySheet({ onClose }: { readonly onClose: () => v
           />
         </fieldset>
 
-        <div className="px-5 pb-5 pt-2">
+        <DialogFooter className="grid-flow-row px-5 pb-5 pt-2">
           {error && (
             <InlineError
               message={error}
@@ -187,15 +191,10 @@ export function ImportZcashHistorySheet({ onClose }: { readonly onClose: () => v
               className="mb-3"
             />
           )}
-          <Button
-            onClick={handleContinue}
-            disabled={isImporting}
-            isLoading={isImporting}
-            className="h-[45px] w-full"
-          >
+          <Button onClick={handleContinue} disabled={isImporting} isLoading={isImporting}>
             Continue
           </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

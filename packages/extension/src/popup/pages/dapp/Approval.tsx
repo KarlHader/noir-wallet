@@ -1178,7 +1178,7 @@ export function Approval() {
                 </div>
                 <div className="space-y-2">
                   {selectedAccounts.length === 0 ? (
-                    <div className="rounded-xl p-4 border border-border/50 bg-card/40 text-xs text-muted-foreground text-center">
+                    <div className="rounded-xl p-4 border border-border/50 bg-card/40 text-xs text-muted text-center">
                       No accounts selected. Tap "Edit accounts" to choose.
                     </div>
                   ) : (

@@ -12,9 +12,9 @@ import {
 } from '@/lib/number-format'
 
 import type { FeeTier } from '@/config/fee'
-import type { NetworkFeeTier } from '@/core/transactions/domain'
-import type { NetworkFeePreviews } from '@/popup/services/network-fee-presentation'
+import { quoteReviewPrimaryAction } from '@/popup/services/quote-review'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
+import { RouteProviderLabel } from '../transaction/RouteProviderLabel'
 import { ReviewDownTriangle } from '../transaction/TransactionReviewView'
 
 import { TokenIcon } from '../tokens/TokenIcon'
@@ -45,6 +45,7 @@ interface SwapReviewViewProps {
   confirmDisabled?: boolean
   onAcceptNewPrice?: () => void
   onRefreshQuote?: () => void
+  quoteExpired?: boolean
   quoteRefreshing?: boolean
   provider?: string
   sendMethod?: string
@@ -71,10 +72,7 @@ interface SwapReviewViewProps {
   fundingSource?: FundingSource
   sourceNetworkFee?: { readonly amount: string; readonly symbol: string } | null
   combinedNetworkFee?: { readonly amount: string; readonly symbol: string }
-  sourceFeeTier?: NetworkFeeTier
-  sourceFeeFamily?: 'evm' | 'bitcoin'
-  onSourceFeeTierChange?: (tier: NetworkFeeTier) => void | Promise<void>
-  loadSourceFeeTierPreviews?: () => Promise<NetworkFeePreviews>
+  sourceFeeControl?: ReactNode
   sourceTransferDetails?: {
     readonly network: string
     readonly chainIcon: string
@@ -117,6 +115,7 @@ export function SwapReviewView({
   confirmDisabled,
   onAcceptNewPrice,
   onRefreshQuote,
+  quoteExpired,
   quoteRefreshing,
   provider,
   sendMethod,
@@ -139,10 +138,7 @@ export function SwapReviewView({
   fundingSource,
   sourceNetworkFee,
   combinedNetworkFee,
-  sourceFeeTier,
-  sourceFeeFamily,
-  onSourceFeeTierChange,
-  loadSourceFeeTierPreviews,
+  sourceFeeControl,
   sourceTransferDetails,
   destinationDetails,
   approvalDetails,
@@ -172,6 +168,26 @@ export function SwapReviewView({
       : approvalDetails
         ? 'Approve token'
         : confirmLabel
+  const primaryAction = quoteReviewPrimaryAction({
+    confirmLabel: actionLabel,
+    onConfirm,
+    confirmDisabled:
+      insufficient ||
+      feeUnavailable ||
+      Boolean(preparationError) ||
+      quoteExpired ||
+      confirmDisabled,
+    refresh:
+      preparationError && onRetryPreparation
+        ? { onClick: onRetryPreparation, retry: true }
+        : quoteExpired && onRefreshQuote
+          ? { onClick: onRefreshQuote }
+          : undefined,
+    accept:
+      quoteAcceptanceLabel && onAcceptNewPrice
+        ? { label: quoteAcceptanceLabel, onClick: onAcceptNewPrice }
+        : undefined
+  })
 
   return (
     <>
@@ -266,6 +282,11 @@ export function SwapReviewView({
               />
             </DetailItem>
           )}
+          {provider && (
+            <DetailItem label="Provider">
+              <RouteProviderLabel router={provider} />
+            </DetailItem>
+          )}
           {onRefreshQuote && (
             <div className="flex items-center justify-between gap-3 py-2">
               <button
@@ -277,25 +298,10 @@ export function SwapReviewView({
                 {showMore ? 'Show less' : 'Show more'}
                 <Icon icon={showMore ? 'lucide:chevron-up' : 'lucide:chevron-down'} width={14} />
               </button>
-              <button
-                type="button"
-                onClick={onRefreshQuote}
-                disabled={isLoading || quoteRefreshing}
-                className="inline-flex min-h-8 shrink-0 items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-                aria-label="Refresh quote"
-              >
-                <Icon
-                  icon="lucide:refresh-cw"
-                  width={14}
-                  className={quoteRefreshing ? 'animate-spin' : undefined}
-                />
-                Refresh quote
-              </button>
             </div>
           )}
           {(!onRefreshQuote || showMore) && (
             <>
-              {provider && <DetailItem label="Provider">{provider}</DetailItem>}
               {onRefreshQuote && sourceAddress && (
                 <DetailItem label="Used account">
                   <span title={sourceAddress} className="text-xs">
@@ -307,19 +313,8 @@ export function SwapReviewView({
               <DetailItem label={combinedNetworkFee ? 'Approval fee' : 'Network fee'}>
                 {quoteRefreshing ? (
                   <span className="inline-block h-4 w-24 animate-pulse rounded bg-card" />
-                ) : sourceNetworkFee &&
-                  sourceFeeTier &&
-                  sourceFeeFamily &&
-                  onSourceFeeTierChange ? (
-                  <NetworkFeeTierPicker
-                    chainFamily={sourceFeeFamily}
-                    tier={sourceFeeTier}
-                    amount={sourceNetworkFee.amount}
-                    symbol={sourceNetworkFee.symbol}
-                    onTierChange={onSourceFeeTierChange}
-                    loadTierPreviews={loadSourceFeeTierPreviews}
-                    disabled={isLoading}
-                  />
+                ) : sourceFeeControl ? (
+                  sourceFeeControl
                 ) : sourceNetworkFee ? (
                   <AmountDisplay
                     value={sourceNetworkFee.amount}
@@ -445,12 +440,11 @@ export function SwapReviewView({
           )}
         </div>
 
-        {quoteChanges}
-        {preparationError && (
+        {!quoteExpired && !quoteRefreshing && !preparationError && quoteChanges}
+        {(preparationError || (quoteExpired && !quoteRefreshing)) && (
           <InlineError
-            message={preparationError}
-            onRetry={onRetryPreparation}
-            retrying={isLoading}
+            message={preparationError ?? 'Quote expired.'}
+            tone={preparationError ? 'error' : 'muted'}
             className="mt-3 px-1"
           />
         )}
@@ -486,30 +480,17 @@ export function SwapReviewView({
           <Button
             type="button"
             size="wallet"
-            onClick={quoteAcceptanceLabel ? onAcceptNewPrice : onConfirm}
-            disabled={
-              isLoading ||
-              insufficient ||
-              feeUnavailable ||
-              Boolean(preparationError) ||
-              confirmDisabled ||
-              (Boolean(quoteAcceptanceLabel) && !onAcceptNewPrice)
-            }
-            isLoading={isLoading}
+            onClick={primaryAction.onConfirm}
+            disabled={isLoading || quoteRefreshing || primaryAction.confirmDisabled}
+            isLoading={isLoading || quoteRefreshing}
             aria-label={
-              quoteAcceptanceLabel
-                ? quoteAcceptanceLabel
-                : approvalDetails && !combinedNetworkFee
-                  ? 'Confirm token approval'
-                  : actionLabel
+              primaryAction.onConfirm === onConfirm && approvalDetails && !combinedNetworkFee
+                ? 'Confirm token approval'
+                : primaryAction.confirmLabel
             }
-            className={`min-w-0 flex-[2] text-sm text-black ${quoteAcceptanceLabel ? 'bg-warning hover:bg-warning/90' : ''}`}
+            className={`min-w-0 flex-[2] text-sm text-black ${primaryAction.confirmTone === 'warning' ? 'bg-warning hover:bg-warning/90' : ''}`}
           >
-            {quoteAcceptanceLabel
-              ? quoteAcceptanceLabel
-              : actionLabel === 'Confirm Swap'
-                ? 'Confirm'
-                : actionLabel}
+            {primaryAction.confirmLabel === 'Confirm Swap' ? 'Confirm' : primaryAction.confirmLabel}
           </Button>
         </div>
       </div>

@@ -1,5 +1,12 @@
 import { Button } from '../ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from '../ui/dialog'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
@@ -119,8 +126,8 @@ export function ShieldConfirmSheet({
           </p>
         )}
 
-        <div className="p-5 flex gap-3">
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1 h-[45px]">
+        <DialogFooter className="p-5 gap-3">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
@@ -138,11 +145,10 @@ export function ShieldConfirmSheet({
             }}
             isLoading={isShielding}
             disabled={!hasEnoughBalance || !feeReady}
-            className="flex-1 h-[45px]"
           >
             Shield Now
           </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

@@ -553,7 +553,6 @@ export function Home() {
     setFocusTransactionId(null)
     await openModal({
       showCloseButton: true,
-      className: 'max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain',
       body: (resolve: (value: unknown) => void, close: () => void) => (
         <MultichainActivityDetail
           item={item}
@@ -822,7 +821,7 @@ export function Home() {
           </div>
         </div>
 
-        {accountNetworksError && (
+        {accountNetworksError && !storageV2Account && (
           <InlineError
             className="mb-4 px-5"
             message="Unable to load account addresses"

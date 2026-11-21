@@ -1,6 +1,7 @@
 import { Icon } from '@iconify/react'
 import type { ReactNode } from 'react'
 import { Button } from '../ui/button'
+import { DialogFooter } from '../ui/dialog'
 
 export function TransactionActionReview({
   children,
@@ -40,7 +41,7 @@ export function TransactionActionReview({
           </div>
         )}
       </div>
-      <div className="grid shrink-0 grid-cols-2 gap-2.5 border-t border-border/60 pt-3">
+      <DialogFooter className="gap-2.5 border-t border-border/60 pt-3">
         <Button type="button" variant="outline" disabled={backDisabled} onClick={onBack}>
           {backLabel}
         </Button>
@@ -53,7 +54,7 @@ export function TransactionActionReview({
         >
           {confirmLabel}
         </Button>
-      </div>
+      </DialogFooter>
     </div>
   )
 }

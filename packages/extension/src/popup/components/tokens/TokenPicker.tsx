@@ -252,7 +252,7 @@ export function TokenPicker<Row>({
       </div>
       <div
         ref={virtualWindow.scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
         style={{ overflowAnchor: 'none' }}
         onScroll={virtualWindow.onScroll}
         onKeyDown={virtualWindow.onKeyDown}

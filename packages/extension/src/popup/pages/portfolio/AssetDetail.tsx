@@ -60,7 +60,7 @@ import {
 } from '@/popup/services/chain-explorer'
 import { useNavigate } from '@/popup/provider/Router'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
-import { ListSkeleton, Skeleton } from '@/popup/components/ui/skeleton'
+import { BalanceSkeleton, ListSkeleton, Skeleton } from '@/popup/components/ui/skeleton'
 import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import { MultichainActivityPanel } from '@/popup/components/transaction/MultichainActivityPanel'
 import { MultichainActivityDetail } from '@/popup/components/transaction/MultichainActivityDetail'
@@ -113,10 +113,14 @@ export function AssetDetail() {
   )
   const historyRequestSequence = useRef(0)
   const missingAssetRefreshes = useRef(new Set<string>())
-  const { model, status, refresh, refreshSource } = usePortfolioSnapshot(
-    effectiveWalletId,
-    effectiveAccountId
-  )
+  const {
+    model,
+    status,
+    scopeKey: portfolioScopeKey,
+    refresh,
+    refreshSource
+  } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId)
+  const [settledConfidentialScope, setSettledConfidentialScope] = useState<string | null>(null)
   const [prices, setPrices] = useState<AssetPriceReadModel | null>(null)
   const [priceStatus, setPriceStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [history, setHistory] = useState<AssetMarketHistoryReadModel | null>(null)
@@ -264,6 +268,11 @@ export function AssetDetail() {
     privateTransferEligible ||
     (chain?.chain.family === 'zcash' &&
       getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0)
+  const loadingConfidentialBalance =
+    refreshConfidentialBalances &&
+    Boolean(portfolioScopeKey) &&
+    visibleModel?.confidential?.status !== 'ready' &&
+    settledConfidentialScope !== portfolioScopeKey
   const categories =
     asset && visibleModel
       ? getAssetDetailCategories(
@@ -306,15 +315,16 @@ export function AssetDetail() {
     navigate(`/asset-detail?${query}`, { replace: true })
   }
   useEffect(() => {
-    if (!refreshConfidentialBalances || !effectiveWalletId || !effectiveAccountId) return
-    void refreshSource({ source: 'near-confidential', authorize: false }).catch(() => {})
-  }, [
-    refreshConfidentialBalances,
-    effectiveWalletId,
-    effectiveAccountId,
-    currentNetwork,
-    refreshSource
-  ])
+    if (!refreshConfidentialBalances || !portfolioScopeKey) return
+    let active = true
+    const settle = () => {
+      if (active) setSettledConfidentialScope(portfolioScopeKey)
+    }
+    void refreshSource({ source: 'near-confidential', authorize: false }).then(settle, settle)
+    return () => {
+      active = false
+    }
+  }, [refreshConfidentialBalances, portfolioScopeKey, refreshSource])
 
   const handlePrivateTransfer = (intent: BalanceTransferIntent) => {
     if (!asset) return
@@ -675,7 +685,6 @@ export function AssetDetail() {
     async (item: ActivityItem) => {
       await openModal({
         showCloseButton: true,
-        className: 'max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain',
         body: (resolve: (value: unknown) => void, close: () => void) => (
           <MultichainActivityDetail
             item={item}
@@ -741,7 +750,9 @@ export function AssetDetail() {
         <PageHeader title="Asset details" showBack />
         <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
           <Icon icon="lucide:circle-alert" width={40} height={40} className="text-muted" />
-          <p className="mt-4 text-base font-medium">Asset unavailable</p>
+          <p className={cn('mt-4 text-base font-medium', status !== 'error' && 'text-muted')}>
+            Asset unavailable
+          </p>
           {status === 'error' ? (
             <InlineError
               message="This asset could not be refreshed. Check your connection."
@@ -771,6 +782,8 @@ export function AssetDetail() {
       : nativeRaw
   const detailAmount =
     displayRaw === null ? '—' : formatDisplayTokenAmount(displayRaw, asset.metadata.decimals)
+  const detailBalanceLoading =
+    detailMode === 'shield' && displayRaw === null && loadingConfidentialBalance
   const detailFiat =
     displayRaw === null || !quote
       ? null
@@ -824,54 +837,30 @@ export function AssetDetail() {
         </button>
       </>
     ) : null
-  const historyLinks = [
-    {
-      domain: 'public',
-      address: publicAddress,
-      label: chain.chain.family === 'zcash' ? 'View Transparent address' : 'View Public address'
-    },
-    {
-      domain: 'private',
-      address: privateTransferEligible ? accountNetwork?.privateExecutionAddress : undefined,
-      label: 'View Private address'
-    }
-  ].flatMap(({ domain, address, label }) => {
-    if (!address || domain !== detailMode) return []
-    const href = formatChainAddressExplorerUrl(chain.chain.id, address, currentNetwork)
-    return href ? [{ domain, label, href }] : []
-  })
-  const historyFooter = (
-    <div
-      aria-label="Asset history links"
-      className="flex items-center justify-center gap-2 whitespace-nowrap border-t border-border/60 px-5 py-4 text-xs"
-    >
-      <span className="text-muted">View</span>
-      {historyLinks.map((link, index) => (
-        <span key={link.domain} className="inline-flex items-center gap-2">
-          {index > 0 && (
-            <span aria-hidden="true" className="text-muted">
-              ·
-            </span>
-          )}
-          <a
-            href={link.href}
-            aria-label={link.label}
-            target="_blank"
-            rel="noopener noreferrer"
-            referrerPolicy="no-referrer"
-            className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
-          >
-            {link.domain === 'public'
-              ? chain.chain.family === 'zcash'
-                ? 'Transparent'
-                : 'Public'
-              : 'Private'}
-            <Icon icon="lucide:external-link" width={12} height={12} />
-          </a>
-        </span>
-      ))}
+  const historyAddress =
+    detailMode === 'public'
+      ? publicAddress
+      : detailMode === 'private' && privateTransferEligible
+        ? accountNetwork?.privateExecutionAddress
+        : undefined
+  const historyUrl = historyAddress
+    ? formatChainAddressExplorerUrl(chain.chain.id, historyAddress, currentNetwork)
+    : null
+  const historyFooter = historyUrl ? (
+    <div className="flex justify-center border-t border-border/60 px-5 py-4 text-xs">
+      <a
+        href={historyUrl}
+        aria-label="More activity on the block explorer"
+        target="_blank"
+        rel="noopener noreferrer"
+        referrerPolicy="no-referrer"
+        className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+      >
+        More
+        <Icon icon="lucide:external-link" width={12} height={12} aria-hidden="true" />
+      </a>
     </div>
-  )
+  ) : null
   const hardware = storageV2Account
     ? storageV2Account.walletSource.kind === 'hardware'
     : isZcashHardwareKeySource(currentWallet?.keySource)
@@ -1032,9 +1021,13 @@ export function AssetDetail() {
                 : `${formatBaseUnitAmount(displayRaw, asset.metadata.decimals)} ${formatSymbol(asset.metadata.symbol)}`
             }
           >
-            {detailAmount} {formatSymbol(asset.metadata.symbol)}
+            {detailBalanceLoading ? (
+              <BalanceSkeleton className="h-6 w-24" />
+            ) : (
+              `${detailAmount} ${formatSymbol(asset.metadata.symbol)}`
+            )}
           </p>
-          {priceStatus === 'loading' && detailFiat === null ? (
+          {detailBalanceLoading || (priceStatus === 'loading' && detailFiat === null) ? (
             <Skeleton className="mt-2 h-4 w-20" />
           ) : (
             <p className="mt-1.5 text-sm text-muted">
@@ -1141,9 +1134,13 @@ export function AssetDetail() {
                           : renderBalanceAddress(publicAddress, 'Public')
                     }
                     balance={
-                      raw === null
-                        ? '—'
-                        : `${formatDisplayTokenAmount(raw, asset.metadata.decimals)} ${formatSymbol(asset.metadata.symbol)}`
+                      domain === 'shield' && raw === null && loadingConfidentialBalance ? (
+                        <BalanceSkeleton className="h-4 w-20" />
+                      ) : raw === null ? (
+                        '—'
+                      ) : (
+                        `${formatDisplayTokenAmount(raw, asset.metadata.decimals)} ${formatSymbol(asset.metadata.symbol)}`
+                      )
                     }
                     fiat={formatBalanceFiat(categories.fiat[domain])}
                     actions={domain === 'shield' ? confidentialActions() : accountActions(domain)}
@@ -1229,9 +1226,13 @@ export function AssetDetail() {
                 onSelect={() => selectDetailMode('shield')}
                 actions={confidentialActions()}
                 balance={
-                  nearConfidentialZec
-                    ? `${formatDisplayTokenAmount(nearConfidentialZec.availableRaw, asset.metadata.decimals)} ZEC`
-                    : '—'
+                  nearConfidentialZec ? (
+                    `${formatDisplayTokenAmount(nearConfidentialZec.availableRaw, asset.metadata.decimals)} ZEC`
+                  ) : loadingConfidentialBalance ? (
+                    <BalanceSkeleton className="h-4 w-20" />
+                  ) : (
+                    '—'
+                  )
                 }
                 fiat={formatBalanceFiat(
                   nearConfidentialZec && quote
@@ -1259,7 +1260,11 @@ export function AssetDetail() {
                 historyRanges?.assetId === asset.asset.id ? historyRanges.ranges : []
               }
               onRangeChange={setHistoryRange}
-              error={historyStatus === 'error' ? 'Unable to load chart.' : null}
+              error={
+                historyStatus === 'error' && !visibleHistory?.points.length
+                  ? 'Chart unavailable'
+                  : null
+              }
               onRetry={() => setHistoryRetry(value => value + 1)}
             />
           </section>
@@ -1297,7 +1302,7 @@ export function AssetDetail() {
                 showToolbar={false}
                 pageSize={5}
                 localPagination
-                historyFooter={historyLinks.length > 0 ? historyFooter : null}
+                historyFooter={historyFooter}
                 compact
                 onItemClick={item => void handleActivityClick(item)}
               />

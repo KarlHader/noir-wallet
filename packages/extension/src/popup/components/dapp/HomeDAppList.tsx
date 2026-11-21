@@ -72,8 +72,8 @@ export function HomeDAppList({
           ))}
         </div>
       )}
-      {dapps === null && failed && (
-        <InlineError message="Unable to load DApps." onRetry={retry} retrying={loading} />
+      {dapps === null && failed && !loading && (
+        <InlineError message="DApps unavailable" tone="muted" onRetry={retry} />
       )}
       {dapps?.map(dapp => {
         const connected =

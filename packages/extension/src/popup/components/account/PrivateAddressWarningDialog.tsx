@@ -40,7 +40,7 @@ export function PrivateAddressWarningDialog({
             {address}
           </p>
         )}
-        <DialogFooter className="grid grid-cols-2">
+        <DialogFooter>
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>

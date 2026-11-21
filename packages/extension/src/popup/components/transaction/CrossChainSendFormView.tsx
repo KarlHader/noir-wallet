@@ -4,7 +4,9 @@ import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import { formatChainName, formatSymbol } from '@/lib/format'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import { RouteProviderLabel } from './RouteProviderLabel'
 import { SendRouteInfoCard, SendFormActions } from './SendInputCards'
 import { SendFormSlot } from './SendFormLayout'
 
@@ -95,6 +97,7 @@ export function CrossChainSendFormView({
 }: CrossChainSendFormViewProps) {
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const sourceSymbol = formatSymbol(tokenIn?.symbol) || sourceSymbolFallback || 'Token'
+  const quoteNotice = getSwapQuoteNotice(quoteError)
   const destinationId = selectedDestinationChainId ?? tokenOut?.rheaChainId ?? null
   const destination = destinationOptions.find(option => option.id === destinationId)
   const destinationName =
@@ -157,7 +160,7 @@ export function CrossChainSendFormView({
         }
       >
         {hasInsufficientFunds && (
-          <InlineError message={insufficientMessage ?? 'Insufficient balance'} />
+          <InlineError message={insufficientMessage ?? 'Insufficient balance'} tone="muted" />
         )}
 
         <SendRouteInfoCard
@@ -167,8 +170,10 @@ export function CrossChainSendFormView({
                 <Icon icon="lucide:loader-circle" className="size-3.5 animate-spin" aria-hidden />
                 Calculating quote…
               </span>
+            ) : providerName ? (
+              <RouteProviderLabel router={providerName} />
             ) : (
-              (providerName ?? '—')
+              '—'
             )
           }
           feeLabel="Route cost (est.)"
@@ -201,10 +206,15 @@ export function CrossChainSendFormView({
               : undefined
           }
         />
-        {catalogError && <InlineError message="Unable to load assets" onRetry={onRetryCatalog} />}
-        {quoteError && (
-          <InlineError message={quoteError} onRetry={onRetryQuote} retrying={isQuoting} />
-        )}
+        {catalogError ? (
+          <InlineError message="Unable to load assets" onRetry={onRetryCatalog} />
+        ) : !isQuoting && !recipientError && quoteError ? (
+          <InlineError
+            message={quoteNotice ?? quoteError}
+            tone={quoteNotice ? 'muted' : 'error'}
+            onRetry={onRetryQuote}
+          />
+        ) : null}
       </SendFormSlot>
       <ChainSelector
         open={networkPickerOpen}

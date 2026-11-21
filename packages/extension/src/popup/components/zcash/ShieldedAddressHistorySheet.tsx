@@ -35,10 +35,7 @@ export function ShieldedAddressHistorySheet({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        position="bottom"
-        className="max-h-[78vh] grid-rows-[auto_minmax(0,1fr)] gap-0 p-0"
-      >
+      <DialogContent position="bottom" scroll="body" className="gap-0 p-0">
         <DialogHeader className="border-b border-border px-5 pb-4 pt-5">
           <DialogTitle className="text-center">Shield addresses</DialogTitle>
           <DialogDescription className="sr-only">
@@ -48,7 +45,7 @@ export function ShieldedAddressHistorySheet({
         <div
           role="region"
           aria-label="Shield address history"
-          className="min-h-0 space-y-2 overflow-y-auto px-4 py-4"
+          className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-4 py-4"
         >
           {error && (
             <p role="alert" className="text-sm text-destructive">

@@ -5,6 +5,8 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 
 import { cn } from '@/lib/utils'
 
+const dialogHeightClassName = 'min-h-[min(150px,80dvh)] max-h-[80dvh]'
+
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
 }
@@ -38,10 +40,14 @@ function DialogContent({
   children,
   showCloseButton = true,
   position = 'center',
+  scroll = 'content',
+  fixedHeight = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
   position?: 'center' | 'bottom'
+  scroll?: 'content' | 'body'
+  fixedHeight?: boolean
 }) {
   const positionClasses = {
     center:
@@ -49,15 +55,6 @@ function DialogContent({
     bottom:
       'bottom-0 left-0 right-0 translate-x-0 translate-y-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom max-w-full rounded-t-2xl rounded-b-none border-t border-foreground/10 shadow-[0_-14px_36px_rgba(0,0,0,0.48)]'
   }
-  const scrollableBody = typeof className === 'string' && /\boverflow-y-auto\b/.test(className)
-  const surfaceClassName =
-    scrollableBody && typeof className === 'string'
-      ? className
-          .replace(/\boverflow-y-auto\b/g, '')
-          .replace(/\boverscroll-contain\b/g, '')
-          .trim()
-      : className
-
   const closeButton = showCloseButton ? (
     <DialogPrimitive.Close
       data-slot="dialog-close"
@@ -86,16 +83,19 @@ function DialogContent({
         data-slot="dialog-content"
         className={cn(
           'bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed z-50 w-full shadow-lg duration-200 outline-none [&>*]:min-w-0',
-          scrollableBody
-            ? 'flex max-h-[calc(100dvh-1rem)] flex-col gap-4 overflow-hidden p-6'
-            : 'grid gap-4 overflow-hidden p-6',
+          'flex flex-col gap-4 overflow-hidden p-6',
           positionClasses[position],
-          surfaceClassName
+          className,
+          dialogHeightClassName,
+          fixedHeight && 'h-[80dvh]'
         )}
         {...props}
       >
-        {scrollableBody ? (
-          <div className="grid min-h-0 flex-1 content-start gap-[inherit] overflow-y-auto overscroll-contain">
+        {scroll === 'content' ? (
+          <div
+            data-slot="dialog-scroll"
+            className="grid min-h-0 flex-1 content-start gap-[inherit] overflow-y-auto overscroll-contain [&>*]:min-w-0"
+          >
             {children}
           </div>
         ) : (
@@ -121,7 +121,10 @@ function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="dialog-footer"
-      className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)}
+      className={cn(
+        'grid w-full shrink-0 auto-cols-fr grid-flow-col gap-2 [&>button]:h-11 [&>button]:min-w-0 [&>button]:whitespace-normal [&>button]:leading-tight',
+        className
+      )}
       {...props}
     />
   )

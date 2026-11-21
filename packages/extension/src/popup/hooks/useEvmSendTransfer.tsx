@@ -696,6 +696,8 @@ export function useEvmSendTransfer({
     await openModal<string | undefined>({
       title: 'Select Recipient',
       showCloseButton: true,
+      scroll: 'body',
+      fixedHeight: true,
       body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}

@@ -161,6 +161,8 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
     await openModal<string | undefined>({
       title: 'Select Recipient',
       showCloseButton: true,
+      scroll: 'body',
+      fixedHeight: true,
       body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}

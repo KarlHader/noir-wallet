@@ -6,6 +6,7 @@ import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatPortfolioNetworkName } from '@/popup/services/portfolio-format'
+import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
 import { SendRecipientAddress } from '@/popup/components/transaction/SendInputCards'
 import { ExecutionAccountBadge } from '@/popup/components/account/ExecutionAccountSelector'
@@ -366,6 +367,7 @@ function EvmSendRouteDetails({ state }: { readonly state: EvmSendTransferState }
     handleMaximum,
     support
   } = state
+  const privatePreviewNotice = getSwapQuoteNotice(privatePreviewError)
   return (
     <>
       {sendPrivately && (
@@ -408,8 +410,13 @@ function EvmSendRouteDetails({ state }: { readonly state: EvmSendTransferState }
           }
         />
       )}
-      {sendPrivately && privatePreviewError && (
-        <InlineError message={privatePreviewError} onRetry={retryPrivatePreview} className="px-1" />
+      {sendPrivately && !privatePreviewLoading && privatePreviewError && (
+        <InlineError
+          message={privatePreviewNotice ?? privatePreviewError}
+          tone={privatePreviewNotice ? 'muted' : 'error'}
+          onRetry={retryPrivatePreview}
+          className="px-1"
+        />
       )}
 
       {route === 'onchain' && (

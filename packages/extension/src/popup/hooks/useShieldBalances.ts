@@ -211,6 +211,14 @@ export function useShieldBalances({
     balances,
     spendableBalances,
     settled,
+    loading:
+      active &&
+      enabled &&
+      scope !== null &&
+      (!settled ||
+        connecting ||
+        autoRecovering ||
+        (authorizeOnMount && !balances && autoAttemptedKey.current !== lifecycleKey)),
     connecting: connecting || autoRecovering,
     error: autoRecovering ? null : error,
     errorCode: autoRecovering ? null : errorCode,

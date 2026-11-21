@@ -7,6 +7,7 @@ import { ChainSelector, type ChainSelectorOption } from '@/popup/components/comm
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogDescription,
   DialogHeader,
   DialogTitle
@@ -26,14 +27,12 @@ export function AddAddressDialog({
   open,
   onOpenChange,
   networks,
-  initialChainId = '',
-  fullHeight = false
+  initialChainId = ''
 }: {
   readonly open: boolean
   readonly onOpenChange: (open: boolean) => void
   readonly networks: readonly AddressBookNetworkChoice[]
   readonly initialChainId?: string
-  readonly fullHeight?: boolean
 }) {
   const addContact = useAddressBookStore(state => state.addContact)
   const getExactContact = useAddressBookStore(state => state.getExactContact)
@@ -105,20 +104,12 @@ export function AddAddressDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        position="bottom"
-        className={cn(
-          'gap-0 p-0',
-          fullHeight && '!flex h-[calc(100dvh-56px)] max-h-[calc(100dvh-56px)] flex-col'
-        )}
-      >
-        <DialogHeader className="px-5 pb-5 pt-5">
-          <DialogTitle className={fullHeight ? 'text-left' : 'text-center'}>
-            Add address
-          </DialogTitle>
+      <DialogContent position="bottom" scroll="body" className="gap-0 p-0">
+        <DialogHeader className="shrink-0 px-5 pb-5 pt-5 text-left">
+          <DialogTitle>Add address</DialogTitle>
           <DialogDescription className="sr-only">Save a recipient address</DialogDescription>
         </DialogHeader>
-        <div className={cn('space-y-4 px-5', fullHeight && 'min-h-0 overflow-y-auto')}>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5">
           <label className="flex flex-col gap-2 text-sm">
             <span>Name</span>
             <Input
@@ -190,15 +181,11 @@ export function AddAddressDialog({
             </p>
           )}
         </div>
-        <div className={cn('p-5', fullHeight && 'mt-auto')}>
-          <Button
-            className="w-full"
-            disabled={!network || !name.trim() || !address.trim()}
-            onClick={save}
-          >
+        <DialogFooter className="p-5">
+          <Button disabled={!network || !name.trim() || !address.trim()} onClick={save}>
             Save address
           </Button>
-        </div>
+        </DialogFooter>
         <ChainSelector
           open={showNetworks}
           onOpenChange={setShowNetworks}

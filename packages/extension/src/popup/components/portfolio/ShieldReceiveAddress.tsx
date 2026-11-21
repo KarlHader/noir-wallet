@@ -221,6 +221,7 @@ export function ShieldReceiveAddress({
       return
     }
     const requestScope = scope
+    const requestWallet = useWalletStore.getState()
     const requestId = requestIdRef.current ?? crypto.randomUUID()
     requestIdRef.current = requestId
     busyRef.current = true
@@ -239,12 +240,13 @@ export function ShieldReceiveAddress({
         refundAddress: refundAddress.trim(),
         requestId
       })
+      const currentWallet = useWalletStore.getState()
       if (
         !mounted.current ||
         scopeRef.current !== requestScope ||
-        useWalletStore.getState().currentNetwork !== network ||
-        useWalletStore.getState().currentWalletId !== walletId ||
-        useWalletStore.getState().currentAccountId !== accountId
+        currentWallet.currentNetwork !== network ||
+        currentWallet.currentWalletId !== requestWallet.currentWalletId ||
+        currentWallet.currentAccountId !== requestWallet.currentAccountId
       )
         return
       if (
@@ -339,7 +341,8 @@ export function ShieldReceiveAddress({
         <DialogContent
           position="bottom"
           showCloseButton={false}
-          className="h-[min(90dvh,760px)] max-h-[90dvh] gap-0 bg-background p-0"
+          scroll="body"
+          className="gap-0 p-0"
         >
           <DialogTitle className="sr-only">Receiving Address</DialogTitle>
           <DialogDescription className="sr-only">
@@ -566,7 +569,9 @@ export function ShieldReceiveAddress({
                 {currentRecord.phase === 'awaiting-payment' &&
                   hasExternalShieldDepositFunding(currentRecord) &&
                   now >= currentRecord.expiresAt && (
-                    <p className="mt-1 text-xs text-warning">Quote expired</p>
+                    <p role="status" className="mt-1 text-xs text-muted">
+                      Payment window closed
+                    </p>
                   )}
                 {(!canPay || payment?.hasDeposit || currentRecord.settledOutputRaw) && (
                   <div className="mt-5 space-y-2 border-t border-white/10 pt-4">

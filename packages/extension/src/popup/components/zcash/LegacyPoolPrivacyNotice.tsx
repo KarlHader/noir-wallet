@@ -1,5 +1,12 @@
 import { Button } from '../ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from '../ui/dialog'
 import { NYM_DOWNLOAD_URL, TOR_DOWNLOAD_URL } from '@/lib/legacy-pool-privacy-notice'
 
 interface LegacyPoolPrivacyNoticeProps {
@@ -105,9 +112,11 @@ export function LegacyPoolPrivacyNotice({ open, onDismiss }: LegacyPoolPrivacyNo
           </p>
         </div>
 
-        <Button className="mt-4 h-11 w-full rounded-lg font-semibold" onClick={onDismiss}>
-          Got it
-        </Button>
+        <DialogFooter>
+          <Button className="mt-4  w-full rounded-lg font-semibold" onClick={onDismiss}>
+            Got it
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

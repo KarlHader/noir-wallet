@@ -179,10 +179,15 @@ export function formatMinimumDepositPaymentAmount(
   raw: string,
   decimals: number | undefined
 ): string | null {
+  if (decimals === undefined) return null
   const exact = formatDepositAmount(raw, decimals)
-  return exact === null
-    ? null
-    : formatDecimalAmount(exact, { maximumFractionDigits: 6, roundingMode: Big.roundUp })
+  if (exact === null) return null
+  const amount = new Big(exact)
+  return formatDecimalAmount(exact, {
+    maximumFractionDigits: Math.min(decimals, Math.max(2, 2 - amount.e)),
+    roundingMode: Big.roundUp,
+    displayMinimum: false
+  })
 }
 
 export function hasDepositSettlementShortfall(record: ExternalShieldDeposit): boolean {

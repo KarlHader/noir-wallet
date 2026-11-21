@@ -5,6 +5,7 @@ import { Skeleton } from '../components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogDescription,
   DialogHeader,
   DialogTitle
@@ -121,14 +122,14 @@ export function Update() {
                   </div>
                 )}
 
-                <div className="mt-5 flex gap-2">
-                  <Button variant="outline" className="h-10 flex-1" onClick={leavePage}>
+                <DialogFooter className="mt-5">
+                  <Button variant="outline" onClick={leavePage}>
                     Later
                   </Button>
-                  <Button className="h-10 flex-1" isLoading={isSubmitting} onClick={handleUpdate}>
+                  <Button isLoading={isSubmitting} onClick={handleUpdate}>
                     Restart
                   </Button>
-                </div>
+                </DialogFooter>
               </>
             ) : (
               <>
@@ -151,9 +152,11 @@ export function Update() {
                   </div>
                 )}
 
-                <Button className="mt-5 h-10 w-full" isLoading={isSubmitting} onClick={handleDone}>
-                  Got it
-                </Button>
+                <DialogFooter className="mt-5">
+                  <Button isLoading={isSubmitting} onClick={handleDone}>
+                    Got it
+                  </Button>
+                </DialogFooter>
               </>
             )}
           </DialogContent>

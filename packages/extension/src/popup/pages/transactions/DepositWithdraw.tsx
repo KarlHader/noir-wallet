@@ -536,6 +536,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const shieldBalanceKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}`
   const {
     balances: shieldBalances,
+    loading: loadingShieldBalances,
     connecting: shieldConnecting,
     error: shieldBalanceError,
     errorCode: shieldBalanceErrorCode,
@@ -2236,6 +2237,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
             <BalanceTransferAmount
               asset={assetControl}
               balance={sourceBalance}
+              balanceLoading={from === 'shield' && !currentShieldBalances && loadingShieldBalances}
               amount={{
                 id: 'transfer-amount',
                 label: 'Transfer amount',
@@ -2568,7 +2570,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         <DialogContent
           position="bottom"
           data-wallet-mode={walletMode}
-          className="max-h-[75dvh] min-h-0 overflow-y-auto bg-wallet-surface p-4"
+          className="bg-wallet-surface p-4"
         >
           <DialogHeader className="text-left">
             <DialogTitle className="text-sm font-medium leading-[18px]">

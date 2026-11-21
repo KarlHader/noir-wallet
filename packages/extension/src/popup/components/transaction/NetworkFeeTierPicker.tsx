@@ -170,7 +170,7 @@ function FeePickerDialog({
           </button>
         </DialogTrigger>
       </div>
-      <DialogContent position="bottom" className="gap-5 overflow-y-auto">
+      <DialogContent position="bottom" className="gap-5">
         {children(() => setOpen(false))}
       </DialogContent>
     </Dialog>
@@ -471,7 +471,7 @@ function NetworkFeeTierEditContent({
             title={!canEditCustom ? 'Gas estimate required' : undefined}
             disabled={!canEditCustom || updating}
             className={cn(
-              '-my-1 inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors enabled:hover:bg-card enabled:hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-55',
+              'inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors enabled:hover:bg-card enabled:hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary disabled:opacity-55',
               customApplied ? 'text-primary' : 'text-muted'
             )}
             onClick={() => {

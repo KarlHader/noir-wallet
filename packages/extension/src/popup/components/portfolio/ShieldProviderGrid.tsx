@@ -18,6 +18,7 @@ import {
   shieldZcashEnablePath
 } from '@/popup/services/shield-zcash-entry'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
+import { BalanceSkeleton } from '@/popup/components/ui/skeleton'
 import { ShieldProviderLogo, SHIELD_PROVIDERS } from './shield-providers'
 
 export function HomeShieldProviders({
@@ -44,7 +45,11 @@ export function HomeShieldProviders({
     'near' | 'canManageNear' | 'hasZcash'
   >
 }) {
-  const { connecting, error, refreshBalances } = useShieldBalances({
+  const {
+    loading: loadingShieldBalances,
+    error,
+    refreshBalances
+  } = useShieldBalances({
     active: true,
     enabled: canManageNear && near.status !== 'ready',
     scopeKey: `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`,
@@ -70,7 +75,7 @@ export function HomeShieldProviders({
       provider: 'near-confidential',
       visible: canManageNear || near.entries.length > 0,
       fiat: near.fiat,
-      loading: loading || connecting,
+      loading: near.status !== 'ready' && (loading || loadingShieldBalances),
       icons: nearConfidentialVaultIcons(near.entries)
     },
     {
@@ -101,12 +106,8 @@ export function HomeShieldProviders({
             const { name, tint } = SHIELD_PROVIDERS[provider]
             const needsZcash = provider === 'zcash-shield' && !zcashEntry.hasActiveZcash
             const enablePath = needsZcash ? enableZcashPath : null
-            const label = needsZcash
-              ? '—'
-              : formatShieldProviderFiat(card.fiat, {
-                  hidden: balancesHidden,
-                  loading: card.loading
-                })
+            const label = needsZcash ? '—' : formatShieldProviderFiat(card.fiat, balancesHidden)
+            const showSkeleton = !needsZcash && !balancesHidden && card.fiat == null && card.loading
 
             return (
               <button
@@ -146,12 +147,16 @@ export function HomeShieldProviders({
                           />
                         ))}
                       </span>
-                      <span
-                        className="min-w-0 truncate tabular-nums"
-                        title={balancesHidden ? undefined : label}
-                      >
-                        {label}
-                      </span>
+                      {showSkeleton ? (
+                        <BalanceSkeleton />
+                      ) : (
+                        <span
+                          className="min-w-0 truncate tabular-nums"
+                          title={balancesHidden ? undefined : label}
+                        >
+                          {label}
+                        </span>
+                      )}
                     </>
                   )}
                 </span>

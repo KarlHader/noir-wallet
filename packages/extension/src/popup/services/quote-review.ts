@@ -62,6 +62,40 @@ export function quoteReviewActionLabel(changes: readonly QuoteTermsChange[]): st
   return changes.every(change => change.field === 'route') ? 'Accept new route' : 'Accept new price'
 }
 
+export function quoteReviewPrimaryAction({
+  confirmLabel,
+  onConfirm,
+  confirmDisabled = false,
+  refresh,
+  accept
+}: {
+  readonly confirmLabel: string
+  readonly onConfirm: () => void
+  readonly confirmDisabled?: boolean
+  readonly refresh?: { readonly onClick: () => void; readonly retry?: boolean }
+  readonly accept?: { readonly label: string; readonly onClick: () => void }
+}): {
+  confirmLabel: string
+  onConfirm: () => void
+  confirmDisabled: boolean
+  confirmTone: 'default' | 'warning'
+} {
+  if (refresh) {
+    return {
+      confirmLabel: refresh.retry ? 'Try again' : 'Get new quote',
+      onConfirm: refresh.onClick,
+      confirmDisabled: false,
+      confirmTone: 'default'
+    }
+  }
+  return {
+    confirmLabel: accept?.label ?? confirmLabel,
+    onConfirm: accept?.onClick ?? onConfirm,
+    confirmDisabled,
+    confirmTone: accept ? 'warning' : 'default'
+  }
+}
+
 export interface QuoteReviewCandidate {
   readonly id: string
   readonly quoteHandle?: string

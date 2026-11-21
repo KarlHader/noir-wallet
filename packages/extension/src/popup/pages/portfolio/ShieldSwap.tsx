@@ -29,6 +29,7 @@ import {
 import { estimateSwapOutputFromPrices, getSwapAmountValues } from '@/popup/services/swap-estimate'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { ShieldTokenPicker } from '@/popup/components/tokens/ShieldTokenPicker'
 import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
@@ -38,6 +39,7 @@ import {
   TransactionReviewView
 } from '@/popup/components/transaction/TransactionReviewView'
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
+import { RouteProviderLabel } from '@/popup/components/transaction/RouteProviderLabel'
 import {
   ConfidentialActivityView,
   type ConfidentialActivityDisplay,
@@ -88,7 +90,7 @@ import {
 } from '@/popup/services/shield-swap-zec-sources'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
-import { confidentialQuoteTerms } from '@/popup/services/quote-review'
+import { confidentialQuoteTerms, quoteReviewPrimaryAction } from '@/popup/services/quote-review'
 
 function shieldSwapQuoteErrorMessage(cause: unknown): string {
   const quoteMessage = getSwapQuoteFailureMessage(cause)
@@ -229,6 +231,7 @@ function ShieldSwapForm({
   const confirmationAttempt = useRef<string | null>(null)
   const {
     balances: currentBalances,
+    loading: loadingBalances,
     connecting,
     error: balanceError,
     refreshBalances: loadBalances
@@ -297,6 +300,7 @@ function ShieldSwapForm({
   const portfolioBalances = useMemo(() => shieldPortfolioBalances(model), [model])
   const trustedBalances = balanceRefreshRequired ? null : currentBalances
   const displayBalances = balanceRefreshRequired ? null : (currentBalances ?? portfolioBalances)
+  const balanceLoading = !displayBalances && loadingBalances
   const sourceChoices = useMemo(() => {
     const funded = shieldFundingSources(options, displayBalances)
     const fundedIds = new Set(funded.map(asset => asset.asset.asset.id))
@@ -427,6 +431,7 @@ function ShieldSwapForm({
     error: previewError,
     retry: retryPreview
   } = useConfidentialFundingPreview(active ? previewRequest : null, scopeKey)
+  const previewNotice = getSwapQuoteNotice(previewError)
   const previewOutput =
     preview && to
       ? formatBaseUnitDecimalAmount(preview.amountOutRaw, to.asset.metadata.decimals)
@@ -849,10 +854,7 @@ function ShieldSwapForm({
   }
   const confirm = async () => {
     if (!prepared || busy || !canManageNear || !scopeStillCurrent()) return
-    if (!uncertain && prepared.review.expiresAt <= Date.now()) {
-      setError('Quote expired. Refresh quote.')
-      return
-    }
+    if (!uncertain && prepared.review.expiresAt <= Date.now()) return
     if (
       !uncertain &&
       (!quoteReview.isAccepted(
@@ -942,7 +944,28 @@ function ShieldSwapForm({
   }
 
   if (prepared) {
-    const priceAcceptanceRequired = reviewDescription.changes.length > 0 && !reviewAccepted
+    const acceptLabel = reviewDescription.acceptLabel
+    const reviewMatchesDraft =
+      previewRequest !== null && JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
+    const needsNewQuote = !uncertain && reviewExpired
+    const primaryAction = quoteReviewPrimaryAction({
+      confirmLabel: uncertain ? 'Check status' : 'Confirm',
+      onConfirm: () => void confirm(),
+      confirmDisabled:
+        !uncertain &&
+        (Boolean(error) ||
+          needsNewQuote ||
+          (!reviewAccepted && !acceptLabel) ||
+          !reviewMatchesDraft),
+      refresh:
+        !uncertain && reviewMatchesDraft && (needsNewQuote || error)
+          ? { onClick: () => void refreshReview(), retry: Boolean(error && !reviewExpired) }
+          : undefined,
+      accept:
+        !uncertain && !error && !needsNewQuote && acceptLabel
+          ? { label: acceptLabel, onClick: () => void quoteReview.accept(draftKey, reviewId) }
+          : undefined
+    })
     const output = formatBaseUnitDecimalAmount(
       prepared.review.expectedOutputRaw,
       prepared.to.asset.metadata.decimals
@@ -1000,13 +1023,12 @@ function ShieldSwapForm({
           }
           rows={[
             {
-              label: 'Network',
-              content: prepared.request.externalRecipient
-                ? 'NEAR Confidential → Zcash'
-                : 'NEAR Confidential'
+              label: 'Provider',
+              content: <RouteProviderLabel router="near-confidential" />
             },
             ...(prepared.request.externalRecipient
               ? [
+                  { label: 'Destination network', content: 'Zcash' },
                   {
                     label: 'Recipient',
                     content: (
@@ -1094,7 +1116,7 @@ function ShieldSwapForm({
           ]}
           afterRows={
             <div className="pt-3">
-              {!refreshingReview && (
+              {!refreshingReview && !needsNewQuote && !error && !uncertain && (
                 <QuoteReviewChanges
                   changes={reviewDescription.changes}
                   output={{
@@ -1116,68 +1138,25 @@ function ShieldSwapForm({
                     width={14}
                   />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void refreshReview()}
-                  disabled={busy || uncertain}
-                  className="inline-flex min-h-8 shrink-0 items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-                  aria-label="Refresh quote"
-                >
-                  <Icon
-                    icon="lucide:refresh-cw"
-                    width={14}
-                    className={refreshingReview ? 'animate-spin' : undefined}
-                  />
-                  Refresh quote
-                </button>
               </div>
             </div>
           }
           error={
-            error || (reviewExpired && !uncertain && !refreshingReview) ? (
-              <p role="alert" className="mt-3 text-sm text-warning">
-                {error ?? 'Quote expired. Refresh quote.'}
-              </p>
+            error || (needsNewQuote && !refreshingReview) ? (
+              <InlineError
+                className="mt-3"
+                message={error ?? 'Quote expired.'}
+                tone={error ? 'error' : 'muted'}
+              />
             ) : undefined
           }
-          confirmLabel={
-            uncertain
-              ? 'Check status'
-              : priceAcceptanceRequired && !error
-                ? (reviewDescription.acceptLabel ?? 'Accept new price')
-                : 'Confirm'
-          }
-          confirmTone={priceAcceptanceRequired && !error && !uncertain ? 'warning' : 'default'}
+          {...primaryAction}
           confirming={busy}
           submitting={
             busy && !refreshingReview && confirmationAttempt.current === prepared.review.planId
           }
           preparing={refreshingReview}
-          confirmDisabled={
-            !uncertain &&
-            (Boolean(error) ||
-              reviewExpired ||
-              (!reviewAccepted && !priceAcceptanceRequired) ||
-              !previewRequest ||
-              JSON.stringify(previewRequest) !== JSON.stringify(prepared.request))
-          }
           onCancel={() => void cancelReview()}
-          onConfirm={() => {
-            if (priceAcceptanceRequired && !uncertain) {
-              if (
-                !busy &&
-                !error &&
-                !reviewExpired &&
-                prepared.review.expiresAt > Date.now() &&
-                previewRequest &&
-                JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
-              ) {
-                quoteReview.accept(draftKey, reviewId)
-              }
-              return
-            }
-            void confirm()
-          }}
         />
       </div>
     )
@@ -1194,6 +1173,7 @@ function ShieldSwapForm({
           amount={amount}
           fiatValue={fromToken?.price ? fromFiat : ''}
           balance={hidden ? '••••' : (balance ?? '—')}
+          balanceLoading={!hidden && balanceLoading}
           tokenSelectDisabled={tokens.length === 0}
           onTokenSelect={() => {
             setPicker('from')
@@ -1208,7 +1188,7 @@ function ShieldSwapForm({
             setAmount(value)
             setError(null)
           }}
-          validationMessage={amountError ?? undefined}
+          validationMessage={balanceLoading ? undefined : (amountError ?? undefined)}
           onMaxClick={() => {
             if (!from || currentBalance === null) return
             if (!fromId) setFromId(from.asset.asset.id)
@@ -1282,12 +1262,11 @@ function ShieldSwapForm({
             }
           />
         )}
-        {!error && !balanceError && previewError && (
+        {!error && !balanceError && !previewLoading && previewError && (
           <InlineError
             className="mt-3"
-            tone="warning"
-            role="alert"
-            message={classifyError(previewError).userMessage}
+            tone={previewNotice ? 'muted' : 'error'}
+            message={previewNotice ?? classifyError(previewError).userMessage}
             onRetry={
               previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
                 ? () => void refreshBalances()
@@ -1309,20 +1288,19 @@ function ShieldSwapForm({
             retrying={connecting}
           />
         )}
-        {status === 'error' && trustedBalances && !error && !balanceError && (
-          <InlineError
-            className="mt-3"
-            tone="warning"
-            role="alert"
-            message="Shield assets are unavailable"
-            onRetry={() => void onRefreshPortfolio()}
-          />
-        )}
-        {!trustedBalances && canManageNear && connecting && (
-          <p role="status" className="mt-4 text-center text-sm text-muted">
-            Loading Shield balances…
-          </p>
-        )}
+        {status === 'error' &&
+          tokens.length === 0 &&
+          trustedBalances &&
+          !error &&
+          !balanceError && (
+            <InlineError
+              className="mt-3"
+              tone="warning"
+              role="alert"
+              message="Shield assets are unavailable"
+              onRetry={() => void onRefreshPortfolio()}
+            />
+          )}
       </div>
       <div className="page-footer">
         <Button

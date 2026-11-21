@@ -41,6 +41,7 @@ import { openModal } from '@/popup/provider/ModalManager'
 import { Tabs, TabsContent } from '@/popup/components/ui/tabs'
 import { PageTabsList, PageTabsTrigger } from '@/popup/components/common/PageTabs'
 import { Button } from '@/popup/components/ui/button'
+import { BalanceSkeleton } from '@/popup/components/ui/skeleton'
 import { buildShieldActionPath, SHIELD_ACTIONS } from '@/popup/services/shield-action-selection'
 import {
   resolveShieldZcashVaultEntry,
@@ -132,6 +133,7 @@ function ShieldProviderContent() {
     getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
   const {
     connecting,
+    loading: loadingShieldBalances,
     error: connectionError,
     refreshBalances: refreshShieldBalances
   } = useShieldBalances({
@@ -190,10 +192,10 @@ function ShieldProviderContent() {
     ? availableDepositTokens(directoryTokens, supportedNetworks)
     : null
   const providerFiat = provider === 'near-confidential' ? near.fiat : group?.fiat
-  const displayFiat = formatShieldProviderFiat(providerFiat, {
-    hidden: balancesHidden,
-    loading: status === 'loading' || (provider === 'zcash-shield' && pricesLoading)
-  })
+  const providerLoading =
+    provider === 'near-confidential'
+      ? near.status !== 'ready' && (status === 'loading' || loadingShieldBalances)
+      : status === 'loading' || pricesLoading
   const canSpendNativeZec =
     hasZcashAccount && !getFundingSourceUnavailableReason(currentWallet?.keySource, 'shielded')
   const canSwapNativeZec = canSwapNativeShieldZec({
@@ -205,7 +207,6 @@ function ShieldProviderContent() {
   const handleActivityClick = async (item: ActivityItem) => {
     await openModal({
       showCloseButton: true,
-      className: 'max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain',
       body: (resolve: (value: unknown) => void, close: () => void) => (
         <MultichainActivityDetail
           item={item}
@@ -360,9 +361,13 @@ function ShieldProviderContent() {
           <TabsContent value="assets" className="mt-0">
             <section aria-label={`${info.name} balance`}>
               <div className="py-5 text-center">
-                <p className="break-all px-4 text-[26px] font-semibold leading-[37.4px]">
-                  {displayFiat}
-                </p>
+                <div className="break-all px-4 text-[26px] font-semibold leading-[37.4px]">
+                  {!balancesHidden && providerFiat == null && providerLoading ? (
+                    <BalanceSkeleton className="h-7 w-28" />
+                  ) : (
+                    formatShieldProviderFiat(providerFiat, balancesHidden)
+                  )}
+                </div>
                 <div className="mt-0.5 flex items-center justify-center gap-1.5 text-sm text-[var(--color-wallet-secondary)]">
                   <span>
                     {provider === 'near-confidential' ? 'Total balance' : 'Shield balance'}
@@ -446,13 +451,8 @@ function ShieldProviderContent() {
                   ))}
                 </div>
               ) : nearBalanceEmpty ||
-                (provider === 'zcash-shield' && group?.fiat === '0') ? null : status ===
-                  'loading' ||
-                (provider === 'near-confidential' && connecting) ? (
-                <p role="status" className="px-4 py-5 text-center text-sm text-muted">
-                  Loading balances…
-                </p>
-              ) : (
+                providerLoading ||
+                (provider === 'zcash-shield' && group?.fiat === '0') ? null : (
                 <p className="px-4 py-5 text-center text-sm text-muted">Balance unavailable</p>
               )}
               {showNearEmptyState && (

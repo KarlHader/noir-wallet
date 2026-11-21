@@ -15,51 +15,15 @@ import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
 import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { Button } from '../ui/button'
-import { Skeleton } from '../ui/skeleton'
+import { BalanceSkeleton, Skeleton } from '../ui/skeleton'
 import { BalanceHelp } from '../transaction/BalanceHelp'
+import { RouteProviderLabel } from '../transaction/RouteProviderLabel'
 import { SendRecipientInputCard } from '../transaction/SendInputCards'
 import { safeBig } from '@/lib/big'
 import { shouldDeferSwapAmountFocus } from '@/popup/services/swap-page-model'
-import {
-  getRheaProviderIconUrl,
-  providerDisplayName
-} from '@/popup/services/swap-provider-presentation'
 import { InlineError } from '../common/InlineError'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
-import nearIntentsIcon from '@/images/figma-near-confidential.svg'
-
-function ProviderMark({ router, size }: { readonly router: string; readonly size: 24 | 28 }) {
-  const iconUrl =
-    router.trim().toLowerCase() === 'near-confidential'
-      ? nearIntentsIcon
-      : getRheaProviderIconUrl(router)
-  const [failedIcon, setFailedIcon] = useState<string | null>(null)
-  if (iconUrl && failedIcon !== iconUrl) {
-    return (
-      <img
-        src={iconUrl}
-        crossOrigin="anonymous"
-        referrerPolicy="no-referrer"
-        alt=""
-        width={size}
-        height={size}
-        className={cn('shrink-0 rounded object-contain', size === 24 ? 'size-6' : 'size-7')}
-        onError={() => setFailedIcon(iconUrl)}
-      />
-    )
-  }
-  return (
-    <span
-      className={cn(
-        'flex shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-bold',
-        size === 24 ? 'size-6' : 'size-7'
-      )}
-      aria-hidden="true"
-    >
-      {providerDisplayName(router).slice(0, 1).toUpperCase()}
-    </span>
-  )
-}
+import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
 
 export function SwapProviderCard({
   slippage,
@@ -90,10 +54,7 @@ export function SwapProviderCard({
       </div>
       <div className="mt-1.5 rounded-md bg-white/5 px-2.5 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <ProviderMark router={providerName} size={24} />
-          <span className="min-w-0 truncate font-medium" title={providerDisplayName(providerName)}>
-            {providerDisplayName(providerName)}
-          </span>
+          <RouteProviderLabel router={providerName} size={24} className="font-medium" />
           {isBestPrice && (
             <span className="shrink-0 rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
               Best price
@@ -199,6 +160,7 @@ interface SwapAssetCardProps {
   accountAction?: ReactNode
   accountFallbackLabel?: string
   balance?: string
+  balanceLoading?: boolean
   onTokenSelect: () => void
   tokenSelectDisabled?: boolean
   tokenSelectLocked?: boolean
@@ -279,6 +241,7 @@ export function SwapAssetCard({
   accountAction,
   accountFallbackLabel,
   balance,
+  balanceLoading = false,
   onTokenSelect,
   tokenSelectDisabled = false,
   tokenSelectLocked = false,
@@ -377,9 +340,16 @@ export function SwapAssetCard({
           <div className="ml-auto flex min-w-0 max-w-[48%] shrink items-center gap-1">
             <span className="flex min-w-0 shrink items-center gap-1 text-xs font-medium text-muted">
               <span className="shrink-0">Bal.</span>
-              <span className="min-w-0 truncate text-right font-sans tabular-nums" title={balance}>
-                {formatTokenQuantity(balance)}
-              </span>
+              {balanceLoading ? (
+                <BalanceSkeleton />
+              ) : (
+                <span
+                  className="min-w-0 truncate text-right font-sans tabular-nums"
+                  title={balance}
+                >
+                  {formatTokenQuantity(balance)}
+                </span>
+              )}
             </span>
             {onMaxClick && (
               <button
@@ -685,6 +655,7 @@ export function SwapInputView({
       (feeIsApproximate ? 'Insufficient balance' : `Insufficient balance (Fee: ${networkFee} ZEC)`)
     : undefined
   const hasQuoteDetails = Boolean(estimatedOut) && rate !== '...' && rate !== '0'
+  const quoteNotice = getSwapQuoteNotice(quoteError)
   const providerNetworkFeeLabel =
     isZecSource && networkFee !== undefined ? `${formatFeeAmount(networkFee)} ZEC` : null
 
@@ -835,22 +806,20 @@ export function SwapInputView({
           />
         )}
 
-        {catalogError && (
+        {catalogError ? (
           <InlineError
             message="Unable to load assets"
             onRetry={onRetryTokenCatalog}
             className="mt-2 px-1 leading-5"
           />
-        )}
-
-        {quoteError && (
+        ) : !isQuoting && quoteError ? (
           <InlineError
-            message={quoteError}
+            message={quoteNotice ?? quoteError}
+            tone={quoteNotice ? 'muted' : 'error'}
             onRetry={onRetryQuote}
-            retrying={isQuoting}
             className="mt-2 px-1 leading-5"
           />
-        )}
+        ) : null}
         {onEnableReceiveNetwork && (
           <Button
             type="button"
@@ -914,9 +883,7 @@ export function SwapInputView({
             {providerName && !showProviderCard && (
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <span className="text-muted">Provider</span>
-                <span className="truncate" title={providerName}>
-                  {providerName}
-                </span>
+                <RouteProviderLabel router={providerName} />
               </div>
             )}
             <div className="flex min-w-0 items-center justify-between gap-2">
@@ -984,11 +951,7 @@ export function SwapInputView({
         open={recipientSelectorOpen && !hideReceiveAddress && !onSelectDestinationAccount}
         onOpenChange={setRecipientSelectorOpen}
       >
-        <DialogContent
-          position="bottom"
-          className="flex max-h-[calc(100dvh-56px)] flex-col gap-0 p-0"
-          showCloseButton
-        >
+        <DialogContent position="bottom" scroll="body" className="gap-0 p-0" showCloseButton>
           <DialogHeader className="shrink-0 px-5 pb-4 pt-5 text-left">
             <DialogTitle className="text-sm">Receive at</DialogTitle>
           </DialogHeader>
@@ -1015,15 +978,11 @@ export function SwapInputView({
               {recipientError && <InlineError message={recipientError} className="mt-2" />}
             </div>
           )}
-          <div className="shrink-0 p-5">
-            <Button
-              type="button"
-              onClick={() => setRecipientSelectorOpen(false)}
-              className="h-10 w-full"
-            >
+          <DialogFooter className="p-5">
+            <Button type="button" onClick={() => setRecipientSelectorOpen(false)}>
               Done
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1033,7 +992,8 @@ export function SwapInputView({
       >
         <DialogContent
           position="bottom"
-          className="flex max-h-[80dvh] flex-col gap-0 bg-popover p-0"
+          scroll="body"
+          className="gap-0 bg-popover p-0"
           showCloseButton
         >
           <DialogHeader className="shrink-0 px-5 pb-4 pt-5 text-left">
@@ -1056,13 +1016,11 @@ export function SwapInputView({
             {providerName && (
               <div className="min-h-[98px] rounded-lg border border-primary bg-white/5 px-3 py-3">
                 <div className="flex min-w-0 items-center gap-2">
-                  <ProviderMark router={providerName} size={28} />
-                  <span
-                    className="min-w-0 truncate text-sm font-medium"
-                    title={providerDisplayName(providerName)}
-                  >
-                    {providerDisplayName(providerName)}
-                  </span>
+                  <RouteProviderLabel
+                    router={providerName}
+                    size={28}
+                    className="text-sm font-medium"
+                  />
                   {providerIsBestPrice && (
                     <span className="shrink-0 rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
                       Best price
@@ -1095,13 +1053,11 @@ export function SwapInputView({
                 className="wallet-interactive min-h-[98px] w-full rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-left hover:border-white/30"
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  <ProviderMark router={route.router} size={28} />
-                  <span
-                    className="min-w-0 truncate text-sm font-medium"
-                    title={providerDisplayName(route.router)}
-                  >
-                    {providerDisplayName(route.router)}
-                  </span>
+                  <RouteProviderLabel
+                    router={route.router}
+                    size={28}
+                    className="text-sm font-medium"
+                  />
                   {providerSelectedAmountRaw &&
                     BigInt(route.estimatedOut) >= BigInt(providerSelectedAmountRaw) &&
                     providerAlternatives.every(

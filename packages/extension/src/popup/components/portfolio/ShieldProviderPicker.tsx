@@ -30,7 +30,8 @@ export function ShieldProviderDialog({
       <DialogContent
         position="bottom"
         showCloseButton={false}
-        className="flex h-[min(575px,calc(100dvh-2rem))] flex-col gap-0 bg-wallet-surface p-0"
+        scroll="body"
+        className="gap-0 bg-wallet-surface p-0"
       >
         <div className="flex h-14 shrink-0 items-center justify-between px-4">
           <DialogTitle className="text-base font-medium">Shield Provider</DialogTitle>

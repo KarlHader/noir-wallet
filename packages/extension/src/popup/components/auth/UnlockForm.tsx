@@ -7,6 +7,7 @@ import { classifyError } from '@/lib/errors'
 import { useNavigate } from '../../provider/Router'
 import { rehydrateWalletStore } from '@/store/wallet-store'
 import { openModal } from '../../provider/ModalManager'
+import { DialogFooter } from '../ui/dialog'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import { BlockingWalletFailure } from '../shell/BlockingWalletFailure'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
@@ -134,13 +135,12 @@ export function UnlockForm({
 
           <WarningBox>Make sure you have your Secret Recovery Phrase before proceeding.</WarningBox>
 
-          <div className="flex gap-2 pt-2">
+          <DialogFooter className="pt-2">
             <Button
               variant="outline"
               onClick={() => {
                 resolve(false)
               }}
-              className="flex-1"
             >
               Cancel
             </Button>
@@ -149,11 +149,10 @@ export function UnlockForm({
               onClick={() => {
                 resolve(true)
               }}
-              className="flex-1"
             >
               Reset Wallet
             </Button>
-          </div>
+          </DialogFooter>
         </div>
       )
     })

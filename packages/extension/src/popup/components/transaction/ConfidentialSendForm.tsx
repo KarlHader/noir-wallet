@@ -40,6 +40,7 @@ import {
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import {
   CONFIDENTIAL_PREVIEW_CONNECTION_ERROR,
@@ -70,7 +71,7 @@ import {
   resolvePrivateBalanceTransferAmount
 } from '@/popup/services/private-balance-transfer'
 import { estimateConfidentialSendTime } from '@/popup/services/send-time-estimate'
-import { confidentialQuoteTerms } from '@/popup/services/quote-review'
+import { confidentialQuoteTerms, quoteReviewPrimaryAction } from '@/popup/services/quote-review'
 
 function withdrawChainIconAlias(chain: ShieldFundingAsset['chain']['chain']): string {
   return chain.family === 'evm'
@@ -211,6 +212,7 @@ export function ConfidentialSendForm({
   const {
     balances: currentBalances,
     spendableBalances,
+    loading: loadingBalances,
     connecting,
     error: balanceError,
     refreshBalances: loadBalances
@@ -566,14 +568,15 @@ export function ConfidentialSendForm({
   }, [catalogResolved, source, destinationNetworkId, destinations])
   const availableRaw = shieldFundingAvailableRaw(source, spendableBalances ?? displayBalances)
   const displayedAsset = source?.asset ?? initialAsset
-  const amountState = source
-    ? resolvePrivateBalanceTransferAmount({
-        amount,
-        decimals: source.asset.metadata.decimals,
-        availableRaw,
-        sourceLabel: 'Shield'
-      })
-    : null
+  const amountState =
+    source && (spendableBalances ?? displayBalances)
+      ? resolvePrivateBalanceTransferAmount({
+          amount,
+          decimals: source.asset.metadata.decimals,
+          availableRaw,
+          sourceLabel: 'Shield'
+        })
+      : null
   const recipientValid = isShieldWithdrawRecipient(recipient.trim(), destination, network)
   useEffect(() => {
     if (handledPublicModeRequest.current === publicModeRequest) return
@@ -646,6 +649,7 @@ export function ConfidentialSendForm({
     active ? previewRequest : null,
     `${scopeKey}:${previewGeneration}`
   )
+  const previewNotice = getSwapQuoteNotice(previewError)
   const previewFee =
     source && destination && previewRequest && preview && preview.expiresAt > Date.now()
       ? estimateShieldSendRouteFee(
@@ -953,10 +957,7 @@ export function ConfidentialSendForm({
   }
   const confirm = async () => {
     if (!prepared || busy || !canManageNear || !scopeStillCurrent()) return
-    if (!uncertain && prepared.review.expiresAt <= Date.now()) {
-      setError('Quote expired. Refresh quote.')
-      return
-    }
+    if (!uncertain && prepared.review.expiresAt <= Date.now()) return
     if (
       !uncertain &&
       (!quoteReview.isAccepted(
@@ -1022,7 +1023,28 @@ export function ConfidentialSendForm({
   }
 
   if (prepared) {
-    const priceAcceptanceRequired = reviewDescription.changes.length > 0 && !reviewAccepted
+    const acceptLabel = reviewDescription.acceptLabel
+    const reviewMatchesDraft =
+      previewRequest !== null && JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
+    const needsNewQuote = !uncertain && reviewExpired
+    const primaryAction = quoteReviewPrimaryAction({
+      confirmLabel: uncertain ? 'Check status' : 'Confirm',
+      onConfirm: () => void confirm(),
+      confirmDisabled:
+        !uncertain &&
+        (Boolean(error) ||
+          needsNewQuote ||
+          (!reviewAccepted && !acceptLabel) ||
+          !reviewMatchesDraft),
+      refresh:
+        !uncertain && reviewMatchesDraft && (needsNewQuote || error)
+          ? { onClick: () => void refreshReview(), retry: Boolean(error && !reviewExpired) }
+          : undefined,
+      accept:
+        !uncertain && !error && !needsNewQuote && acceptLabel
+          ? { label: acceptLabel, onClick: () => void quoteReview.accept(draftKey, reviewId) }
+          : undefined
+    })
     const output = formatBaseUnitDecimalAmount(
       prepared.review.expectedOutputRaw,
       prepared.destination.asset.metadata.decimals
@@ -1157,74 +1179,30 @@ export function ConfidentialSendForm({
             }
           ]}
           afterRows={
-            <div className="pt-3">
-              {!refreshingReview && (
-                <QuoteReviewChanges
-                  changes={reviewDescription.changes}
-                  output={{
-                    decimals: prepared.destination.asset.metadata.decimals,
-                    symbol: formatSymbol(prepared.destination.asset.metadata.symbol)
-                  }}
-                />
-              )}
-              <button
-                type="button"
-                onClick={() => void refreshReview()}
-                disabled={busy || uncertain}
-                className="inline-flex min-h-8 items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-                aria-label="Refresh quote"
-              >
-                <Icon
-                  icon="lucide:refresh-cw"
-                  width={14}
-                  className={refreshingReview ? 'animate-spin' : undefined}
-                />
-                Refresh quote
-              </button>
-            </div>
-          }
-          error={
-            error || (reviewExpired && !uncertain && !refreshingReview) ? (
-              <p role="alert" className="mt-3 text-sm text-warning">
-                {error ?? 'Quote expired. Refresh quote.'}
-              </p>
+            !refreshingReview && !needsNewQuote && !error && !uncertain ? (
+              <QuoteReviewChanges
+                changes={reviewDescription.changes}
+                output={{
+                  decimals: prepared.destination.asset.metadata.decimals,
+                  symbol: formatSymbol(prepared.destination.asset.metadata.symbol)
+                }}
+              />
             ) : undefined
           }
-          confirmLabel={
-            uncertain
-              ? 'Check status'
-              : priceAcceptanceRequired
-                ? (reviewDescription.acceptLabel ?? 'Accept new price')
-                : 'Confirm'
+          error={
+            error || (needsNewQuote && !refreshingReview) ? (
+              <InlineError
+                className="mt-3"
+                message={error ?? 'Quote expired.'}
+                tone={error ? 'error' : 'muted'}
+              />
+            ) : undefined
           }
-          confirmTone={priceAcceptanceRequired && !error && !uncertain ? 'warning' : 'default'}
+          {...primaryAction}
           confirming={busy}
           submitting={busy && confirmationAttempt.current === prepared.review.planId}
           preparing={refreshingReview}
-          confirmDisabled={
-            !uncertain &&
-            (Boolean(error) ||
-              reviewExpired ||
-              (!reviewAccepted && !priceAcceptanceRequired) ||
-              !previewRequest ||
-              JSON.stringify(previewRequest) !== JSON.stringify(prepared.request))
-          }
           onCancel={() => void cancelReview()}
-          onConfirm={() => {
-            if (priceAcceptanceRequired && !uncertain) {
-              if (
-                !busy &&
-                !error &&
-                !reviewExpired &&
-                prepared.review.expiresAt > Date.now() &&
-                previewRequest &&
-                JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
-              )
-                quoteReview.accept(draftKey, reviewId)
-              return
-            }
-            void confirm()
-          }}
         />
       </div>
     )
@@ -1277,30 +1255,26 @@ export function ConfidentialSendForm({
         />
       </div>
       {source && destinations.length === 0 && (
-        <p role="alert" className="text-xs text-warning">
-          No supported network for this token
-        </p>
+        <InlineError message="No supported network for this token" tone="muted" />
       )}
-      {!error && !balanceError && previewError && (
-        <div role="alert" className="flex items-center justify-between gap-2 text-xs text-warning">
-          <span>
-            {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-              ? 'Refresh Shield balances to get a quote.'
-              : previewError}
-          </span>
-          <button
-            type="button"
-            disabled={connecting || recoveryPending}
-            onClick={
-              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                ? () => void refreshBalances()
-                : retryPreview
-            }
-            className="shrink-0 text-primary disabled:opacity-45"
-          >
-            {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : 'Retry'}
-          </button>
-        </div>
+      {!error && !balanceError && !previewLoading && previewError && (
+        <InlineError
+          message={
+            previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+              ? 'Shield balances need to be updated.'
+              : (previewNotice ?? previewError)
+          }
+          tone={previewNotice ? 'muted' : 'error'}
+          onRetry={
+            previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+              ? () => void refreshBalances()
+              : retryPreview
+          }
+          retrying={connecting || recoveryPending}
+          retryLabel={
+            previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : 'Retry'
+          }
+        />
       )}
       {amountState?.error && (
         <p role="alert" className="text-xs text-warning">
@@ -1319,11 +1293,6 @@ export function ConfidentialSendForm({
           onRetry={() => void refreshBalances()}
           retrying={connecting || recoveryPending}
         />
-      )}
-      {!currentBalances && canManageNear && connecting && (
-        <p role="status" className="text-center text-sm text-muted">
-          Loading Shield balances…
-        </p>
       )}
     </>
   )
@@ -1382,10 +1351,12 @@ export function ConfidentialSendForm({
             ariaLabel: `Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`
           },
           balance: {
-            value: source
-              ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
-              : null,
-            hidden: balancesHidden
+            value:
+              source && displayBalances
+                ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                : null,
+            hidden: balancesHidden,
+            loading: !displayBalances && loadingBalances
           },
           maximum: {
             disabled: busy || !spendableBalances || !source || availableRaw === '0',
@@ -1422,7 +1393,9 @@ export function ConfidentialSendForm({
       <Dialog open={active && picker !== null} onOpenChange={open => !open && setPicker(null)}>
         <DialogContent
           position="bottom"
-          className="max-h-[80vh] min-h-0 overflow-y-auto bg-wallet-surface p-4 pb-6"
+          scroll={picker === 'recipient' ? 'body' : 'content'}
+          fixedHeight={picker === 'recipient'}
+          className="bg-wallet-surface p-4 pb-6"
         >
           <DialogTitle>{picker === 'slippage' ? 'Slippage' : 'Recipient'}</DialogTitle>
           <DialogDescription className="sr-only">

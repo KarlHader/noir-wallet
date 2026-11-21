@@ -118,7 +118,7 @@ function EmptyState({
           className="text-muted"
         />
       </div>
-      <p className="text-sm font-medium">{title}</p>
+      <p className="text-sm font-medium text-muted">{title}</p>
     </div>
   )
 }
@@ -632,10 +632,14 @@ export function MultichainActivityPanel({
         })
       : null
   const historyIssueBanner =
-    historyRefreshFailed && showsTransparentHistory ? (
+    historyRefreshFailed &&
+    showsTransparentHistory &&
+    status === 'ready' &&
+    visibleItems.length === 0 ? (
       <div className="px-5 py-2">
         <InlineError
-          message="Unable to refresh Zcash history"
+          message="Zcash history is out of date"
+          tone="muted"
           onRetry={() => {
             const active = useWalletStore.getState()
             if (
@@ -746,7 +750,6 @@ export function MultichainActivityPanel({
         {sectionHeading}
         {toolbar}
         {recoveryBanners}
-        {historyIssueBanner}
         <ListSkeleton rows={3} label="Loading activity" className="px-5 py-3" />
       </section>
     )
@@ -758,7 +761,6 @@ export function MultichainActivityPanel({
         {sectionHeading}
         {toolbar}
         {recoveryBanners}
-        {historyIssueBanner}
         <div className={cn('flex items-center px-6', compact ? 'min-h-28 py-4' : 'min-h-48 py-8')}>
           <InlineError
             message="Unable to load activity"
@@ -785,18 +787,19 @@ export function MultichainActivityPanel({
         {sectionHeading}
         {toolbar}
         {recoveryBanners}
-        {historyIssueBanner}
-        <EmptyState
-          icon="lucide:inbox"
-          title={
-            showStatusFilter && statusFilter !== 'all'
-              ? 'No matching activity'
-              : filterAssetId
-                ? 'No activity for this asset'
-                : 'No activity yet'
-          }
-          compact={compact}
-        />
+        {historyIssueBanner ?? (
+          <EmptyState
+            icon="lucide:inbox"
+            title={
+              showStatusFilter && statusFilter !== 'all'
+                ? 'No matching activity'
+                : filterAssetId
+                  ? 'No activity for this asset'
+                  : 'No activity yet'
+            }
+            compact={compact}
+          />
+        )}
         {olderControl}
         {fullHistoryLink}
       </section>
@@ -808,7 +811,6 @@ export function MultichainActivityPanel({
       {sectionHeading}
       {toolbar}
       {recoveryBanners}
-      {historyIssueBanner}
       <div className="space-y-4 pb-4">
         {groups.map(([date, items]) => (
           <section key={date} aria-label={date}>

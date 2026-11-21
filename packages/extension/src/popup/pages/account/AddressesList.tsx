@@ -753,9 +753,10 @@ export function AddressesList({ receive = false }: { readonly receive?: boolean 
         }}
       >
         <DialogContent
-          position="center"
+          position="bottom"
           showCloseButton={false}
-          className="!inset-0 !h-dvh !w-screen !max-w-none !translate-x-0 !translate-y-0 gap-0 rounded-none p-0 shadow-none"
+          scroll="body"
+          className="gap-0 p-0"
         >
           {qrTarget && (
             <>

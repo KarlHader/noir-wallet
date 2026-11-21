@@ -60,7 +60,7 @@ function EmptyState({
       <div className="flex size-12 items-center justify-center rounded-full bg-card text-muted">
         <Icon icon={icon} width={22} height={22} />
       </div>
-      <p className="mt-3 text-sm font-medium">{title}</p>
+      <p className="mt-3 text-sm font-medium text-muted">{title}</p>
       {description && (
         <p className="mt-1 max-w-[250px] text-xs leading-5 text-muted">{description}</p>
       )}
@@ -187,8 +187,8 @@ export function RecipientSelector({
   )
 
   return (
-    <Tabs defaultValue="accounts" className="min-h-0 min-w-0 w-full max-w-full gap-0">
-      <div className="px-1 pb-3">
+    <Tabs defaultValue="accounts" className="min-h-0 min-w-0 w-full max-w-full flex-1 gap-0">
+      <div className="shrink-0 px-1 pb-3">
         <SearchInput
           value={query}
           onChange={event => setQuery(event.target.value)}
@@ -198,14 +198,14 @@ export function RecipientSelector({
           iconSize={18}
         />
       </div>
-      <PageTabsList className="w-full border-b border-white/8 px-3">
+      <PageTabsList className="w-full shrink-0 border-b border-white/8 px-3">
         <PageTabsTrigger value="accounts">My Wallets</PageTabsTrigger>
         <PageTabsTrigger value="address-book">Address Book</PageTabsTrigger>
       </PageTabsList>
 
       <TabsContent
         value="accounts"
-        className="min-h-0 min-w-0 max-h-[360px] overflow-y-auto px-1 py-4"
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-1 py-4"
       >
         {loading ? (
           <ListSkeleton rows={3} label="Loading wallet accounts" className="px-1 py-1" card />
@@ -257,7 +257,7 @@ export function RecipientSelector({
                             )}
                           </div>
                           {group.addresses.length === 0 ? (
-                            <div className="rounded-lg bg-card px-3 py-2.5 text-xs text-muted opacity-60">
+                            <div className="rounded-lg bg-card px-3 py-2.5 text-xs text-muted">
                               Unavailable on this network
                             </div>
                           ) : (
@@ -350,7 +350,7 @@ export function RecipientSelector({
 
       <TabsContent
         value="address-book"
-        className="min-h-0 min-w-0 max-h-[360px] overflow-y-auto px-1 py-4"
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-1 py-4"
       >
         {visibleRecipients.length === 0 ? (
           <EmptyState
@@ -446,7 +446,6 @@ export function RecipientSelector({
         onOpenChange={setAddingAddress}
         networks={addressBookNetworks}
         initialChainId={chainId}
-        fullHeight
       />
     </Tabs>
   )
