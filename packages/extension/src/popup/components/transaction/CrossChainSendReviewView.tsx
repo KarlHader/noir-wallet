@@ -15,6 +15,7 @@ export function CrossChainSendReviewView({
   review,
   routeCost,
   sourceNetworkFee,
+  sourceFeeControl,
   executionTarget,
   approval,
   isPreparingReview,
@@ -38,6 +39,7 @@ export function CrossChainSendReviewView({
   readonly review: Pick<RheaSwapReviewView, 'amountIn' | 'estimatedOut' | 'recipient' | 'router'>
   readonly routeCost: string | null
   readonly sourceNetworkFee: { readonly amount: string; readonly symbol: string } | null
+  readonly sourceFeeControl?: ReactNode
   readonly executionTarget: { readonly label: string; readonly address: string } | null
   readonly approval?: { readonly amountRaw: string; readonly spender: string }
   readonly isPreparingReview: boolean
@@ -115,7 +117,7 @@ export function CrossChainSendReviewView({
           ? [
               {
                 label: 'Source network fee',
-                content: (
+                content: sourceFeeControl ?? (
                   <AmountDisplay
                     value={sourceNetworkFee.amount}
                     symbol={sourceNetworkFee.symbol}

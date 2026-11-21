@@ -3038,11 +3038,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     safeBig(swap.amountIn).gt(0) &&
     walletAmountRaw === null
   const preparedFeeUnaffordable = isPreparedSwapFeeUnaffordable(preparedQuoteTransfer)
-  const reviewedFeeTier = isPrivateFunding
-    ? evmMoveFeeSelection.kind === 'tier'
-      ? evmMoveFeeSelection.tier
-      : undefined
-    : networkFeeTier
+  const reviewedFeeTier =
+    privateBalanceTransferRequested && isPrivateFunding
+      ? evmMoveFeeSelection.kind === 'tier'
+        ? evmMoveFeeSelection.tier
+        : undefined
+      : networkFeeTier
   const loadSourceFeeTierPreviews = useCallback(
     () =>
       preparedQuoteTransfer?.family === 'evm'
@@ -3054,6 +3055,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         : Promise.resolve({}),
     [preparedQuoteTransfer, executionSourceMode, reviewedFeeTier]
   )
+  const sourceFeeTierPreviews =
+    preparedQuoteTransfer?.family === 'evm' ? loadSourceFeeTierPreviews : undefined
 
   const liveQuoteRequest = useMemo(() => {
     if (shieldNativeZecSwap) return null
@@ -6608,11 +6611,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                         amount={sourceNetworkFee.amount}
                         symbol={sourceNetworkFee.symbol}
                         onTierChange={reviewLiveQuote}
-                        loadTierPreviews={
-                          preparedQuoteTransfer.family === 'evm'
-                            ? loadSourceFeeTierPreviews
-                            : undefined
-                        }
+                        loadTierPreviews={sourceFeeTierPreviews}
                         onSelectionChange={
                           isPrivateFunding && walletOwnedSource.family === 'evm'
                             ? async selection => {
@@ -6766,6 +6765,19 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             review={rheaReview}
             routeCost={routeCost}
             sourceNetworkFee={sourceNetworkFee}
+            sourceFeeControl={
+              sourceNetworkFee && sourceFeeTierPreviews ? (
+                <NetworkFeeTierPicker
+                  chainFamily="evm"
+                  tier={networkFeeTier}
+                  amount={sourceNetworkFee.amount}
+                  symbol={sourceNetworkFee.symbol}
+                  onTierChange={reviewLiveQuote}
+                  loadTierPreviews={sourceFeeTierPreviews}
+                  disabled={isSending || isPreparingReview}
+                />
+              ) : undefined
+            }
             executionTarget={executionTarget}
             approval={pendingRheaEvmAfterApproval?.approval}
             isPreparingReview={isPreparingReview}
@@ -6894,9 +6906,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               ? reviewLiveQuote
               : undefined
           }
-          loadSourceFeeTierPreviews={
-            preparedQuoteTransfer?.family === 'evm' ? loadSourceFeeTierPreviews : undefined
-          }
+          loadSourceFeeTierPreviews={sourceFeeTierPreviews}
           sourceTransferDetails={
             walletOwnedSource
               ? {

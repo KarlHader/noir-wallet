@@ -13,10 +13,35 @@ import {
   parseEvmPriorityFeeGwei,
   type EvmFeeSelection
 } from '@/infrastructure/chains/evm'
-import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
+import {
+  formatBaseUnitAmount,
+  formatBaseUnitDecimalAmount,
+  parseDisplayUnitAmount
+} from '@/lib/number-format'
 
 export type NetworkFeePreview = Readonly<{ amount: string; symbol: string; approximate?: boolean }>
 export type NetworkFeePreviews = Partial<Record<NetworkFeeTier, NetworkFeePreview>>
+
+export async function estimateNetworkFeeTierPreviews(
+  estimate: (tier: NetworkFeeTier) => Promise<string | null>,
+  currency: Readonly<{ symbol: string; decimals: number }>,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const previews: NetworkFeePreviews = {}
+  await Promise.allSettled(
+    NETWORK_FEE_TIERS.filter(tier => tier !== reviewedTier).map(async tier => {
+      const amountRaw = await estimate(tier)
+      if (amountRaw !== null) {
+        previews[tier] = {
+          amount: formatBaseUnitAmount(amountRaw, currency.decimals),
+          symbol: currency.symbol,
+          approximate: true
+        }
+      }
+    })
+  )
+  return previews
+}
 
 export interface FeeOption<T extends string> {
   readonly id: T

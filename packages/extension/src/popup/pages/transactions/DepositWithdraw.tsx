@@ -95,7 +95,8 @@ import {
 } from '@/popup/services/balance-transfer-asset-picker'
 import {
   confidentialFundingClient,
-  previewClusterNetworkFeeTiers
+  previewClusterNetworkFeeTiers,
+  previewReviewedConfidentialDepositFeeTiers
 } from '@/popup/services/confidential-funding-client'
 import type {
   ConfidentialFundingPlan,
@@ -1947,21 +1948,6 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         />
       ) : null
     const networkFee = activeShieldReview.sourceNetworkFee
-    const previewAmount = shieldAmountState?.amountRaw
-    const loadTierPreviews =
-      activeShieldReview.operation === 'cluster' &&
-      from !== 'shield' &&
-      effective &&
-      managedAsset &&
-      previewAmount
-        ? () =>
-            scopeStillCurrent()
-              ? previewClusterNetworkFeeTiers(
-                  buildClusterPreviewRequest(previewAmount),
-                  evmMoveFee.kind === 'tier' ? evmMoveFee.tier : undefined
-                )
-              : Promise.resolve({})
-        : undefined
     return (
       <div className="page-container">
         <TransactionReviewView
@@ -2058,7 +2044,15 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                         }}
                         amount={formatBaseUnitAmount(networkFee.raw, networkFee.decimals)}
                         symbol={formatSymbol(networkFee.symbol)}
-                        loadTierPreviews={loadTierPreviews}
+                        loadTierPreviews={() =>
+                          scopeStillCurrent()
+                            ? previewReviewedConfidentialDepositFeeTiers(
+                                activeShieldReview,
+                                selected.asset.asset.id,
+                                evmMoveFee.kind === 'tier' ? evmMoveFee.tier : undefined
+                              )
+                            : Promise.resolve({})
+                        }
                         onTierChange={tier => changeShieldFee({ kind: 'tier', tier })}
                         onSelectionChange={changeShieldFee}
                         disabled={
@@ -2379,9 +2373,9 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   )}
                 </div>
               )}
-            {fundingRoute &&
-              selected?.chain.chain.family === 'evm' &&
-              from !== 'shield' &&
+            {clusterSelected &&
+              clusterNetworkFee &&
+              clusterQuoted &&
               evmMoveFee.kind !== 'tier' && (
                 <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-xs">
                   <span className="text-muted">Network fee</span>
@@ -2390,15 +2384,12 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                     tier="standard"
                     selection={evmMoveFee}
                     feeModel={evmMoveFee.kind === 'legacy' ? 'legacy' : 'eip1559'}
-                    amount={
-                      clusterNetworkFee
-                        ? formatBaseUnitAmount(clusterNetworkFee.raw, clusterNetworkFee.decimals)
-                        : '—'
-                    }
-                    symbol={
-                      clusterNetworkFee?.symbol ??
-                      nativeFeeAsset?.metadata.symbol ??
-                      selected.chain.chain.displayName
+                    amount={formatBaseUnitAmount(clusterNetworkFee.raw, clusterNetworkFee.decimals)}
+                    symbol={formatSymbol(clusterNetworkFee.symbol)}
+                    loadTierPreviews={() =>
+                      scopeStillCurrent()
+                        ? previewClusterNetworkFeeTiers(buildClusterPreviewRequest())
+                        : Promise.resolve({})
                     }
                     onTierChange={tier => {
                       setEvmMoveFee({ kind: 'tier', tier })

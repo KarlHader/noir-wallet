@@ -2,7 +2,6 @@ import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from 
 import type { EvmFeeEstimate, EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { NetworkFeeTier, TransactionGraph } from '@/core/transactions/domain'
 import {
-  NETWORK_FEE_TIERS,
   parseNearIntentsTransactionBinding,
   parseRheaSwapTransactionBinding,
   type NearIntentsTransactionBinding,
@@ -25,7 +24,6 @@ import {
   type AssetProtocolSourceMapping
 } from '@/core/prices/asset-market-mappings'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
-import { formatBaseUnitAmount } from '@/lib/number-format'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import {
   createAssetId,
@@ -46,7 +44,7 @@ import type {
   EvmWalletClient
 } from './evm-wallet-client'
 import { evmWalletClient } from './evm-wallet-client'
-import type { NetworkFeePreviews } from './network-fee-presentation'
+import { estimateNetworkFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
 import type {
   BitcoinTransferReview,
   BitcoinTransferApprovalResult,
@@ -121,10 +119,8 @@ export async function loadQuoteDepositEvmFeePreviews(
   if (!transaction) return {}
 
   const { source } = prepared
-  const { symbol, decimals } = source.networkFeeAsset.metadata
-  const previews: NetworkFeePreviews = {}
-  await Promise.allSettled(
-    NETWORK_FEE_TIERS.filter(tier => tier !== reviewedTier).map(async tier => {
+  return estimateNetworkFeeTierPreviews(
+    async tier => {
       const options = { feeTier: tier, executionMode }
       const estimate =
         transaction.input === '0x' && source.asset.asset.kind === 'native'
@@ -145,14 +141,11 @@ export async function loadQuoteDepositEvmFeePreviews(
               },
               options
             )
-      previews[tier] = {
-        amount: formatBaseUnitAmount(estimate.maximumFeeWei, decimals),
-        symbol,
-        approximate: true
-      }
-    })
+      return estimate.maximumFeeWei
+    },
+    source.networkFeeAsset.metadata,
+    reviewedTier
   )
-  return previews
 }
 
 export interface QuoteDepositMaximum {
