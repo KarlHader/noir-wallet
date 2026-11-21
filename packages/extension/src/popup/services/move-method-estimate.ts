@@ -58,7 +58,7 @@ export async function estimateDirectMove(input: {
   readonly signal: AbortSignal
 }): Promise<MoveMethodEstimate> {
   const match = /^eip155:([1-9][0-9]*)$/.exec(input.chain.chain.id)
-  if (!match) throw new Error('Unsupported Move network')
+  if (!match) throw new Error('This network does not support the transfer')
   const catalog = await rheaSwapClient
     .listTokens({ direction: 'from', tokenListChainIds: [Number(match[1])] })
     .catch(() => null)
@@ -68,7 +68,7 @@ export async function estimateDirectMove(input: {
     input.asset.asset.kind === 'token' ? input.asset.asset.reference : null
   )
   const token = preferWalletEvmQuoteToken(input.asset, catalogToken)
-  if (!token) throw new Error('Move source asset could not be mapped to a quote token')
+  if (!token) throw new Error('This asset is unavailable for the transfer')
   const asset = {
     chain: token.rheaChainId,
     address: token.rheaAddress,

@@ -29,6 +29,7 @@ import type {
 } from '@/core/services/confidential-funding'
 import { getActivityInteractionPresentation } from './activity-interaction-adapters'
 import { getActivityAddressAlias } from '@/popup/services/activity-address-alias'
+import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
 import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
 import {
   getLifecycleStatusPresentation,
@@ -164,23 +165,20 @@ export function getActivityAccountRouteLabel(route: ActivitySwapPresentation): s
   return `${source} → ${route.sourceFundingSource ? 'NEAR Confidential' : label(route.destinationAccountMode)}`
 }
 
-export function getActivityRouteTitle(item: ActivityItem, route: ActivitySwapPresentation): string {
-  if (item.snapshot?.shield) {
-    if (item.snapshot.direction === 'self' && item.snapshot.shield.operation !== 'swap')
-      return 'Move'
-    return item.snapshot.shield.operation === 'cluster'
-      ? 'Move'
-      : item.snapshot.shield.operation === 'deposit'
-        ? 'Receive'
-        : item.snapshot.shield.operation === 'swap'
-          ? 'Swap'
-          : 'Send'
-  }
-  if (isDirectAccountMove(item, route)) return 'Move'
-  if (isAccountModeTransfer(item, route)) {
-    return isOwnedAccountTransfer(route) ? 'Account Transfer' : 'Transfer'
-  }
-  return 'Swap'
+export function getActivityRouteTitle(
+  item: ActivityItem,
+  route: ActivitySwapPresentation,
+  perspective: ActivityPerspective = {}
+): string {
+  if (
+    item.snapshot?.shield ||
+    route.sourceFundingSource ||
+    route.destinationFundingSource ||
+    isDirectAccountMove(item, route) ||
+    isAccountModeTransfer(item, route)
+  )
+    return getActivityAction(item, perspective, route).label
+  return item.kind === 'swap' ? 'Swap' : getActivityAction(item, perspective, route).label
 }
 
 export function getClusterChildStatusLabel(
@@ -612,17 +610,15 @@ function isSignedOrderOrigin(segment: ActivitySegment): boolean {
   )
 }
 
-export function getActivityDetailTitle(item: ActivityItem, interactionTitle?: string): string {
+export function getActivityDetailTitle(
+  item: ActivityItem,
+  interactionTitle?: string,
+  perspective: ActivityPerspective = {},
+  route?: ActivitySwapPresentation | null
+): string {
   if (item.snapshot?.shield) {
-    if (item.snapshot.direction === 'self' && item.snapshot.shield.operation !== 'swap')
-      return 'Move'
-    return item.snapshot.shield.operation === 'cluster'
-      ? 'Move'
-      : item.snapshot.shield.operation === 'deposit'
-        ? 'Receive'
-        : item.snapshot.shield.operation === 'swap'
-          ? 'Shield Swap'
-          : 'Send'
+    const label = getActivityAction(item, perspective, route).label
+    return label === 'Swap' ? 'Shield Swap' : label
   }
   if (isConfidentialFundingActivity(item)) return 'Add to Confidential'
   if (item.failureCode === 'refunded') return 'Refund'
@@ -633,14 +629,12 @@ export function getActivityDetailTitle(item: ActivityItem, interactionTitle?: st
   ) {
     return 'Transfer'
   }
-  if (item.kind === 'transfer') {
-    return item.snapshot?.direction === 'incoming' ? 'Receive' : 'Send'
-  }
+  if (item.kind === 'transfer') return getActivityAction(item, perspective, route).label
   switch (item.kind) {
     case 'receive':
       return 'Receive'
     case 'shield':
-      return 'Shield'
+      return perspective.viewedDomain ? getActivityAction(item, perspective, route).label : 'Shield'
     case 'swap':
       return 'Swap'
     case 'supply':
@@ -1073,15 +1067,13 @@ export function getActivityProgressSteps(
     })
 }
 
-function getActivityTitle(item: ActivityItem, chainId?: string): string {
-  if (item.snapshot?.shield)
-    return item.snapshot.shield.operation === 'cluster'
-      ? 'Move'
-      : item.snapshot.shield.operation === 'deposit'
-        ? 'Receive'
-        : item.snapshot.shield.operation === 'swap'
-          ? 'Shield Swap'
-          : 'Send'
+function getActivityTitle(
+  item: ActivityItem,
+  chainId?: string,
+  perspective: ActivityPerspective = {},
+  route?: ActivitySwapPresentation | null
+): string {
+  if (item.snapshot?.shield) return getActivityAction(item, perspective, route).label
   if (isConfidentialFundingActivity(item)) return 'Added to Confidential'
   if (item.failureCode === 'refunded') return 'Refunded'
   const interaction = getActivityInteractionPresentation(item, chainId)
@@ -1096,10 +1088,12 @@ export function getActivityRowTextPresentation(
   primarySymbol: string | undefined,
   rawCounterSymbol: string | undefined,
   networkName: string,
-  chainId?: string
+  chainId?: string,
+  perspective: ActivityPerspective = {},
+  route?: ActivitySwapPresentation | null
 ): ActivityRowTextPresentation {
   const interaction = getActivityInteractionPresentation(item, chainId)
-  const title = interaction?.title ?? getActivityTitle(item, chainId)
+  const title = interaction?.title ?? getActivityTitle(item, chainId, perspective, route)
   const symbol = formatSymbol(primarySymbol)
   const counterSymbol = formatSymbol(rawCounterSymbol)
   const sender = item.snapshot?.sender?.address
@@ -1109,7 +1103,13 @@ export function getActivityRowTextPresentation(
 
   if (item.kind === 'shield') {
     return {
-      title: symbol ? `Shielded ${symbol}` : 'Shielded',
+      title: perspective.viewedDomain
+        ? symbol
+          ? `${getActivityAction(item, perspective, route).label} ${symbol}`
+          : getActivityAction(item, perspective, route).label
+        : symbol
+          ? `Shielded ${symbol}`
+          : 'Shielded',
       subtitle: 'Transparent → Shielded'
     }
   }
@@ -1141,13 +1141,18 @@ export function getActivityRowTextPresentation(
     }
   }
 
-  const counterparty = isIncoming ? sender : recipient
-  const counterpartyChainId = isIncoming
+  const incomingPerspective =
+    getActivityAction(item, perspective, route).side === 'destination' ||
+    (getActivityAction(item, perspective, route).side === 'none' && isIncoming)
+  const counterparty = incomingPerspective ? sender : recipient
+  const counterpartyChainId = incomingPerspective
     ? item.snapshot?.sender?.chainId
     : item.snapshot?.recipient?.chainId
-  const counterpartyLabel = isIncoming ? 'From' : 'To'
+  const counterpartyLabel = incomingPerspective ? 'From' : 'To'
   return {
-    title: symbol ? `${title} ${symbol}` : title,
+    title: symbol
+      ? `${item.kind === 'transfer' && perspective.viewedDomain ? getActivityAction(item, perspective, route).label : title} ${symbol}`
+      : title,
     subtitle: counterparty
       ? `${counterpartyLabel}: ${getActivityAddressAlias(counterpartyChainId, counterparty) ?? formatSortAddress(counterparty)}`
       : networkName

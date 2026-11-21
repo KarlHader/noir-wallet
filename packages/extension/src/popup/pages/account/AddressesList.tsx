@@ -367,15 +367,15 @@ function AddressNetworkGroup({
   )
 }
 
-export function AddressesList() {
+export function AddressesList({ receive = false }: { readonly receive?: boolean }) {
   const { navigate } = useNavigate()
   const location = useLocation()
   const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
   const [searchParams] = useSearchParams()
-  const walletId = searchParams.get('walletId')
-  const accountId = searchParams.get('accountId')
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const walletId = searchParams.get('walletId') ?? (receive ? currentWalletId : null)
+  const accountId = searchParams.get('accountId') ?? (receive ? currentAccountId : null)
   const currentShieldedAddress = useWalletStore(state =>
     walletId && accountId
       ? state.getAccount(walletId, accountId)?.networkAddresses?.[DEFAULT_NETWORK]?.shielded
@@ -388,7 +388,11 @@ export function AddressesList() {
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const executionMode = useDAppExecutionMode(
     Boolean(
-      walletId && accountId && walletId === currentWalletId && accountId === currentAccountId
+      !receive &&
+      walletId &&
+      accountId &&
+      walletId === currentWalletId &&
+      accountId === currentAccountId
     ),
     walletId,
     accountId,
@@ -396,7 +400,9 @@ export function AddressesList() {
   )
   const [privateExecutionSupported, setPrivateExecutionSupported] = useState(false)
   const defaultMode =
-    privateExecutionSupported && executionMode.state?.mode === 'private' ? 'private' : 'public'
+    !receive && privateExecutionSupported && executionMode.state?.mode === 'private'
+      ? 'private'
+      : 'public'
   const [networkQuery, setNetworkQuery] = useState('')
   const availableFamilies = useMemo(() => availableSoftwareAccountFamilies(), [])
   const selectedFamilies = account?.networkSelections?.[DEFAULT_NETWORK] ?? availableFamilies

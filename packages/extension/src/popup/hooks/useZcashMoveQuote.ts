@@ -125,14 +125,13 @@ export function useZcashMoveQuote({
             review.expiresAt <= Date.now() + 5_000
           ) {
             void cancelNativeZecIntentsSwap(review.quoteId).catch(() => {})
-            setError('Move quote changed. Try again.')
+            setError('Quote changed. Try again.')
             return
           }
           setQuote({ key, review })
         })
         .catch(cause => {
-          if (!cancelled)
-            setError(cause instanceof Error ? cause.message : 'Move quote unavailable')
+          if (!cancelled) setError(cause instanceof Error ? cause.message : 'Quote unavailable')
         })
     }, 800)
     return () => {
@@ -160,7 +159,7 @@ export function useZcashMoveQuote({
     submittingQuoteId,
     invalidate: () => {
       setQuote(null)
-      setError('Move quote changed. Try again.')
+      setError('Quote changed. Try again.')
     },
     retry
   }

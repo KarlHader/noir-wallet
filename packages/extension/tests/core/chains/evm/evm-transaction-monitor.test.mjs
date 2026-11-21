@@ -277,6 +277,50 @@ test.describe('EVM persisted transaction monitor', () => {
     })
   })
 
+  test('repairs a pending original after its cancellation was already persisted as final', async () => {
+    const repository = new InMemoryTransactionRepository()
+    const original = graph('transaction:evm:missed-cancellation', 'broadcast', scope, {
+      transactionHash,
+      externalReference: 'evm-nonce:7'
+    })
+    const cancellation = graph('transaction:evm:final-cancellation', 'final', scope, {
+      transactionHash: replacementTransactionHash,
+      externalReference: 'evm-nonce:7',
+      blockHash,
+      blockHeight: 101
+    })
+    cancellation.root.kind = 'cancel'
+    cancellation.root.relation = { kind: 'replacement-of', transactionId: original.root.id }
+    cancellation.root.intent.direction = 'self'
+    await repository.create(original)
+    await repository.create(cancellation)
+    const monitor = new EvmTransactionMonitor({
+      repository,
+      chainId,
+      rpc: {
+        ...rpc(null),
+        getTransactionLocation: async () => ({ status: 'unknown' })
+      },
+      now: () => 1_100,
+      createEventId: ids()
+    })
+
+    await expect(monitor.poll([scope])).resolves.toMatchObject({ applied: 1, errors: 0 })
+    await expect(
+      repository.get(scope, parseTransactionId(original.root.id))
+    ).resolves.toMatchObject({
+      root: { status: 'failed', failure: { code: 'cancelled' } },
+      segments: [
+        {
+          status: 'failed',
+          evidence: { transactionHash, replacementTransactionHash },
+          failure: { code: 'cancelled' }
+        }
+      ]
+    })
+    await expect(monitor.poll([scope])).resolves.toMatchObject({ applied: 0, errors: 0 })
+  })
+
   test('finalizes the original origin when a linked same-payload speed up succeeds', async () => {
     const repository = new InMemoryTransactionRepository()
     const original = graph('transaction:evm:original-speed-up', 'broadcast', scope, {

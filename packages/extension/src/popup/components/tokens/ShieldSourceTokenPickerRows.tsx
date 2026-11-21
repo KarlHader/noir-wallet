@@ -14,12 +14,13 @@ export interface ShieldSourceTokenPickerItem {
   readonly searchTerms?: readonly string[]
   readonly contractAddress?: string
   readonly iconUrl?: string
-  readonly chainName?: string
-  readonly chainId?: string
+  readonly chainName: string
+  readonly chainId: string
   readonly badgeBlockchain?: string
   readonly nativeIconChain?: string
   readonly zcashFundingSource?: FundingSource
-  readonly availableRaw: string
+  readonly sourceLabel?: string
+  readonly availableRaw?: string
   readonly decimals: number
   readonly priceUsd?: string | number | null
   readonly disabledReason?: string
@@ -40,12 +41,19 @@ export function shieldSourceSelectionItem(
   item: ShieldSourceTokenPickerItem,
   balancesHidden: boolean
 ): TokenSelectionItem {
-  const balance = formatBaseUnitDecimalAmount(item.availableRaw, item.decimals)
+  const balance =
+    item.availableRaw === undefined
+      ? undefined
+      : formatBaseUnitDecimalAmount(item.availableRaw, item.decimals)
   return {
     key: item.key,
     symbol: formatSymbol(item.symbol),
     symbolSuffix: item.zcashFundingSource ? (
       <ZcashFundingBadge source={item.zcashFundingSource} />
+    ) : item.sourceLabel ? (
+      <span className="min-w-0 truncate rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] text-muted">
+        {item.sourceLabel}
+      </span>
     ) : undefined,
     icon: (
       <TokenIcon
@@ -57,16 +65,17 @@ export function shieldSourceSelectionItem(
         size={32}
       />
     ),
-    subtitle: item.zcashFundingSource ? 'Zcash' : item.chainName,
-    balance: (
-      <TokenBalanceDisplay
-        amount={balance}
-        symbol={formatSymbol(item.symbol)}
-        priceUsd={item.priceUsd}
-        approximateFiat
-        balancesHidden={balancesHidden}
-      />
-    ),
+    subtitle: item.chainName,
+    balance:
+      balance !== undefined ? (
+        <TokenBalanceDisplay
+          amount={balance}
+          symbol={formatSymbol(item.symbol)}
+          priceUsd={item.priceUsd}
+          approximateFiat
+          balancesHidden={balancesHidden}
+        />
+      ) : undefined,
     balanceTitle: balancesHidden ? undefined : balance,
     disabledReason: item.disabledReason
   }

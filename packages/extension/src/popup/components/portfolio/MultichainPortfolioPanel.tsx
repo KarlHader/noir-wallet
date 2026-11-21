@@ -116,14 +116,18 @@ export function MultichainPortfolioPanel({
     activeAccount?.walletId === walletId && activeAccount?.accountId === accountId
       ? activeAccount
       : null
-  const domainModel =
+  const projectedModel =
     domain === 'all'
-      ? withNearConfidentialZecChain(visibleModel, network)
+      ? visibleModel
       : visibleModel
         ? projectPortfolioForDomain(visibleModel, domain, {
             evmPrivateAvailable: supportsEvmPrivateExecution(scopedAccount?.walletSource)
           })
         : null
+  const domainModel =
+    domain === 'all' || domain === 'shield'
+      ? withNearConfidentialZecChain(projectedModel, network)
+      : projectedModel
   const availableChainIds = resolvePortfolioChainSelection(
     domainModel,
     null,

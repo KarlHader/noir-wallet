@@ -1,25 +1,5 @@
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
-import shieldFundsIcon from '@/images/figma-shield-funds.svg'
-
-export function WalletShieldFundsIcon() {
-  return (
-    <span
-      aria-hidden="true"
-      className="size-5 shrink-0 bg-current"
-      style={{
-        maskImage: `url("${shieldFundsIcon}")`,
-        WebkitMaskImage: `url("${shieldFundsIcon}")`,
-        maskPosition: 'center',
-        WebkitMaskPosition: 'center',
-        maskRepeat: 'no-repeat',
-        WebkitMaskRepeat: 'no-repeat',
-        maskSize: 'contain',
-        WebkitMaskSize: 'contain'
-      }}
-    />
-  )
-}
 
 interface WalletActionButtonProps {
   readonly icon: ReactNode

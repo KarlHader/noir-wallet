@@ -1,4 +1,5 @@
 import { Icon } from '@iconify/react'
+import { useEffect, useRef } from 'react'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
@@ -54,7 +55,9 @@ interface SendTransferFormProps {
   readonly onSubmitted: (submission: SendTransferSubmission) => void
 }
 
-type EvmTransferProps = Parameters<typeof useEvmSendTransfer>[0]
+type EvmTransferProps = Parameters<typeof useEvmSendTransfer>[0] & {
+  readonly shieldModeRequest?: number
+}
 
 export function SendTransferForm(
   props: SendTransferFormProps | (EvmTransferProps & { readonly family: 'evm' })
@@ -141,6 +144,14 @@ export function SendTransferForm(
 
 function EvmTransfer(props: EvmTransferProps) {
   const state = useEvmSendTransfer(props)
+  const handledShieldModeRequest = useRef(props.shieldModeRequest ?? 0)
+  useEffect(() => {
+    if (handledShieldModeRequest.current === props.shieldModeRequest) return
+    handledShieldModeRequest.current = props.shieldModeRequest ?? 0
+    if (!state.active || state.preparing || state.approving || state.updatingFee || state.review)
+      return
+    state.selectShield('shield')
+  }, [props.shieldModeRequest, state])
   return <EvmSendTransferView state={state} />
 }
 

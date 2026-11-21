@@ -32,13 +32,13 @@ import {
   SendFormActions,
   SendFieldLabel,
   SendAmountInputCard,
+  SendAssetHeader,
   SendRouteInfoCard,
   SendRecipientInputCard
 } from '@/popup/components/transaction/SendInputCards'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
-import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import type { ShieldSourceTokenPickerItem } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
 import {
   sortSendAssetsByBalanceValue,
@@ -127,24 +127,23 @@ export function ShieldWithdrawForm({
   onStateChange,
   model,
   initialAsset,
-  refresh,
-  readProjection,
   onSelectPublic,
   onOpenSourcePicker,
   onSourcePickerState,
   onMoveSourceSelect,
   onMoveDestinationSelect,
   onMoveReverse,
+  publicModeRequest = 0,
   sourceSelectorActive = false,
-  moveToOwnZcash = false
+  moveToOwnZcash = false,
+  balanceAction = 'Withdraw',
+  lockMoveDestination = false
 }: {
   readonly active: boolean
   readonly entry: Readonly<ShieldWithdrawEntry>
   readonly onStateChange: (state: { readonly reviewing: boolean; readonly busy: boolean }) => void
   readonly model: PortfolioReadModel | null
   readonly initialAsset: PortfolioAssetView | null
-  readonly refresh: (force?: boolean) => Promise<void>
-  readonly readProjection: () => Promise<void>
   readonly onSelectPublic: (
     assetId: string | null,
     recipient: string,
@@ -156,12 +155,16 @@ export function ShieldWithdrawForm({
   readonly onMoveSourceSelect?: () => void
   readonly onMoveDestinationSelect?: () => void
   readonly onMoveReverse?: () => void
+  readonly publicModeRequest?: number
   readonly sourceSelectorActive?: boolean
   readonly moveToOwnZcash?: boolean
+  readonly balanceAction?: 'Deposit' | 'Withdraw'
+  readonly lockMoveDestination?: boolean
 }) {
   const { navigate } = useNavigate()
-  const actionLabel = moveToOwnZcash ? 'Move' : 'Send'
+  const actionLabel = moveToOwnZcash ? balanceAction : 'Send'
   const providerIsNear = entry.provider === null || entry.provider === 'near-confidential'
+  const handledPublicModeRequest = useRef(publicModeRequest)
   const routeAssetId = entry.assetId ?? ''
   const routeNetworkId = entry.networkId
   const routeRecipient = entry.recipient
@@ -265,11 +268,7 @@ export function ShieldWithdrawForm({
     active,
     enabled: canManageNear,
     scopeKey,
-    scope: account
-      ? { network, keyDomainId: account.walletId, accountId: account.accountId }
-      : null,
-    refreshPortfolio: refresh,
-    readProjection
+    scope: account ? { network, keyDomainId: account.walletId, accountId: account.accountId } : null
   })
 
   useLayoutEffect(() => {
@@ -294,7 +293,7 @@ export function ShieldWithdrawForm({
   }, [])
 
   useEffect(() => {
-    if (active && !providerIsNear) navigate('/shield-funds', { replace: true })
+    if (active && !providerIsNear) navigate('/?domain=shield', { replace: true })
   }, [active, providerIsNear, navigate])
 
   useEffect(() => {
@@ -645,6 +644,33 @@ export function ShieldWithdrawForm({
       })
     : null
   const recipientValid = isShieldWithdrawRecipient(recipient.trim(), destination, network)
+  useEffect(() => {
+    if (handledPublicModeRequest.current === publicModeRequest) return
+    handledPublicModeRequest.current = publicModeRequest
+    if (!active || busy || prepared) return
+    const publicAssetId = [source?.asset, destination?.asset, initialAsset]
+      .map(asset => asset?.asset.id)
+      .find(id => model?.assets.some(item => item.asset.id === id))
+    onSelectPublic(
+      publicAssetId ?? null,
+      recipientValid ? recipient : '',
+      amount,
+      destination?.asset.asset.id ?? null
+    )
+  }, [
+    publicModeRequest,
+    active,
+    busy,
+    prepared,
+    source,
+    destination,
+    initialAsset,
+    model,
+    onSelectPublic,
+    recipientValid,
+    recipient,
+    amount
+  ])
   const previewAmountRaw = amountState?.amountRaw
   const previewRequest = useMemo(() => {
     if (
@@ -731,11 +757,18 @@ export function ShieldWithdrawForm({
       },
       () => {
         if (activeRef.current)
-          navigate(`/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`)
+          navigate(
+            `/?domain=shield&tab=activity&transactionId=${encodeURIComponent(transactionId)}`
+          )
       },
       prepared
         ? {
             operation: moveToOwnZcash ? 'move' : 'send',
+            perspective: {
+              viewedDomain: 'shield',
+              shieldProvider:
+                moveToOwnZcash && balanceAction === 'Deposit' ? 'zcash-shield' : 'near-confidential'
+            },
             amount: prepared.amount,
             symbol: formatSymbol(prepared.source.asset.metadata.symbol),
             from: 'Shield · NEAR Confidential',
@@ -1074,7 +1107,7 @@ export function ShieldWithdrawForm({
       <div ref={formRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <TransactionReviewView
           variant="figma"
-          title={moveToOwnZcash ? 'Confirm Move' : 'Confirm Send'}
+          title={`Confirm ${actionLabel}`}
           asset={{
             assetId: prepared.source.asset.asset.id,
             symbol: formatSymbol(prepared.source.asset.metadata.symbol),
@@ -1445,7 +1478,7 @@ export function ShieldWithdrawForm({
                   disabled={busy}
                   onClick={
                     onMoveDestinationSelect ??
-                    (ownZcashRecipients.length > 1
+                    (!lockMoveDestination && ownZcashRecipients.length > 1
                       ? () => setPicker('move-destination')
                       : undefined)
                   }
@@ -1464,28 +1497,12 @@ export function ShieldWithdrawForm({
               disabled={!canContinue || busy}
               onClick={() => void prepare()}
             >
-              Move
+              {actionLabel}
             </Button>
           </div>
         </>
       ) : (
         <SendFormView
-          domain="shield"
-          availableDomains={['public', 'shield']}
-          disabled={busy}
-          onDomainChange={domain => {
-            if (domain === 'public') {
-              const publicAssetId = [source?.asset, destination?.asset, initialAsset]
-                .map(asset => asset?.asset.id)
-                .find(id => model?.assets.some(item => item.asset.id === id))
-              onSelectPublic(
-                publicAssetId ?? null,
-                recipientValid ? recipient : '',
-                amount,
-                destination?.asset.asset.id ?? null
-              )
-            }
-          }}
           recipient={
             <div className="space-y-2">
               <div className="flex min-w-0 items-center justify-between gap-3 text-xs">
@@ -1557,32 +1574,17 @@ export function ShieldWithdrawForm({
             />
           }
           assetSelector={
-            <button
-              type="button"
+            <SendAssetHeader
+              assetId={displayedAsset?.asset.id}
+              symbol={displayedAsset ? formatSymbol(displayedAsset.metadata.symbol) : 'Token'}
+              icon={displayedAsset?.metadata.iconUrl}
+              networkName={source?.chain.chain.displayName ?? ''}
+              blockchain={source ? withdrawChainIconAlias(source.chain.chain) : undefined}
+              onSelectAsset={onOpenSourcePicker}
+              variant="pill"
               disabled={busy}
-              onClick={onOpenSourcePicker}
-              className="wallet-interactive flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-wallet-surface px-2.5 text-sm enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
-              aria-label={`Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`}
-            >
-              {displayedAsset && (
-                <TokenIcon
-                  assetId={displayedAsset.asset.id}
-                  symbol={formatSymbol(displayedAsset.metadata.symbol)}
-                  icon={displayedAsset.metadata.iconUrl}
-                  blockchain={source ? withdrawChainIconAlias(source.chain.chain) : undefined}
-                  size={24}
-                />
-              )}
-              <span className="flex min-w-0 flex-col items-start gap-0.5 leading-none">
-                <span className="max-w-[7ch] truncate">
-                  {displayedAsset ? formatSymbol(displayedAsset.metadata.symbol) : 'Token'}
-                </span>
-                {source && (
-                  <span className="text-[10px] text-muted">{source.chain.chain.displayName}</span>
-                )}
-              </span>
-              <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0" />
-            </button>
+              ariaLabel={`Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`}
+            />
           }
           balance={
             <span
@@ -1649,7 +1651,7 @@ export function ShieldWithdrawForm({
             {picker === 'slippage'
               ? 'Slippage'
               : picker === 'move-destination'
-                ? 'Move to'
+                ? 'Select destination'
                 : 'Recipient'}
           </DialogTitle>
           <DialogDescription className="sr-only">

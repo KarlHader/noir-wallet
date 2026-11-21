@@ -21,8 +21,15 @@ import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-act
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import { useNavigate } from '@/popup/provider/Router'
-import { SwapAssetCard, SwapProviderCard } from '@/popup/components/swap/SwapInputView'
-import { getSwapAmountValues } from '@/popup/components/swap/swap-estimate'
+import {
+  SwapAssetCard,
+  SwapDestinationPanel,
+  SwapProviderCard
+} from '@/popup/components/swap/SwapInputView'
+import {
+  estimateSwapOutputFromPrices,
+  getSwapAmountValues
+} from '@/popup/components/swap/swap-estimate'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { ShieldSourceTokenSelector } from '@/popup/components/tokens/ShieldSourceTokenSelector'
@@ -58,6 +65,7 @@ import {
   hasShieldTransferStarted,
   formatShieldQuoteTime,
   isUnsignedShieldTerminal,
+  getZcashTokenPickerChain,
   listShieldFundingAssets,
   selectDefaultShieldWithdrawSource,
   shieldPortfolioBalances,
@@ -96,7 +104,6 @@ interface ShieldSwapPageProps {
   readonly portfolio: PortfolioReadModel | null
   readonly portfolioLoading: boolean
   readonly tokens: readonly SwapToken[]
-  readonly onReadPortfolio: () => Promise<void>
   readonly onRefreshPortfolio: () => Promise<void>
   readonly amountFocusToken?: number
   readonly onStateChange: (state: { readonly reviewing: boolean; readonly busy: boolean }) => void
@@ -126,7 +133,6 @@ function ShieldSwapForm({
   portfolio: model,
   portfolioLoading,
   tokens: parentTokens,
-  onReadPortfolio,
   onRefreshPortfolio,
   amountFocusToken,
   onStateChange,
@@ -231,11 +237,7 @@ function ShieldSwapForm({
     active,
     enabled: canManageNear,
     scopeKey,
-    scope: account
-      ? { network, keyDomainId: account.walletId, accountId: account.accountId }
-      : null,
-    refreshPortfolio: onRefreshPortfolio,
-    readProjection: onReadPortfolio
+    scope: account ? { network, keyDomainId: account.walletId, accountId: account.accountId } : null
   })
 
   useLayoutEffect(() => {
@@ -255,7 +257,7 @@ function ShieldSwapForm({
   }, [])
 
   useEffect(() => {
-    if (active && !providerIsNear) navigate('/shield-funds', { replace: true })
+    if (active && !providerIsNear) navigate('/?domain=shield', { replace: true })
   }, [active, providerIsNear, navigate])
 
   useEffect(() => {
@@ -432,13 +434,22 @@ function ShieldSwapForm({
       : null
   const fromToken = tokens.find(token => token.assetId === from?.managed.protocolAssetId) ?? null
   const toToken = tokens.find(token => token.assetId === to?.managed.protocolAssetId) ?? null
+  const displayOutput =
+    previewOutput ??
+    (previewLoading
+      ? estimateSwapOutputFromPrices({
+          amountIn: amount,
+          tokenInPrice: fromToken?.price,
+          tokenOutPrice: toToken?.price
+        })
+      : '')
   const tokenPrices = useMemo(
     () => new Map(tokens.map(token => [token.assetId, token.price] as const)),
     [tokens]
   )
   const { fromFiat, toFiat } = getSwapAmountValues({
     amountIn: amount,
-    amountOut: previewOutput ?? '',
+    amountOut: displayOutput,
     tokenInPrice: fromToken?.price,
     tokenOutPrice: toToken?.price
   })
@@ -451,10 +462,8 @@ function ShieldSwapForm({
               key: SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID,
               assetId: SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID,
               symbol: 'ZEC',
-              chainName: 'Zcash Transparent',
+              ...getZcashTokenPickerChain(network),
               zcashFundingSource: 'transparent' as const,
-              chainId: 'zec',
-              badgeBlockchain: 'zec',
               nativeIconChain: 'zcash',
               availableRaw: nativeZecTransparentRaw,
               decimals: ZEC_DECIMALS
@@ -472,8 +481,9 @@ function ShieldSwapForm({
           symbol: option.symbol,
           iconUrl: option.iconUrl,
           chainName: option.chainName,
+          sourceLabel: option.sourceLabel,
           zcashFundingSource: option.kind === 'native-shielded' ? ('shielded' as const) : undefined,
-          chainId: option.badgeBlockchain,
+          chainId: option.chainId,
           badgeBlockchain: option.badgeBlockchain,
           nativeIconChain: 'zcash',
           availableRaw: option.availableRaw,
@@ -516,6 +526,7 @@ function ShieldSwapForm({
       )
     return Object.freeze([...transparentZecRow, ...zecRows, ...nonZecRows])
   }, [
+    network,
     fromPickerReady,
     sourceChoices,
     to?.managed.protocolAssetId,
@@ -882,7 +893,8 @@ function ShieldSwapForm({
   const viewActivity = useCallback(() => {
     const transactionId = activeActivity?.plan.transactionId
     setActiveActivity(null)
-    if (transactionId) navigate(`/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`)
+    if (transactionId)
+      navigate(`/?domain=shield&tab=activity&transactionId=${encodeURIComponent(transactionId)}`)
   }, [activeActivity?.plan.transactionId, navigate])
 
   if (activeActivity) {
@@ -1185,80 +1197,42 @@ function ShieldSwapForm({
           maxDisabled={busy || connecting || currentBalance === null || currentBalance === '0'}
           maxDisabledReason={!trustedBalances ? 'Refresh Shield balance' : 'No available balance'}
         />
-        <div className="relative border-t border-white/10 pt-2">
-          <span
-            className="group absolute -top-3.5 left-1/2 z-10 -translate-x-1/2"
-            tabIndex={!canReverse ? 0 : undefined}
-            aria-describedby={!canReverse ? 'shield-swap-reverse-reason' : undefined}
-            aria-label={
-              !canReverse
-                ? (reverseUnavailableReason ?? 'Reverse source asset is unavailable')
-                : undefined
+        <SwapDestinationPanel
+          canSwitchAssets={Boolean(!busy && from && to && canReverse)}
+          reverseUnavailableReason={
+            canReverse
+              ? undefined
+              : (reverseUnavailableReason ?? 'Reverse source asset is unavailable')
+          }
+          onSwitchAssets={() => {
+            if (!from || !to || !canReverse) return
+            if (nativeZecDestination && fromToken) {
+              const destination = confidentialDestinationFormToken(from, fromToken)
+              if (!destination) return
+              if (nativeZecDestination === 'transparent') onSelectTransparentZecSwap?.(destination)
+              else onSelectNativeZecSwap?.(destination)
+              return
             }
-            title={
-              !canReverse
-                ? (reverseUnavailableReason ?? 'Reverse source asset is unavailable')
-                : 'Switch assets'
-            }
-          >
-            <Button
-              type="button"
-              aria-label="Switch assets"
-              disabled={busy || !from || !to || !canReverse}
-              title={
-                !canReverse
-                  ? (reverseUnavailableReason ?? 'Reverse source asset is unavailable')
-                  : 'Switch assets'
-              }
-              onClick={() => {
-                if (!from || !to || !canReverse) return
-                if (nativeZecDestination && fromToken) {
-                  const destination = confidentialDestinationFormToken(from, fromToken)
-                  if (!destination) return
-                  if (nativeZecDestination === 'transparent')
-                    onSelectTransparentZecSwap?.(destination)
-                  else onSelectNativeZecSwap?.(destination)
-                  return
-                }
-                setFromId(to.asset.asset.id)
-                setToId(from.asset.asset.id)
-                setAmount('')
-                setError(null)
-              }}
-              className="size-7 rounded-md bg-[#373741] p-0 text-foreground hover:bg-popover disabled:opacity-40"
-              variant="secondary"
-            >
-              <Icon icon="lucide:arrow-down-up" width={16} height={16} />
-            </Button>
-            {!canReverse && (
-              <span
-                id="shield-swap-reverse-reason"
-                role="tooltip"
-                className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-48 -translate-x-1/2 rounded bg-popover p-2 text-center text-xs text-foreground opacity-0 shadow-md group-hover:opacity-100 group-focus:opacity-100"
-              >
-                {reverseUnavailableReason ?? 'Reverse source asset is unavailable'}
-              </span>
-            )}
-          </span>
-          <SwapAssetCard
-            direction="To"
-            token={toToken}
-            tokenBadgeBlockchain={nativeZecDestination ? 'zec' : toZecSource?.badgeBlockchain}
-            tokenNetworkLabel={nativeZecDestination ? 'Zcash' : toZecSource?.chainName}
-            zcashFundingSource={nativeZecDestination ?? undefined}
-            accountAddress={nativeZecRecipient}
-            amount={previewOutput ?? ''}
-            fiatValue={toToken?.price ? toFiat : ''}
-            onTokenSelect={() => {
-              setPicker('to')
-            }}
-            tokenSelectDisabled={tokens.length === 0}
-            tokenSelectLocked={busy}
-            isReadOnly
-            isAmountLoading={previewLoading}
-            isEstimatedAmount={Boolean(previewOutput)}
-          />
-        </div>
+            setFromId(to.asset.asset.id)
+            setToId(from.asset.asset.id)
+            setAmount('')
+            setError(null)
+          }}
+          token={toToken}
+          tokenBadgeBlockchain={nativeZecDestination ? 'zec' : toZecSource?.badgeBlockchain}
+          tokenNetworkLabel={nativeZecDestination ? 'Zcash' : toZecSource?.chainName}
+          zcashFundingSource={nativeZecDestination ?? undefined}
+          accountAddress={nativeZecRecipient}
+          amount={displayOutput}
+          fiatValue={toToken?.price ? toFiat : ''}
+          onTokenSelect={() => {
+            setPicker('to')
+          }}
+          tokenSelectDisabled={tokens.length === 0}
+          tokenSelectLocked={busy}
+          isAmountLoading={previewLoading}
+          isEstimatedAmount={previewLoading && Boolean(displayOutput)}
+        />
         {preview && from && to && previewOutput && (
           <SwapProviderCard
             slippage={slippage}

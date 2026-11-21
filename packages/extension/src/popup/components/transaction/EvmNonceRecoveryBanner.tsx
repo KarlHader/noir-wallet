@@ -33,6 +33,81 @@ import {
 type RecoveryState = NonNullable<Awaited<ReturnType<typeof evmWalletClient.getNonceRecovery>>>
 const RECOVERY_CHECK_INTERVAL_MS = 30_000
 
+function NonceRecoveryFeeForm({
+  onContinue,
+  onCancel
+}: {
+  readonly onContinue: (selection: EvmFeeSelection) => void
+  readonly onCancel: () => void
+}) {
+  const [feeMode, setFeeMode] = useState<'fast' | 'standard' | 'custom'>('fast')
+  const [customPriorityFee, setCustomPriorityFee] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const continueWithFee = () => {
+    try {
+      onContinue(
+        feeMode === 'custom'
+          ? parseEvmPriorityFeeGwei(customPriorityFee)
+          : { kind: 'tier', tier: feeMode }
+      )
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Invalid network fee')
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" className="w-full justify-between">
+            {feeMode === 'fast' ? 'Fast' : feeMode === 'standard' ? 'Standard' : 'Custom'}
+            <Icon icon="lucide:chevron-down" className="size-4 text-muted" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="min-w-(--radix-dropdown-menu-trigger-width)">
+          <DropdownMenuRadioGroup
+            value={feeMode}
+            onValueChange={value => {
+              if (value === 'fast' || value === 'standard' || value === 'custom') {
+                setFeeMode(value)
+                setError(null)
+              }
+            }}
+          >
+            <DropdownMenuRadioItem value="fast">Fast</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="standard">Standard</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="custom">Custom</DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {feeMode === 'custom' && (
+        <Input
+          aria-label="Custom priority fee in GWEI"
+          value={customPriorityFee}
+          onChange={event => {
+            setCustomPriorityFee(event.target.value)
+            setError(null)
+          }}
+          placeholder="Priority fee in GWEI"
+        />
+      )}
+      {error && (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button variant="outline" className="flex-1" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button className="flex-1" onClick={continueWithFee}>
+          Continue
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 interface EvmNonceRecoveryBannerProps {
   readonly accountId: string
   readonly chainId: string
@@ -54,13 +129,10 @@ export function EvmNonceRecoveryBanner({
 }: EvmNonceRecoveryBannerProps) {
   const [state, setState] = useState<RecoveryState | null>(null)
   const [busy, setBusy] = useState(false)
-  const [feeMode, setFeeMode] = useState<'fast' | 'standard' | 'custom'>('fast')
-  const [customPriorityFee, setCustomPriorityFee] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [checkFailed, setCheckFailed] = useState(false)
   const [checking, setChecking] = useState(false)
   const [checkRevision, setCheckRevision] = useState(0)
-  const [reviewOpen, setReviewOpen] = useState(false)
   const refreshSequence = useRef(0)
   const presentation = state ? getEvmNonceRecoveryPresentation(state.action) : null
 
@@ -71,13 +143,11 @@ export function EvmNonceRecoveryBanner({
       const next = await evmWalletClient.getNonceRecovery(chainId, executionMode)
       if (sequence !== refreshSequence.current) return
       setState(next)
-      if (!next) setReviewOpen(false)
       setCheckFailed(false)
       setError(null)
     } catch (cause) {
       if (sequence !== refreshSequence.current) return
       setState(null)
-      setReviewOpen(false)
       setCheckFailed(
         cause instanceof EvmWalletClientError && cause.code === 'nonce-queue-unavailable'
       )
@@ -133,13 +203,15 @@ export function EvmNonceRecoveryBanner({
         )
         await refresh()
         onUpdated()
-        setReviewOpen(false)
         return
       }
-      const selection: EvmFeeSelection =
-        feeMode === 'custom'
-          ? parseEvmPriorityFeeGwei(customPriorityFee)
-          : { kind: 'tier', tier: feeMode }
+      const selection = await openModal<EvmFeeSelection | null>({
+        title: 'Network fee',
+        body: resolve => (
+          <NonceRecoveryFeeForm onContinue={resolve} onCancel={() => resolve(null)} />
+        )
+      })
+      if (!selection) return
       const review = await evmWalletClient.prepareNonceRecovery(chainId, executionMode, selection)
       const summary = review.review.summary
       if (summary.schema !== 'evm.transaction.v1') {
@@ -234,7 +306,6 @@ export function EvmNonceRecoveryBanner({
       }
       await refresh()
       onUpdated()
-      setReviewOpen(false)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'EVM nonce recovery failed')
     } finally {
@@ -242,18 +313,7 @@ export function EvmNonceRecoveryBanner({
     }
   }
 
-  if (!state) {
-    return checkFailed ? (
-      <div className="border-b border-border/60 px-5 py-3">
-        <p className="mb-1 text-xs text-muted">{networkName}</p>
-        <InlineError
-          message="Unable to verify the send queue."
-          onRetry={() => void refresh()}
-          retrying={checking}
-        />
-      </div>
-    ) : null
-  }
+  if (!state) return null
 
   if (state.action === 'retry-broadcast') {
     return (
@@ -270,96 +330,23 @@ export function EvmNonceRecoveryBanner({
   }
 
   return (
-    <div className="border-b border-border/60 px-5 py-3" aria-label="EVM nonce recovery">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground/8 text-muted">
-          <Icon icon={presentation?.icon ?? 'lucide:clock-3'} width={17} height={17} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium leading-5 text-foreground">
-            {presentation?.title}
-          </p>
-          <p className="truncate text-xs leading-4 text-muted" title={networkName}>
-            {networkName}
-          </p>
-        </div>
-        {presentation?.actionLabel && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 shrink-0 gap-1 px-1.5 text-xs text-primary hover:bg-primary/10 hover:text-primary"
-            aria-expanded={reviewOpen}
-            disabled={busy || checking}
-            onClick={() => setReviewOpen(open => !open)}
-          >
-            {presentation.actionLabel}
-            <Icon
-              icon={reviewOpen ? 'lucide:chevron-up' : 'lucide:chevron-right'}
-              width={14}
-              height={14}
-            />
-          </Button>
-        )}
+    <div className="border-b border-border/60 px-5 py-2" aria-label="EVM nonce recovery">
+      <div className="flex min-w-0 items-center gap-2">
+        <p className="min-w-0 flex-1 truncate text-xs text-muted" title={networkName}>
+          {networkName} - {presentation?.title}
+        </p>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 shrink-0 px-1.5 text-xs text-primary hover:bg-primary/10 hover:text-primary"
+          disabled={busy || checking}
+          onClick={() => void handleRecovery()}
+        >
+          {presentation?.actionLabel ?? 'Review'}
+        </Button>
       </div>
-      {reviewOpen && (
-        <div className="ml-12 mt-3 border-t border-border/60 pt-3">
-          <div className="flex items-center gap-2">
-            <label htmlFor={`nonce-fee-${chainId}`} className="shrink-0 text-xs text-muted">
-              Network fee
-            </label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  id={`nonce-fee-${chainId}`}
-                  variant="outline"
-                  disabled={busy}
-                  className="h-8 min-w-0 flex-1 justify-between px-2 text-xs"
-                >
-                  {feeMode === 'fast' ? 'Fast' : feeMode === 'standard' ? 'Standard' : 'Custom'}
-                  <Icon icon="lucide:chevron-down" className="size-3.5 text-muted" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="min-w-(--radix-dropdown-menu-trigger-width)">
-                <DropdownMenuRadioGroup
-                  value={feeMode}
-                  onValueChange={value => {
-                    if (value === 'fast' || value === 'standard' || value === 'custom') {
-                      setFeeMode(value)
-                    }
-                  }}
-                >
-                  <DropdownMenuRadioItem value="fast">Fast</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="standard">Standard</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="custom">Custom</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 px-3 text-xs"
-              disabled={busy}
-              onClick={() => void handleRecovery()}
-            >
-              Continue
-            </Button>
-          </div>
-          {feeMode === 'custom' && (
-            <div className="mt-2">
-              <Input
-                aria-label="Custom priority fee in GWEI"
-                value={customPriorityFee}
-                onChange={event => setCustomPriorityFee(event.target.value)}
-                placeholder="Priority fee in GWEI"
-                disabled={busy}
-                className="h-8 w-full text-xs"
-              />
-            </div>
-          )}
-        </div>
-      )}
       {error && (
-        <p className="ml-12 mt-2 text-xs text-destructive" role="alert">
+        <p className="mt-1 text-xs text-destructive" role="alert">
           {error}
         </p>
       )}

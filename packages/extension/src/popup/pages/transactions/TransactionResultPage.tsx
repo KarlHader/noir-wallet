@@ -641,7 +641,9 @@ export function TransactionResultPage() {
     if (retrySend)
       navigate(retrySend.path, { replace: true, state: { retryDraft: retrySend.draft } })
     else if (data?.type === 'zcash' && retry)
-      navigate(retry.draft.fundingSource === 'shielded' ? '/shield-funds' : '/', { replace: true })
+      navigate(retry.draft.fundingSource === 'shielded' ? '/?domain=shield' : '/', {
+        replace: true
+      })
     else goBack()
   }
 

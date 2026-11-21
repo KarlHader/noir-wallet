@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { Icon } from '@iconify/react'
 import type { DAppExecutionMode, DAppExecutionModeState } from '@/core/dapp/dapp-execution-mode'
 import { cn } from '@/lib/utils'
+import { Tooltip } from '../ui/tooltip'
 
 export function WalletModeSwitch({
   state,
@@ -11,49 +12,37 @@ export function WalletModeSwitch({
   readonly busy: boolean
   readonly onChange: (mode: DAppExecutionMode) => void
 }) {
-  const [intent, setIntent] = useState<DAppExecutionMode | null>(null)
-  useEffect(() => {
-    if (!busy) setIntent(null)
-  }, [busy, state?.mode])
-  const visualMode = intent ?? state?.mode ?? null
+  const isPrivate = state?.mode === 'private'
+  const canToggle = state !== null && !busy && (isPrivate || state.privateAvailable)
+  const tooltip = busy
+    ? 'DApp address updating'
+    : canToggle
+      ? isPrivate
+        ? 'DApp address: Private'
+        : 'DApp address: Public'
+      : 'Private DApp address unavailable'
+
   return (
-    <div
-      role="radiogroup"
-      aria-label="Wallet mode"
-      aria-busy={busy}
-      data-visual-mode={visualMode}
-      className="flex h-8 w-[141px] shrink-0 items-center gap-1 rounded-xl bg-white/6 p-1"
-    >
-      {(['main', 'private'] as const).map(mode => (
-        <button
-          key={mode}
-          type="button"
-          role="radio"
-          aria-label={mode === 'main' ? 'Public mode' : 'Private mode'}
-          aria-checked={state?.mode === mode}
-          title={
-            mode === 'private' && state && !state.privateAvailable
-              ? 'Private mode unavailable for this account'
-              : undefined
-          }
-          disabled={!state || (mode === 'private' && !state.privateAvailable)}
-          onClick={() => {
-            setIntent(mode)
-            onChange(mode)
-          }}
-          className={cn(
-            'wallet-interactive h-6 min-w-0 flex-1 rounded-lg text-[13px] font-normal leading-[17px] transition-[opacity,transform,background-color] duration-150 ease-out enabled:active:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none',
-            visualMode === mode ? 'scale-100 opacity-100 font-medium' : 'scale-[0.97] opacity-80',
-            visualMode === mode
-              ? mode === 'private'
-                ? 'bg-wallet-mode text-white'
-                : 'bg-wallet-selected text-foreground'
-              : 'text-muted enabled:hover:bg-white/[0.06] enabled:hover:text-foreground'
-          )}
-        >
-          {mode === 'main' ? 'Public' : 'Private'}
-        </button>
-      ))}
-    </div>
+    <Tooltip content={tooltip} side="bottom">
+      <button
+        type="button"
+        aria-label="Private DApp address"
+        aria-pressed={isPrivate}
+        aria-disabled={!canToggle}
+        aria-busy={busy || undefined}
+        onClick={() => {
+          if (canToggle) onChange(isPrivate ? 'main' : 'private')
+        }}
+        className={cn(
+          'wallet-interactive flex size-8 items-center justify-center rounded-md border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+          isPrivate
+            ? 'border-private/35 bg-private/12 text-private aria-disabled:opacity-65'
+            : 'border-transparent text-wallet-secondary aria-disabled:opacity-45',
+          canToggle ? 'hover:bg-white/10 active:bg-white/15' : 'cursor-default'
+        )}
+      >
+        <Icon icon="noir:private-assets" width={19} height={19} aria-hidden="true" />
+      </button>
+    </Tooltip>
   )
 }

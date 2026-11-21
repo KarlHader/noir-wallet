@@ -35,6 +35,7 @@ import {
   getActivityInteractionPresentation
 } from './activity-interaction-adapters'
 import { resolveActivityChainId } from './activity-chain'
+import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
 import {
   getActivityCancellationPresentation,
   getActivityDisplayChanges,
@@ -99,6 +100,7 @@ export interface ActivityTransactionView {
   readonly isShieldSend: boolean
   readonly isMove: boolean
   readonly isRefunded: boolean
+  readonly actionSide: 'source' | 'destination' | 'none'
 }
 
 export function buildActivityTransactionView(input: {
@@ -107,6 +109,7 @@ export function buildActivityTransactionView(input: {
   readonly assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>
   readonly chainMetadata: ReadonlyMap<string, ActivityChainMetadata>
   readonly executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
+  readonly perspective?: ActivityPerspective
   readonly settledDestination?: Parameters<typeof getActivitySwapPresentation>[4]
   readonly legacyPrivateShieldWithdrawDestination?: boolean
   readonly fallback?: ActivityTransactionFallback
@@ -160,6 +163,18 @@ export function buildActivityTransactionView(input: {
             : rawSwap.destinationNetwork
       }
     : null
+  const action = getActivityAction(
+    item,
+    input.perspective,
+    swap ?? {
+      sourceAccountMode: item.snapshot?.sender?.address
+        ? input.executionAddressModes?.get(item.snapshot.sender.address.toLowerCase())
+        : undefined,
+      destinationAccountMode: item.snapshot?.recipient?.address
+        ? input.executionAddressModes?.get(item.snapshot.recipient.address.toLowerCase())
+        : undefined
+    }
+  )
   const asset = sourceAmount ? assetMetadata.get(sourceAmount.assetId) : undefined
   const displayMetadata = asset?.metadata ?? sourceAmount?.metadata
   const amount =
@@ -168,11 +183,12 @@ export function buildActivityTransactionView(input: {
           value: formatBaseUnitAmount(sourceAmount.amountRaw, displayMetadata.decimals),
           symbol: displayMetadata.symbol,
           prefix:
+            action.side === 'destination' ||
             item.failureCode === 'refunded' ||
             item.kind === 'receive' ||
             item.snapshot?.direction === 'incoming'
               ? '+'
-              : item.snapshot?.direction === 'outgoing'
+              : action.side === 'source' || item.snapshot?.direction === 'outgoing'
                 ? '−'
                 : ''
         }
@@ -180,11 +196,19 @@ export function buildActivityTransactionView(input: {
         ? {
             value: fallback.source.value,
             symbol: fallback.source.symbol,
-            prefix: item.snapshot?.direction === 'incoming' ? '+' : '−'
+            prefix:
+              action.side === 'destination' || item.snapshot?.direction === 'incoming' ? '+' : '−'
           }
         : null
   const changes = getActivityDisplayChanges(item, assetMetadata)
     .filter(change => !change.isRaw)
+    .sort((left, right) =>
+      left.direction === right.direction || action.side === 'none'
+        ? 0
+        : left.direction === (action.side === 'destination' ? 'incoming' : 'outgoing')
+          ? -1
+          : 1
+    )
     .slice(0, 2)
   const showChanges =
     getActivityAssetEffects(item) !== undefined &&
@@ -303,11 +327,14 @@ export function buildActivityTransactionView(input: {
         : (resolveActivityChainMetadata(chainId, chainMetadata)?.displayName ?? 'Unknown network')
     ),
     isCrossChain: item.segments.length > 1,
-    isIncoming: item.kind === 'receive' || direction === 'incoming',
+    isIncoming:
+      action.side === 'destination' ||
+      (action.side === 'none' && (item.kind === 'receive' || direction === 'incoming')),
     isShieldMove,
     isShieldSend,
     isMove,
-    isRefunded: input.refunded === true || item.failureCode === 'refunded'
+    isRefunded: input.refunded === true || item.failureCode === 'refunded',
+    actionSide: action.side
   }
 }
 
@@ -325,10 +352,10 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
     return (
       <div className="flex flex-col items-center py-7 text-center" data-activity-swap-detail>
         <ActivityRouteTokenIcons item={item} route={swap} size="detail" />
-        {swap.isExternalDeposit ? (
+        {swap.isExternalDeposit || view.actionSide === 'destination' ? (
           <div className="mt-4 max-w-full">
             <p className="text-sm text-muted">
-              {view.isRefunded ? 'Deposit' : swap.destinationIsSettled ? 'Received' : 'Expected'}
+              {view.isRefunded ? 'Refund' : swap.destinationIsSettled ? 'Received' : 'Expected'}
             </p>
             <div
               className={cn(
@@ -348,6 +375,8 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                   prefix="+"
                   symbol={swap.destination.symbol}
                 />
+              ) : swap.source ? (
+                <AmountDisplay value={swap.source.exact} prefix="+" symbol={swap.source.symbol} />
               ) : (
                 '—'
               )}
@@ -362,20 +391,25 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                 '—'
               )}
             </div>
-            {swap.destination && !swap.hideDestinationCredit && !view.isRefunded && (
-              <div className="mt-1 max-w-full break-all font-sans text-sm text-muted tabular-nums">
-                {view.isShieldSend
-                  ? 'Recipient receives'
-                  : swap.destinationIsSettled
-                    ? 'Received'
-                    : 'Expected'}{' '}
-                <AmountDisplay
-                  value={swap.destination.exact}
-                  prefix={view.isShieldSend ? '' : '+'}
-                  symbol={swap.destination.symbol}
-                />
-              </div>
-            )}
+            {swap.destination &&
+              !swap.hideDestinationCredit &&
+              !view.isRefunded &&
+              (view.actionSide !== 'source' ||
+                view.isShieldSend ||
+                !isOwnedAccountTransfer(swap)) && (
+                <div className="mt-1 max-w-full break-all font-sans text-sm text-muted tabular-nums">
+                  {view.isShieldSend
+                    ? 'Recipient receives'
+                    : swap.destinationIsSettled
+                      ? 'Received'
+                      : 'Expected'}{' '}
+                  <AmountDisplay
+                    value={swap.destination.exact}
+                    prefix={view.isShieldSend ? '' : '+'}
+                    symbol={swap.destination.symbol}
+                  />
+                </div>
+              )}
           </>
         )}
       </div>

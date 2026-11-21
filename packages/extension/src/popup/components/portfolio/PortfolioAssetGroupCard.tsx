@@ -26,7 +26,7 @@ import { formatDisplayAmount } from './portfolio-format'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import {
   getAvailablePortfolioAssetGroupUsdValue,
-  getPortfolioAssetDomainBalances,
+  getMergedZecProviderBalances,
   getPortfolioAssetGroupUnitQuote,
   type PortfolioAssetGroup,
   type PortfolioAssetGroupEntry
@@ -121,67 +121,40 @@ function assetPendingAmount(asset: PortfolioAssetView): Big {
 }
 
 function PortfolioAssetQuantity({
-  entries,
-  domain,
-  prices,
   balancesHidden,
-  confidentialZec,
   amount,
-  symbol
+  symbol,
+  providerBalances
 }: {
-  readonly entries: readonly PortfolioAssetGroupEntry[]
-  readonly domain: AssetDomain
-  readonly prices: AssetPriceReadModel | null
   readonly balancesHidden: boolean
-  readonly confidentialZec?: NearConfidentialZecRow | null
   readonly amount: Big
   readonly symbol: string
+  readonly providerBalances?: ReturnType<typeof getMergedZecProviderBalances>
 }) {
-  if (balancesHidden) return <p className="mt-0.5 break-all text-xs text-muted">••••</p>
-
-  const domainBalances = confidentialZec?.displayAsset
-    ? []
-    : getPortfolioAssetDomainBalances(entries, domain, prices)
-  const isZcash = entries.every(entry => entry.chain.chain.family === 'zcash')
-  const balances = confidentialZec
-    ? [...domainBalances, { ...confidentialZec, domain: 'near-confidential' as const }]
-    : domainBalances
+  const quantity = (
+    <p className="mt-0.5 break-all text-xs text-muted">
+      {balancesHidden ? '••••' : `${formatDisplayAmount(amount)} ${formatSymbol(symbol)}`}
+    </p>
+  )
+  if (balancesHidden || !providerBalances) return quantity
   return (
     <Tooltip
       side="top"
       className="max-w-[260px]"
       content={
         <div className="space-y-1.5">
-          {balances.map(balance => (
-            <div key={balance.domain} className="flex items-start justify-between gap-4">
-              <span className="shrink-0">
-                {balance.domain === 'public' && isZcash
-                  ? 'Transparent'
-                  : balance.domain === 'public'
-                    ? 'Public'
-                    : balance.domain === 'shield'
-                      ? 'Shield'
-                      : balance.domain === 'near-confidential'
-                        ? 'NEAR Confidential'
-                        : 'Private'}
-              </span>
+          {providerBalances.map(({ provider, amount: providerAmount }) => (
+            <div key={provider} className="flex items-start justify-between gap-4">
+              <span className="shrink-0">{provider}</span>
               <span className="text-right tabular-nums">
-                <span className="block">
-                  {balance.amount === null ? '—' : formatDisplayAmount(new Big(balance.amount))}{' '}
-                  {formatSymbol(symbol)}
-                </span>
-                <span className="block opacity-70">
-                  {balance.fiat === null ? '—' : formatFiatAmount(balance.fiat, { showSign: true })}
-                </span>
+                {formatDisplayAmount(new Big(providerAmount))} {formatSymbol(symbol)}
               </span>
             </div>
           ))}
         </div>
       }
     >
-      <span className="mt-0.5 inline-block break-all text-xs text-muted underline decoration-dotted underline-offset-2">
-        {formatDisplayAmount(amount.plus(confidentialZec?.amount ?? '0'))} {formatSymbol(symbol)}
-      </span>
+      {quantity}
     </Tooltip>
   )
 }
@@ -190,10 +163,7 @@ function PendingAssetAmount({ amount, symbol }: { readonly amount: Big; readonly
   if (amount.lte(0)) return null
   return (
     <div className="flex min-w-0 items-center justify-end gap-1 px-3 pb-2.5 text-[11px] text-muted">
-      <span
-        className="min-w-0 break-all text-right"
-        title={`${amount.toFixed()} ${formatSymbol(symbol)} pending`}
-      >
+      <span className="min-w-0 break-all text-right">
         {formatDisplayAmount(amount)} {formatSymbol(symbol)} pending
       </span>
       <BalanceHelp kind="pending" />
@@ -327,13 +297,10 @@ function PortfolioAssetBalanceRow({
             </p>
           )}
           <PortfolioAssetQuantity
-            entries={[entry]}
-            domain={domain ?? 'all'}
-            prices={prices}
             balancesHidden={balancesHidden}
-            confidentialZec={zec}
-            amount={amount}
+            amount={amount.plus(zec?.amount ?? '0')}
             symbol={entry.asset.metadata.symbol}
+            providerBalances={getMergedZecProviderBalances([entry], zec, domain ?? 'all')}
           />
         </div>
       </button>
@@ -458,13 +425,10 @@ export function PortfolioAssetGroupCard({
                 </p>
               )}
               <PortfolioAssetQuantity
-                entries={group.entries}
-                domain={domain}
-                prices={prices}
                 balancesHidden={balancesHidden}
-                confidentialZec={zec}
-                amount={totalAmount}
+                amount={totalAmount.plus(zec?.amount ?? '0')}
                 symbol={group.symbol}
+                providerBalances={getMergedZecProviderBalances(group.entries, zec, domain)}
               />
             </>
           }

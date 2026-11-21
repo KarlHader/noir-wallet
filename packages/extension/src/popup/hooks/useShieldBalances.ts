@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  confidentialFundingClient,
-  type ConfidentialBalanceErrorCode
-} from '@/popup/services/confidential-funding-client'
+import type { ConfidentialBalanceErrorCode } from '@/popup/services/confidential-funding-client'
 import { usePortfolioSnapshot } from './usePortfolioSnapshot'
 import type { Network } from '@/types/wallet'
 
@@ -19,26 +16,30 @@ export function useShieldBalances({
   enabled: boolean
   scopeKey: string
   scope: BalanceScope | null
-  refreshPortfolio: (force?: boolean) => Promise<void>
-  readProjection?: () => Promise<void>
   authorizeOnMount?: boolean
 }>) {
-  const { model, settled, readLatest } = usePortfolioSnapshot(
-    scope?.keyDomainId ?? null,
-    scope?.accountId ?? null,
-    { enabled: active && enabled }
-  )
+  const {
+    model,
+    settled,
+    scopeKey: snapshotKey,
+    refreshSource
+  } = usePortfolioSnapshot(scope?.keyDomainId ?? null, scope?.accountId ?? null, {
+    enabled: active && enabled,
+    autoRefresh: false
+  })
+  const lifecycleKey = JSON.stringify([scopeKey, snapshotKey])
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [errorCode, setErrorCode] = useState<ConfidentialBalanceErrorCode | null>(null)
   const [autoRecoveringKey, setAutoRecoveringKey] = useState<string | null>(null)
-  const currentKey = useRef(scopeKey)
+  const currentKey = useRef(lifecycleKey)
   const currentActive = useRef(active && enabled)
   const autoAttemptedKey = useRef<string | null>(null)
   const cancelAutoRecovery = useRef<(() => void) | null>(null)
   const lastErrorCode = useRef<ConfidentialBalanceErrorCode | null>(null)
   const inFlight = useRef<{ key: string; promise: Promise<boolean> } | null>(null)
-  currentKey.current = scopeKey
+  const activeRequest = useRef(0)
+  currentKey.current = lifecycleKey
   currentActive.current = active && enabled
 
   const confidential = model?.confidential
@@ -60,14 +61,14 @@ export function useShieldBalances({
       })) ?? null,
     [freshAssets]
   )
-  const autoRecovering = active && enabled && autoRecoveringKey === scopeKey && !balances
+  const autoRecovering = active && enabled && autoRecoveringKey === lifecycleKey && !balances
 
   useEffect(() => {
     setConnecting(false)
     setError(null)
     setErrorCode(null)
     lastErrorCode.current = null
-  }, [scopeKey])
+  }, [lifecycleKey])
 
   useEffect(() => {
     currentActive.current = active && enabled
@@ -81,7 +82,7 @@ export function useShieldBalances({
     return () => {
       currentActive.current = false
     }
-  }, [active, enabled, scopeKey])
+  }, [active, enabled, lifecycleKey])
 
   const refreshBalances = useCallback(
     (
@@ -93,18 +94,21 @@ export function useShieldBalances({
       if (!scope || !enabled || !active) return Promise.resolve(false)
       if (!automatic) cancelAutoRecovery.current?.()
       if (!force && balances) return Promise.resolve(true)
-      const requestKey = scopeKey
+      const requestKey = JSON.stringify([lifecycleKey, authorize, notifyPortfolio])
       if (inFlight.current?.key === requestKey) return inFlight.current.promise
+      const operationId = ++activeRequest.current
       const request = (async () => {
         setConnecting(true)
         setError(null)
         setErrorCode(null)
         lastErrorCode.current = null
         try {
-          await confidentialFundingClient.refreshBalances(scope, authorize, notifyPortfolio)
-          let latest = await readLatest()
-          if (latest?.confidential?.freshness !== 'fresh') latest = await readLatest()
-          if (latest?.confidential?.freshness !== 'fresh') {
+          const refreshed = await refreshSource({
+            source: 'near-confidential',
+            authorize,
+            notifyPortfolio
+          })
+          if (!refreshed) {
             throw new Error('Shield balance unavailable')
           }
           return true
@@ -117,14 +121,23 @@ export function useShieldBalances({
             code === 'balance_unavailable'
               ? code
               : 'balance_unavailable'
-          if (currentKey.current === requestKey && currentActive.current) {
+          if (
+            currentKey.current === lifecycleKey &&
+            currentActive.current &&
+            activeRequest.current === operationId
+          ) {
             lastErrorCode.current = classifiedCode
             setError(cause instanceof Error ? cause.message : 'Shield balance unavailable')
             setErrorCode(classifiedCode)
           }
           return false
         } finally {
-          if (currentKey.current === requestKey && currentActive.current) setConnecting(false)
+          if (
+            currentKey.current === lifecycleKey &&
+            currentActive.current &&
+            activeRequest.current === operationId
+          )
+            setConnecting(false)
         }
       })()
       inFlight.current = { key: requestKey, promise: request }
@@ -137,11 +150,11 @@ export function useShieldBalances({
       active,
       balances,
       enabled,
-      readLatest,
+      refreshSource,
       scope?.network,
       scope?.keyDomainId,
       scope?.accountId,
-      scopeKey
+      lifecycleKey
     ]
   )
 
@@ -153,20 +166,20 @@ export function useShieldBalances({
       !authorizeOnMount ||
       !settled ||
       balances ||
-      autoAttemptedKey.current === scopeKey
+      autoAttemptedKey.current === lifecycleKey
     )
       return
-    autoAttemptedKey.current = scopeKey
+    autoAttemptedKey.current = lifecycleKey
     let cancelled = false
     let started = false
     let retryTimer: number | null = null
     let retries = 0
     const stop = () => {
       cancelled = true
-      if (!started && autoAttemptedKey.current === scopeKey) autoAttemptedKey.current = null
+      if (!started && autoAttemptedKey.current === lifecycleKey) autoAttemptedKey.current = null
       if (retryTimer !== null) window.clearTimeout(retryTimer)
       if (cancelAutoRecovery.current === stop) cancelAutoRecovery.current = null
-      setAutoRecoveringKey(current => (current === scopeKey ? null : current))
+      setAutoRecoveringKey(current => (current === lifecycleKey ? null : current))
     }
     cancelAutoRecovery.current = stop
     const attempt = async (authorize: boolean) => {
@@ -188,11 +201,11 @@ export function useShieldBalances({
     queueMicrotask(() => {
       if (cancelled) return
       started = true
-      setAutoRecoveringKey(scopeKey)
+      setAutoRecoveringKey(lifecycleKey)
       void attempt(true)
     })
     return stop
-  }, [active, enabled, authorizeOnMount, settled, Boolean(balances), scopeKey, refreshBalances])
+  }, [active, enabled, authorizeOnMount, settled, Boolean(balances), lifecycleKey, refreshBalances])
 
   return {
     balances,

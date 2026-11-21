@@ -7,12 +7,17 @@ import {
 } from '@/popup/services/evm-send-validation'
 import { getPublicPrivateSendRouteCost } from '@/popup/services/public-private-send-preview'
 import { useZcashMoveQuote } from '@/popup/hooks/useZcashMoveQuote'
+import {
+  balanceTransferLabel,
+  resolveBalanceTransferIntent
+} from '@/popup/services/private-balance-transfer'
 import { useZcashPrivateSendPreview } from '@/popup/hooks/useZcashPrivateSendPreview'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
 import { PageHeader } from '../../components/common/PageHeader'
+import { TransactionModeDropdown } from '@/popup/components/transaction/TransactionModeDropdown'
 import {
   ZcashMoveLayout,
   ZcashMoveAccountCard
@@ -64,7 +69,6 @@ import {
 import { cn } from '@/lib/utils'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
-import { BalanceDomainTabs } from '@/popup/components/account/BalanceDomainTabs'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import nearLogo from '@/images/figma-near-confidential.svg'
 import zcashShieldLogo from '@/images/figma-zcash-shield.svg'
@@ -125,6 +129,7 @@ import {
 export function ZcashTransfer({
   active = true,
   embedded = false,
+  receiveForm,
   initialFundingSource = 'transparent',
   fundingSourceSelection,
   onSelectAsset,
@@ -136,6 +141,11 @@ export function ZcashTransfer({
 }: {
   readonly active?: boolean
   readonly embedded?: boolean
+  readonly receiveForm?: {
+    readonly retryPath: string
+    readonly asset: React.ReactNode
+    readonly accounts: React.ReactNode
+  }
   readonly initialFundingSource?: FundingSource
   readonly fundingSourceSelection?: Readonly<{ source: FundingSource; revision: number }> | null
   readonly onSelectAsset?: (fundingSource: FundingSource) => void
@@ -192,13 +202,14 @@ export function ZcashTransfer({
   const leaveSend = () =>
     canReturnToOriginHistory
       ? goBack()
-      : navigate(originPath ?? (fundingSource === 'shielded' ? '/shield-funds' : '/'), {
+      : navigate(originPath ?? (fundingSource === 'shielded' ? '/?domain=shield' : '/'), {
           replace: true
         })
-  const isSelfMove = routeParams.get('move') === '1'
+  const isSelfMove = Boolean(receiveForm) || routeParams.get('move') === '1'
   const isConfidentialMove = isSelfMove && moveDestination === 'confidential'
-  const moveSource =
-    routeParams.get('from') === 'transparent' || routeParams.get('from') === 'shielded'
+  const moveSource = receiveForm
+    ? 'transparent'
+    : routeParams.get('from') === 'transparent' || routeParams.get('from') === 'shielded'
       ? (routeParams.get('from') as FundingSource)
       : null
   const walletMode = 'public' as const
@@ -208,10 +219,10 @@ export function ZcashTransfer({
     requestedRetryDraft?.network === currentNetwork &&
     requestedRetryDraft.walletId === currentWalletId &&
     requestedRetryDraft.accountId === currentAccountId &&
-    requestedRetryDraft.fundingSource === routeParams.get('from')
+    requestedRetryDraft.fundingSource === (moveSource ?? routeParams.get('from'))
       ? requestedRetryDraft
       : null
-  const routeIdentity = JSON.stringify([isSelfMove, routeParams.get('from'), walletMode])
+  const routeIdentity = JSON.stringify([isSelfMove, moveSource, walletMode])
   const previousRouteIdentity = useRef(routeIdentity)
   const [selectedFundingSource, setFundingSource] = useState<FundingSource>(() => {
     const source = routeParams.get('from')
@@ -298,9 +309,20 @@ export function ZcashTransfer({
       : selectedFundingSource
   const isTransparentToShieldMove =
     isSelfMove && !isConfidentialMove && fundingSource === 'transparent'
-  const sendDraftPath = `${embedded && !isSelfMove ? '/send/zcash' : location.pathname}?${new URLSearchParams(
-    {
+  const transferIntent = resolveBalanceTransferIntent(routeParams.get('intent'))
+  const actionLabel = isSelfMove
+    ? balanceTransferLabel(
+        transferIntent ??
+          (moveDestination === 'transparent' || (!moveDestination && fundingSource === 'shielded')
+            ? 'withdraw'
+            : 'deposit')
+      )
+    : 'Send'
+  const sendDraftPath =
+    receiveForm?.retryPath ??
+    `${embedded && !isSelfMove ? '/send/zcash' : location.pathname}?${new URLSearchParams({
       ...(isSelfMove ? { move: '1' } : {}),
+      ...(isSelfMove && transferIntent ? { intent: transferIntent } : {}),
       ...(originPath ? { originPath } : {}),
       ...(sourceWalletId ? { sourceWalletId } : {}),
       ...(sourceAccountId ? { sourceAccountId } : {}),
@@ -312,10 +334,9 @@ export function ZcashTransfer({
         : {}),
       from: fundingSource,
       mode: walletMode
-    }
-  )}`
+    })}`
   const resultReturnPath =
-    originPath ?? (isSelfMove && fundingSource === 'shielded' ? '/shield-funds' : '/')
+    originPath ?? (receiveForm || fundingSource === 'shielded' ? '/?domain=shield' : '/')
   const resultNavigationState = canReturnToOriginHistory
     ? {
         sendOriginHistory: {
@@ -873,7 +894,7 @@ export function ZcashTransfer({
         if (isConfidentialMove) {
           const review = reviewedMoveQuote
           if (!review || !moveReviewReady || review.quoteId !== moveQuoteSubmitting.current) {
-            throw new Error('Move quote changed. Review again.')
+            throw new Error('Quote changed. Review again.')
           }
           const current = await getNativeZecIntentsSwap(review.quoteId)
           if (
@@ -890,7 +911,7 @@ export function ZcashTransfer({
             !sameNativeZecQuoteBinding(current.quoteBinding, review.quoteBinding)
           ) {
             invalidateMoveQuote()
-            throw new Error('Move quote changed. Review again.')
+            throw new Error('Quote changed. Review again.')
           }
         } else {
           const currentMove = resolveZcashSelfMove(
@@ -1031,7 +1052,7 @@ export function ZcashTransfer({
                   reviewedMoveQuote.expectedOutputRaw,
                   ZEC_DECIMALS
                 ),
-                actionName: 'Move',
+                actionName: actionLabel,
                 originChain: 'zcash',
                 destinationChain: 'zcash'
               }
@@ -1080,7 +1101,7 @@ export function ZcashTransfer({
       )
         return
       toast.error(
-        isSelfMove ? 'Could not start Move' : 'Could not send ZEC',
+        isSelfMove ? `Could not start ${actionLabel.toLowerCase()}` : 'Could not send ZEC',
         classifyError(cause).userMessage
       )
     } finally {
@@ -1093,7 +1114,7 @@ export function ZcashTransfer({
   if (!currentAccount) {
     return (
       <div className={embedded ? 'flex min-h-0 flex-1 flex-col' : 'page-container'}>
-        {!embedded && <PageHeader title={isSelfMove ? 'Move' : 'Send'} showBack />}
+        {!embedded && <PageHeader title={actionLabel} showBack />}
         <div className="flex-1 flex items-center justify-center px-5">
           <p className="text-muted text-center">No account available</p>
         </div>
@@ -1156,6 +1177,7 @@ export function ZcashTransfer({
       {isSelfMove && (
         <>
           <ZcashMoveLayout
+            fields={receiveForm}
             amount={
               <input
                 aria-label="ZEC amount"
@@ -1237,7 +1259,8 @@ export function ZcashTransfer({
           {moveUnavailable && (
             <InlineError
               message={
-                moveUnavailableReason ?? 'This account cannot move ZEC from the selected balance.'
+                moveUnavailableReason ??
+                'This account cannot transfer ZEC from the selected balance.'
               }
             />
           )}
@@ -1490,7 +1513,31 @@ export function ZcashTransfer({
       className={embedded ? 'flex min-h-0 flex-1 flex-col bg-background' : 'page-container'}
       data-wallet-mode={isSelfMove ? 'public' : walletMode}
     >
-      {!embedded && <PageHeader title={isSelfMove ? 'Move' : 'Send'} showBack onBack={leaveSend} />}
+      {!embedded && (
+        <PageHeader
+          title={actionLabel}
+          showBack
+          onBack={leaveSend}
+          rightContent={
+            !isSelfMove ? (
+              <TransactionModeDropdown
+                value={fundingSource === 'shielded' ? 'shield' : 'public'}
+                options={(['public', 'shield'] as const).filter(domain =>
+                  fundingOptions.some(
+                    option =>
+                      !option.disabledReason &&
+                      option.type === (domain === 'public' ? 'transparent' : 'shielded')
+                  )
+                )}
+                onChange={domain =>
+                  handleSelectFundingSource(domain === 'shield' ? 'shielded' : 'transparent')
+                }
+                disabled={showReview || isConfirming || isHardwareSigning}
+              />
+            ) : undefined
+          }
+        />
+      )}
       {isSelfMove ? (
         <>
           <div className="page-content min-h-0 !px-4 pt-4">{sendContent}</div>
@@ -1503,39 +1550,12 @@ export function ZcashTransfer({
               onClick={handleContinue}
               className="w-full h-[45px]"
             >
-              Move
+              {actionLabel}
             </Button>
           </div>
         </>
       ) : (
         <SendFormView
-          domain={fundingSource === 'shielded' ? 'shield' : 'public'}
-          availableDomains={(['public', 'shield'] as const).filter(domain =>
-            fundingOptions.some(
-              option =>
-                !option.disabledReason &&
-                option.type === (domain === 'public' ? 'transparent' : 'shielded')
-            )
-          )}
-          onDomainChange={domain =>
-            handleSelectFundingSource(domain === 'shield' ? 'shielded' : 'transparent')
-          }
-          sourceAction={
-            <BalanceDomainTabs
-              value={fundingSource === 'shielded' ? 'shield' : 'public'}
-              labels={{ public: 'Transparent' }}
-              available={(['public', 'shield'] as const).filter(domain =>
-                fundingOptions.some(
-                  option =>
-                    !option.disabledReason &&
-                    option.type === (domain === 'public' ? 'transparent' : 'shielded')
-                )
-              )}
-              onChange={domain =>
-                handleSelectFundingSource(domain === 'shield' ? 'shielded' : 'transparent')
-              }
-            />
-          }
           recipient={recipientView}
           amountInput={
             <SendAmountInputCard
@@ -1632,18 +1652,16 @@ export function ZcashTransfer({
         <DialogContent
           position="bottom"
           showCloseButton={false}
-          aria-label={isSelfMove ? 'Confirm Move' : 'Confirm Send'}
+          aria-label={`Confirm ${actionLabel}`}
           data-wallet-mode={isSelfMove ? 'public' : walletMode}
           className="flex h-dvh max-h-dvh flex-col gap-0 rounded-none border-0 bg-background p-0 shadow-none"
         >
-          <DialogTitle className="sr-only">
-            {isSelfMove ? 'Confirm Move' : 'Confirm Send'}
-          </DialogTitle>
+          <DialogTitle className="sr-only">Confirm {actionLabel}</DialogTitle>
           <DialogDescription className="sr-only">
-            Review the amount, destination, and fee before {isSelfMove ? 'moving' : 'sending'}.
+            Review the amount, destination, and fee.
           </DialogDescription>
           <TransactionReviewView
-            title={isSelfMove ? 'Confirm Move' : 'Confirm Send'}
+            title={`Confirm ${actionLabel}`}
             showTitle
             variant="figma"
             asset={{ symbol: 'ZEC', nativeChain: 'zcash' }}
@@ -1763,9 +1781,7 @@ export function ZcashTransfer({
               isConfidentialMove && !moveReviewReady && !moveReviewStatus.acceptLabel ? (
                 <InlineError
                   className="mt-3"
-                  message={
-                    moveQuoteError ?? (moveQuote ? 'Move quote expired.' : 'Refreshing Move quote…')
-                  }
+                  message={moveQuoteError ?? (moveQuote ? 'Quote expired.' : 'Refreshing quote…')}
                   onRetry={moveQuoteError || moveQuote ? retryMoveQuote : undefined}
                 />
               ) : reviewInsufficient && amountErrorCopy ? (

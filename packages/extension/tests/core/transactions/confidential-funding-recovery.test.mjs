@@ -16,6 +16,7 @@ import { parseTransactionGraph } from '../../../src/core/transactions/domain/ind
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
 import { ZCASH_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
 import { createConfidentialFundingClient } from '../../../src/popup/services/confidential-funding-client.ts'
+import { getActivityAction } from '../../../src/popup/services/activity-action-label.ts'
 import {
   getActivityDetailTitle,
   getActivityRouteTitle
@@ -545,7 +546,10 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
       get: id =>
         id === assetId
           ? nativeAsset
-          : { asset: { id, chainId: id.split('/')[0] }, metadata: { decimals: id === zcashAssetId ? 8 : 18 } },
+          : {
+              asset: { id, chainId: id.split('/')[0] },
+              metadata: { decimals: id === zcashAssetId ? 8 : 18 }
+            },
       list: () => [nativeAsset]
     },
     evmNetworks: [],
@@ -817,6 +821,23 @@ test.describe('confidential funding persisted recovery', () => {
     }
     expect(getActivityRouteTitle(activity, {})).toBe('Swap')
     expect(getActivityDetailTitle(activity)).toBe('Shield Swap')
+    expect(getActivityAction(activity, { viewedDomain: 'shield' })).toEqual({
+      label: 'Swap',
+      side: 'none'
+    })
+    expect(
+      getActivityAction(
+        activity,
+        { viewedDomain: 'shield', shieldProvider: 'near-confidential' },
+        {
+          destinationFundingSource: 'transparent'
+        }
+      )
+    ).toEqual({ label: 'Withdraw', side: 'source' })
+    expect(getActivityAction(activity, { viewedDomain: 'public' })).toEqual({
+      label: 'Receive',
+      side: 'destination'
+    })
   })
 
   test('quotes a Confidential ZEC to EVM swap and an EVM to Confidential ZEC swap', async () => {
@@ -1025,7 +1046,10 @@ test.describe('confidential funding persisted recovery', () => {
     })
 
     h.coordinator.rpcByChain.set('eip155:1', rpc)
-    const changedAmount = { ...privateCluster, source: { ...privateCluster.source, amountRaw: '63' } }
+    const changedAmount = {
+      ...privateCluster,
+      source: { ...privateCluster.source, amountRaw: '63' }
+    }
     const changedReview = await h.coordinator.prepare(changedAmount)
     expect(changedReview.sourceAmountRaw).toBe('63')
     expect(h.state.formalQuotes).toBe(2)
@@ -1106,6 +1130,23 @@ test.describe('confidential funding persisted recovery', () => {
       now: stored.createdAt
     })
     expect(graph.root.kind).toBe('swap')
+    const activity = {
+      ...graph.root,
+      source: 'wallet-v2',
+      snapshot: graph.root.intent,
+      segments: graph.segments
+    }
+    expect(getActivityRouteTitle(activity, {})).toBe('Swap')
+    expect(getActivityAction(activity, { viewedDomain: 'shield' })).toEqual({
+      label: 'Swap',
+      side: 'none'
+    })
+    expect(
+      getActivityAction(activity, {
+        viewedDomain: 'shield',
+        shieldProvider: 'near-confidential'
+      })
+    ).toEqual({ label: 'Swap', side: 'none' })
     expect(graph.segments.find(segment => segment.role === 'destination').target.kind).toBe(
       'protocol'
     )

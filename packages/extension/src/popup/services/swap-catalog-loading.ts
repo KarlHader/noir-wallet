@@ -507,11 +507,14 @@ export async function loadTokenCatalogByChain(
         const result = await traceDebugStage(requestId, `list-chain-${chainId}`, () =>
           client.listTokens({ direction, tokenListChainIds: [chainId] }, { bypassCache })
         )
-        if (result.failedChainIds.length > 0) {
+        if (options.strict && result.failedChainIds.includes(chainId)) {
           throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
         }
         const onChain = result.tokens.filter(token => token.tokenListChainId === chainId)
         if (result.tokens.length > 0 && onChain.length === 0) {
+          throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
+        }
+        if (result.failedChainIds.includes(chainId) && onChain.length === 0) {
           throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
         }
         const available = mergeTokenCatalogs(onChain)

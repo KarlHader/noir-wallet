@@ -23,14 +23,11 @@ export function EvmSendTransferView({ state }: { readonly state: EvmSendTransfer
     amount,
     recipient,
     preparing,
-    approving,
-    updatingFee,
     networkPickerOpen,
     setNetworkPickerOpen,
     asset,
     chain,
     networkMode,
-    shieldSourceAvailable,
     domainAvailableRaw,
     availableRaw,
     tokenFeeBalanceError,
@@ -57,7 +54,6 @@ export function EvmSendTransferView({ state }: { readonly state: EvmSendTransfer
     setInputAmount,
     setInputRecipient,
     selectMaximum,
-    selectShield,
     selectAsset,
     openDestinationNetworks,
     selectDestinationNetwork,
@@ -67,10 +63,6 @@ export function EvmSendTransferView({ state }: { readonly state: EvmSendTransfer
   return (
     <>
       <SendFormView
-        domain="public"
-        disabled={preparing || approving || updatingFee}
-        availableDomains={shieldSourceAvailable ? ['public', 'shield'] : ['public']}
-        onDomainChange={selectShield}
         amountInput={
           <SendAmountInputCard
             ariaLabel={`${asset.metadata.symbol} amount`}
@@ -203,7 +195,7 @@ export function EvmSendTransferView({ state }: { readonly state: EvmSendTransfer
                       height={13}
                       aria-hidden="true"
                     />
-                    Move
+                    Deposit
                   </button>
                 )}
               </div>

@@ -6,9 +6,11 @@ import {
   getPortfolioSnapshot,
   portfolioSnapshotKey,
   readPortfolioSnapshot,
+  refreshBalanceSnapshot,
   refreshPortfolioSnapshot,
   subscribePortfolioSnapshot
 } from '@/popup/services/portfolio-snapshot-store'
+import type { BalanceRefreshRequest } from '@/popup/services/balance-refresh-adapters'
 
 export function usePortfolioSnapshot(
   walletId: string | null,
@@ -31,6 +33,10 @@ export function usePortfolioSnapshot(
   const getSnapshot = useCallback(() => getPortfolioSnapshot(key, scope ?? undefined), [key])
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   const readLatest = useCallback(() => readPortfolioSnapshot(key), [key])
+  const refreshSource = useCallback(
+    (request: BalanceRefreshRequest) => refreshBalanceSnapshot(key, request),
+    [key]
+  )
   const refresh = useCallback(
     (
       force = false,
@@ -54,5 +60,5 @@ export function usePortfolioSnapshot(
     }
   }, [autoRefresh, key])
 
-  return { ...snapshot, refresh, readLatest }
+  return { ...snapshot, scopeKey: key, refresh, refreshSource, readLatest }
 }

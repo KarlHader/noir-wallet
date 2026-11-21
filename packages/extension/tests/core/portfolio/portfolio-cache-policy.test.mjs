@@ -6,6 +6,27 @@ import {
   shouldRefreshPortfolioFromNetwork,
   refreshPortfolioFromCache
 } from '../../../src/popup/services/portfolio-cache.ts'
+import {
+  balanceRefreshIsReady,
+  balanceRefreshRequestKey
+} from '../../../src/popup/services/balance-refresh-adapters.ts'
+
+test('keeps balance source requests separate and requires a fresh Confidential projection', () => {
+  const chain = { source: 'chain', chainIds: ['eip155:1', 'near:mainnet'] }
+  const reorderedChain = { source: 'chain', additionalChainIds: ['near:mainnet', 'eip155:1'] }
+  const confidential = { source: 'near-confidential', authorize: false }
+  expect(balanceRefreshRequestKey(chain)).toBe(balanceRefreshRequestKey(reorderedChain))
+  expect(balanceRefreshRequestKey(chain)).not.toBe(balanceRefreshRequestKey(confidential))
+  expect(balanceRefreshRequestKey(confidential)).not.toBe(
+    balanceRefreshRequestKey({ source: 'near-confidential', authorize: true })
+  )
+  expect(
+    balanceRefreshIsReady(confidential, { confidential: { status: 'ready', freshness: 'stale' } })
+  ).toBe(false)
+  expect(
+    balanceRefreshIsReady(confidential, { confidential: { status: 'ready', freshness: 'fresh' } })
+  ).toBe(true)
+})
 
 test('keeps a cold-cache automatic refresh limited to the selected chain', async () => {
   const previousChrome = globalThis.chrome

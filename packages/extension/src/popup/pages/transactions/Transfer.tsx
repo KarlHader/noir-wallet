@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate as useRouterNavigate, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
@@ -48,11 +48,24 @@ import {
   type ShieldSourceTokenPickerItem
 } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
 import { ShieldSendProviderTabs } from '@/popup/components/portfolio/ShieldSendProviderTabs'
+import { ShieldProviderDialog } from '@/popup/components/portfolio/ShieldProviderDialog'
+import { ShieldProviderLogo, SHIELD_PROVIDERS } from '@/popup/components/portfolio/shield-providers'
 import type { ShieldProvider } from '@/popup/services/asset-domains'
+import {
+  listExternalShieldReceiveAssets,
+  resolveShieldReceiveProvider,
+  shieldDepositSource
+} from '@/popup/services/shield-deposit-route'
+import { ShieldReceiveAddress } from '@/popup/components/portfolio/ShieldReceiveAddress'
+import { BalanceTransferAmount } from '@/popup/components/transaction/ZcashMoveLayout'
+import { ZcashTransfer } from '@/popup/components/transaction/ZcashTransfer'
+import {
+  hasNativeZecConfidentialSwapRoute,
+  resolveShieldNativeZecSwapAvailable
+} from '@/popup/services/shield-swap-zec-sources'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { ExecutionAccountIcon } from '@/popup/components/account/ExecutionAccountSelector'
-import nearLogo from '@/images/figma-near-confidential.svg'
 import { Button } from '@/popup/components/ui/button'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
 import { areEvmFeeSelectionsEqual, type EvmFeeSelection } from '@/infrastructure/chains/evm'
@@ -88,12 +101,14 @@ import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets
 import {
   buildShieldTransferRequest,
   formatShieldQuoteTime,
+  getZcashTokenPickerChain,
   hasShieldTransferStarted,
   isClusterTransferRoute,
   isUnsignedShieldTerminal,
   isShieldTransferRoute,
   listShieldFundingAssets,
   listShieldMoveDestinations,
+  listShieldTokenPickerNetworks,
   matchesShieldReview,
   resolveShieldManagedAsset,
   shieldFundingSources,
@@ -104,11 +119,14 @@ import { TransactionReviewView } from '@/popup/components/transaction/Transactio
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
 import {
+  balanceTransferLabel,
+  fixedTransferSide,
   normalizePrivateBalanceTransferInput,
   getPrivateTransferChainIds,
   getTransferDomainBalanceRaw,
   resolvePrivateBalanceTransferAmount,
   resolvePrivateBalanceTransferSource,
+  resolveBalanceTransferIntent,
   selectDefaultTransferAssetId,
   type PrivateBalanceTransferDirection,
   type TransferDomain
@@ -121,7 +139,7 @@ import {
 import { initialMoveDraft, readMoveAssetHint, readMoveDraft } from './move-draft'
 import { getFundingBalance } from '@/core/wallet/funding-balance'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
-import { resolveZcashSelfMove } from '@/popup/services/zcash-self-move'
+import { getConfidentialZcashMoveRecipients } from '@/popup/services/zcash-self-move'
 import { getZcashChainId } from '@/core/chains/registry'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import type { FundingSource } from '@/types/wallet'
@@ -138,6 +156,67 @@ function domainLabel(domain: TransferDomain): string {
   return domain === 'shield' ? 'Shield' : domain === 'private' ? 'Private' : 'Public'
 }
 
+function TransferBalanceOption({
+  label,
+  ariaLabel,
+  icon,
+  address,
+  balance,
+  selected = false,
+  disabled,
+  onSelect
+}: {
+  label: string
+  ariaLabel?: string
+  icon: ReactNode
+  address?: string
+  balance?: string | null
+  selected?: boolean
+  disabled: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      aria-pressed={selected}
+      disabled={disabled}
+      onClick={onSelect}
+      className={cn(
+        'wallet-interactive flex min-h-[65px] w-full items-center justify-between gap-3 rounded-lg border bg-white/5 px-3 py-2 text-left enabled:hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-45',
+        selected ? 'border-primary ring-1 ring-primary' : 'border-white/10'
+      )}
+    >
+      <span className="min-w-0">
+        <span className="flex items-center gap-2 text-base font-medium leading-[21px]">
+          <span className="shrink-0" aria-hidden="true">
+            {icon}
+          </span>
+          <span>{label}</span>
+        </span>
+        {address !== undefined && (
+          <span
+            className="mt-1 block truncate font-mono text-xs font-medium leading-4 text-muted"
+            title={address}
+          >
+            {address ? formatSortAddress(address) : '—'}
+          </span>
+        )}
+      </span>
+      {balance !== undefined && (
+        <span
+          className={cn(
+            'max-w-[38%] break-words text-right text-base font-medium leading-[21px]',
+            (!balance || balance === '0') && 'text-muted'
+          )}
+        >
+          {balance ?? '—'}
+        </span>
+      )}
+    </button>
+  )
+}
+
 function formatMoveReviewAddress(address: string): string {
   return address.length > 12 ? `${address.slice(0, 7)}...${address.slice(-5)}` : address
 }
@@ -152,7 +231,9 @@ function DomainCard({
   onNetworkClick,
   onAccountClick,
   showNetwork = false,
-  disabled
+  disabled,
+  provider = 'near-confidential',
+  external = false
 }: {
   label: 'From' | 'To'
   accountName: string
@@ -161,24 +242,39 @@ function DomainCard({
   network: string
   networkName: string
   onNetworkClick: () => void
-  onAccountClick: () => void
+  onAccountClick?: () => void
   showNetwork?: boolean
   disabled?: boolean
+  provider?: ShieldProvider | null
+  external?: boolean
 }) {
+  const AccountControl = onAccountClick ? 'button' : 'div'
   return (
     <div className="w-full rounded-xl border border-white/5 bg-wallet-surface px-4 py-4">
-      <button
-        type="button"
-        onClick={onAccountClick}
-        disabled={disabled}
-        aria-label={`${label}: ${domainLabel(domain)}. Change account`}
+      <AccountControl
+        {...(onAccountClick && {
+          type: 'button',
+          onClick: onAccountClick,
+          disabled,
+          'aria-label': `${label}: ${external ? 'External transfer' : domainLabel(domain)}. Change account`
+        })}
         className="wallet-interactive flex w-full min-w-0 items-center gap-3 rounded text-left focus-visible:outline-2 focus-visible:outline-primary"
       >
-        {domain === 'shield' ? (
-          <img src={nearLogo} alt="" aria-hidden="true" className="size-7 shrink-0 rounded" />
+        {domain === 'shield' && provider ? (
+          <ShieldProviderLogo provider={provider} size={28} />
         ) : (
           <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-muted">
-            <Icon icon="lucide:wallet" width={19} height={19} />
+            <Icon
+              icon={
+                external
+                  ? 'lucide:qr-code'
+                  : domain === 'shield'
+                    ? 'noir:shield-assets'
+                    : 'lucide:wallet'
+              }
+              width={19}
+              height={19}
+            />
           </span>
         )}
         <span className="min-w-0 flex-1">
@@ -189,8 +285,13 @@ function DomainCard({
                 <span>Shield</span>
               </span>
               <span className="block truncate text-base font-medium">
-                NEAR Confidential Intents
+                {provider ? SHIELD_PROVIDERS[provider].detailName : 'Select provider'}
               </span>
+            </>
+          ) : external ? (
+            <>
+              <span className="block text-xs text-muted">{label}</span>
+              <span className="block text-base font-medium">External transfer</span>
             </>
           ) : (
             <>
@@ -212,8 +313,10 @@ function DomainCard({
             </>
           )}
         </span>
-        <Icon icon="lucide:chevron-down" width={15} height={15} className="shrink-0 text-muted" />
-      </button>
+        {onAccountClick && (
+          <Icon icon="lucide:chevron-down" width={15} height={15} className="shrink-0 text-muted" />
+        )}
+      </AccountControl>
       {showNetwork && domain !== 'shield' && (
         <button
           type="button"
@@ -339,21 +442,27 @@ function TransferForm() {
   const [params] = useSearchParams()
   const location = useLocation()
   const routerNavigate = useRouterNavigate()
-  const walletMode = params.get('mode') === 'private' ? 'private' : 'public'
+  const receiveEntry = location.pathname === '/receive' && params.get('mode') === 'shield'
+  const walletMode =
+    params.get('mode') === 'private' || (receiveEntry && params.get('from') === 'private')
+      ? 'private'
+      : 'public'
   const routeFrom = params.get('from')
-  const routeTo = params.get('to')
+  const routeTo = receiveEntry ? 'shield' : params.get('to')
+  const intent = receiveEntry ? 'deposit' : resolveBalanceTransferIntent(params.get('intent'))
+  const fixedSide = fixedTransferSide(intent)
   const routeAssetId = params.get('assetId')
-  const entry = params.get('entry')
+  const entry = receiveEntry ? 'shield' : params.get('entry')
   const shieldEntry =
-    entry === 'shield' &&
-    (params.get('provider') === null || params.get('provider') === 'near-confidential')
+    receiveEntry ||
+    (entry === 'shield' &&
+      (params.get('provider') === null || params.get('provider') === 'near-confidential'))
   const { goBack, navigate } = useNavigate()
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const wallets = useWalletStore(state => state.wallets)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const currentAccount = useWalletStore(state => state.getCurrentAccount())
   const currentWallet = useWalletStore(state => state.getCurrentWallet())
   const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
   const zecPrice = useWalletStore(state => state.zecPrice)
@@ -374,7 +483,7 @@ function TransferForm() {
   })
   const scopeKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}:${endpointRuntimeKey}`
   const preferenceKey =
-    shieldEntry && effective
+    shieldEntry && !receiveEntry && effective
       ? shieldMovePreferenceKey(currentNetwork, effective.walletId, effective.accountId)
       : null
   const initialDraft = initialMoveDraft({
@@ -384,7 +493,8 @@ function TransferForm() {
     routeFrom,
     routeTo,
     routeAssetId,
-    entry
+    entry,
+    intent
   })
   const initialRouteState = useRef(location.state).current
   const launchDraft = initialMoveDraft({
@@ -394,9 +504,13 @@ function TransferForm() {
     routeFrom,
     routeTo,
     routeAssetId,
-    entry
+    entry,
+    intent
   })
-  const launchHasDraft = readMoveDraft(initialRouteState, scopeKey) !== null
+  const restoredLaunchDraft = readMoveDraft(initialRouteState, scopeKey)
+  const launchHasDraft =
+    restoredLaunchDraft !== null &&
+    (!fixedSide || restoredLaunchDraft[fixedSide] === launchDraft[fixedSide])
   const moveAssetHint = readMoveAssetHint(location.state, scopeKey, initialDraft.assetId)
   const latestScopeKey = useRef(scopeKey)
   latestScopeKey.current = scopeKey
@@ -411,8 +525,7 @@ function TransferForm() {
     model: portfolio,
     status: loadState,
     settled: portfolioSettled,
-    refresh: refreshPortfolio,
-    readLatest: readLatestPortfolio
+    refresh: refreshPortfolio
   } = useHomePortfolio(effective?.walletId ?? null, effective?.accountId ?? null)
   const [retry, setRetry] = useState(0)
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
@@ -425,11 +538,23 @@ function TransferForm() {
   )
   const [assetPrices, setAssetPrices] = useState<AssetPriceReadModel | null>(null)
   const [domainPicker, setDomainPicker] = useState<'from' | 'to' | null>(null)
+  const [providerPickerOpen, setProviderPickerOpen] = useState(false)
+  const [receiveExternal, setReceiveExternal] = useState(
+    () => shieldDepositSource(routeFrom) === 'external'
+  )
+  const [preferredReceiveProvider, setPreferredReceiveProvider] = useState<ShieldProvider | null>(
+    () => {
+      const provider = params.get('provider')
+      return provider === 'zcash-shield' || provider === 'near-confidential' ? provider : null
+    }
+  )
+  const [nativeReceiveState, setNativeReceiveState] = useState({ reviewing: false, busy: false })
   const [pickerAccountId, setPickerAccountId] = useState<string | null>(null)
   const [draftScope, setDraftScope] = useState(scopeKey)
   const [selectedAssetId, setSelectedAssetId] = useState(initialDraft.assetId)
   const [from, setFrom] = useState<TransferDomain>(initialDraft.from)
   const [to, setTo] = useState<TransferDomain>(initialDraft.to)
+  const actionLabel = balanceTransferLabel(intent ?? (to === 'public' ? 'withdraw' : 'deposit'))
   const [amount, setAmount] = useState(initialDraft.amount)
   const [method, setMethod] = useState<'cluster' | 'directly'>(initialDraft.method)
   const [evmMoveFee, setEvmMoveFee] = useState<EvmFeeSelection>({
@@ -465,8 +590,6 @@ function TransferForm() {
     scope: effective
       ? { network: currentNetwork, keyDomainId: effective.walletId, accountId: effective.accountId }
       : null,
-    refreshPortfolio,
-    readProjection: readLatestPortfolio,
     authorizeOnMount:
       from === 'shield' || (method === 'cluster' && isClusterTransferRoute(from, to))
   })
@@ -598,7 +721,8 @@ function TransferForm() {
       routeFrom,
       routeTo,
       routeAssetId,
-      entry
+      entry,
+      intent
     })
     setDraftScope(scopeKey)
     setFrom(draft.from)
@@ -619,6 +743,7 @@ function TransferForm() {
     setAssetPickerOpen(false)
     setNetworkPickerOpen(false)
     setDomainPicker(null)
+    setProviderPickerOpen(false)
     setPickerAccountId(null)
   }, [scopeKey])
 
@@ -735,7 +860,7 @@ function TransferForm() {
   )
   useEffect(() => {
     if (
-      !shieldEntry ||
+      !preferenceKey ||
       !effective ||
       !preferenceReady ||
       !catalogReady ||
@@ -747,7 +872,7 @@ function TransferForm() {
     )
       return
     if (!userEditedMove.current && !launchHasDraft) {
-      const useRememberedDomains = !routeFrom && !routeTo && rememberedMove !== null
+      const useRememberedDomains = !fixedSide && !routeFrom && !routeTo && rememberedMove !== null
       const preferredFrom = useRememberedDomains ? rememberedMove.from : launchDraft.from
       const preferredTo = useRememberedDomains ? rememberedMove.to : launchDraft.to
       const preferredAssetId = routeAssetId ?? rememberedMove?.assetId ?? null
@@ -761,7 +886,7 @@ function TransferForm() {
         shieldBalances: currentShieldBalances,
         preferredAssetId
       })
-      const fallbackToPublic = preferredFrom === 'shield' && !preferredAsset
+      const fallbackToPublic = !fixedSide && preferredFrom === 'shield' && !preferredAsset
       const nextFrom = fallbackToPublic ? 'public' : preferredFrom
       const nextTo = fallbackToPublic ? 'shield' : preferredTo
       const nextAsset = fallbackToPublic
@@ -785,7 +910,7 @@ function TransferForm() {
     }
     setPreferenceAppliedScope(scopeKey)
   }, [
-    shieldEntry,
+    preferenceKey,
     effective,
     preferenceReady,
     catalogReady,
@@ -800,6 +925,7 @@ function TransferForm() {
     routeFrom,
     routeTo,
     routeAssetId,
+    fixedSide,
     rememberedMove,
     assets,
     eligibleChainIds,
@@ -807,8 +933,38 @@ function TransferForm() {
     catalogTokens,
     currentNetwork
   ])
+  const zcashAssetId = `${getZcashChainId(currentNetwork)}/slip44:133`
+  const zcashMoveRecipients = getConfidentialZcashMoveRecipients(activeAccount, currentNetwork)
+  const zcashPublicAddress = zcashMoveRecipients.find(
+    item => item.privacy === 'transparent'
+  )?.address
+  const zcashReceiveAddress = zcashMoveRecipients.find(item => item.privacy === 'shielded')?.address
+  const canSpendPublicZec = Boolean(
+    zcashPublicAddress &&
+    !getFundingSourceUnavailableReason(currentWallet?.keySource, 'transparent')
+  )
+  const defaultReceiveZec =
+    zcashReceiveAddress && (preferredReceiveProvider === 'zcash-shield' || !canLoadShield)
+  const receiveAssetId = receiveEntry
+    ? (selectedAssetId ?? (defaultReceiveZec ? zcashAssetId : defaultAssetId))
+    : null
+  const receiveZec = receiveAssetId === zcashAssetId
+  const externalReceive = receiveEntry && (receiveExternal || (receiveZec && !canSpendPublicZec))
+  const receiveSource = externalReceive ? 'external' : receiveZec ? 'public' : from
   const selected =
-    assets.find(item => item.asset.asset.id === (selectedAssetId ?? defaultAssetId)) ?? null
+    assets.find(
+      item =>
+        item.asset.asset.id ===
+        (receiveEntry ? receiveAssetId : (selectedAssetId ?? defaultAssetId))
+    ) ?? null
+  const externalAssets = useMemo(
+    () =>
+      receiveEntry && canLoadShield && activeAccount
+        ? listExternalShieldReceiveAssets(currentNetwork, catalogTokens, activeAccount.networks)
+        : [],
+    [receiveEntry, canLoadShield, activeAccount, currentNetwork, catalogTokens, endpointRuntimeKey]
+  )
+  const externalAsset = externalAssets.find(item => item.assetId === receiveAssetId) ?? null
   useEffect(() => {
     setEvmMoveFee({ kind: 'tier', tier: 'standard' })
   }, [selected?.chain.chain.id])
@@ -836,6 +992,7 @@ function TransferForm() {
     () =>
       listMoveAssetPickerRows({
         assets,
+        includeEmpty: receiveEntry,
         from,
         network: currentNetwork,
         prices: assetPrices,
@@ -846,6 +1003,7 @@ function TransferForm() {
       }),
     [
       assets,
+      receiveEntry,
       from,
       currentNetwork,
       assetPrices,
@@ -858,8 +1016,14 @@ function TransferForm() {
   const shieldAssetPicker = shieldEntry || from === 'shield' || to === 'shield'
   const zcashMoveSources = (['transparent', 'shielded'] as const).filter(
     source =>
-      activeAccount?.networks.some(item => item.chain.family === 'zcash') &&
-      resolveZcashSelfMove(currentAccount?.addresses, source, currentNetwork) !== null &&
+      (!fixedSide ||
+        (intent === 'deposit' &&
+          from === 'public' &&
+          to === 'shield' &&
+          source === 'transparent') ||
+        (intent === 'withdraw' && from === 'shield' && to === 'public' && source === 'shielded')) &&
+      zcashMoveRecipients.some(item => item.privacy === source) &&
+      zcashMoveRecipients.some(item => item.privacy !== source) &&
       !getFundingSourceUnavailableReason(currentWallet?.keySource, source)
   )
   const availableProviders: ShieldProvider[] = [
@@ -873,9 +1037,7 @@ function TransferForm() {
     key: `zcash-move:${source}`,
     assetId: 'zec',
     symbol: 'ZEC',
-    chainName: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
-    chainId: 'zec',
-    badgeBlockchain: 'zec',
+    ...getZcashTokenPickerChain(currentNetwork),
     nativeIconChain: 'zcash',
     zcashFundingSource: source,
     availableRaw: parseDisplayUnitAmount(
@@ -885,25 +1047,67 @@ function TransferForm() {
     decimals: ZEC_DECIMALS,
     priceUsd: zecPrice
   }))
-  const shieldPickerRows: ShieldSourceTokenPickerItem[] =
-    activeAssetProvider === 'zcash-shield'
-      ? zcashPickerRows
-      : pickerRows.map(item => ({
-          key: item.asset.asset.id,
-          assetId: item.asset.asset.id,
-          symbol: item.asset.metadata.symbol,
-          iconUrl: item.asset.metadata.iconUrl,
-          chainName: item.chain.chain.displayName,
-          chainId: item.chain.chain.id,
-          badgeBlockchain: resolveChainIconAlias(
-            item.chain.chain.family,
-            item.chain.chain.displayName,
-            item.chain.chain.id
-          ),
-          availableRaw: item.sourceRaw,
-          decimals: item.asset.metadata.decimals,
-          priceUsd: findAssetPrice(assetPrices, item.asset.asset.id)?.priceUsd
-        }))
+  const evmShieldPickerRows: ShieldSourceTokenPickerItem[] = pickerRows.map(item => ({
+    key: item.asset.asset.id,
+    assetId: item.asset.asset.id,
+    symbol: item.asset.metadata.symbol,
+    iconUrl: item.asset.metadata.iconUrl,
+    chainName: item.chain.chain.displayName,
+    chainId: item.chain.chain.id,
+    badgeBlockchain: resolveChainIconAlias(
+      item.chain.chain.family,
+      item.chain.chain.displayName,
+      item.chain.chain.id
+    ),
+    availableRaw: item.sourceRaw,
+    decimals: item.asset.metadata.decimals,
+    priceUsd: findAssetPrice(assetPrices, item.asset.asset.id)?.priceUsd
+  }))
+  const shieldPickerRows =
+    activeAssetProvider === 'zcash-shield' ? zcashPickerRows : evmShieldPickerRows
+  const receivePickerRows: ShieldSourceTokenPickerItem[] = receiveEntry
+    ? [
+        ...(externalReceive
+          ? externalAssets
+              .filter(item => !zcashReceiveAddress || item.assetId !== zcashAssetId)
+              .map(item => ({
+                key: item.assetId,
+                assetId: item.assetId,
+                symbol: item.token.symbol,
+                chainName: item.chain.displayName,
+                chainId: item.chain.id,
+                badgeBlockchain: resolveChainIconAlias(
+                  item.chain.family,
+                  item.chain.displayName,
+                  item.chain.id
+                ),
+                decimals: item.token.decimals
+              }))
+          : evmShieldPickerRows),
+        ...(zcashReceiveAddress
+          ? [
+              {
+                key: zcashAssetId,
+                assetId: zcashAssetId,
+                symbol: 'ZEC',
+                ...getZcashTokenPickerChain(currentNetwork),
+                nativeIconChain: 'zcash',
+                decimals: ZEC_DECIMALS,
+                ...(externalReceive
+                  ? {}
+                  : {
+                      availableRaw: parseDisplayUnitAmount(
+                        getFundingBalance(zcashBalance, 'transparent').available,
+                        ZEC_DECIMALS
+                      ),
+                      priceUsd: zecPrice
+                    })
+              }
+            ]
+          : [])
+      ]
+    : []
+  const providerAssetRows = receiveEntry ? receivePickerRows : shieldPickerRows
   const rankPickerAsset = (item: TransferAsset) =>
     rankTokenSearchFields(
       {
@@ -956,7 +1160,8 @@ function TransferForm() {
       : null
   const supportedPair =
     (from === 'public' && to === 'private') || (from === 'private' && to === 'public')
-  const shieldPair = isShieldTransferRoute(from, to) && selected?.chain.chain.family === 'evm'
+  const shieldPair =
+    !externalReceive && isShieldTransferRoute(from, to) && selected?.chain.chain.family === 'evm'
   const clusterPair = isClusterTransferRoute(from, to) && selected?.chain.chain.family === 'evm'
   const clusterSelected = method === 'cluster' && clusterPair
   const fundingRoute = Boolean(shieldPair || clusterSelected)
@@ -980,6 +1185,32 @@ function TransferForm() {
         : null,
     [selected?.asset, managedAssets, catalogTokens, currentNetwork]
   )
+  const { available: receiveProviders, selected: receiveProvider } = resolveShieldReceiveProvider({
+    nativeZec: receiveZec,
+    preferred: preferredReceiveProvider,
+    canReceiveNativeZec: Boolean(zcashReceiveAddress) && (externalReceive || canSpendPublicZec),
+    nearSupportsAsset:
+      receiveEntry &&
+      canLoadShield &&
+      (externalReceive
+        ? Boolean(externalAsset)
+        : receiveZec
+          ? canSpendPublicZec &&
+            currentNetwork === 'mainnet' &&
+            hasNativeZecConfidentialSwapRoute(
+              activeAccount,
+              currentNetwork,
+              __ENABLED_CHAIN_FEATURE_FLAGS__
+            ) &&
+            resolveShieldNativeZecSwapAvailable({
+              network: currentNetwork,
+              portfolio: null,
+              enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__,
+              zcashAccountEnabled: true
+            })
+          : Boolean(managedAsset))
+  })
+  const nativeReceive = receiveEntry && receiveZec && !externalReceive && receiveProvider !== null
   const clusterAvailable = Boolean(clusterPair && managedAsset && effective)
   const destinationOptions = useMemo(() => {
     if (from !== 'shield' || !selected || !managedAsset) return []
@@ -1367,15 +1598,17 @@ function TransferForm() {
     shieldAmountState?.amountRaw
   )
   const selectDomain = (domain: TransferDomain, side: 'from' | 'to') => {
-    if (pickerAccountId !== effective?.accountId) return
+    if (pickerAccountId !== effective?.accountId || side === fixedSide) return
+    if (domain === (side === 'from' ? to : from)) return
     userEditedMove.current = true
-    if (selected) setSelectedAssetId(selected.asset.asset.id)
+    if (receiveEntry) {
+      if (receiveAssetId) setSelectedAssetId(receiveAssetId)
+      setReceiveExternal(false)
+    } else if (selected) setSelectedAssetId(selected.asset.asset.id)
     if (side === 'from') {
       setFrom(domain)
-      if (domain === to) setTo(from)
     } else {
       setTo(domain)
-      if (domain === from) setFrom(to)
     }
     setAmount('')
     setDestinationAssetId(null)
@@ -1384,6 +1617,7 @@ function TransferForm() {
     setDomainPicker(null)
   }
   const openDomainPicker = (side: 'from' | 'to') => {
+    if (side === fixedSide) return
     setPickerAccountId(effective?.accountId ?? null)
     setDomainPicker(side)
   }
@@ -1412,7 +1646,7 @@ function TransferForm() {
           })
     )
   }
-  const openZcashMove = (source: FundingSource) => {
+  const openZcashMove = (source: FundingSource, destination?: 'transparent' | 'shielded') => {
     if (!effective || !zcashMoveSources.includes(source)) return
     const query = new URLSearchParams({
       move: '1',
@@ -1422,6 +1656,9 @@ function TransferForm() {
       sourceWalletId: effective.walletId,
       sourceAccountId: effective.accountId
     })
+    if (intent) query.set('intent', intent)
+    if (destination) query.set('to', destination)
+    else if (intent) query.set('to', intent === 'deposit' ? 'shielded' : 'transparent')
     setAssetPickerOpen(false)
     navigate(`/shield-zcash-move?${query.toString()}`)
   }
@@ -1472,12 +1709,28 @@ function TransferForm() {
       )
     : 'Account'
   const pickerIsActive = Boolean(
-    pickerAccount && effective && pickerAccount.accountId === effective.accountId
+    pickerAccount &&
+    effective &&
+    pickerAccount.walletId === effective.walletId &&
+    pickerAccount.accountId === effective.accountId &&
+    pickerAccountId === effective.accountId
   )
   const pickerNetwork = pickerAccount?.networks.find(
-    item => item.chain.id === selected?.chain.chain.id
+    item =>
+      item.chain.id === (receiveZec ? getZcashChainId(currentNetwork) : selected?.chain.chain.id)
   )
-  const pickerShieldRaw = pickerIsActive && selected ? refreshedShieldRaw : null
+  const pickerValue = receiveEntry ? receiveSource : domainPicker === 'from' ? from : to
+  const oppositeDomain = domainPicker === 'from' ? to : from
+  const pickerBalance = (raw: string | null) =>
+    selected && pickerIsActive && raw !== null
+      ? formatTokenQuantity(formatBaseUnitAmount(raw, selected.asset.metadata.decimals))
+      : null
+  const nearPickerAvailable =
+    pickerIsActive && canLoadShield && Boolean(managedAsset) && oppositeDomain !== 'shield'
+  // Native ZEC can move directly between its transparent and shielded addresses.
+  const zcashPickerSource = domainPicker === 'from' ? 'shielded' : 'transparent'
+  const zcashPickerAvailable =
+    pickerIsActive && oppositeDomain === 'public' && zcashMoveSources.includes(zcashPickerSource)
   const addressFor = (domain: TransferDomain) => {
     if (domain === 'shield') return ''
     return domain === 'private' ? privateAddress : mainAddress
@@ -1624,12 +1877,18 @@ function TransferForm() {
       reviewAttempt.current = null
       updateFeeRefresh(null)
       void loadShieldBalances(true, false)
+      const domain = (fixedSide === 'to' ? to : from) === 'private' ? 'private' : 'shield'
       void openConfidentialActivity(
         plan,
-        () => navigate(`/?tab=activity&transactionId=${encodeURIComponent(plan.transactionId)}`),
+        () => {
+          navigate(
+            `/?domain=${domain}&tab=activity&transactionId=${encodeURIComponent(plan.transactionId)}`
+          )
+        },
         selected
           ? {
               operation: 'move',
+              perspective: { viewedDomain: domain },
               amount: currentAmount,
               symbol: formatSymbol(selected.asset.metadata.symbol),
               from: `${accountName} · ${domainLabel(from)}`,
@@ -1814,7 +2073,7 @@ function TransferForm() {
       <div className="page-container">
         <TransactionReviewView
           variant="figma"
-          title={activeShieldReview.operation === 'cluster' ? 'Cluster Move' : 'Confirm Move'}
+          title={`Confirm ${actionLabel}`}
           asset={{
             assetId: selected.asset.asset.id,
             symbol,
@@ -1947,13 +2206,7 @@ function TransferForm() {
               </div>
             ) : undefined
           }
-          confirmLabel={
-            confirmUncertain
-              ? 'Check status'
-              : activeShieldReview.operation === 'cluster'
-                ? 'Confirm Cluster'
-                : 'Move'
-          }
+          confirmLabel={confirmUncertain ? 'Check status' : actionLabel}
           confirming={confirmingShield}
           submitting={
             confirmingShield && confirmAttemptedPlanId.current === activeShieldReview.planId
@@ -1973,296 +2226,399 @@ function TransferForm() {
     )
   }
 
-  return (
-    <div className="page-container" data-wallet-mode={walletMode}>
-      <PageHeader
-        title="Move"
-        showBack
-        onBack={goBack}
-        rightContent={
-          fundingRoute &&
-          (shieldConnection === 'connected' || shieldConnection === 'busy') && (
-            <button
-              type="button"
-              onClick={() => void refreshShield()}
-              disabled={shieldConnection === 'busy'}
-              aria-label="Refresh Shield balance"
-              aria-busy={shieldConnection === 'busy'}
-              title={
-                shieldConnection === 'busy' ? 'Updating Shield balance…' : 'Refresh Shield balance'
-              }
-              className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-muted hover:bg-wallet-selected hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
-            >
-              <Icon
-                icon="lucide:refresh-cw"
-                width={16}
-                height={16}
-                className={cn(shieldConnection === 'busy' && 'animate-spin')}
-              />
-            </button>
-          )
-        }
-      />
-      <div className="page-content flex min-h-0 flex-col !px-4 !pb-2 !pt-3">
-        <div className="flex min-h-[145px] shrink-0 flex-col items-center justify-center gap-2 py-3">
-          <input
-            id="transfer-amount"
-            aria-label="Transfer amount"
-            inputMode="decimal"
-            value={currentAmount}
-            disabled={!selected}
-            title={currentAmount || undefined}
-            style={{
-              fontSize: `${Math.max(16, Math.min(40, Math.floor(500 / Math.max(1, currentAmount.length))))}px`
-            }}
-            onChange={event => {
-              const next = normalizePrivateBalanceTransferInput(event.target.value)
-              if (next !== null) {
-                userEditedMove.current = true
-                if (selected) setSelectedAssetId(selected.asset.asset.id)
-                setAmount(next)
-                setMaxSelected(false)
-              }
-            }}
-            placeholder="0"
-            className="h-14 w-full min-w-0 bg-transparent text-center text-[40px] font-semibold leading-[52px] caret-primary outline-none placeholder:text-muted/45"
-          />
-          <button
-            type="button"
-            onClick={() => setAssetPickerOpen(true)}
-            disabled={!selected && loadState === 'loading'}
-            className="wallet-interactive flex h-9 max-w-full items-center gap-2 rounded-full bg-card px-2 text-base font-medium leading-[21px] hover:bg-wallet-selected active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary"
-            aria-label="Select transfer asset"
-          >
-            {selected || pendingAssetHint ? (
-              <TokenIcon
-                assetId={selected?.asset.asset.id ?? selectedAssetId!}
-                symbol={symbol || formatSymbol(pendingAssetHint!.symbol)}
-                icon={selected?.asset.metadata.iconUrl ?? pendingAssetHint?.iconUrl}
-                {...(from !== 'shield' ? { blockchain: networkIcon } : {})}
-                size={26}
-              />
-            ) : (
-              <Icon icon="lucide:coins" width={20} height={20} />
-            )}
-            <span className="max-w-32 truncate">
-              {symbol ||
-                formatSymbol(pendingAssetHint?.symbol) ||
-                (loadState === 'loading' ? '…' : 'Select asset')}
-            </span>
-            <Icon icon="lucide:chevron-down" width={14} height={14} />
-          </button>
-          <div className="flex max-w-full items-center gap-2 text-xs text-muted">
-            <span className="truncate" title={sourceBalance}>
-              {formatTokenQuantity(sourceBalance)}
-            </span>
-            <button
-              type="button"
-              onClick={handleMax}
-              disabled={!selected || maxDisabled || maximumRaw === '0'}
-              aria-label="Max"
-              className="wallet-interactive shrink-0 rounded bg-white/10 px-1.5 py-0.5 disabled:opacity-40"
-            >
-              Max
-            </button>
-          </div>
-        </div>
-        <div className="mt-3 shrink-0">
-          <DomainCard
-            label="From"
-            accountName={accountName}
-            domain={from}
-            address={addressFor(from)}
-            networkName={selected?.chain.chain.displayName ?? ''}
-            network={from === 'shield' ? 'near' : networkIcon}
-            onNetworkClick={() => setAssetPickerOpen(true)}
-            onAccountClick={() => openDomainPicker('from')}
-            disabled={!selected}
-          />
-          <div className="relative h-2.5">
-            <button
-              type="button"
-              onClick={() => {
-                userEditedMove.current = true
-                if (from === 'shield' && destination) setSelectedAssetId(destination.asset.asset.id)
-                else if (selected) setSelectedAssetId(selected.asset.asset.id)
-                setDestinationAssetId(null)
-                setFrom(to)
-                setTo(from)
-                setAmount('')
-                setMaxSelected(false)
-              }}
-              aria-label="Switch transfer direction"
-              disabled={!selected}
-              className={cn(
-                'wallet-interactive absolute left-1/2 top-1/2 z-10 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-card hover:bg-wallet-selected active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary',
-                walletMode === 'private' ? 'text-private' : 'text-foreground'
-              )}
-            >
-              <Icon icon="lucide:arrow-up-down" width={18} height={18} />
-            </button>
-          </div>
-          <DomainCard
-            label="To"
-            accountName={accountName}
-            domain={to}
-            address={to === 'shield' ? '' : targetAddress}
-            networkName={targetAsset?.chain.chain.displayName ?? 'Select network'}
-            network={
-              targetAsset
+  const assetSymbol = receiveZec
+    ? 'ZEC'
+    : symbol || formatSymbol(externalAsset?.token.symbol ?? pendingAssetHint?.symbol)
+  const assetControl = (
+    <button
+      type="button"
+      onClick={() => setAssetPickerOpen(true)}
+      disabled={!receiveEntry && !selected && loadState === 'loading'}
+      className="wallet-interactive flex h-9 max-w-full items-center gap-2 rounded-full bg-card px-2 text-base font-medium leading-[21px] hover:bg-wallet-selected active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary"
+      aria-label="Select transfer asset"
+    >
+      {assetSymbol ? (
+        <TokenIcon
+          assetId={selected?.asset.asset.id ?? receiveAssetId ?? selectedAssetId ?? undefined}
+          symbol={assetSymbol}
+          icon={selected?.asset.metadata.iconUrl ?? pendingAssetHint?.iconUrl}
+          nativeChain={receiveZec ? 'zcash' : undefined}
+          blockchain={
+            receiveZec
+              ? 'zec'
+              : externalAsset
                 ? resolveChainIconAlias(
-                    targetAsset.chain.chain.family,
-                    targetAsset.chain.chain.displayName,
-                    targetAsset.chain.chain.id
+                    externalAsset.chain.family,
+                    externalAsset.chain.displayName,
+                    externalAsset.chain.id
                   )
-                : networkIcon
-            }
-            onNetworkClick={() => {
-              setNetworkPickerOpen(true)
-            }}
-            showNetwork={to !== 'shield'}
-            onAccountClick={() => openDomainPicker('to')}
-            disabled={!selected}
-          />
-        </div>
-        {!selected && !pendingAssetHint && loadState !== 'loading' && loadState !== 'error' && (
-          <p role="status" className="mt-3 text-center text-sm text-muted">
-            No transferable assets
-          </p>
-        )}
-        {transferError && (
-          <p role="alert" className="mt-2 text-xs text-warning">
-            {transferError}
-          </p>
-        )}
-        {selected?.chain.chain.family === 'evm' &&
-          clusterPair &&
-          (clusterAvailable || methodAvailable) && (
-            <div
-              role="radiogroup"
-              aria-label="Transfer method"
-              className={cn(
-                'mt-auto grid shrink-0 gap-2.5 pt-4',
-                clusterAvailable && methodAvailable
-                  ? 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-                  : 'grid-cols-1'
-              )}
-            >
-              {clusterAvailable && (
-                <MethodCard
-                  title="Cluster"
-                  detail="Multiple transactions"
-                  recommended
-                  selected={method === 'cluster'}
-                  disabled={clusterUnavailable}
-                  estimate={clusterEstimate.value}
-                  loading={
-                    canEstimateMethods &&
-                    shieldConnection === 'connected' &&
-                    clusterEstimate.loading
-                  }
-                  fee={formatMoveMethodFee(clusterEstimateWithFee, selected.asset)}
-                  onClick={() => {
-                    userPickedMethod.current = true
-                    setMethod('cluster')
-                  }}
-                />
-              )}
-              {methodAvailable && (
-                <MethodCard
-                  title="Directly"
-                  detail="One transaction"
-                  recommended={false}
-                  selected={method === 'directly'}
-                  disabled={directUnavailable}
-                  estimate={directEstimate.value}
-                  loading={canEstimateMethods && methodAvailable && directEstimate.loading}
-                  fee={formatMoveMethodFee(directEstimate.value, selected.asset)}
-                  onClick={() => {
-                    userPickedMethod.current = true
-                    setMethod('directly')
-                  }}
-                />
-              )}
-            </div>
-          )}
-        {fundingRoute &&
-          selected?.chain.chain.family === 'evm' &&
-          from !== 'shield' &&
-          evmMoveFee.kind !== 'tier' && (
-            <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-xs">
-              <span className="text-muted">Network fee</span>
-              <NetworkFeeTierPicker
-                chainFamily="evm"
-                tier="standard"
-                selection={evmMoveFee}
-                feeModel={evmMoveFee.kind === 'legacy' ? 'legacy' : 'eip1559'}
-                amount={
-                  clusterNetworkFee
-                    ? formatBaseUnitAmount(clusterNetworkFee.raw, clusterNetworkFee.decimals)
-                    : '—'
-                }
-                symbol={
-                  clusterNetworkFee?.symbol ??
-                  nativeFeeAsset?.metadata.symbol ??
-                  selected.chain.chain.displayName
-                }
-                onTierChange={tier => {
-                  setEvmMoveFee({ kind: 'tier', tier })
-                  setShieldError(null)
-                }}
-                onSelectionChange={next => {
-                  setEvmMoveFee(next)
-                  setShieldError(null)
-                }}
-              />
-            </div>
-          )}
-        {showGenericEstimateError && (
-          <InlineError
-            message="Transfer estimate unavailable. Try again."
-            onRetry={() => setRetry(value => value + 1)}
-          />
-        )}
-        {loadState === 'error' && !portfolio && (
-          <InlineError
-            message="Assets could not be loaded."
-            onRetry={() => void refreshPortfolio(true)}
-          />
-        )}
-        {fundingRoute && shieldConnection === 'required' && !shieldConnecting && (
-          <InlineError
-            message={shieldError ?? 'Shield balance unavailable.'}
-            onRetry={() => void refreshShield(shieldNeedsAuthorization)}
-          />
-        )}
-        {shieldError && !activeShieldReview && shieldConnection !== 'required' && (
-          <p role="alert" className="text-xs text-warning">
-            {shieldError}
-          </p>
-        )}
-      </div>
-      <div className="page-footer">
-        <Button
-          size="wallet"
-          className="w-full"
-          disabled={fundingRoute ? !canReviewShield || preparingShield : !canReview}
-          isLoading={
-            preparingShield ||
-            (fundingRoute &&
-              (shieldConnecting ||
-                shieldConnection === 'checking' ||
-                shieldConnection === 'busy')) ||
-            (!transferError &&
-              clusterPair &&
-              (fundingRoute ? clusterSelected : method === 'directly') &&
-              selectedEstimate.loading)
+                : from !== 'shield'
+                  ? networkIcon
+                  : undefined
           }
-          onClick={fundingRoute ? () => void prepareShield() : review}
-        >
-          {clusterSelected ? 'Review Cluster' : 'Move'}
-        </Button>
-      </div>
+          size={26}
+        />
+      ) : (
+        <Icon icon="lucide:coins" width={20} height={20} />
+      )}
+      <span className="max-w-32 truncate">
+        {assetSymbol || (loadState === 'loading' ? '…' : 'Select asset')}
+      </span>
+      <Icon icon="lucide:chevron-down" width={14} height={14} />
+    </button>
+  )
+  const receiveAccounts = receiveEntry && (
+    <div className="mt-3 space-y-2.5">
+      <DomainCard
+        label="From"
+        accountName={accountName}
+        domain={receiveSource === 'private' ? 'private' : 'public'}
+        address={receiveZec ? (zcashPublicAddress ?? '') : addressFor(from)}
+        networkName=""
+        network={networkIcon}
+        onNetworkClick={() => setAssetPickerOpen(true)}
+        onAccountClick={() => openDomainPicker('from')}
+        external={externalReceive}
+      />
+      <DomainCard
+        label="To"
+        accountName={accountName}
+        domain="shield"
+        address=""
+        networkName=""
+        network="near"
+        onNetworkClick={() => setAssetPickerOpen(true)}
+        onAccountClick={() => setProviderPickerOpen(true)}
+        provider={receiveProvider}
+      />
+    </div>
+  )
+  const nativeRetryPath =
+    nativeReceive &&
+    receiveProvider &&
+    `/receive?${new URLSearchParams({
+      mode: 'shield',
+      provider: receiveProvider,
+      from: 'public',
+      assetId: zcashAssetId,
+      walletId: currentWalletId ?? '',
+      accountId: currentAccountId ?? ''
+    })}`
+
+  return (
+    <div className="page-container" data-wallet-mode={receiveEntry ? 'public' : walletMode}>
+      {(!nativeReceive || !nativeReceiveState.reviewing) && (
+        <PageHeader
+          title={receiveEntry ? 'Receive' : actionLabel}
+          showBack
+          onBack={goBack}
+          backDisabled={nativeReceive && nativeReceiveState.busy}
+          rightContent={
+            !receiveEntry &&
+            fundingRoute &&
+            (shieldConnection === 'connected' || shieldConnection === 'busy') && (
+              <button
+                type="button"
+                onClick={() => void refreshShield()}
+                disabled={shieldConnection === 'busy'}
+                aria-label="Refresh Shield balance"
+                aria-busy={shieldConnection === 'busy'}
+                title={
+                  shieldConnection === 'busy'
+                    ? 'Updating Shield balance…'
+                    : 'Refresh Shield balance'
+                }
+                className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-muted hover:bg-wallet-selected hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
+              >
+                <Icon
+                  icon="lucide:refresh-cw"
+                  width={16}
+                  height={16}
+                  className={cn(shieldConnection === 'busy' && 'animate-spin')}
+                />
+              </button>
+            )
+          }
+        />
+      )}
+      {nativeRetryPath ? (
+        <ZcashTransfer
+          key={receiveProvider}
+          embedded
+          receiveForm={{
+            retryPath: nativeRetryPath,
+            asset: assetControl,
+            accounts: receiveAccounts
+          }}
+          moveDestination={receiveProvider === 'zcash-shield' ? 'shielded' : 'confidential'}
+          onMoveStateChange={setNativeReceiveState}
+        />
+      ) : externalReceive ? (
+        <>
+          <div className="page-content flex min-h-0 flex-col !px-4 !pb-2 !pt-3">
+            <BalanceTransferAmount asset={assetControl} />
+            {receiveAccounts}
+          </div>
+          <div className="page-footer">
+            <ShieldReceiveAddress
+              key={`${scopeKey}:${receiveProvider}:${receiveAssetId}`}
+              provider={receiveProvider ?? 'near-confidential'}
+              network={currentNetwork}
+              account={activeAccount}
+              accountCatalog={catalog}
+              asset={externalAsset}
+              zcashAddress={zcashReceiveAddress}
+              enabled={Boolean(effective && receiveProvider)}
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="page-content flex min-h-0 flex-col !px-4 !pb-2 !pt-3">
+            <BalanceTransferAmount
+              asset={assetControl}
+              balance={sourceBalance}
+              amount={
+                <input
+                  id="transfer-amount"
+                  aria-label="Transfer amount"
+                  inputMode="decimal"
+                  value={currentAmount}
+                  disabled={!selected}
+                  title={currentAmount || undefined}
+                  style={{
+                    fontSize: `${Math.max(16, Math.min(40, Math.floor(500 / Math.max(1, currentAmount.length))))}px`
+                  }}
+                  onChange={event => {
+                    const next = normalizePrivateBalanceTransferInput(event.target.value)
+                    if (next !== null) {
+                      userEditedMove.current = true
+                      if (selected) setSelectedAssetId(selected.asset.asset.id)
+                      setAmount(next)
+                      setMaxSelected(false)
+                    }
+                  }}
+                  placeholder="0"
+                  className="h-14 w-full min-w-0 bg-transparent text-center text-[40px] font-semibold leading-[52px] caret-primary outline-none placeholder:text-muted/45"
+                />
+              }
+              max={
+                <button
+                  type="button"
+                  onClick={handleMax}
+                  disabled={!selected || maxDisabled || maximumRaw === '0'}
+                  aria-label="Max"
+                  className="wallet-interactive shrink-0 rounded bg-white/10 px-1.5 py-0.5 disabled:opacity-40"
+                >
+                  Max
+                </button>
+              }
+            />
+            {receiveEntry ? (
+              receiveAccounts
+            ) : (
+              <div className="mt-3 shrink-0">
+                <DomainCard
+                  label="From"
+                  accountName={accountName}
+                  domain={from}
+                  address={addressFor(from)}
+                  networkName={selected?.chain.chain.displayName ?? ''}
+                  network={from === 'shield' ? 'near' : networkIcon}
+                  onNetworkClick={() => setAssetPickerOpen(true)}
+                  onAccountClick={fixedSide === 'from' ? undefined : () => openDomainPicker('from')}
+                  disabled={!selected}
+                />
+                <div className="relative h-2.5">
+                  {!fixedSide && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        userEditedMove.current = true
+                        if (from === 'shield' && destination)
+                          setSelectedAssetId(destination.asset.asset.id)
+                        else if (selected) setSelectedAssetId(selected.asset.asset.id)
+                        setDestinationAssetId(null)
+                        setFrom(to)
+                        setTo(from)
+                        setAmount('')
+                        setMaxSelected(false)
+                      }}
+                      aria-label="Switch transfer direction"
+                      disabled={!selected}
+                      className={cn(
+                        'wallet-interactive absolute left-1/2 top-1/2 z-10 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-card hover:bg-wallet-selected active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary',
+                        walletMode === 'private' ? 'text-private' : 'text-foreground'
+                      )}
+                    >
+                      <Icon icon="lucide:arrow-up-down" width={18} height={18} />
+                    </button>
+                  )}
+                </div>
+                <DomainCard
+                  label="To"
+                  accountName={accountName}
+                  domain={to}
+                  address={to === 'shield' ? '' : targetAddress}
+                  networkName={targetAsset?.chain.chain.displayName ?? 'Select network'}
+                  network={
+                    targetAsset
+                      ? resolveChainIconAlias(
+                          targetAsset.chain.chain.family,
+                          targetAsset.chain.chain.displayName,
+                          targetAsset.chain.chain.id
+                        )
+                      : networkIcon
+                  }
+                  onNetworkClick={() => {
+                    setNetworkPickerOpen(true)
+                  }}
+                  showNetwork={to !== 'shield'}
+                  onAccountClick={fixedSide === 'to' ? undefined : () => openDomainPicker('to')}
+                  disabled={!selected}
+                />
+              </div>
+            )}
+            {!selected && !pendingAssetHint && loadState !== 'loading' && loadState !== 'error' && (
+              <p role="status" className="mt-3 text-center text-sm text-muted">
+                No transferable assets
+              </p>
+            )}
+            {transferError && (
+              <p role="alert" className="mt-2 text-xs text-warning">
+                {transferError}
+              </p>
+            )}
+            {selected?.chain.chain.family === 'evm' &&
+              clusterPair &&
+              (clusterAvailable || methodAvailable) && (
+                <div
+                  role="radiogroup"
+                  aria-label="Transfer method"
+                  className={cn(
+                    'mt-auto grid shrink-0 gap-2.5 pt-4',
+                    clusterAvailable && methodAvailable
+                      ? 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
+                      : 'grid-cols-1'
+                  )}
+                >
+                  {clusterAvailable && (
+                    <MethodCard
+                      title="Cluster"
+                      detail="Multiple transactions"
+                      recommended
+                      selected={method === 'cluster'}
+                      disabled={clusterUnavailable}
+                      estimate={clusterEstimate.value}
+                      loading={
+                        canEstimateMethods &&
+                        shieldConnection === 'connected' &&
+                        clusterEstimate.loading
+                      }
+                      fee={formatMoveMethodFee(clusterEstimateWithFee, selected.asset)}
+                      onClick={() => {
+                        userPickedMethod.current = true
+                        setMethod('cluster')
+                      }}
+                    />
+                  )}
+                  {methodAvailable && (
+                    <MethodCard
+                      title="Directly"
+                      detail="One transaction"
+                      recommended={false}
+                      selected={method === 'directly'}
+                      disabled={directUnavailable}
+                      estimate={directEstimate.value}
+                      loading={canEstimateMethods && methodAvailable && directEstimate.loading}
+                      fee={formatMoveMethodFee(directEstimate.value, selected.asset)}
+                      onClick={() => {
+                        userPickedMethod.current = true
+                        setMethod('directly')
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+            {fundingRoute &&
+              selected?.chain.chain.family === 'evm' &&
+              from !== 'shield' &&
+              evmMoveFee.kind !== 'tier' && (
+                <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-xs">
+                  <span className="text-muted">Network fee</span>
+                  <NetworkFeeTierPicker
+                    chainFamily="evm"
+                    tier="standard"
+                    selection={evmMoveFee}
+                    feeModel={evmMoveFee.kind === 'legacy' ? 'legacy' : 'eip1559'}
+                    amount={
+                      clusterNetworkFee
+                        ? formatBaseUnitAmount(clusterNetworkFee.raw, clusterNetworkFee.decimals)
+                        : '—'
+                    }
+                    symbol={
+                      clusterNetworkFee?.symbol ??
+                      nativeFeeAsset?.metadata.symbol ??
+                      selected.chain.chain.displayName
+                    }
+                    onTierChange={tier => {
+                      setEvmMoveFee({ kind: 'tier', tier })
+                      setShieldError(null)
+                    }}
+                    onSelectionChange={next => {
+                      setEvmMoveFee(next)
+                      setShieldError(null)
+                    }}
+                  />
+                </div>
+              )}
+            {showGenericEstimateError && (
+              <InlineError
+                message="Transfer estimate unavailable. Try again."
+                onRetry={() => setRetry(value => value + 1)}
+              />
+            )}
+            {loadState === 'error' && !portfolio && (
+              <InlineError
+                message="Assets could not be loaded."
+                onRetry={() => void refreshPortfolio(true)}
+              />
+            )}
+            {fundingRoute && shieldConnection === 'required' && !shieldConnecting && (
+              <InlineError
+                message={shieldError ?? 'Shield balance unavailable.'}
+                onRetry={() => void refreshShield(shieldNeedsAuthorization)}
+              />
+            )}
+            {shieldError && !activeShieldReview && shieldConnection !== 'required' && (
+              <p role="alert" className="text-xs text-warning">
+                {shieldError}
+              </p>
+            )}
+          </div>
+          <div className="page-footer">
+            <Button
+              size="wallet"
+              className="w-full"
+              disabled={fundingRoute ? !canReviewShield || preparingShield : !canReview}
+              isLoading={
+                preparingShield ||
+                (fundingRoute &&
+                  (shieldConnecting ||
+                    shieldConnection === 'checking' ||
+                    shieldConnection === 'busy')) ||
+                (!transferError &&
+                  clusterPair &&
+                  (fundingRoute ? clusterSelected : method === 'directly') &&
+                  selectedEstimate.loading)
+              }
+              onClick={fundingRoute ? () => void prepareShield() : review}
+            >
+              {clusterSelected ? `Review ${actionLabel}` : actionLabel}
+            </Button>
+          </div>
+        </>
+      )}
 
       <TokenSelectorDialog
         open={assetPickerOpen}
@@ -2275,18 +2631,7 @@ function TransferForm() {
           onSearchChange={setAssetSearch}
           networks={
             shieldAssetPicker
-              ? Array.from(
-                  new Map(
-                    shieldPickerRows.map(item => [
-                      item.chainId,
-                      {
-                        id: item.chainId ?? 'zec',
-                        label: item.chainId === 'zec' ? 'Zcash' : (item.chainName ?? ''),
-                        iconChain: item.badgeBlockchain ?? item.chainId ?? 'zec'
-                      }
-                    ])
-                  ).values()
-                )
+              ? listShieldTokenPickerNetworks(providerAssetRows)
               : Array.from(
                   new Map(pickerRows.map(item => [item.chain.chain.id, item.chain])).values()
                 ).map(chain => ({
@@ -2302,7 +2647,7 @@ function TransferForm() {
           selectedNetwork={assetChainId}
           onNetworkChange={setAssetChainId}
           toolbar={
-            shieldAssetPicker ? (
+            shieldAssetPicker && !receiveEntry ? (
               <div className="-mx-4 mt-3">
                 <ShieldSendProviderTabs
                   value={activeAssetProvider}
@@ -2316,13 +2661,15 @@ function TransferForm() {
             ) : undefined
           }
           selectedKey={
-            shieldAssetPicker && activeAssetProvider === 'zcash-shield'
-              ? undefined
-              : selected?.asset.asset.id
+            receiveEntry
+              ? (receiveAssetId ?? undefined)
+              : shieldAssetPicker && activeAssetProvider === 'zcash-shield'
+                ? undefined
+                : selected?.asset.asset.id
           }
           items={
             shieldAssetPicker
-              ? shieldPickerRows
+              ? providerAssetRows
                   .filter(item => assetChainId === 'all' || item.chainId === assetChainId)
                   .filter(
                     item =>
@@ -2370,22 +2717,26 @@ function TransferForm() {
                   }))
           }
           onSelect={key => {
-            if (shieldAssetPicker && activeAssetProvider === 'zcash-shield') {
+            if (!receiveEntry && shieldAssetPicker && activeAssetProvider === 'zcash-shield') {
               const source = zcashMoveSources.find(item => key === `zcash-move:${item}`)
               if (source) openZcashMove(source)
               return
             }
-            const item = pickerRows.find(row => row.asset.asset.id === key)
-            if (!item) return
+            if (
+              receiveEntry
+                ? !receivePickerRows.some(item => item.key === key)
+                : !pickerRows.some(row => row.asset.asset.id === key)
+            )
+              return
             userEditedMove.current = true
-            setSelectedAssetId(item.asset.asset.id)
+            setSelectedAssetId(key)
             setDestinationAssetId(null)
             setAmount('')
             setMaxSelected(false)
             setAssetPickerOpen(false)
           }}
           emptyMessage={
-            (shieldAssetPicker ? shieldPickerRows.length : pickerRows.length) === 0
+            (shieldAssetPicker ? providerAssetRows.length : pickerRows.length) === 0
               ? loadState === 'loading' || (from === 'shield' && shieldConnection === 'checking')
                 ? 'Loading assets…'
                 : 'No assets available'
@@ -2427,114 +2778,120 @@ function TransferForm() {
         >
           <DialogHeader className="text-left">
             <DialogTitle className="text-sm font-medium leading-[18px]">
-              Move {domainPicker === 'from' ? 'from' : 'to'} · {walletDisplayName} ·{' '}
-              {pickerAccountName}
+              {domainPicker === 'from' ? 'From' : 'To'} · {walletDisplayName} · {pickerAccountName}
             </DialogTitle>
             <DialogDescription className="sr-only">Select a balance.</DialogDescription>
           </DialogHeader>
           <div aria-label={`${pickerAccountName} balances`} className="space-y-2 pb-2">
-            {(['public', 'private'] as const).map(domain => {
-              const address =
-                domain === 'private'
-                  ? pickerNetwork?.privateExecutionAddress
-                  : pickerNetwork?.addresses.find(item => item.preferredForReceive)?.value
-              const raw =
-                pickerIsActive && selected
-                  ? getTransferDomainBalanceRaw(selected.asset, domain)
-                  : null
-              return (
-                <button
-                  key={domain}
-                  type="button"
-                  onClick={() => domainPicker && selectDomain(domain, domainPicker)}
-                  disabled={!pickerIsActive || !address}
-                  aria-label={`Select ${domainLabel(domain)} account`}
-                  aria-pressed={pickerIsActive && (domainPicker === 'from' ? from : to) === domain}
-                  className={cn(
-                    'flex min-h-[65px] w-full items-center justify-between gap-3 rounded-lg border bg-white/5 px-3 py-2 text-left disabled:opacity-45',
-                    pickerIsActive && (domainPicker === 'from' ? from : to) === domain
-                      ? 'border-primary ring-1 ring-primary'
-                      : 'border-white/10'
-                  )}
-                >
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-2 text-base font-medium leading-[21px]">
-                      <ExecutionAccountIcon
-                        mode={domain === 'private' ? 'private' : 'main'}
-                        size={16}
-                      />
-                      {domainLabel(domain)} account
-                    </span>
-                    <span
-                      className="mt-1 block truncate font-mono text-xs font-medium leading-4 text-muted"
-                      title={address}
-                    >
-                      {address ? formatSortAddress(address) : '—'}
-                    </span>
-                  </span>
-                  <span
-                    className={cn(
-                      'max-w-[38%] break-all text-right text-base font-medium leading-[21px]',
-                      raw === '0' && 'text-muted'
-                    )}
-                    title={raw ?? undefined}
-                  >
-                    {raw !== null && selected
-                      ? formatTokenQuantity(
-                          formatBaseUnitAmount(raw, selected.asset.metadata.decimals)
-                        )
-                      : '—'}
-                  </span>
-                </button>
-              )
-            })}
-            <button
-              type="button"
-              onClick={() => {
-                if (!domainPicker || !selected) return
-                selectDomain('shield', domainPicker)
-              }}
-              disabled={!pickerIsActive || !managedAsset}
-              aria-label="Select Shield balance"
-              aria-pressed={pickerIsActive && (domainPicker === 'from' ? from : to) === 'shield'}
-              className={cn(
-                'flex min-h-[65px] w-full items-center justify-between gap-3 rounded-lg border bg-white/5 px-3 py-2 text-left disabled:opacity-45',
-                pickerIsActive && (domainPicker === 'from' ? from : to) === 'shield'
-                  ? 'border-primary ring-1 ring-primary'
-                  : 'border-white/10'
-              )}
-            >
-              <span className="min-w-0">
-                <span className="flex items-center gap-2 text-base font-medium leading-[21px]">
-                  <Icon icon="noir:shield-assets" width={16} height={16} />
-                  Shield
-                </span>
-                <span className="mt-1 flex min-w-0 items-center gap-1.5 text-xs font-medium leading-4 text-muted">
-                  <img
-                    src={nearLogo}
-                    alt=""
-                    aria-hidden="true"
-                    className="size-4 shrink-0 rounded-[3px]"
+            {(['public', 'private'] as const)
+              .filter(domain => domain !== oppositeDomain)
+              .map(domain => {
+                const address =
+                  domain === 'private'
+                    ? pickerNetwork?.privateExecutionAddress
+                    : receiveZec
+                      ? zcashPublicAddress
+                      : pickerNetwork?.addresses.find(item => item.preferredForReceive)?.value
+                const nativeRaw =
+                  receiveZec && domain === 'public'
+                    ? getFundingBalance(zcashBalance, 'transparent').available
+                    : null
+                return (
+                  <TransferBalanceOption
+                    key={domain}
+                    label={`${domainLabel(domain)} account`}
+                    ariaLabel={`Select ${domainLabel(domain)} account`}
+                    icon={<ExecutionAccountIcon mode={domain === 'private' ? 'private' : 'main'} />}
+                    address={address ?? ''}
+                    balance={
+                      nativeRaw !== null
+                        ? formatTokenQuantity(nativeRaw)
+                        : pickerBalance(
+                            selected ? getTransferDomainBalanceRaw(selected.asset, domain) : null
+                          )
+                    }
+                    disabled={
+                      !pickerIsActive ||
+                      !address ||
+                      (receiveZec && (domain === 'private' || !canSpendPublicZec))
+                    }
+                    selected={pickerIsActive && pickerValue === domain}
+                    onSelect={() => domainPicker && selectDomain(domain, domainPicker)}
                   />
-                  <span className="truncate">NEAR Confidential</span>
-                </span>
-              </span>
-              <span
-                className={cn(
-                  'max-w-[38%] break-all text-right text-base font-medium leading-[21px]',
-                  pickerShieldRaw === '0' && 'text-muted'
-                )}
+                )
+              })}
+            {receiveEntry && domainPicker === 'from' && (
+              <TransferBalanceOption
+                label="External transfer"
+                icon={<Icon icon="lucide:qr-code" width={20} height={20} />}
+                selected={externalReceive}
+                disabled={!pickerIsActive || (!canLoadShield && !zcashReceiveAddress)}
+                onSelect={() => {
+                  if (receiveAssetId) setSelectedAssetId(receiveAssetId)
+                  setReceiveExternal(true)
+                  setAssetChainId('all')
+                  setDomainPicker(null)
+                }}
+              />
+            )}
+            {!receiveEntry && (
+              <div
+                role="group"
+                aria-labelledby="transfer-shield-providers"
+                className="space-y-2 pt-2"
               >
-                {pickerShieldRaw !== null && selected
-                  ? formatTokenQuantity(
-                      formatBaseUnitAmount(pickerShieldRaw, selected.asset.metadata.decimals)
+                <p id="transfer-shield-providers" className="px-1 text-xs font-medium text-muted">
+                  Shield providers
+                </p>
+                <TransferBalanceOption
+                  label={SHIELD_PROVIDERS['near-confidential'].name}
+                  icon={<ShieldProviderLogo provider="near-confidential" size={18} />}
+                  selected={pickerIsActive && pickerValue === 'shield'}
+                  disabled={!nearPickerAvailable}
+                  balance={nearPickerAvailable ? pickerBalance(refreshedShieldRaw) : null}
+                  onSelect={() => {
+                    if (nearPickerAvailable && domainPicker) selectDomain('shield', domainPicker)
+                  }}
+                />
+                <TransferBalanceOption
+                  label={SHIELD_PROVIDERS['zcash-shield'].detailName}
+                  icon={<ShieldProviderLogo provider="zcash-shield" size={18} />}
+                  disabled={!zcashPickerAvailable}
+                  balance={
+                    zcashPickerAvailable
+                      ? `${formatTokenQuantity(getFundingBalance(zcashBalance, 'shielded').available)} ZEC`
+                      : null
+                  }
+                  onSelect={() => {
+                    if (!zcashPickerAvailable) return
+                    setDomainPicker(null)
+                    openZcashMove(
+                      zcashPickerSource,
+                      domainPicker === 'from' ? 'transparent' : 'shielded'
                     )
-                  : '—'}
-              </span>
-            </button>
+                  }}
+                />
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
+      {receiveEntry && (
+        <ShieldProviderDialog
+          open={providerPickerOpen}
+          onClose={() => setProviderPickerOpen(false)}
+          selected={receiveProvider}
+          available={receiveProviders}
+          onSelect={provider => {
+            if (!receiveProviders[provider]) return
+            if (receiveAssetId) setSelectedAssetId(receiveAssetId)
+            setPreferredReceiveProvider(provider)
+            setProviderPickerOpen(false)
+          }}
+          networks={portfolio?.chains.map(item => item.chain) ?? []}
+          tokens={catalogTokens}
+        />
+      )}
     </div>
   )
 }

@@ -43,6 +43,30 @@ export type ShieldFundingAsset = Readonly<{
   marketAssetId?: string
 }>
 
+export function getZcashTokenPickerChain(network: Network) {
+  return {
+    chainId: getZcashChainId(network),
+    chainName: network === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+    badgeBlockchain: 'zec'
+  }
+}
+
+export function listShieldTokenPickerNetworks(
+  rows: readonly Readonly<{ chainId: string; chainName: string; badgeBlockchain?: string }>[]
+) {
+  const networks = new Map<string, { id: string; label: string; iconChain: string }>()
+  for (const { chainId, chainName, badgeBlockchain } of rows) {
+    if (!networks.has(chainId)) {
+      networks.set(chainId, {
+        id: chainId,
+        label: chainName,
+        iconChain: badgeBlockchain ?? chainId
+      })
+    }
+  }
+  return [...networks.values()]
+}
+
 export function formatShieldQuoteTime(seconds: number): string {
   return formatIntentsConfirmationTime(seconds)
 }

@@ -8,6 +8,20 @@ export type PrivateBalanceTransferDirection = 'main-to-private' | 'private-to-ma
 
 export type TransferDomain = Exclude<AssetDomain, 'all'>
 
+export function resolveBalanceTransferIntent(value: string | null | undefined) {
+  return value === 'deposit' || value === 'withdraw' ? value : null
+}
+
+export type BalanceTransferIntent = NonNullable<ReturnType<typeof resolveBalanceTransferIntent>>
+
+export function balanceTransferLabel(intent: BalanceTransferIntent): 'Deposit' | 'Withdraw' {
+  return intent === 'deposit' ? 'Deposit' : 'Withdraw'
+}
+
+export function fixedTransferSide(intent: BalanceTransferIntent | null): 'to' | 'from' | null {
+  return intent === 'deposit' ? 'to' : intent === 'withdraw' ? 'from' : null
+}
+
 export function getTransferDomainBalanceRaw(
   asset: PortfolioAssetView,
   domain: TransferDomain

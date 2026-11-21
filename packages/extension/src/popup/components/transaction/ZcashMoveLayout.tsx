@@ -86,12 +86,40 @@ export function ZcashMoveAccountCard({
   )
 }
 
+export function BalanceTransferAmount({
+  amount,
+  asset,
+  balance,
+  max
+}: {
+  readonly amount?: ReactNode
+  readonly asset: ReactNode
+  readonly balance?: string
+  readonly max?: ReactNode
+}) {
+  return (
+    <div className="flex min-h-[145px] min-w-0 shrink-0 flex-col items-center justify-center gap-2 py-3">
+      {amount}
+      {asset}
+      {balance !== undefined && (
+        <div className="flex max-w-full items-center gap-2 text-xs text-muted">
+          <span className="truncate" title={balance}>
+            {formatTokenQuantity(balance)}
+          </span>
+          {max}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ZcashMoveLayout({
   amount,
   balance,
   max,
   source,
   destination,
+  fields,
   onReverse,
   canReverse = false
 }: {
@@ -100,41 +128,46 @@ export function ZcashMoveLayout({
   readonly max: ReactNode
   readonly source: ReactNode
   readonly destination: ReactNode
+  readonly fields?: { readonly asset: ReactNode; readonly accounts: ReactNode }
   readonly onReverse?: () => void
   readonly canReverse?: boolean
 }) {
   return (
     <>
-      <div className="flex min-w-0 flex-col items-center pb-6 pt-5 text-center">
-        {amount}
-        <span className="mt-3 inline-flex h-9 items-center gap-2 rounded-full bg-wallet-surface px-2.5 text-base font-medium">
-          <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zec" size={26} />
-          ZEC
-        </span>
-        <div className="mt-4 flex min-w-0 items-center justify-center gap-3 text-xs text-muted">
-          <span className="min-w-0 truncate" title={balance}>
-            {formatTokenQuantity(balance)}
-          </span>
-          {max}
+      <BalanceTransferAmount
+        amount={amount}
+        balance={balance}
+        max={max}
+        asset={
+          fields?.asset ?? (
+            <span className="inline-flex h-9 items-center gap-2 rounded-full bg-wallet-surface px-2.5 text-base font-medium">
+              <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zec" size={26} />
+              ZEC
+            </span>
+          )
+        }
+      />
+      {fields ? (
+        fields.accounts
+      ) : (
+        <div>
+          {source}
+          <div className="relative h-2.5">
+            {canReverse && onReverse && (
+              <button
+                type="button"
+                aria-label="Switch transfer direction"
+                title="Switch transfer direction"
+                onClick={onReverse}
+                className="absolute left-1/2 top-1/2 z-10 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-card text-foreground transition-colors hover:bg-wallet-selected"
+              >
+                <Icon icon="lucide:arrow-down-up" width={18} height={18} />
+              </button>
+            )}
+          </div>
+          {destination}
         </div>
-      </div>
-      <div>
-        {source}
-        <div className="relative h-2.5">
-          {canReverse && onReverse && (
-            <button
-              type="button"
-              aria-label="Switch move direction"
-              title="Switch move direction"
-              onClick={onReverse}
-              className="absolute left-1/2 top-1/2 z-10 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-card text-foreground transition-colors hover:bg-wallet-selected"
-            >
-              <Icon icon="lucide:arrow-down-up" width={18} height={18} />
-            </button>
-          )}
-        </div>
-        {destination}
-      </div>
+      )}
     </>
   )
 }

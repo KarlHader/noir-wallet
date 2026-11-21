@@ -21,7 +21,7 @@ import {
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import type { Network } from '@/types'
 import { isSelectableChainFamily } from './chain-selection-availability'
-import { getAssetDomainRaw, type AssetDomain } from './asset-domains'
+import type { AssetDomain } from './asset-domains'
 
 const ASSET_FALLBACK_ORDER = ['USDC', 'USDT', 'ZEC', 'BTC', 'ETH', 'SOL', 'NEAR'] as const
 
@@ -87,50 +87,38 @@ export interface PortfolioAssetGroup {
   readonly iconUrl?: string
 }
 
-export function getPortfolioAssetDomainBalances(
+export function getMergedZecProviderBalances(
   entries: readonly PortfolioAssetGroupEntry[],
-  domain: AssetDomain,
-  prices: AssetPriceReadModel | null
-): readonly Readonly<{
-  domain: 'public' | 'shield' | 'private'
-  amount: string | null
-  fiat: string | null
-}>[] {
-  const domains = (['public', 'shield', 'private'] as const).filter(category =>
-    domain === 'all'
-      ? category === 'public' ||
-        entries.some(({ chain }) =>
-          category === 'shield'
-            ? chain.chain.family === 'evm' || chain.chain.family === 'zcash'
-            : chain.chain.family === 'evm'
-        )
-      : category === domain
+  confidentialZec: NearConfidentialZecRow | null | undefined,
+  domain: AssetDomain
+): readonly Readonly<{ provider: 'Zcash Shield' | 'NEAR Confidential'; amount: string }>[] | null {
+  if (domain !== 'shield' || !confidentialZec?.mergedHolding || confidentialZec.displayAsset)
+    return null
+  const native = entries.find(
+    ({ asset, chain }) =>
+      asset.asset.id === confidentialZec.assetId &&
+      asset.asset.chainId === confidentialZec.chainId &&
+      chain.chain.id === confidentialZec.chainId &&
+      chain.chain.family === 'zcash'
   )
-  return domains.map(category => {
-    let amount = new Big(0)
-    let fiat = new Big(0)
-    let amountKnown = true
-    let fiatKnown = true
-    for (const { asset } of entries) {
-      const raw = domain === 'all' ? getAssetDomainRaw(asset, category) : asset.balance.totalRaw
-      if (raw === null) {
-        amountKnown = false
-        fiatKnown = false
-        continue
-      }
-      const part = new Big(formatBaseUnitDecimalAmount(raw, asset.metadata.decimals))
-      amount = amount.plus(part)
-      if (part.eq(0)) continue
-      const quote = findAssetPrice(prices, asset.asset.id)
-      if (quote) fiat = fiat.plus(part.times(quote.priceUsd))
-      else fiatKnown = false
-    }
-    return Object.freeze({
-      domain: category,
-      amount: amountKnown ? amount.toFixed() : null,
-      fiat: fiatKnown ? fiat.toFixed() : null
-    })
-  })
+  if (
+    !native ||
+    BigInt(native.asset.balance.totalRaw) <= 0n ||
+    BigInt(confidentialZec.mergedHolding.entry.asset.availableRaw) <= 0n
+  )
+    return null
+
+  // Future providers (including Railgun): merge BNB USDC only on the same chain and canonical asset ID; dedupe balances already embedded in the portfolio.
+  return [
+    {
+      provider: 'Zcash Shield',
+      amount: formatBaseUnitDecimalAmount(
+        native.asset.balance.totalRaw,
+        native.asset.metadata.decimals
+      )
+    },
+    { provider: 'NEAR Confidential', amount: confidentialZec.amount }
+  ]
 }
 
 export function getPortfolioChainBalanceStatus(
@@ -432,7 +420,9 @@ export function buildPortfolioDisplay({
       ? listStandaloneNearConfidentialHoldings(model, sourceModel, prices)
       : []
   const confidentialZec =
-    domain === 'all' ? resolveNearConfidentialZecRow(model, sourceModel, network, standalone) : null
+    domain === 'all' || domain === 'shield'
+      ? resolveNearConfidentialZecRow(model, sourceModel, network, standalone)
+      : null
   const displayAsset = confidentialZec?.displayAsset
   const selectableChains = listSelectablePortfolioChains(model.chains, enabledFlags).map(chain =>
     displayAsset && chain.chain.id === confidentialZec.chainId

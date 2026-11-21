@@ -19,6 +19,7 @@ import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { SendRouteMenu } from '@/popup/components/transaction/SendRouteMenu'
+import { TransactionModeDropdown } from '@/popup/components/transaction/TransactionModeDropdown'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenBalanceDisplay } from '@/popup/components/tokens/TokenBalanceDisplay'
 import { ZcashFundingBadge } from '@/popup/components/account/ZcashFundingBadge'
@@ -80,6 +81,7 @@ import {
 } from '@/popup/services/evm-send-catalog'
 import { getEnabledSwapChains } from '@/popup/services/swap-catalog-loading'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
+import { listShieldTokenPickerNetworks } from '@/popup/services/shield-transfer'
 import {
   resolveEvmFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
@@ -99,6 +101,7 @@ interface SendDomainSession {
   shieldEntry: ShieldWithdrawEntry | null
   shieldProvider: ShieldProvider
   zcashVisited: boolean
+  publicZcash: boolean
   zcashInitialFundingSource: FundingSource
 }
 
@@ -481,7 +484,7 @@ function SendAssetFlow({
   const [searchParams] = useSearchParams()
   const location = useLocation()
   const requestedAssetId = searchParams.get('assetId')
-  const requestedSourceMode = searchParams.get('sourceMode')
+  const requestedSourceMode = searchParams.get('sourceMode') ?? searchParams.get('mode')
   const requestedNetworkId = searchParams.get('networkId')
   const { goBack, navigate, replace } = useNavigate()
   const currentNetwork = useWalletStore(state => state.currentNetwork)
@@ -535,6 +538,8 @@ function SendAssetFlow({
     source: FundingSource
     revision: number
   } | null>(null)
+  const [publicModeRequest, requestPublicMode] = useState(0)
+  const [shieldModeRequest, requestShieldMode] = useState(0)
   const [nonEvmDraft, setNonEvmDraft] = useState<{
     key: string
     assetId: string
@@ -563,6 +568,12 @@ function SendAssetFlow({
     zcashSources.find(source => source.type === 'transparent' && !source.disabledReason)?.type ??
     zcashSources.find(source => !source.disabledReason)?.type ??
     (getFundingSourceUnavailableReason(zcashKeySource, 'transparent') ? 'shielded' : 'transparent')
+  const zcashEnabled =
+    !contextChanging &&
+    (storageV2Account?.networks.some(network => network.chain.family === 'zcash') ??
+      Boolean(currentAccount?.addresses.transparent || currentAccount?.addresses.shielded))
+  const confidentialEnabled =
+    getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
   const effectiveAccount = contextChanging
     ? null
     : resolveEffectiveActiveAccountIdentity({
@@ -575,8 +586,7 @@ function SendAssetFlow({
   const {
     model,
     status: loadStatus,
-    refresh,
-    readLatest
+    refresh
   } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId)
   const entryScope = location.state as {
     walletId?: unknown
@@ -683,12 +693,27 @@ function SendAssetFlow({
   const [domainSession, setDomainSession] = useState<SendDomainSession | null>(null)
   const requestedZcashProvider =
     initialZcashProvider || searchParams.get('provider') === 'zcash-shield'
+  const requestedNearProvider = searchParams.get('provider') === 'near-confidential'
+  const initialZcashSource = searchParams.get('from')
+  const transparentZcashRequested = requestedZcashProvider && initialZcashSource === 'transparent'
+  const initialPublicZcash =
+    transparentZcashRequested && !getFundingSourceUnavailableReason(zcashKeySource, 'transparent')
+  const shieldedZcashAvailable = zcashSources.some(
+    source => source.type === 'shielded' && !source.disabledReason
+  )
   const initialSource =
     domainSession?.routeKey === location.key
       ? domainSession.source
-      : requestedZcashProvider || requestedSourceMode === 'shield'
-        ? 'shield'
-        : 'main'
+      : transparentZcashRequested
+        ? 'main'
+        : requestedZcashProvider || requestedSourceMode === 'shield'
+          ? 'shield'
+          : 'main'
+  const initialShieldProvider: ShieldProvider = requestedZcashProvider
+    ? 'zcash-shield'
+    : requestedNearProvider || confidentialEnabled
+      ? 'near-confidential'
+      : 'zcash-shield'
   const currentSession: SendDomainSession =
     domainSession?.key === sendEntryKey
       ? domainSession
@@ -699,21 +724,27 @@ function SendAssetFlow({
           publicVisited: initialSource !== 'shield',
           publicRecipient: requestedRecipient ?? '',
           publicAmount: requestedAmount,
-          shieldProvider: requestedZcashProvider ? 'zcash-shield' : 'near-confidential',
-          zcashVisited: requestedZcashProvider,
+          shieldProvider: initialShieldProvider,
+          zcashVisited:
+            initialPublicZcash ||
+            (initialSource === 'shield' &&
+              initialShieldProvider === 'zcash-shield' &&
+              shieldedZcashAvailable),
+          publicZcash: initialPublicZcash,
           zcashInitialFundingSource:
-            searchParams.get('from') === 'transparent' &&
+            initialZcashSource === 'transparent' &&
             !getFundingSourceUnavailableReason(zcashKeySource, 'transparent')
               ? 'transparent'
-              : (searchParams.get('from') === 'shielded' ||
-                    (requestedZcashProvider && !initialZcashProvider)) &&
+              : (initialZcashSource === 'shielded' ||
+                    (initialSource === 'shield' && initialShieldProvider === 'zcash-shield')) &&
                   !getFundingSourceUnavailableReason(zcashKeySource, 'shielded')
                 ? 'shielded'
                 : defaultZcashFundingSource,
           shieldEntry:
             initialSource === 'shield'
               ? {
-                  assetId: requestedZcashProvider ? ZEC_ZCASH_ASSET : requestedAssetId,
+                  assetId:
+                    initialShieldProvider === 'zcash-shield' ? ZEC_ZCASH_ASSET : requestedAssetId,
                   networkId: requestedNetworkId,
                   recipient: requestedRecipient ?? '',
                   amount: requestedAmount,
@@ -723,7 +754,9 @@ function SendAssetFlow({
         }
   const shieldActive = currentSession.source === 'shield'
   const zcashActive =
-    shieldActive && currentSession.shieldProvider === 'zcash-shield' && !sourcePicker
+    ((shieldActive && currentSession.shieldProvider === 'zcash-shield') ||
+      (!shieldActive && currentSession.publicZcash)) &&
+    !sourcePicker
   const nearActive =
     shieldActive && currentSession.shieldProvider === 'near-confidential' && !sourcePicker
   const selectZcash = (source: FundingSource) => {
@@ -736,9 +769,11 @@ function SendAssetFlow({
     }))
     setDomainSession({
       ...currentSession,
-      source: 'shield',
+      source: source === 'shielded' ? 'shield' : 'main',
       shieldProvider: 'zcash-shield',
       zcashVisited: true,
+      publicVisited: currentSession.publicVisited || source === 'transparent',
+      publicZcash: currentSession.publicZcash || source === 'transparent',
       zcashInitialFundingSource: currentSession.zcashVisited
         ? currentSession.zcashInitialFundingSource
         : source,
@@ -779,6 +814,18 @@ function SendAssetFlow({
     },
     []
   )
+  const [{ reviewing: zcashReviewing, busy: zcashBusy }, setZcashState] = useState({
+    reviewing: false,
+    busy: false
+  })
+  const handleZcashStateChange = useCallback(
+    (next: { readonly reviewing: boolean; readonly busy: boolean }) => {
+      setZcashState(previous =>
+        previous.reviewing === next.reviewing && previous.busy === next.busy ? previous : next
+      )
+    },
+    []
+  )
   const handleNearSourceOptions = useCallback(
     (value: ShieldWithdrawSourcePickerState) => {
       setNearSourceOptions({ key: sendEntryKey, value })
@@ -797,11 +844,11 @@ function SendAssetFlow({
       ? goBack
       : () => navigate(originPath, { replace: true })
     : !entryScopeValid
-      ? () => navigate(shieldActive ? '/shield-funds' : '/', { replace: true })
+      ? () => navigate(shieldActive ? '/?domain=shield' : '/', { replace: true })
       : initialZcashProvider
         ? () =>
             navigate(
-              currentSession.zcashInitialFundingSource === 'shielded' ? '/shield-funds' : '/',
+              currentSession.zcashInitialFundingSource === 'shielded' ? '/?domain=shield' : '/',
               { replace: true }
             )
         : goBack
@@ -830,15 +877,9 @@ function SendAssetFlow({
         cachedPrices.quotes.length >= initialPrices.quotes.length))
       ? cachedPrices
       : initialPrices
-  const zcashEnabled =
-    !contextChanging &&
-    (storageV2Account?.networks.some(network => network.chain.family === 'zcash') ??
-      Boolean(currentAccount?.addresses.transparent || currentAccount?.addresses.shielded))
-  const confidentialEnabled =
-    getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
   const availableShieldProviders: ShieldProvider[] = [
     ...(confidentialEnabled ? (['near-confidential'] as const) : []),
-    ...(zcashEnabled ? (['zcash-shield'] as const) : [])
+    ...(zcashEnabled && shieldedZcashAvailable ? (['zcash-shield'] as const) : [])
   ]
 
   const load = useCallback(
@@ -1066,7 +1107,7 @@ function SendAssetFlow({
     setAssetPickerOpen(false)
     const params = new URLSearchParams({
       assetId: sourceAssetId,
-      sourceMode: asset ? 'main' : 'shield',
+      sourceMode: asset || zcashSource === 'transparent' ? 'main' : 'shield',
       sourceWalletId: effectiveWalletId,
       sourceAccountId: effectiveAccountId,
       ...(asset ? {} : { provider: 'zcash-shield', from: zcashSource }),
@@ -1101,7 +1142,9 @@ function SendAssetFlow({
       `/transfer?${new URLSearchParams({
         assetId: selection.asset.asset.id,
         from: 'private',
-        to: 'shield'
+        to: 'shield',
+        mode: 'private',
+        intent: 'withdraw'
       })}`
     )
   }, [replace, requestedSourceMode, selection])
@@ -1175,9 +1218,7 @@ function SendAssetFlow({
   const searchedNearItems = useMemo(() => {
     if (!nearSourceVisible) return []
     const items = (nearPicker?.items ?? []).filter(
-      item =>
-        sourcePickerNetwork === 'all' ||
-        (item.chainId ?? item.badgeBlockchain ?? 'near') === sourcePickerNetwork
+      item => sourcePickerNetwork === 'all' || item.chainId === sourcePickerNetwork
     )
     if (!deferredSourcePickerQuery.trim()) return items
     return items
@@ -1194,7 +1235,7 @@ function SendAssetFlow({
               symbol: item.symbol,
               contractAddress,
               assetId: item.assetId,
-              searchTerms: item.chainName ? [item.chainName] : []
+              searchTerms: [item.chainName]
             },
             deferredSourcePickerQuery
           )
@@ -1207,24 +1248,10 @@ function SendAssetFlow({
   const visibleNearItems = searchedNearItems.slice(0, sourceVisibleLimit)
   const sourcePickerNetworks = useMemo(
     () =>
-      sortSendNetworks(
-        [
-          ...new Map(
-            (nearPicker?.items ?? []).map(item => {
-              const id = item.chainId ?? item.badgeBlockchain ?? 'near'
-              return [
-                id,
-                {
-                  id,
-                  label: item.chainName ?? 'NEAR Confidential',
-                  iconChain: item.badgeBlockchain ?? id
-                }
-              ] as const
-            })
-          ).values()
-        ],
-        option => ({ id: option.id, name: option.label })
-      ),
+      sortSendNetworks(listShieldTokenPickerNetworks(nearPicker?.items ?? []), option => ({
+        id: option.id,
+        name: option.label
+      })),
     [nearPicker?.items]
   )
   const sourcePickerRows = visibleNearItems.map(item =>
@@ -1324,7 +1351,8 @@ function SendAssetFlow({
     !assetPickerOpen && requestedAssetId && !selection && loadStatus === 'loading'
   )
   const showPublicAssetPicker =
-    !shieldActive && (assetPickerOpen || (!selection && !preparingRequestedAsset))
+    !shieldActive &&
+    (assetPickerOpen || (!selection && !currentSession.publicZcash && !preparingRequestedAsset))
   const switchSource = (
     sourceMode: 'main' | 'shield',
     assetId: string | null,
@@ -1335,15 +1363,19 @@ function SendAssetFlow({
   ) => {
     setAssetPickerOpen(false)
     if (selectedAsset) setSelection(selectedAsset)
-    else if (sourceMode === 'main' && !currentSession.publicVisited)
+    else if (sourceMode === 'main' && assetId)
       setSelection(assets.find(item => item.asset.asset.id === assetId) ?? null)
     setDomainSession({
       ...currentSession,
       source: sourceMode,
       publicVisited: currentSession.publicVisited || sourceMode === 'main',
+      publicZcash:
+        sourceMode === 'main' && assetId && assetId !== ZEC_ZCASH_ASSET
+          ? false
+          : currentSession.publicZcash,
       shieldProvider:
         sourceMode === 'shield' && currentSession.source === 'main'
-          ? 'near-confidential'
+          ? (availableShieldProviders[0] ?? currentSession.shieldProvider)
           : currentSession.shieldProvider,
       publicRecipient:
         sourceMode === 'main' && !currentSession.publicVisited
@@ -1366,18 +1398,50 @@ function SendAssetFlow({
           : null)
     })
   }
+  const switchMode = (mode: 'public' | 'private' | 'shield') => {
+    if (mode === 'private' || (mode === 'shield') === shieldActive) return
+    if (mode === 'shield') {
+      if (
+        (zcashActive || !confidentialEnabled) &&
+        zcashSources.some(source => source.type === 'shielded' && !source.disabledReason)
+      ) {
+        selectZcash('shielded')
+      } else if (selection?.chain.chain.family === 'evm' && !currentSession.publicZcash) {
+        requestShieldMode(value => value + 1)
+      } else {
+        switchSource('shield', selection?.asset.asset.id ?? null, '', undefined, '')
+      }
+    } else if (
+      zcashActive &&
+      zcashSources.some(source => source.type === 'transparent' && !source.disabledReason)
+    ) {
+      selectZcash('transparent')
+    } else if (nearActive) {
+      requestPublicMode(value => value + 1)
+    } else if (zcashActive) {
+      setDomainSession({
+        ...currentSession,
+        source: 'main',
+        publicVisited: true,
+        publicZcash: false
+      })
+    } else {
+      switchSource('main', null, '', undefined, '')
+    }
+  }
   return (
     <div className="page-container" data-wallet-mode={walletMode}>
-      {!(nearActive && shieldReviewing) && (
+      {!(nearActive && shieldReviewing) && !(zcashActive && zcashReviewing) && (
         <PageHeader
           title={sourcePicker || showPublicAssetPicker ? 'Select Token' : 'Send'}
           showBack
+          backDisabled={shieldBusy || zcashBusy}
           onBack={
             sourcePicker
               ? () => setSourcePicker(null)
               : shieldActive
                 ? () => {
-                    if (!nearActive || !shieldBusy) returnToEntry()
+                    if (!shieldBusy && !zcashBusy) returnToEntry()
                   }
                 : assetPickerOpen && selection
                   ? () => {
@@ -1389,33 +1453,43 @@ function SendAssetFlow({
                     : goBack
           }
           rightContent={
-            !sourcePicker && !shieldActive && !assetPickerOpen && nonEvmCrossChainSourceAssetId ? (
-              <SendRouteMenu
-                route="onchain"
-                onChange={route => {
-                  if (route !== 'cross-chain' || !effectiveWalletId || !effectiveAccountId) return
-                  navigate(
-                    `/send/cross-chain?${new URLSearchParams({
-                      source: nonEvmCrossChainSourceAssetId,
-                      sourceMode: 'main',
-                      sourceWalletId: effectiveWalletId,
-                      sourceAccountId: effectiveAccountId,
-                      ...(originPath ? { originPath } : {}),
-                      ...(activeNonEvmDraft?.recipient
-                        ? { recipient: activeNonEvmDraft.recipient }
-                        : {}),
-                      ...(activeNonEvmDraft?.amount ? { amount: activeNonEvmDraft.amount } : {})
-                    })}`,
-                    {
-                      replace: true,
-                      state: { returnToSendAssetId: nonEvmCrossChainSourceAssetId, sendEntry }
-                    }
-                  )
-                }}
+            !sourcePicker ? (
+              <TransactionModeDropdown
+                value={shieldActive ? 'shield' : 'public'}
+                options={availableShieldProviders.length > 0 ? ['public', 'shield'] : ['public']}
+                onChange={switchMode}
+                disabled={shieldBusy || shieldReviewing || zcashBusy || zcashReviewing}
               />
             ) : undefined
           }
         />
+      )}
+      {!sourcePicker && !shieldActive && !assetPickerOpen && nonEvmCrossChainSourceAssetId && (
+        <div className="flex justify-end px-4">
+          <SendRouteMenu
+            route="onchain"
+            onChange={route => {
+              if (route !== 'cross-chain' || !effectiveWalletId || !effectiveAccountId) return
+              navigate(
+                `/send/cross-chain?${new URLSearchParams({
+                  source: nonEvmCrossChainSourceAssetId,
+                  sourceMode: 'main',
+                  sourceWalletId: effectiveWalletId,
+                  sourceAccountId: effectiveAccountId,
+                  ...(originPath ? { originPath } : {}),
+                  ...(activeNonEvmDraft?.recipient
+                    ? { recipient: activeNonEvmDraft.recipient }
+                    : {}),
+                  ...(activeNonEvmDraft?.amount ? { amount: activeNonEvmDraft.amount } : {})
+                })}`,
+                {
+                  replace: true,
+                  state: { returnToSendAssetId: nonEvmCrossChainSourceAssetId, sendEntry }
+                }
+              )
+            }}
+          />
+        </div>
       )}
       {sourcePicker && !nearSourceVisible && (
         <AssetSelection
@@ -1424,7 +1498,11 @@ function SendAssetFlow({
           assets={assets}
           chains={visibleModel?.chains ?? []}
           zcashOnly={sourcePicker.mode === 'shield'}
-          zcashSources={zcashSources}
+          zcashSources={zcashSources.filter(source =>
+            sourcePicker.mode === 'shield'
+              ? source.type === 'shielded'
+              : source.type === 'transparent'
+          )}
           zcashEnabled={zcashEnabled}
           zcashNetwork={currentNetwork}
           zecPrice={zecPrice}
@@ -1520,11 +1598,8 @@ function SendAssetFlow({
               assets.find(item => item.asset.asset.id === currentSession.shieldEntry?.assetId)
                 ?.asset ?? null
             }
-            refresh={load}
-            readProjection={async () => {
-              await readLatest()
-            }}
             onStateChange={handleShieldStateChange}
+            publicModeRequest={publicModeRequest}
             onSelectPublic={(assetId, recipient, amount, destinationAssetId) => {
               if (
                 assetId &&
@@ -1581,6 +1656,7 @@ function SendAssetFlow({
             fundingSourceSelection={
               zcashFundingSelection?.key === sendEntryKey ? zcashFundingSelection : null
             }
+            onMoveStateChange={handleZcashStateChange}
             onSelectAsset={fundingSource =>
               openSourcePicker(
                 fundingSource === 'shielded' ? 'shield' : 'zcash-public',
@@ -1590,7 +1666,15 @@ function SendAssetFlow({
           />
         </div>
       )}
-      {currentSession.publicVisited && selection && (
+      {shieldActive &&
+        !sourcePicker &&
+        currentSession.shieldProvider === 'zcash-shield' &&
+        !currentSession.zcashVisited && (
+          <div className="page-content px-4 pt-4">
+            <InlineError message="Shielded ZEC is unavailable for this account." />
+          </div>
+        )}
+      {currentSession.publicVisited && selection && !currentSession.publicZcash && (
         <div className={shieldActive || assetPickerOpen ? 'hidden' : 'contents'}>
           {selection.chain.chain.family === 'evm' && visibleModel ? (
             requestedSourceMode === 'private' ? null : storageV2Account ? (
@@ -1621,6 +1705,7 @@ function SendAssetFlow({
                     amount
                   )
                 }
+                shieldModeRequest={shieldModeRequest}
                 onOpenDestinationNetworks={() => requestDestinationCache(attempt => attempt + 1)}
                 destinationNetworks={sortSendNetworks(
                   [
@@ -1699,6 +1784,7 @@ function SendAssetFlow({
                             assetId: selection.asset.asset.id,
                             from: 'public',
                             to: 'private',
+                            intent: 'deposit',
                             mode: walletMode
                           })}`
                         )
@@ -1750,7 +1836,7 @@ function SendAssetFlow({
           accountScope={effectiveAccount}
           assets={assets}
           chains={visibleModel?.chains ?? []}
-          zcashSources={zcashSources}
+          zcashSources={zcashSources.filter(source => source.type === 'transparent')}
           zcashEnabled={zcashEnabled}
           zcashNetwork={currentNetwork}
           zecPrice={zecPrice}

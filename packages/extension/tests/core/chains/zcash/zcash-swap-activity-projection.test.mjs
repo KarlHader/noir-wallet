@@ -88,6 +88,14 @@ test('native ZEC Confidential settlement projects an internal destination withou
   assert.equal(presentation.destinationAccountMode, 'Confidential')
   assert.equal(presentation.sourceAccountMode, 'Public')
   assert.equal(presentation.sourceFundingSource, 'transparent')
+  assert.equal(getActivityRouteTitle(item, presentation, { viewedDomain: 'public' }), 'Send')
+  assert.equal(
+    getActivityRouteTitle(item, presentation, {
+      viewedDomain: 'shield',
+      shieldProvider: 'near-confidential'
+    }),
+    'Deposit'
+  )
   assert.equal(getActivityAccountRouteLabel(presentation), 'Transparent → NEAR Confidential')
   assert.equal(presentation.destinationChainIconAlias, 'near')
   assert.equal(presentation.recipientAddress, undefined)
@@ -101,6 +109,24 @@ test('native ZEC Confidential settlement projects an internal destination withou
   )
   const shieldedPresentation = getActivitySwapPresentation(shieldedItem, new Map(), new Map())
   assert.equal(shieldedPresentation.sourceFundingSource, 'shielded')
+  assert.equal(
+    getActivityRouteTitle(shieldedItem, shieldedPresentation, { viewedDomain: 'shield' }),
+    'Swap'
+  )
+  assert.equal(
+    getActivityRouteTitle(shieldedItem, shieldedPresentation, {
+      viewedDomain: 'shield',
+      shieldProvider: 'zcash-shield'
+    }),
+    'Withdraw'
+  )
+  assert.equal(
+    getActivityRouteTitle(shieldedItem, shieldedPresentation, {
+      viewedDomain: 'shield',
+      shieldProvider: 'near-confidential'
+    }),
+    'Deposit'
+  )
   assert.equal(
     getActivityAccountRouteLabel(shieldedPresentation),
     'Zcash Shield → NEAR Confidential'
@@ -141,7 +167,7 @@ test('a bound ZEC private send remains a monitored route but appears as a transf
     ['origin', 'relay', 'destination']
   )
   assert.equal(item.snapshot.recipient.address, 't1recipient')
-  assert.equal(getActivityRouteTitle(item, route), 'Transfer')
+  assert.equal(getActivityRouteTitle(item, route), 'Send')
   assert.equal(getActivityDetailTitle(item), 'Send')
 
   const unmarked = mapZcashV1TransactionToActivityItem(

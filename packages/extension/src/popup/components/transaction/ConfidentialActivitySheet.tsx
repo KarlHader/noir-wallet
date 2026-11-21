@@ -18,6 +18,7 @@ import {
   getConfidentialFundingPlanId
 } from '@/popup/services/confidential-funding-client'
 import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
+import type { ActivityPerspective } from '@/popup/services/activity-action-label'
 import type { ActivityItem } from '@/core/activity'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { Network } from '@/types'
@@ -44,6 +45,7 @@ interface ConfidentialActivitySheetProps {
 
 export interface ConfidentialActivityDisplay {
   readonly operation: 'send' | 'move' | 'swap'
+  readonly perspective?: ActivityPerspective
   readonly amount: string
   readonly symbol: string
   readonly receiveAmount?: string
@@ -228,6 +230,7 @@ export function ConfidentialActivityView({
         assetMetadata: catalog.assetMetadata,
         chainMetadata: catalog.chainMetadata,
         confidentialPlan: scopedPlan,
+        perspective: display?.perspective,
         legacyPrivateShieldWithdrawDestination: isLegacyPrivateShieldWithdrawDestination(
           scopedActivity,
           scopedPlan,

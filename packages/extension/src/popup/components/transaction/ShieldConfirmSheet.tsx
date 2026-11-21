@@ -68,7 +68,7 @@ export function ShieldConfirmSheet({
         <DialogHeader className="px-5 pt-5 pb-4">
           <DialogTitle className="text-center">Shield</DialogTitle>
           <DialogDescription className="sr-only">
-            Move transparent funds into the private pool
+            Deposit transparent funds into the shielded pool
           </DialogDescription>
         </DialogHeader>
 

@@ -1,6 +1,7 @@
 import { useDeferredValue, useMemo, useState } from 'react'
 import { useTokenSelectorReady, useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
+import { listShieldTokenPickerNetworks } from '@/popup/services/shield-transfer'
 import { TokenSelectorView } from './TokenSelectorView'
 import {
   shieldSourceSelectionItem,
@@ -28,24 +29,11 @@ export function ShieldSourceTokenSelector({
   const deferredNetwork = useDeferredValue(network)
   const filterKey = `${deferredNetwork}:${deferredSearch}`
   const ready = useTokenSelectorReady()
-  const networks = useMemo(() => {
-    const result = new Map<string, { id: string; label: string; iconChain: string }>()
-    if (ready)
-      for (const row of rows) {
-        const id = row.chainId ?? row.badgeBlockchain
-        if (id && !result.has(id))
-          result.set(id, {
-            id,
-            label: id === 'zec' ? 'Zcash' : (row.chainName ?? id),
-            iconChain: row.badgeBlockchain ?? id
-          })
-      }
-    return [...result.values()]
-  }, [ready, rows])
+  const networks = useMemo(() => (ready ? listShieldTokenPickerNetworks(rows) : []), [ready, rows])
   const filtered = useMemo(() => {
     if (!ready) return []
     const candidates = rows.filter(
-      row => deferredNetwork === 'all' || (row.chainId ?? row.badgeBlockchain) === deferredNetwork
+      row => deferredNetwork === 'all' || row.chainId === deferredNetwork
     )
     if (!deferredSearch.trim()) return candidates
     return candidates
@@ -57,9 +45,9 @@ export function ShieldSourceTokenSelector({
             assetId: row.assetId,
             contractAddress: row.contractAddress,
             searchTerms: [
-              row.chainName ?? '',
+              row.chainName,
               ...(row.searchTerms ?? []),
-              ...(row.zcashFundingSource ? [row.zcashFundingSource] : ['confidential'])
+              row.sourceLabel ?? row.zcashFundingSource ?? 'confidential'
             ]
           },
           deferredSearch

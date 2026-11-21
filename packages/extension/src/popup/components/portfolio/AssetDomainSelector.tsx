@@ -1,122 +1,122 @@
 import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import { formatAssetDomainFiat, type AssetDomain } from '@/popup/services/asset-domains'
+import type { HomeAssetDomain } from '@/popup/services/home-navigation'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '../ui/skeleton'
 
-export const ASSET_DOMAIN_LABELS: Record<AssetDomain, string> = {
-  all: 'Total assets',
-  public: 'Public assets',
-  shield: 'Shield assets',
-  private: 'Private assets'
-}
+const BALANCE_MODES = {
+  public: { label: 'Public', icon: 'lucide:wallet', color: 'text-wallet-secondary' },
+  private: { label: 'Private', icon: 'noir:private-assets', color: 'text-private' },
+  shield: { label: 'Shield', icon: 'noir:shield-assets', color: 'text-success' }
+} satisfies Record<HomeAssetDomain, { label: string; icon: string; color: string }>
 
-const ASSET_DOMAIN_ICONS: Record<AssetDomain, string> = {
-  all: 'noir:total-assets',
-  public: 'noir:public-assets',
-  shield: 'noir:shield-assets',
-  private: 'noir:private-assets'
-}
+const BALANCE_DOMAINS = ['public', 'private', 'shield'] as const
 
 export function AssetDomainSelector({
   value,
   totals,
-  partialTotals,
   balancesHidden,
   loading,
-  domains = Object.keys(ASSET_DOMAIN_LABELS) as AssetDomain[],
+  domains = BALANCE_DOMAINS,
   onChange
 }: {
-  readonly value: AssetDomain
+  readonly value: HomeAssetDomain
   readonly totals: Readonly<Record<AssetDomain, string | number | null>>
-  readonly partialTotals?: Readonly<Record<AssetDomain, boolean>>
   readonly balancesHidden: boolean
   readonly loading?: Readonly<Record<AssetDomain, boolean>>
-  readonly domains?: readonly AssetDomain[]
-  readonly onChange: (domain: AssetDomain) => void
+  readonly domains?: readonly HomeAssetDomain[]
+  readonly onChange: (domain: HomeAssetDomain) => void
 }) {
   const [open, setOpen] = useState(false)
+  const mode = BALANCE_MODES[value]
+  const renderAmount = (domain: AssetDomain, className: string) => {
+    const total = totals[domain]
+    if (!balancesHidden && total === null && loading?.[domain]) {
+      return (
+        <Skeleton className={cn('h-4 w-12 max-w-full', className)} aria-label="Loading balance" />
+      )
+    }
+    const amount = balancesHidden ? '••••' : total === null ? '—' : formatAssetDomainFiat(total)
+    return (
+      <span
+        className={cn('min-w-0 truncate tabular-nums', className)}
+        title={balancesHidden ? undefined : amount}
+      >
+        {amount}
+      </span>
+    )
+  }
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={`Asset category: ${ASSET_DOMAIN_LABELS[value]}`}
-          className="wallet-interactive inline-flex h-[26px] items-center gap-1.5 rounded-md px-2 text-sm text-foreground hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+          className="wallet-interactive inline-flex h-8 w-[164px] max-w-full items-center gap-2 rounded-lg bg-white/6 px-2.5 text-sm text-foreground hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 data-[state=open]:bg-white/10"
         >
           <Icon
-            icon={ASSET_DOMAIN_ICONS[value]}
-            width={14}
-            height={14}
-            className={cn(
-              value === 'shield'
-                ? 'text-success'
-                : value === 'private'
-                  ? 'text-private'
-                  : 'text-wallet-secondary'
-            )}
+            icon={mode.icon}
+            width={16}
+            height={16}
+            className={cn('shrink-0', mode.color)}
+            aria-hidden="true"
           />
-          {ASSET_DOMAIN_LABELS[value]}
-          <Icon icon="lucide:chevron-down" width={12} height={12} />
+          <span className="whitespace-nowrap">{mode.label} balance</span>
+          <Icon
+            icon="lucide:chevron-down"
+            width={15}
+            height={15}
+            className={cn('ml-auto shrink-0 text-wallet-secondary', open && 'rotate-180')}
+            aria-hidden="true"
+          />
         </button>
       </PopoverTrigger>
       <PopoverContent
         align="center"
         sideOffset={8}
-        className="w-[270px] max-w-[calc(100vw-24px)] border-0 px-0 py-2"
-        aria-label="Asset categories"
+        className="w-[270px] max-w-[calc(100vw-24px)] border-white/10 p-2 text-left"
+        aria-label="Balance breakdown"
       >
-        <div role="radiogroup" aria-label="Asset category">
-          {domains.map(domain => (
-            <button
-              key={domain}
-              type="button"
-              role="radio"
-              aria-checked={value === domain}
-              onClick={() => {
-                onChange(domain)
-                setOpen(false)
-              }}
-              className={cn(
-                'wallet-interactive flex min-h-[38px] w-full items-center gap-2 px-3.5 py-2 text-left text-sm hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2',
-                value === domain && 'bg-white/6'
-              )}
-            >
-              <Icon
-                icon={ASSET_DOMAIN_ICONS[domain]}
-                width={15}
-                height={15}
-                className={cn(
-                  'shrink-0',
-                  (domain === 'all' || domain === 'public') && 'text-wallet-secondary',
-                  domain === 'shield' && 'text-success',
-                  domain === 'private' && 'text-private'
-                )}
-              />
-              <span className="shrink-0">{ASSET_DOMAIN_LABELS[domain]}</span>
-              {!balancesHidden && loading?.[domain] && totals[domain] === null ? (
-                <Skeleton className="ml-auto h-4 w-16" />
-              ) : (
-                <span
-                  className="ml-auto min-w-0 truncate text-right text-sm tabular-nums text-foreground"
-                  title={
-                    balancesHidden
-                      ? undefined
-                      : totals[domain] === null
-                        ? '—'
-                        : formatAssetDomainFiat(totals[domain], partialTotals?.[domain])
-                  }
-                >
-                  {balancesHidden
-                    ? '••••'
-                    : totals[domain] === null
-                      ? '—'
-                      : formatAssetDomainFiat(totals[domain], partialTotals?.[domain])}
+        <div className="mb-1 flex min-h-9 items-center gap-2 pl-2.5 pr-[34px] text-sm">
+          <span className="shrink-0 text-wallet-secondary">Total balance</span>
+          {renderAmount('all', 'ml-auto text-right font-medium text-foreground')}
+        </div>
+        <div role="group" aria-label="Balance mode" className="grid gap-0.5">
+          {domains.map(domain => {
+            const option = BALANCE_MODES[domain]
+            return (
+              <button
+                key={domain}
+                type="button"
+                aria-pressed={value === domain}
+                onClick={() => {
+                  onChange(domain)
+                  setOpen(false)
+                }}
+                className="wallet-interactive grid min-h-10 min-w-0 grid-cols-[24px_auto_minmax(0,1fr)_14px] items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-wallet-secondary hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-pressed:bg-white/9 aria-pressed:text-foreground"
+              >
+                <span className="grid size-6 place-items-center rounded-md bg-white/5">
+                  <Icon
+                    icon={option.icon}
+                    width={15}
+                    height={15}
+                    className={option.color}
+                    aria-hidden="true"
+                  />
                 </span>
-              )}
-            </button>
-          ))}
+                <span className="font-medium">{option.label}</span>
+                {renderAmount(domain, 'justify-self-end text-right')}
+                <Icon
+                  icon="lucide:check"
+                  width={14}
+                  height={14}
+                  className={cn('text-primary', value !== domain && 'invisible')}
+                  aria-hidden="true"
+                />
+              </button>
+            )
+          })}
         </div>
       </PopoverContent>
     </Popover>

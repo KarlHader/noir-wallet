@@ -64,6 +64,24 @@ test('restores a Move draft only for its wallet account and network', () => {
       maxSelected: false
     })
   }
+  expect(
+    initialMoveDraft({
+      ...input,
+      scope,
+      routeFrom: 'public',
+      routeTo: 'private',
+      intent: 'deposit'
+    })
+  ).toMatchObject({ from: 'public', to: 'private', assetId: null, amount: '' })
+  expect(
+    initialMoveDraft({
+      ...input,
+      scope,
+      routeFrom: 'private',
+      routeTo: 'shield',
+      intent: 'withdraw'
+    })
+  ).toEqual(draft)
 })
 
 test('defaults Shield Move and keeps preferences scoped to a supported account asset', () => {

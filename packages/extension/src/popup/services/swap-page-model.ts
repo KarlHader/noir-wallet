@@ -86,6 +86,7 @@ export function resolveSwapResultReturnPaths(input: {
       ...(sourceAssetId ? { assetId: sourceAssetId } : {}),
       from,
       to,
+      intent: input.privateTransfer ? 'withdraw' : 'deposit',
       mode: from
     })}`
   } else if (input.privateTransfer) {

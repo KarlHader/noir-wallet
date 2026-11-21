@@ -1,5 +1,7 @@
 import {
+  fixedTransferSide,
   normalizePrivateBalanceTransferInput,
+  resolveBalanceTransferIntent,
   resolveTransferDomains,
   type TransferDomain
 } from '@/popup/services/private-balance-transfer'
@@ -80,14 +82,16 @@ export function initialMoveDraft(input: {
   readonly routeTo: string | null
   readonly routeAssetId: string | null
   readonly entry?: string | null
+  readonly intent?: string | null
 }): MoveDraft {
-  const restored = readMoveDraft(input.state, input.scope)
-  if (restored) return restored
   const domains = resolveTransferDomains({
     mode: input.mode,
     from: input.routeFrom ?? input.mode,
     to: input.routeTo ?? 'shield'
   })
+  const fixedSide = fixedTransferSide(resolveBalanceTransferIntent(input.intent))
+  const restored = readMoveDraft(input.state, input.scope)
+  if (restored && (!fixedSide || restored[fixedSide] === domains[fixedSide])) return restored
   return {
     scope: input.scope,
     assetId: input.routeAssetId,

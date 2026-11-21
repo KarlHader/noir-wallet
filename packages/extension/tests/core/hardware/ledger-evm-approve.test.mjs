@@ -116,6 +116,7 @@ async function fixture() {
     assertExpectedChain: async () => {},
     getNativeBalance: async () => '1000000000000000000',
     getPendingNonce: async () => '7',
+    getTransactionCount: async () => '7',
     simulateCall: async () => '0x',
     estimateGas: async () => '70000',
     getMaximumPriorityFeePerGas: async () => '1000000000',

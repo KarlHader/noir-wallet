@@ -900,8 +900,38 @@ export class EvmTransferOrchestrator {
       const origin = graph.segments.find(segment => segment.role === 'origin')
       return [{ nonce, hash: origin?.evidence?.transactionHash }]
     })
-    const observe = (rpc: EvmNonceQueueRpc) =>
-      this.observeNonceQueue(rpc, sender, candidates, signal)
+    const observe = async (rpc: EvmNonceQueueRpc) => {
+      const queue = await this.observeNonceQueue(rpc, sender, candidates, signal)
+      const finalized = await this.repository.list({
+        scope,
+        chainId,
+        statuses: ['final'],
+        limit: 200
+      })
+      for (const graph of finalized) {
+        if (this.graphNonce(graph, chainId, sender) !== queue.nextNonce) continue
+        const origin = graph.segments.find(segment => segment.role === 'origin')
+        const evidence = origin?.evidence
+        if (
+          origin?.status !== 'final' ||
+          !evidence?.transactionHash ||
+          !evidence.blockHash ||
+          evidence.blockHeight === undefined
+        ) {
+          continue
+        }
+        const receipt = await rpc.getTransactionReceipt(evidence.transactionHash, signal)
+        if (
+          receipt?.status === 'success' &&
+          receipt.transactionHash === evidence.transactionHash &&
+          receipt.blockHash === evidence.blockHash &&
+          BigInt(receipt.blockNumber) === BigInt(evidence.blockHeight)
+        ) {
+          throw new EvmRpcError('invalid-response', 'EVM nonce count lags a confirmed transaction')
+        }
+      }
+      return queue
+    }
     try {
       if (this.rpc.withNonceQueueEndpoint) {
         return await this.rpc.withNonceQueueEndpoint(observe, signal)
@@ -923,11 +953,15 @@ export class EvmTransferOrchestrator {
     signal?: AbortSignal
   ): Promise<{ nextNonce: bigint; gapHighest: bigint | null; uncertainHead: boolean }> {
     const pendingNonce = BigInt(await rpc.getPendingNonce(sender, signal))
+    const latestNonce = BigInt(await rpc.getTransactionCount(sender, 'latest', signal))
     if (!candidates.some(candidate => candidate.nonce >= pendingNonce)) {
-      return { nextNonce: pendingNonce, gapHighest: null, uncertainHead: false }
+      return {
+        nextNonce: latestNonce > pendingNonce ? latestNonce : pendingNonce,
+        gapHighest: null,
+        uncertainHead: false
+      }
     }
 
-    const latestNonce = BigInt(await rpc.getTransactionCount(sender, 'latest', signal))
     const initialNextNonce = latestNonce > pendingNonce ? latestNonce : pendingNonce
     let includedFloor = initialNextNonce
     const pending = new Set<bigint>()

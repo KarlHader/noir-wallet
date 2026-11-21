@@ -3,10 +3,17 @@ import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-setting
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { useSettingsStore } from '@/store/settings-store'
 import { useWalletStore } from '@/store/wallet-store'
-import { readCachedPortfolio, refreshPortfolioFromCache } from './portfolio-cache'
+import type { Network } from '@/types/wallet'
+import { readCachedPortfolio } from './portfolio-cache'
+import {
+  balanceRefreshIsReady,
+  balanceRefreshRequestKey,
+  runBalanceRefresh,
+  type BalanceRefreshRequest
+} from './balance-refresh-adapters'
 
 export interface PortfolioSnapshotScope {
-  readonly network: string
+  readonly network: Network
   readonly walletId: string
   readonly accountId: string
   readonly endpointRuntimeKey: string
@@ -157,12 +164,16 @@ export function refreshPortfolioSnapshot(
     readonly forceDiscovery?: boolean
   } = {}
 ): Promise<boolean> {
+  return refreshBalanceSnapshot(key, { source: 'chain', force, ...options }).catch(() => false)
+}
+
+export function refreshBalanceSnapshot(
+  key: string,
+  request: BalanceRefreshRequest
+): Promise<boolean> {
   const entry = entries.get(key)
   if (!entry || !scopeIsActive(entry)) return Promise.resolve(false)
-  const chainIds = [
-    ...new Set([...(options.chainIds ?? []), ...(options.additionalChainIds ?? [])])
-  ].sort()
-  const requestKey = JSON.stringify([force, options.forceDiscovery === true, chainIds])
+  const requestKey = balanceRefreshRequestKey(request)
   const pending = entry.refreshes.get(requestKey)
   if (pending) return pending
   const run = Promise.resolve().then(async () => {
@@ -170,19 +181,19 @@ export function refreshPortfolioSnapshot(
     if (!entry.snapshot.model) {
       publish(entry, { ...entry.snapshot, status: 'loading', settled: false })
     }
-    try {
-      const model = await refreshPortfolioFromCache(entry.scope, entry.snapshot.model, {
-        forceRefresh: force,
-        allowStaleOnError: false,
-        forceDiscovery: options.forceDiscovery,
-        refreshChainIds: options.chainIds,
-        additionalChainIds: options.additionalChainIds
-      })
-      if (!scopeIsActive(entry)) return false
-      return model !== null && (await readPortfolioSnapshot(key, true)) !== null
-    } catch {
+    await runBalanceRefresh(entry.scope, entry.snapshot.model, request)
+    if (!scopeIsActive(entry)) return false
+    let model = await readPortfolioSnapshot(key, true)
+    if (!scopeIsActive(entry)) return false
+    if (!balanceRefreshIsReady(request, model) && request.source === 'near-confidential') {
+      model = await readPortfolioSnapshot(key, true)
+    }
+    if (!scopeIsActive(entry)) return false
+    if (!balanceRefreshIsReady(request, model)) {
+      if (request.source === 'near-confidential') throw new Error('Shield balance unavailable')
       return false
     }
+    return true
   })
   const operation = run.finally(() => {
     entry.refreshes.delete(requestKey)

@@ -5,7 +5,12 @@ import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
 import { useWalletStore } from '@/store/wallet-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
-import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import {
+  balanceTransferLabel,
+  fixedTransferSide,
+  getPrivateTransferChainIds,
+  resolveBalanceTransferIntent
+} from '@/popup/services/private-balance-transfer'
 import { getConfidentialZcashMoveRecipients } from '@/popup/services/zcash-self-move'
 import { resolveShieldNativeZecSwapAvailable } from '@/popup/services/shield-swap-zec-sources'
 import { useNavigate } from '@/popup/provider/Router'
@@ -34,7 +39,7 @@ function ShieldZcashMoveContent() {
   const currentWallet = useWalletStore(state => state.getCurrentWallet())
   const currentAccount = useWalletStore(state => state.getCurrentAccount())
   const { activeAccount, loading } = useActiveAccountNetworks()
-  const { model, refresh, readLatest } = useHomePortfolio(walletId, accountId)
+  const { model } = useHomePortfolio(walletId, accountId)
   const [state, setState] = useState({ reviewing: false, busy: false })
   const [picker, setPicker] = useState<'source' | 'destination' | null>(null)
   const chainId = getZcashChainId(network)
@@ -100,7 +105,14 @@ function ShieldZcashMoveContent() {
       : recipients.some(item => item.privacy === to))
   const available =
     accountMatches && params.get('assetId') === assetId && canRoute(source, destination)
-  const canReverse = canRoute(destination, source)
+  const intent = resolveBalanceTransferIntent(params.get('intent'))
+  const fixedSide = fixedTransferSide(intent)
+  const actionLabel = balanceTransferLabel(
+    intent ?? (destination === 'transparent' ? 'withdraw' : 'deposit')
+  )
+  const canReverse = !fixedSide && canRoute(destination, source)
+  const openSourcePicker = fixedSide === 'from' ? undefined : () => setPicker('source')
+  const openDestinationPicker = fixedSide === 'to' ? undefined : () => setPicker('destination')
 
   const updateDirection = (nextSource: ZcashMoveDomain, nextDestination: ZcashMoveDomain) => {
     const next = new URLSearchParams(params)
@@ -111,6 +123,7 @@ function ShieldZcashMoveContent() {
     setPicker(null)
   }
   const selectSource = (next: ZcashMoveDomain) => {
+    if (fixedSide === 'from' || (fixedSide === 'to' && next === destination)) return
     const nextDestination =
       next === destination
         ? source === 'confidential' && next !== 'confidential'
@@ -120,6 +133,7 @@ function ShieldZcashMoveContent() {
     if (canRoute(next, nextDestination)) updateDirection(next, nextDestination)
   }
   const selectDestination = (next: ZcashMoveDomain) => {
+    if (fixedSide === 'to') return
     if (canRoute(source, next)) updateDirection(source, next)
   }
   const addressFor = (domain: ZcashMoveDomain) =>
@@ -129,13 +143,15 @@ function ShieldZcashMoveContent() {
 
   return (
     <div className="page-container">
-      {!state.reviewing && <PageHeader title="Move" showBack backDisabled={state.busy} />}
+      {!state.reviewing && <PageHeader title={actionLabel} showBack backDisabled={state.busy} />}
       {available ? (
         source === 'confidential' ? (
           <ShieldWithdrawForm
             key={`${source}:${destination}`}
             active
             moveToOwnZcash
+            balanceAction={actionLabel}
+            lockMoveDestination={fixedSide === 'to'}
             entry={{
               assetId,
               networkId: chainId,
@@ -145,12 +161,10 @@ function ShieldZcashMoveContent() {
             onStateChange={setState}
             model={model}
             initialAsset={model?.assets.find(item => item.asset.id === assetId) ?? null}
-            refresh={refresh}
-            readProjection={readLatest}
             onSelectPublic={() => {}}
             onOpenSourcePicker={() => {}}
-            onMoveSourceSelect={() => setPicker('source')}
-            onMoveDestinationSelect={() => setPicker('destination')}
+            onMoveSourceSelect={openSourcePicker}
+            onMoveDestinationSelect={openDestinationPicker}
             onMoveReverse={canReverse ? () => updateDirection(destination, source) : undefined}
           />
         ) : (
@@ -158,8 +172,8 @@ function ShieldZcashMoveContent() {
             key={`${source}:${destination}`}
             embedded
             moveDestination={destination}
-            onMoveSourceSelect={() => setPicker('source')}
-            onMoveDestinationSelect={() => setPicker('destination')}
+            onMoveSourceSelect={openSourcePicker}
+            onMoveDestinationSelect={openDestinationPicker}
             onMoveReverse={canReverse ? () => updateDirection(destination, source) : undefined}
             onMoveStateChange={setState}
           />
@@ -169,8 +183,8 @@ function ShieldZcashMoveContent() {
           {loading
             ? 'Loading account…'
             : accountMatches
-              ? 'Move is unavailable for this account'
-              : 'Account changed. Reopen Move.'}
+              ? `${actionLabel} is unavailable for this account`
+              : 'Account changed. Reopen this transfer.'}
         </p>
       )}
       <Dialog open={available && picker !== null} onOpenChange={open => !open && setPicker(null)}>
@@ -178,12 +192,13 @@ function ShieldZcashMoveContent() {
           position="bottom"
           className="max-h-[80vh] min-h-0 overflow-y-auto bg-wallet-surface p-4 pb-6"
         >
-          <DialogTitle>{picker === 'source' ? 'Move from' : 'Move to'}</DialogTitle>
+          <DialogTitle>{picker === 'source' ? 'Select source' : 'Select destination'}</DialogTitle>
           <DialogDescription className="sr-only">Select a ZEC balance</DialogDescription>
           <div className="space-y-2">
             {options
               .filter(option => {
                 if (picker === 'destination') return canRoute(source, option)
+                if (fixedSide === 'to') return canRoute(option, destination)
                 const nextDestination =
                   option === destination
                     ? source === 'confidential' && option !== 'confidential'

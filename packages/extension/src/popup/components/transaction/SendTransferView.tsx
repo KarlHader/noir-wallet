@@ -86,9 +86,6 @@ export function SendTransferView({
   return (
     <>
       <SendFormView
-        domain="public"
-        availableDomains={['public']}
-        onDomainChange={() => {}}
         amountInput={
           <SendAmountInputCard
             ariaLabel={`${asset.symbol} amount`}

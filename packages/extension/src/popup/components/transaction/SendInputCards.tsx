@@ -103,25 +103,28 @@ function SendSourceSection({
   readonly maxButton: ReactNode
   readonly recipient?: ReactNode
   readonly sourceAction?: ReactNode
-  readonly domain: BalanceDomain
-  readonly availableDomains: readonly BalanceDomain[]
-  readonly onDomainChange: (domain: BalanceDomain) => void
+  readonly domain?: BalanceDomain
+  readonly availableDomains?: readonly BalanceDomain[]
+  readonly onDomainChange?: (domain: BalanceDomain) => void
   readonly sourceLabel?: string
   readonly disabled?: boolean
 }) {
   return (
     <>
-      <div className="order-1 flex min-w-0 items-center justify-between gap-3">
-        <SendFieldLabel>{sourceLabel}</SendFieldLabel>
-        {sourceAction ?? (
-          <BalanceDomainTabs
-            value={domain}
-            available={availableDomains}
-            onChange={onDomainChange}
-            disabled={disabled}
-          />
-        )}
-      </div>
+      {(sourceAction || (domain && availableDomains && onDomainChange)) && (
+        <div className="order-1 flex min-w-0 items-center justify-between gap-3">
+          <SendFieldLabel>{sourceLabel}</SendFieldLabel>
+          {sourceAction ??
+            (domain && availableDomains && onDomainChange ? (
+              <BalanceDomainTabs
+                value={domain}
+                available={availableDomains}
+                onChange={onDomainChange}
+                disabled={disabled}
+              />
+            ) : null)}
+        </div>
+      )}
       {recipient}
       <div className="order-3">
         <SendAmountRow
@@ -543,6 +546,8 @@ export function SendAssetHeader({
   nativeChain,
   blockchain,
   onSelectAsset,
+  disabled,
+  ariaLabel,
   variant = 'default'
 }: {
   readonly assetId?: string
@@ -552,6 +557,8 @@ export function SendAssetHeader({
   readonly nativeChain?: 'zcash' | 'bitcoin' | 'solana' | 'near'
   readonly blockchain?: string
   readonly onSelectAsset?: () => void
+  readonly disabled?: boolean
+  readonly ariaLabel?: string
   readonly variant?: 'default' | 'compact' | 'pill'
 }) {
   if (variant === 'pill') {
@@ -575,8 +582,9 @@ export function SendAssetHeader({
           <button
             type="button"
             onClick={onSelectAsset}
-            aria-label={`Select send asset, ${symbol} on ${networkName}`}
-            className="inline-flex h-9 max-w-full items-center gap-2 rounded-full bg-wallet-surface px-2.5 text-sm font-medium hover:bg-wallet-selected"
+            aria-label={ariaLabel ?? `Select send asset, ${symbol} on ${networkName}`}
+            disabled={disabled}
+            className="wallet-interactive inline-flex h-9 max-w-full min-w-0 items-center gap-2 rounded-full bg-wallet-surface px-2.5 text-sm font-medium enabled:hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
           >
             {content}
           </button>

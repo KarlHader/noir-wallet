@@ -6,6 +6,7 @@ interface PageHeaderProps {
   showBack?: boolean
   backDisabled?: boolean
   rightContent?: React.ReactNode
+  compactTitle?: boolean
   action?: {
     ariaLabel: string
     icon: React.ReactNode
@@ -19,6 +20,7 @@ export function PageHeader({
   showBack = false,
   backDisabled = false,
   rightContent,
+  compactTitle = false,
   action
 }: PageHeaderProps) {
   const { goBack } = useNavigate()
@@ -28,7 +30,11 @@ export function PageHeader({
   if (!visibleTitle && !showBack && !rightContent && !action) return null
 
   return (
-    <header className="h-14 flex items-center justify-center shrink-0 relative px-4">
+    <header
+      className={`h-14 flex items-center justify-center shrink-0 relative px-4${
+        compactTitle && rightContent ? ' max-[350px]:justify-start max-[350px]:pl-12' : ''
+      }`}
+    >
       {showBack && (
         <button
           type="button"

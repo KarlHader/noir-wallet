@@ -14,6 +14,7 @@ import {
 import type { TokenSelectorExtraItem } from '@/popup/components/tokens/TokenSelector'
 import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-manager-client'
 import {
+  getZcashTokenPickerChain,
   listShieldFundingAssets,
   shieldFundingSources,
   shieldPortfolioBalances,
@@ -21,6 +22,7 @@ import {
 } from '@/popup/services/shield-transfer'
 import {
   buildShieldSwapZecSourceOptions,
+  hasNativeZecConfidentialSwapRoute,
   parseShieldSwapZecSourceParam,
   resolveShieldNativeZecSwapAvailable,
   shieldSwapZecSourceParam,
@@ -141,10 +143,13 @@ import {
 } from '@/core/wallet/funding-source'
 import type { FundingSource } from '@/types/wallet'
 import { PageHeader } from '../../components/common/PageHeader'
-import { BalanceDomainTabs, type BalanceDomain } from '../../components/account/BalanceDomainTabs'
-import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import type { BalanceDomain } from '../../components/account/BalanceDomainTabs'
+import { TransactionModeDropdown } from '@/popup/components/transaction/TransactionModeDropdown'
+import {
+  balanceTransferLabel,
+  getPrivateTransferChainIds
+} from '@/popup/services/private-balance-transfer'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
-import { getEvmNetworkConfigs } from '@/config/networks'
 import { InlineError } from '../../components/common/InlineError'
 import { ZcashSyncProgress } from '../../components/common/ZcashSyncProgress'
 import { useZcashSyncReadStatus } from '@/popup/hooks/usePersistedExtensionContextSync'
@@ -462,6 +467,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const privateBalanceTransferRequested = Boolean(
     searchParams.get('balanceTransfer') === '1' && lockedAssetFlowRequested
   )
+  const balanceAction = privateBalanceTransferRequested
+    ? balanceTransferLabel(privateTransferRequested ? 'withdraw' : 'deposit')
+    : null
   const { isTransfer: isTransferAnalyticsFlow, kind: transferAnalyticsKind } =
     resolveSwapAnalyticsAction({
       privateTransferRequested,
@@ -610,12 +618,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const confidentialShieldAvailable =
     getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
-  const nativeZecConfidentialAvailable = Boolean(
-    CROSS_CHAIN_SEND_CAPABILITIES.evm &&
-    supportsEvmPrivateExecution(storageV2Account?.walletSource) &&
-    storageV2Account?.networks.some(
-      network => network.chain.id === getEvmNetworkConfigs(currentNetwork)[0]?.chainId
-    )
+  const nativeZecConfidentialAvailable = hasNativeZecConfidentialSwapRoute(
+    storageV2Account,
+    currentNetwork,
+    __ENABLED_CHAIN_FEATURE_FLAGS__
   )
   const nativeZecShieldAvailable = resolveShieldNativeZecSwapAvailable({
     network: currentNetwork,
@@ -696,6 +702,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const defaultShieldZecSource: ShieldSwapZecSourceKind =
     nativeZecShieldAvailable &&
+    nativeZecConfidentialAvailable &&
     searchParams.get('provider') !== 'near-confidential' &&
     !searchParams.has('assetId') &&
     !searchParams.has('source')
@@ -1141,10 +1148,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               key: SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID,
               assetId: SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID,
               symbol: 'ZEC',
-              chainName: 'Zcash Transparent',
+              ...getZcashTokenPickerChain(currentNetwork),
               zcashFundingSource: 'transparent' as const,
-              chainId: 'zec',
-              badgeBlockchain: 'zec',
               nativeIconChain: 'zcash',
               availableRaw: parseDisplayUnitAmount(
                 getFundingBalance(storeBalance, 'transparent').available,
@@ -1161,8 +1166,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         symbol: option.symbol,
         iconUrl: option.iconUrl,
         chainName: option.chainName,
+        sourceLabel: option.sourceLabel,
         zcashFundingSource: option.kind === 'native-shielded' ? ('shielded' as const) : undefined,
-        chainId: option.badgeBlockchain,
+        chainId: option.chainId,
         badgeBlockchain: option.badgeBlockchain,
         nativeIconChain: 'zcash',
         availableRaw: option.availableRaw,
@@ -1192,6 +1198,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         }))
     ]
   }, [
+    currentNetwork,
     nativeZecShieldAvailable,
     zcashKeySource,
     storeBalance,
@@ -1222,10 +1229,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           key,
           assetId: key,
           symbol: 'ZEC',
-          chainName: source === 'transparent' ? 'Zcash Transparent' : 'Zcash Shield',
+          ...getZcashTokenPickerChain(currentNetwork),
           zcashFundingSource: source,
-          chainId: 'zec',
-          badgeBlockchain: 'zec',
           nativeIconChain: 'zcash',
           availableRaw: parseDisplayUnitAmount(
             getFundingBalance(storeBalance, source).available,
@@ -1237,6 +1242,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       )
     })
   }, [
+    currentNetwork,
     hasManagedZcashDestination,
     nativeZecShieldAvailable,
     nativeZecPickerRows,
@@ -1439,10 +1445,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       cancelled = true
     }
   }, [effectiveWalletId, effectiveAccountId, walletSourcesScope, walletSourcesTraceId])
-
-  const readLatestPortfolio = useCallback(async () => {
-    await portfolioSnapshot.readLatest()
-  }, [portfolioSnapshot.readLatest])
 
   const refreshShieldPortfolio = useCallback(async () => {
     if (!walletSourcesScope) return
@@ -4254,7 +4256,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           ...(crossChainSendRequested
             ? { actionName: 'Cross-chain Send' }
             : privateTransferRequested || isPrivateFunding
-              ? { actionName: 'Transfer' }
+              ? { actionName: balanceAction ?? 'Transfer' }
               : {}),
           ...(privateFundingRequestId
             ? { approvalRequestIdAfterFunding: privateFundingRequestId }
@@ -5510,7 +5512,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       if (type === 'in' && shieldNativeZecSwap) {
         setShieldPickerNetwork(
           swap.isZecSource
-            ? 'zec'
+            ? getZcashTokenPickerChain(currentNetwork).chainId
             : swap.tokenIn
               ? (resolveSwapRecipientChainId(swap.tokenIn, currentNetwork) ?? 'all')
               : 'all'
@@ -5612,7 +5614,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                               ? 'transparent'
                               : 'shield'
                           ],
-                          lowBalance: BigInt(row.availableRaw) <= 0n,
+                          lowBalance:
+                            row.availableRaw === undefined || BigInt(row.availableRaw) <= 0n,
                           selected:
                             row.key === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
                               ? swap.isZecSource && fundingSource === 'shielded'
@@ -6134,7 +6137,18 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     handleSourceModeChange('private', true)
   }
   const handleBalanceDomainChange = (domain: BalanceDomain) => {
-    if (!availableBalanceDomains.includes(domain) || lastRequestedBalanceDomain.current === domain)
+    if (
+      !ordinarySwapRequested ||
+      viewStep !== 'input' ||
+      !availableBalanceDomains.includes(domain) ||
+      lastRequestedBalanceDomain.current === domain ||
+      balanceDomainPending ||
+      shieldBusy ||
+      shieldReviewing ||
+      isPreparingReview ||
+      isSending ||
+      resumingApprovalReview
+    )
       return
     lastRequestedBalanceDomain.current = domain
     startBalanceDomainTransition(() => {
@@ -6522,13 +6536,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             )
           },
           {
-            label: 'Receive in',
+            label: 'To',
             content: <ExecutionAccountBadge mode={destinationMode} />
           },
           ...(transferReview
             ? [
                 {
-                  label: 'Send To',
+                  label: 'Address',
                   content: (
                     <span className="font-mono text-muted" title={transferReview.recipient}>
                       {formatSortAddress(transferReview.recipient)}
@@ -6636,7 +6650,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
 
         return (
           <TransactionReviewView
-            title={publicPrivacySendRequested ? 'Review Send' : 'Review Transfer'}
+            title={`Review ${publicPrivacySendRequested ? 'Send' : (balanceAction ?? 'Transfer')}`}
             showTitle={false}
             variant="figma"
             asset={{
@@ -6673,7 +6687,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 </p>
               ) : undefined
             }
-            confirmLabel={quoteAcceptanceLabel ?? 'Confirm'}
+            confirmLabel={
+              quoteAcceptanceLabel ?? (balanceAction ? `Confirm ${balanceAction}` : 'Confirm')
+            }
             confirmTone={quoteAcceptanceLabel ? 'warning' : 'default'}
             confirming={isSending || isPreparingReview || refreshingMaximumReview}
             submitting={isSending}
@@ -6819,8 +6835,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           confirmLabel={
             crossChainSendRequested
               ? 'Confirm Send'
-              : privateBalanceTransferRequested
-                ? 'Confirm transfer'
+              : balanceAction
+                ? `Confirm ${balanceAction}`
                 : isPrivateFunding || privateTransferRequested
                   ? 'Confirm'
                   : undefined
@@ -6887,8 +6903,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
           hasSigningReview={Boolean(rheaSigningReview)}
           signingActionLabel={
-            privateBalanceTransferRequested
-              ? 'Confirm transfer'
+            balanceAction
+              ? `Confirm ${balanceAction}`
               : crossChainSendRequested
                 ? rheaSigningReview?.kind === 'solana-transaction' ||
                   rheaSigningReview?.kind === 'near-transaction-batch'
@@ -7473,9 +7489,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 ? 'Token approval'
                 : publicPrivacySendRequested || crossChainSendRequested
                   ? 'Confirm Send'
-                  : lockedAssetFlowRequested
-                    ? 'Transfer'
-                    : 'Confirm Swap'}
+                  : balanceAction
+                    ? `Confirm ${balanceAction}`
+                    : lockedAssetFlowRequested
+                      ? 'Transfer'
+                      : 'Confirm Swap'}
             </h1>
             <button
               type="button"
@@ -7493,6 +7511,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         viewStep !== 'review' &&
         !(resumingApprovalReview && viewStep === 'input') && (
           <PageHeader
+            compactTitle
             title={
               viewStep === 'approval-pending'
                 ? 'Token approval'
@@ -7506,29 +7525,25 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             }
             {...(viewStep === 'approval-pending' ? {} : getHeaderProps())}
             rightContent={
-              showSwapSettings && viewStep === 'input' ? (
-                <SwapSettingsButton
-                  disabled={balanceDomainPending || (confidentialShieldSwapActive && shieldBusy)}
-                  onClick={() => void handleOpenSlippageSetting()}
-                />
+              ordinarySwapRequested && viewStep === 'input' && !resumingApprovalReview ? (
+                <div className="flex items-center gap-1">
+                  <TransactionModeDropdown
+                    value={committedBalanceDomain}
+                    options={availableBalanceDomains}
+                    onChange={handleBalanceDomainChange}
+                    disabled={balanceDomainPending || shieldBusy || isPreparingReview || isSending}
+                  />
+                  {showSwapSettings && (
+                    <SwapSettingsButton
+                      disabled={
+                        balanceDomainPending || shieldBusy || isPreparingReview || isSending
+                      }
+                      onClick={() => void handleOpenSlippageSetting()}
+                    />
+                  )}
+                </div>
               ) : undefined
             }
-          />
-        )}
-      {ordinarySwapRequested &&
-        viewStep === 'input' &&
-        !resumingApprovalReview &&
-        !shieldReviewing &&
-        availableBalanceDomains.length > 1 && (
-          <BalanceDomainTabs
-            value={committedBalanceDomain}
-            pending={balanceDomainPending}
-            available={availableBalanceDomains}
-            onChange={handleBalanceDomainChange}
-            allowReselect
-            optimistic
-            disabled={shieldBusy || isPreparingReview}
-            className="shrink-0 justify-center px-4 pb-3 pt-3"
           />
         )}
       <div className="contents" inert={balanceDomainPending} aria-busy={balanceDomainPending}>
@@ -7543,7 +7558,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 portfolio={portfolio}
                 portfolioLoading={walletSourcesLoading}
                 tokens={shieldCatalogTokens}
-                onReadPortfolio={readLatestPortfolio}
                 onRefreshPortfolio={refreshShieldPortfolio}
                 amountFocusToken={amountFocusToken}
                 onStateChange={handleShieldFormStateChange}
@@ -7601,7 +7615,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           renderContent()
         ) : preparingSimplifiedTransfer ? (
           <TransactionReviewView
-            title={publicPrivacySendRequested ? 'Review Send' : 'Review Transfer'}
+            title={`Review ${publicPrivacySendRequested ? 'Send' : (balanceAction ?? 'Transfer')}`}
             showTitle={false}
             variant="figma"
             asset={
@@ -7637,7 +7651,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               ...(privateBalanceTransferRequested
                 ? [
                     {
-                      label: 'Receive in',
+                      label: 'To',
                       content: (
                         <ExecutionAccountBadge mode={isPrivateFunding ? 'private' : 'main'} />
                       )
@@ -7645,7 +7659,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   ]
                 : []),
               {
-                label: publicPrivacySendRequested ? 'Recipient' : 'Send To',
+                label: publicPrivacySendRequested
+                  ? 'Recipient'
+                  : balanceAction
+                    ? 'Address'
+                    : 'Send To',
                 content:
                   resolvedRecipientAddress || privateTransferRecipient ? (
                     <span
@@ -7686,7 +7704,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               ) : undefined
             }
             preparing={!transferPreparationStatusError}
-            confirmLabel="Confirm"
+            confirmLabel={balanceAction ? `Confirm ${balanceAction}` : 'Confirm'}
             confirmDisabled
             onCancel={publicPrivacySendRequested ? returnFromPublicPrivacySend : goBack}
             onConfirm={() => {}}

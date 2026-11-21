@@ -1,38 +1,46 @@
 import type { ReactNode } from 'react'
-import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
+import { WalletActionIcon, type WalletAction } from '@/popup/components/common/WalletActionIcon'
 import { Tooltip } from '@/popup/components/ui/tooltip'
 
-export function AssetBalanceRow({
-  label,
-  subtitle,
-  balance,
-  fiat,
-  pending,
-  actions = []
-}: {
+interface AssetDetailBalanceRowProps {
   readonly label: string
   readonly subtitle?: ReactNode
   readonly balance: ReactNode
   readonly fiat: string
   readonly pending?: ReactNode
+  readonly onSelect: () => void
   readonly actions?: readonly {
-    readonly action: 'send' | 'receive' | 'move' | 'swap'
+    readonly action: WalletAction
     readonly label: string
     readonly onClick: () => void
     readonly disabled?: boolean
   }[]
-}) {
+}
+
+export function AssetDetailBalanceRow({
+  label,
+  subtitle,
+  balance,
+  fiat,
+  pending,
+  onSelect,
+  actions = []
+}: AssetDetailBalanceRowProps) {
   return (
-    <div
-      role="group"
-      aria-label={label}
-      className="group/balance flex min-h-[62px] items-center justify-between gap-3 py-2.5"
-    >
-      <div className="min-w-0 flex-1">
+    <div className="group/balance relative flex min-h-[62px] items-center justify-between gap-3 py-2.5">
+      <button
+        type="button"
+        aria-label={`View ${label} balance`}
+        onClick={onSelect}
+        className="wallet-interactive absolute inset-0 rounded-md text-left hover:bg-white/[0.04] focus-visible:outline-2 focus-visible:outline-primary"
+      />
+      <div className="pointer-events-none relative min-w-0 flex-1">
         <p className="text-sm font-medium">{label}</p>
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted">{subtitle}</div>
+        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted">
+          {subtitle && <span className="flex min-w-0 items-center gap-1.5">{subtitle}</span>}
+        </div>
       </div>
-      <div className="relative min-w-0 max-w-[48%] text-right">
+      <div className="pointer-events-none relative min-w-0 max-w-[48%] text-right">
         <div
           className={
             actions.length
@@ -53,7 +61,7 @@ export function AssetBalanceRow({
                   aria-label={actionLabel}
                   onClick={onClick}
                   disabled={disabled}
-                  className="wallet-interactive flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-card hover:brightness-110 focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40"
+                  className="wallet-interactive flex size-8 shrink-0 items-center justify-center rounded-lg bg-card hover:brightness-110 focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40"
                 >
                   <WalletActionIcon action={action} size={18} />
                 </button>

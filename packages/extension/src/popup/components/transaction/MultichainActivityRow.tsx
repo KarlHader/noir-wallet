@@ -33,9 +33,11 @@ import { getActivityAddressAlias } from '@/popup/services/activity-address-alias
 import { SMALL_TRANSFER_WARNING } from '@/popup/services/activity-small-transfer-warning'
 import { Tooltip } from '../ui/tooltip'
 import type { TransactionAssetAmount } from '@/core/transactions/domain'
+import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
 
 interface MultichainActivityRowProps {
   readonly item: ActivityItem
+  readonly perspective?: ActivityPerspective
   readonly assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>
   readonly chainMetadata: ReadonlyMap<string, ActivityChainMetadata>
   readonly networkName: string
@@ -119,28 +121,24 @@ function ActivityAvatar({
   )
 }
 
-function signedAmount(item: ActivityItem, amount: ActivityDisplayAmount): string {
-  const direction = item.snapshot?.direction
-  const sign =
-    item.kind === 'receive' || direction === 'incoming' ? '+' : direction === 'outgoing' ? '−' : ''
-  return `${sign}${amount.formatted} ${amount.symbol}`
-}
-
 function SwapActivityRow({
   item,
   presentation,
+  perspective,
   onClick,
   smallTransferWarning
 }: {
   readonly item: ActivityItem
   readonly presentation: ActivitySwapPresentation
+  readonly perspective?: ActivityPerspective
   readonly onClick?: (item: ActivityItem) => void
   readonly smallTransferWarning?: boolean
 }) {
   const status = getActivityStatusPresentation(item)
   const sourceSymbol = presentation.source?.symbol ?? 'Asset'
   const destinationSymbol = presentation.destination?.symbol ?? 'Asset'
-  const action = getActivityRouteTitle(item, presentation)
+  const action = getActivityRouteTitle(item, presentation, perspective)
+  const focus = getActivityAction(item, perspective, presentation).side
   const isShieldSend =
     item.snapshot?.shield?.operation === 'withdraw' && item.snapshot.direction === 'outgoing'
   const route = `${presentation.sourceNetwork} → ${presentation.destinationNetwork}`
@@ -176,7 +174,7 @@ function SwapActivityRow({
             <p className="min-w-0 truncate text-sm font-medium">
               {presentation.isExternalDeposit
                 ? `${action} ${destinationSymbol}`
-                : action === 'Account Transfer' || action === 'Move'
+                : action === 'Transfer' || focus !== 'none'
                   ? action
                   : `${action} ${sourceSymbol} → ${destinationSymbol}`}
             </p>
@@ -194,7 +192,7 @@ function SwapActivityRow({
             )}
         </div>
         <div className="w-full min-w-0 justify-self-end text-right">
-          {presentation.isExternalDeposit ? (
+          {presentation.isExternalDeposit || focus === 'destination' ? (
             <p
               className={cn(
                 'truncate whitespace-nowrap font-sans text-sm font-medium tabular-nums',
@@ -203,21 +201,25 @@ function SwapActivityRow({
             >
               {presentation.destination
                 ? `${presentation.destinationIsSettled ? '+' : 'Expected +'}${presentation.destination.formatted} ${destinationSymbol}`
-                : '—'}
+                : presentation.source
+                  ? `+${presentation.source.formatted} ${sourceSymbol}`
+                  : '—'}
             </p>
           ) : (
             <>
               <p className="truncate whitespace-nowrap font-sans text-sm font-medium tabular-nums">
                 {presentation.source ? `−${presentation.source.formatted} ${sourceSymbol}` : '—'}
               </p>
-              {presentation.destination && !presentation.hideDestinationCredit && (
-                <p className="truncate whitespace-nowrap font-sans text-[11px] text-muted tabular-nums">
-                  {isShieldSend
-                    ? 'Recipient receives '
-                    : `${presentation.destinationIsSettled ? 'Received' : 'Expected'} +`}
-                  {presentation.destination.formatted} {destinationSymbol}
-                </p>
-              )}
+              {presentation.destination &&
+                !presentation.hideDestinationCredit &&
+                (focus !== 'source' || isShieldSend || !isOwnedAccountTransfer(presentation)) && (
+                  <p className="truncate whitespace-nowrap font-sans text-[11px] text-muted tabular-nums">
+                    {isShieldSend
+                      ? 'Recipient receives '
+                      : `${presentation.destinationIsSettled ? 'Received' : 'Expected'} +`}
+                    {presentation.destination.formatted} {destinationSymbol}
+                  </p>
+                )}
             </>
           )}
           {showStatus && (
@@ -239,6 +241,7 @@ function SwapActivityRow({
 
 export function MultichainActivityRow({
   item,
+  perspective,
   assetMetadata,
   chainMetadata,
   networkName,
@@ -253,7 +256,20 @@ export function MultichainActivityRow({
   const observed =
     getActivityAssetEffects(item) !== undefined &&
     !(item.kind === 'transfer' && item.snapshot?.direction === 'self')
-  const summaryChange = changes.find(change => !change.isRaw)
+  const accountRoute = {
+    sourceAccountMode: item.snapshot?.sender?.address
+      ? executionAddressModes?.get(item.snapshot.sender.address.toLowerCase())
+      : undefined,
+    destinationAccountMode: item.snapshot?.recipient?.address
+      ? executionAddressModes?.get(item.snapshot.recipient.address.toLowerCase())
+      : undefined
+  }
+  const actionSide = getActivityAction(item, perspective, accountRoute).side
+  const preferredDirection =
+    actionSide === 'destination' ? 'incoming' : actionSide === 'source' ? 'outgoing' : undefined
+  const summaryChange =
+    changes.find(change => !change.isRaw && change.direction === preferredDirection) ??
+    changes.find(change => !change.isRaw)
   const primary =
     (observed ? summaryChange : undefined) ??
     resolveActivityDisplayAmount(item.snapshot?.primaryAmount, assetMetadata)
@@ -269,6 +285,7 @@ export function MultichainActivityRow({
     return (
       <SwapActivityRow
         item={item}
+        perspective={perspective}
         presentation={swap}
         onClick={onClick}
         smallTransferWarning={smallTransferWarning}
@@ -283,11 +300,20 @@ export function MultichainActivityRow({
     primary?.symbol,
     counter?.symbol,
     resolvedNetworkName,
-    chainId
+    chainId,
+    perspective,
+    item.kind === 'transfer'
+      ? {
+          ...accountRoute,
+          sourceNetwork: resolvedNetworkName,
+          destinationNetwork: resolvedNetworkName
+        }
+      : undefined
   )
   const showStatus = item.status !== 'final'
   const isCancelled = item.status === 'failed' && item.failureCode === 'user-rejected'
   const isIncoming = item.kind === 'receive' || item.snapshot?.direction === 'incoming'
+  const displayIncoming = actionSide === 'destination' || (actionSide === 'none' && isIncoming)
   const accessibleTitle =
     item.kind === 'contract-call' && interaction?.family === 'evm' ? 'Contract call' : text.title
   const showChanges = observed && summaryChange !== undefined
@@ -360,10 +386,12 @@ export function MultichainActivityRow({
             <p
               className={cn(
                 'flex items-center justify-end gap-1 break-all font-sans text-sm font-medium tabular-nums',
-                isIncoming && 'text-primary'
+                displayIncoming && 'text-primary'
               )}
             >
-              {primary ? signedAmount(item, primary) : '—'}
+              {primary
+                ? `${displayIncoming ? '+' : actionSide === 'source' ? '−' : ''}${primary.formatted} ${primary.symbol}`
+                : '—'}
             </p>
           ) : null}
           {showStatus ? (

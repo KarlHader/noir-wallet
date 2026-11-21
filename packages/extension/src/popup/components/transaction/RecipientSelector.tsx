@@ -20,7 +20,8 @@ import { ChainIcon } from '../common/ChainIcon'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { ListSkeleton } from '../ui/skeleton'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
+import { Tabs, TabsContent } from '../ui/tabs'
+import { PageTabsList, PageTabsTrigger } from '../common/PageTabs'
 import { Tooltip } from '../ui/tooltip'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
 import {
@@ -31,9 +32,6 @@ import {
 } from './recipient-selector-model'
 
 const EMPTY_ADDRESSES: readonly string[] = Object.freeze([])
-const RECIPIENT_TAB_CLASS =
-  'relative h-10 rounded-none border-0 bg-transparent px-3 text-sm text-muted shadow-none after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:after:bg-primary dark:data-[state=active]:border-0 dark:data-[state=active]:bg-transparent'
-
 function addressSchemeLabel(scheme: string): string | null {
   const labels: Readonly<Record<string, string>> = Object.freeze({
     'zcash-shielded-unified': 'Shield',
@@ -200,14 +198,10 @@ export function RecipientSelector({
           startContent={<Icon icon="lucide:search" width={18} height={18} className="text-muted" />}
         />
       </div>
-      <TabsList className="grid h-10 min-w-0 w-full grid-cols-2 rounded-none border-b border-border bg-transparent p-0">
-        <TabsTrigger value="accounts" className={RECIPIENT_TAB_CLASS}>
-          My Wallets
-        </TabsTrigger>
-        <TabsTrigger value="address-book" className={RECIPIENT_TAB_CLASS}>
-          Address Book
-        </TabsTrigger>
-      </TabsList>
+      <PageTabsList className="w-full border-b border-white/8 px-3">
+        <PageTabsTrigger value="accounts">My Wallets</PageTabsTrigger>
+        <PageTabsTrigger value="address-book">Address Book</PageTabsTrigger>
+      </PageTabsList>
 
       <TabsContent
         value="accounts"

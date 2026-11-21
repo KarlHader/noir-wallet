@@ -235,12 +235,15 @@ export function resolveNearConfidentialZecRow(
   if (!holding) return null
   const chain = model.chains.find(({ chain }) => chain.id === mainnetZcashChain.id)
   if (!chain) return null
-  const hasNativeRow = chain.assets.some(asset => asset.asset.id === holding.assetId)
+  const hasNativeRow = chain.assets.some(
+    asset => asset.asset.id === holding.assetId && asset.asset.chainId === chain.chain.id
+  )
 
   const mergedHolding = standalone.find(
-    ({ entry }) =>
+    ({ entry, chain: holdingChain }) =>
       entry.asset.protocolAssetId === holding.protocolAssetId &&
-      entry.asset.availableRaw === holding.availableRaw
+      entry.asset.availableRaw === holding.availableRaw &&
+      holdingChain?.chain.id === chain.chain.id
   )
   if (holding.availableRaw === '0' ? !hasNativeRow : !mergedHolding) return null
   const registeredAsset = mainnetAssets.get(holding.assetId)

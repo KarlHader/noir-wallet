@@ -8,6 +8,16 @@ import { getAssetDomainRaw, summarizeAssetDomainsUsd, type AssetDomain } from '.
 
 export type HomePortfolioTotalStatus = 'loading' | 'ready' | 'partial' | 'unavailable'
 
+const homePrices = new Map<'mainnet' | 'testnet', AssetPriceReadModel>()
+
+export function readHomePrices(network: 'mainnet' | 'testnet'): AssetPriceReadModel | null {
+  return homePrices.get(network) ?? null
+}
+
+export function rememberHomePrices(network: 'mainnet' | 'testnet', prices: AssetPriceReadModel) {
+  if (prices.status !== 'error') homePrices.set(network, prices)
+}
+
 export function resolveHomePortfolioTotalStatus(
   model: PortfolioReadModel | null,
   loadStatus: 'loading' | 'ready' | 'error',

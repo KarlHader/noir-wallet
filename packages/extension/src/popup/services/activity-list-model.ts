@@ -4,6 +4,40 @@ import { resolveActivityChainId } from '@/popup/components/transaction/activity-
 
 const ZCASH_CHAIN_IDS = new Set([getZcashChainId('mainnet'), getZcashChainId('testnet')])
 
+export const activityStatusLabels = {
+  all: 'All status',
+  pending: 'Pending',
+  completed: 'Completed',
+  failed: 'Failed',
+  cancelled: 'Cancelled'
+} as const
+
+export type ActivityStatusFilter = keyof typeof activityStatusLabels
+
+const recentActivity = new Map<string, ActivityReadModel>()
+
+export function readActivitySnapshot(key: string): ActivityReadModel | null {
+  return recentActivity.get(key) ?? null
+}
+
+export function rememberActivitySnapshot(key: string, model: ActivityReadModel) {
+  recentActivity.delete(key)
+  recentActivity.set(key, model)
+  if (recentActivity.size > 8) {
+    const oldest = recentActivity.keys().next()
+    if (!oldest.done) recentActivity.delete(oldest.value)
+  }
+}
+
+function getActivityFilterStatus(item: ActivityItem): Exclude<ActivityStatusFilter, 'all'> {
+  if (item.reconfirming) return 'pending'
+  if (item.status === 'final') return 'completed'
+  if (item.status !== 'failed') return 'pending'
+  return item.failureCode === 'cancelled' || item.failureCode === 'user-rejected'
+    ? 'cancelled'
+    : 'failed'
+}
+
 export function isActivityModelForScope(
   model: ActivityReadModel | null | undefined,
   walletId: string | null,
@@ -32,6 +66,7 @@ export function filterActivityItems(input: {
   readonly selectedChainIds: readonly string[]
   readonly assetId?: string
   readonly domain?: 'public' | 'private' | 'shield'
+  readonly status?: ActivityStatusFilter
   readonly accountMode?: 'main' | 'private'
   readonly confidentialIntentsOnly?: boolean
   readonly shieldProvider?: 'near-confidential' | 'zcash-shield'
@@ -47,6 +82,9 @@ export function filterActivityItems(input: {
     }
   }
   return input.items.filter(item => {
+    if (input.status && input.status !== 'all' && getActivityFilterStatus(item) !== input.status) {
+      return false
+    }
     const primaryAssetId = item.snapshot?.primaryAmount?.assetId
     const counterAssetId = item.snapshot?.counterAmount?.assetId
     const assetMatches =

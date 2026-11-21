@@ -368,6 +368,30 @@ html[data-surface='side-panel'] #root {
   pointer-events: none !important;
 }
 
+@keyframes swap-quote-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+.swap-quote-shimmer {
+  background-image: linear-gradient(90deg, var(--muted) 35%, #fff 50%, var(--muted) 65%);
+  background-size: 250% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: swap-quote-shimmer 1.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swap-quote-shimmer {
+    animation: none;
+    color: var(--muted);
+  }
+}
+
 /* Custom Tabs with short underline */
 .tab-trigger-custom {
   position: relative;
@@ -386,7 +410,7 @@ html[data-surface='side-panel'] #root {
   transition: width 0.2s ease;
 }
 
-.tab-trigger-custom[data-state='active']::after {
+.tab-trigger-custom:is([data-state='active'], [aria-selected='true'])::after {
   width: 60%;
 }
 

@@ -21,7 +21,7 @@ export function ShieldProviderDialog({
 }: {
   readonly open: boolean
   readonly onClose: () => void
-  readonly selected: ShieldProvider
+  readonly selected: ShieldProvider | null
   readonly available: Readonly<Record<ShieldProvider, boolean>>
   readonly onSelect: (provider: ShieldProvider) => void
   readonly networks: readonly ChainDefinition[]

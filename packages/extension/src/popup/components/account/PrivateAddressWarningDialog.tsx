@@ -10,7 +10,7 @@ import {
 } from '../ui/dialog'
 
 export const PRIVATE_ADDRESS_WARNING =
-  'Do not send funds directly to this Private address. Direct transfers can expose the link to the sender. Use Move instead.'
+  'Use Deposit to fund this Private address. A direct transfer can expose the link to the sender.'
 
 export function PrivateAddressWarningDialog({
   address,

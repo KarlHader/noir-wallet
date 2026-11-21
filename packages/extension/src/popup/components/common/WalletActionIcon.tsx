@@ -1,12 +1,28 @@
+import { Icon } from '@iconify/react'
+
+export type WalletAction = 'send' | 'receive' | 'deposit' | 'withdraw' | 'swap'
+
 export function WalletActionIcon({
   action,
   size = 20,
   className
 }: {
-  readonly action: 'send' | 'receive' | 'move' | 'swap'
+  readonly action: WalletAction
   readonly size?: number
   readonly className?: string
 }) {
+  if (action === 'deposit' || action === 'withdraw') {
+    return (
+      <Icon
+        icon={action === 'deposit' ? 'lucide:arrow-down-to-line' : 'lucide:arrow-up-from-line'}
+        width={size}
+        height={size}
+        className={className}
+        aria-hidden="true"
+      />
+    )
+  }
+
   return (
     <svg
       aria-hidden="true"
@@ -19,13 +35,6 @@ export function WalletActionIcon({
       {action === 'send' && <path d="M4 4H16V16M16 4L4 16" stroke="currentColor" strokeWidth="2" />}
       {action === 'receive' && (
         <path d="M4 4V16H16M4 16L16 4" stroke="currentColor" strokeWidth="2" />
-      )}
-      {action === 'move' && (
-        <path
-          d="M18.999 12.715V15.271H7.232L9.978 18.467L8.015 20L2 12.715H18.999ZM18.999 8.158H2.001V5.729H13.769L11.023 2.533L12.984 1L18.999 8.158Z"
-          fill="currentColor"
-          transform="translate(-.5 -.5)"
-        />
       )}
       {action === 'swap' && (
         <g stroke="currentColor" strokeWidth="2" transform="translate(1 1)">

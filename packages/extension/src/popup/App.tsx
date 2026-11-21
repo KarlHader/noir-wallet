@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
+import { Navigate } from 'react-router-dom'
 import { ToastContainer } from './components/common/ToastContainer'
 import { TestnetModeBanner } from './components/common/TestnetModeBanner'
 import { RouterProvider, Routes, Route, useLocation, useNavigate } from './provider/Router'
@@ -18,6 +19,7 @@ import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { parseTransactionId } from '@/core/transactions/domain'
 import { isSidePanelSurface } from '@/lib/extension-display-mode'
 import { initializeAddressBook } from '@/store/address-book-store'
+import { resolveLegacyShieldFundsPath } from './services/home-navigation'
 
 // Pages
 import { Home } from './pages/Home'
@@ -51,7 +53,6 @@ import { Transfer } from './pages/transactions/Transfer'
 import { TransactionResultPage } from './pages/transactions/TransactionResultPage'
 import { AssetDetail } from './pages/portfolio/AssetDetail'
 import { ShieldProviderDetail } from './pages/portfolio/ShieldProviderDetail'
-import { ShieldFundsPage } from './pages/portfolio/ShieldFundsPage'
 import { ShieldWithdrawPage } from './pages/portfolio/ShieldWithdrawPage'
 import { ShieldZcashMovePage } from './pages/portfolio/ShieldZcashMovePage'
 import { ReceivePage } from './pages/portfolio/ReceivePage'
@@ -117,6 +118,11 @@ const multichainSendEnabled =
 const evmNetworkSettingsEnabled = resolveEvmFeatureRuntimePolicy(
   __ENABLED_CHAIN_FEATURE_FLAGS__
 ).newOperationsEnabled
+
+function LegacyShieldFundsRedirect() {
+  const { search } = useLocation()
+  return <Navigate replace to={resolveLegacyShieldFundsPath(search)} />
+}
 
 // Entry component for adding wallet (sets flowMode and redirects)
 function AddWalletEntry() {
@@ -294,7 +300,7 @@ function AppRoutes() {
 
       <Route path="/dapp-connections" element={<DAppConnections />} />
       <Route path="/shield-provider" element={<ShieldProviderDetail />} />
-      <Route path="/shield-funds" element={<ShieldFundsPage />} />
+      <Route path="/shield-funds" element={<LegacyShieldFundsRedirect />} />
       <Route path="/shield-withdraw" element={<ShieldWithdrawPage />} />
       <Route path="/shield-zcash-move" element={<ShieldZcashMovePage />} />
       <Route path="/receive" element={<ReceivePage />} />

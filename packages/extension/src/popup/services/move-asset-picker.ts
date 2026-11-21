@@ -59,6 +59,7 @@ export function listMoveSameChainDestinationAssets(input: {
 
 export function listMoveAssetPickerRows(input: {
   readonly assets: readonly MoveAsset[]
+  readonly includeEmpty?: boolean
   readonly from: TransferDomain
   readonly network: Network
   readonly prices: AssetPriceReadModel | null
@@ -83,7 +84,7 @@ export function listMoveAssetPickerRows(input: {
           ? getConfidentialAvailableForAsset(input.shieldBalances, managed.protocolAssetId)
           : null
         : getTransferDomainBalanceRaw(item.asset, input.from)
-    if (sourceRaw === null || BigInt(sourceRaw) === 0n) return []
+    if (sourceRaw === null || (!input.includeEmpty && BigInt(sourceRaw) === 0n)) return []
 
     const priceUsd =
       findAssetPrice(input.prices, item.asset.asset.id)?.priceUsd ??

@@ -336,7 +336,7 @@ export async function estimateConfidentialTransferMaximum(input: {
     input.asset.asset.kind === 'native' ? null : input.asset.asset.reference
   )
   const token = preferWalletEvmQuoteToken(input.asset, catalogToken)
-  if (!token) throw new Error('Move source asset could not be mapped to a quote token')
+  if (!token) throw new Error('This asset is unavailable for the transfer')
   return estimateRheaRouteMaximum({
     source: createNativeTransferSource(input),
     tokenIn: token,

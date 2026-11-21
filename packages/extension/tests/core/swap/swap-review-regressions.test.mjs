@@ -801,11 +801,21 @@ it('lists Intents and native Shield ZEC as separate selectable sources with dist
       sources: [
         {
           asset: {
-            asset: { id: 'wallet-zec-intents', chainId: 'near:mainnet', kind: 'token' },
+            asset: {
+              id: 'wallet-zec-intents',
+              chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+              kind: 'native'
+            },
             metadata: { symbol: 'ZEC', decimals: 8, name: 'ZEC' },
             balance: { totalRaw: '0' }
           },
-          chain: { chain: { id: 'near:mainnet', family: 'near', displayName: 'NEAR' } },
+          chain: {
+            chain: {
+              id: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+              family: 'zcash',
+              displayName: 'Zcash'
+            }
+          },
           managed: { protocolAssetId: 'nep141:zec.omft.near', assetId: 'wallet-zec-intents' }
         }
       ],
@@ -837,11 +847,15 @@ it('lists Intents and native Shield ZEC as separate selectable sources with dist
     assert.equal(options.length, 2)
     assert.equal(options[0].selectionId, SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID)
     assert.equal(options[0].availableRaw, '120000000')
-    assert.equal(options[0].badgeBlockchain, 'near')
-    assert.equal(options[0].chainName, 'NEAR Confidential')
+    assert.equal(options[0].intentsWalletAssetId, 'wallet-zec-intents')
+    assert.equal(options[0].sourceLabel, 'NEAR Confidential')
     assert.equal(options[1].selectionId, SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID)
     assert.equal(options[1].availableRaw, '40000000')
-    assert.equal(options[1].badgeBlockchain, 'zec')
+    for (const option of options) {
+      assert.equal(option.chainId, input.sources[0].chain.chain.id)
+      assert.equal(option.chainName, 'Zcash')
+      assert.equal(option.badgeBlockchain, 'zec')
+    }
     const pendingOnly = buildShieldSwapZecSourceOptions({
       ...input,
       portfolio: {

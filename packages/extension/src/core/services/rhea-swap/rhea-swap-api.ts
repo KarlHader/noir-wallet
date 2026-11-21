@@ -8,6 +8,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const MAXIMUM_RESPONSE_BYTES = 2 * 1024 * 1024
+const MAXIMUM_TOKEN_CATALOG_RESPONSE_BYTES = 8 * 1024 * 1024
 const DEFAULT_RETRIES = 2
 
 interface RheaSwapApiConfig {
@@ -178,7 +179,7 @@ export class RheaSwapApi {
           })
           const text = await readBoundedResponseText(
             result,
-            MAXIMUM_RESPONSE_BYTES,
+            stage === 'tokens' ? MAXIMUM_TOKEN_CATALOG_RESPONSE_BYTES : MAXIMUM_RESPONSE_BYTES,
             () =>
               new RheaSwapHttpError(
                 'INVALID_API_RESPONSE',
