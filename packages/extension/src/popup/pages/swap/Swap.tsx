@@ -4270,7 +4270,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         resultReturnPath
       )
       navigate('/transaction-result', {
-        replace: crossChainSendRequested || publicPrivacySendRequested
+        replace: ordinarySwapRequested || crossChainSendRequested || publicPrivacySendRequested
       })
     },
     [
@@ -4283,6 +4283,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       setResult,
       privateTransferRequested,
       isPrivateFunding,
+      ordinarySwapRequested,
       crossChainSendRequested,
       publicPrivacySendRequested,
       privateFundingRequestId,
