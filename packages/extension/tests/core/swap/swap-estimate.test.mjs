@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { estimateSwapOutputFromPrices } from '../../../src/popup/components/swap/swap-estimate.ts'
+import { estimateSwapOutputFromPrices } from '../../../src/popup/services/swap-estimate.ts'
 
 test.describe('Swap provisional price estimate', () => {
   test('estimates the output from validated token catalog prices', () => {

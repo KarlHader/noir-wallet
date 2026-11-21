@@ -12,9 +12,9 @@ import {
   getActivityTransactionReferences,
   isActivityTransactionHash
 } from '../../../../src/popup/services/activity-transaction-references.ts'
-import { buildMyAccountRecipientGroups } from '../../../../src/popup/components/transaction/recipient-selector-model.ts'
+import { buildMyAccountRecipientGroups } from '../../../../src/popup/services/recipient-selector-model.ts'
 import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastructure/activity/zcash-v1-activity-source.ts'
-import { getActivityFailureLabel } from '../../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+import { getActivityFailureLabel } from '../../../../src/popup/services/multichain-activity-presentation.ts'
 import { isActivityModelForScope } from '../../../../src/popup/services/activity-list-model.ts'
 
 const expiredSend = {

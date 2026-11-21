@@ -1,24 +1,49 @@
 import { Icon } from '@iconify/react'
 import type { ComponentProps, ReactNode } from 'react'
 import { formatSortAddress } from '@/lib/format'
-import { formatTokenQuantity } from '@/lib/number-format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import { ChainSelector } from '../common/ChainSelector'
 import {
-  TransactionReviewView,
+  SendReviewDialog,
   type TransactionReviewAsset,
   type TransactionReviewRow
 } from './TransactionReviewView'
 import {
-  SendAssetHeader,
-  SendAmountInputCard,
+  type SendFormAdapter,
   SendFormActions,
-  SendFormView,
-  SendFieldLabel,
   SendRouteInfoCard,
-  SendRecipientAddress,
-  SendRecipientInputCard
+  SendRecipientAddress
 } from './SendInputCards'
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
+import { SendFormSlot } from './SendFormLayout'
+
+type DestinationPicker = Pick<
+  ComponentProps<typeof ChainSelector>,
+  'open' | 'onOpenChange' | 'selectedId' | 'options' | 'onSelect'
+>
+
+export function SendTransferScreen({
+  form,
+  review,
+  destinationPicker
+}: {
+  readonly form: ComponentProps<typeof SendFormSlot>
+  readonly review: ComponentProps<typeof SendReviewDialog>
+  readonly destinationPicker?: DestinationPicker
+}) {
+  return (
+    <>
+      <SendFormSlot {...form} />
+      {destinationPicker && (
+        <ChainSelector
+          {...destinationPicker}
+          enabledFirst
+          label={`Networks for ${form.adapter.asset.symbol}`}
+        />
+      )}
+      <SendReviewDialog {...review} />
+    </>
+  )
+}
 
 interface SendTransferReviewState {
   readonly recipient: string
@@ -37,10 +62,9 @@ interface SendTransferReviewState {
 export interface SendTransferViewState {
   readonly family: 'solana' | 'near' | 'bitcoin'
   readonly asset: Pick<
-    ComponentProps<typeof SendAssetHeader>,
+    SendFormAdapter['asset'],
     'assetId' | 'symbol' | 'icon' | 'nativeChain' | 'blockchain'
   >
-  readonly priceUsd: string | null
   readonly networkName: string
   readonly recipientPlaceholder: string
   readonly invalidRecipientMessage: string
@@ -74,184 +98,149 @@ export interface SendTransferViewState {
 
 export function SendTransferView({
   state,
-  routeInfo
+  shareForm = false,
+  routeInfo,
+  networkSelection
 }: {
   readonly state: SendTransferViewState
+  readonly shareForm?: boolean
   readonly routeInfo?: ComponentProps<typeof SendRouteInfoCard>
+  readonly networkSelection?: {
+    readonly trigger: Omit<SendFormAdapter['recipient']['network'], 'name'>
+    readonly picker: DestinationPicker
+  }
 }) {
   const { asset, family, networkName, feeSymbol, review, selectedRecipient, approving } = state
   const titleId = `${family}-send-review-title`
   const balanceKnown = state.balanceKnown ?? true
 
   return (
-    <>
-      <SendFormView
-        amountInput={
-          <SendAmountInputCard
-            ariaLabel={`${asset.symbol} amount`}
-            value={state.amount}
-            onChange={state.setInputAmount}
-            available={state.availableDisplay}
-            symbol={asset.symbol}
-            priceUsd={state.priceUsd}
-            inline
-          />
-        }
-        assetSelector={<SendAssetHeader {...asset} networkName={networkName} variant="pill" />}
-        balance={
-          <span title={balanceKnown ? state.availableDisplay : undefined}>
-            {balanceKnown ? formatTokenQuantity(state.availableDisplay) : '—'}
-          </span>
-        }
-        maxButton={
-          <button
-            type="button"
-            aria-label="Max"
-            aria-pressed={state.maxSelected}
-            disabled={state.maxDisabled}
-            onClick={state.selectMaximum}
-            className="rounded-md bg-white/10 px-2 py-1 font-medium text-muted aria-pressed:bg-primary/15 aria-pressed:text-primary disabled:opacity-40"
-          >
-            Max
-          </button>
-        }
-        recipient={
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <SendFieldLabel>Send to</SendFieldLabel>
-              <span>{networkName}</span>
-            </div>
-            <SendRecipientInputCard
-              id={`${family}-send-recipient`}
-              value={state.recipient}
-              onChange={state.setInputRecipient}
-              placeholder={state.recipientPlaceholder}
-              variant="filled"
-              hideLabel
-              onSelectRecipient={() => void state.selectRecipient()}
-            />
-            {state.recipientInvalid && (
-              <p className="mt-2 px-1 text-xs text-danger">{state.invalidRecipientMessage}</p>
-            )}
-          </div>
-        }
-        footer={
+    <SendTransferScreen
+      destinationPicker={networkSelection?.picker}
+      form={{
+        inline: !shareForm,
+        adapter: {
+          amount: {
+            ariaLabel: `${asset.symbol} amount`,
+            value: state.amount,
+            onChange: state.setInputAmount
+          },
+          asset: { ...asset, networkName },
+          balance: { value: balanceKnown ? state.availableDisplay : null },
+          maximum: {
+            selected: state.maxSelected,
+            disabled: state.maxDisabled,
+            onClick: state.selectMaximum
+          },
+          recipient: {
+            id: `${family}-send-recipient`,
+            value: state.recipient,
+            onChange: state.setInputRecipient,
+            placeholder: state.recipientPlaceholder,
+            network: { name: networkName, ...networkSelection?.trigger },
+            onSelectRecipient: () => void state.selectRecipient(),
+            feedback: state.recipientInvalid && (
+              <p className="px-1 text-xs text-danger">{state.invalidRecipientMessage}</p>
+            )
+          }
+        },
+        footer: (
           <SendFormActions
             disabled={state.continueDisabled}
             loading={state.continueLoading}
             onContinue={() => void state.continueTransfer()}
           />
+        ),
+        children: (
+          <>
+            <div>
+              <SendRouteInfoCard
+                fee={
+                  <span>
+                    {state.feePreviewLoading && (
+                      <Icon
+                        icon="lucide:loader-circle"
+                        width={14}
+                        height={14}
+                        className="mr-1 inline animate-spin"
+                      />
+                    )}
+                    {state.previewFee === '—'
+                      ? state.previewFee
+                      : `${state.previewFee} ${feeSymbol}`}
+                  </span>
+                }
+                {...routeInfo}
+              />
+            </div>
+            {state.insufficientBalance && (
+              <p role="alert" className="mt-3 text-xs text-danger">
+                Insufficient {asset.symbol} balance.
+              </p>
+            )}
+            {state.error && (
+              <p role="alert" className="mt-3 text-xs text-danger">
+                {state.error}
+              </p>
+            )}
+          </>
+        )
+      }}
+      review={{
+        titleId,
+        description: state.reviewDescription,
+        approving,
+        onCancel: () => void state.closeReview(),
+        onConfirm: () => void state.approveTransfer(),
+        review: review && {
+          asset: review.asset ?? asset,
+          amount: review.amount,
+          network: networkName,
+          rows: [
+            {
+              label: 'Recipient',
+              content: (
+                <SendRecipientAddress
+                  address={review.recipient}
+                  name={
+                    selectedRecipient?.address === review.recipient
+                      ? selectedRecipient.name
+                      : undefined
+                  }
+                />
+              )
+            },
+            ...(review.networkBeforeSender ? [{ label: 'Network', content: networkName }] : []),
+            {
+              label: 'From',
+              content: (
+                <span className="font-mono text-muted" title={review.sender}>
+                  {formatSortAddress(review.sender)}
+                </span>
+              )
+            },
+            ...(!review.networkBeforeSender ? [{ label: 'Network', content: networkName }] : []),
+            ...(review.beforeFeeRows ?? []),
+            {
+              label: 'Network fee',
+              content: review.feeContent ?? (
+                <AmountDisplay value={review.fee} symbol={feeSymbol} profile="fee" />
+              )
+            },
+            ...(review.total !== null
+              ? [
+                  {
+                    label: state.totalLabel,
+                    content: <AmountDisplay value={review.total} symbol={feeSymbol} />
+                  }
+                ]
+              : []),
+            ...(review.afterTotalRows ?? [])
+          ],
+          confirmLabel: 'Confirm',
+          preparing: review.preparing
         }
-      >
-        <div>
-          <SendRouteInfoCard
-            fee={
-              <span>
-                {state.feePreviewLoading && (
-                  <Icon
-                    icon="lucide:loader-circle"
-                    width={14}
-                    height={14}
-                    className="mr-1 inline animate-spin"
-                  />
-                )}
-                {state.previewFee === '—' ? state.previewFee : `${state.previewFee} ${feeSymbol}`}
-              </span>
-            }
-            {...routeInfo}
-          />
-        </div>
-        {state.insufficientBalance && (
-          <p role="alert" className="mt-3 text-xs text-danger">
-            Insufficient {asset.symbol} balance.
-          </p>
-        )}
-        {state.error && (
-          <p role="alert" className="mt-3 text-xs text-danger">
-            {state.error}
-          </p>
-        )}
-      </SendFormView>
-
-      <Dialog
-        open={review !== null}
-        onOpenChange={open => {
-          if (!open && !approving) void state.closeReview()
-        }}
-      >
-        <DialogContent
-          position="bottom"
-          className="flex h-dvh max-h-dvh flex-col gap-0 overflow-hidden rounded-none border-0 bg-background p-0 shadow-none"
-          showCloseButton={false}
-          aria-labelledby={titleId}
-        >
-          <DialogTitle className="sr-only" aria-hidden="true">
-            Confirm Send
-          </DialogTitle>
-          <DialogDescription className="sr-only">{state.reviewDescription}</DialogDescription>
-          {review && (
-            <TransactionReviewView
-              title="Confirm Send"
-              titleId={titleId}
-              variant="figma"
-              asset={review.asset ?? asset}
-              amount={review.amount}
-              amountPrefix="-"
-              network={networkName}
-              rows={[
-                {
-                  label: 'Recipient',
-                  content: (
-                    <SendRecipientAddress
-                      address={review.recipient}
-                      name={
-                        selectedRecipient?.address === review.recipient
-                          ? selectedRecipient.name
-                          : undefined
-                      }
-                    />
-                  )
-                },
-                ...(review.networkBeforeSender ? [{ label: 'Network', content: networkName }] : []),
-                {
-                  label: 'From',
-                  content: (
-                    <span className="font-mono text-muted" title={review.sender}>
-                      {formatSortAddress(review.sender)}
-                    </span>
-                  )
-                },
-                ...(!review.networkBeforeSender
-                  ? [{ label: 'Network', content: networkName }]
-                  : []),
-                ...(review.beforeFeeRows ?? []),
-                {
-                  label: 'Network fee',
-                  content: review.feeContent ?? (
-                    <AmountDisplay value={review.fee} symbol={feeSymbol} profile="fee" />
-                  )
-                },
-                ...(review.total !== null
-                  ? [
-                      {
-                        label: state.totalLabel,
-                        content: <AmountDisplay value={review.total} symbol={feeSymbol} />
-                      }
-                    ]
-                  : []),
-                ...(review.afterTotalRows ?? [])
-              ]}
-              confirmLabel="Confirm"
-              confirming={approving}
-              submitting={approving}
-              preparing={review.preparing}
-              cancelDisabled={approving}
-              onCancel={() => void state.closeReview()}
-              onConfirm={() => void state.approveTransfer()}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-    </>
+      }}
+    />
   )
 }

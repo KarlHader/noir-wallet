@@ -1520,8 +1520,6 @@ async function reloadMultichainRuntime(
   await Promise.all([
     evmTransactionMonitor?.init(),
     bitcoinTransactionMonitor?.init(),
-    solanaTransactionMonitor?.init(),
-    nearTransactionMonitor?.init(),
     portfolioCoordinator?.readCachedActive()
   ])
 }
@@ -2181,11 +2179,14 @@ function rheaSignedRecoveryJobs() {
 
 const backgroundNetworkServicesReady = multichainStartupReady
   .then(async () => {
+    // Solana and NEAR recovery acquire the account operation lock themselves.
     await Promise.all([
       DEFAULT_NETWORK === 'mainnet'
         ? transactionMonitor.init()
         : chrome.alarms.clear('transaction-monitor-alarm').then(() => undefined),
       zcashTxMonitor.init(),
+      solanaTransactionMonitor?.init(),
+      nearTransactionMonitor?.init(),
       rheaSwapTransactionMonitor?.init().catch(error => {
         console.warn('[RHEA Swap Monitor] Startup poll failed:', error)
       }) ?? Promise.resolve()
@@ -4032,7 +4033,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         message.action === 'read'
           ? await coordinator.readCachedActive()
           : await coordinator.refreshActive(refreshChainIds, {
-              automatic: message.automatic === true
+              automatic: message.automatic === true,
+              refreshConfidential: message.refreshConfidential !== false
             })
       if (!(await expectedScopeMatches())) throw new Error('Portfolio Account changed')
       if (message.action === 'refresh' && model) {

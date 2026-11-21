@@ -5,10 +5,10 @@ import type { Network } from '@/types'
 import { useWalletStore } from '@/store/wallet-store'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import {
-  TokenSelector,
+  SwapCatalogTokenPicker,
   type TokenSelectorExtraItem,
-  type TokenSelectorProps
-} from '../tokens/TokenSelector'
+  type SwapCatalogTokenPickerProps
+} from './SwapCatalogTokenPicker'
 import {
   findVerifiedRheaSwapToken,
   preferWalletEvmQuoteToken,
@@ -61,9 +61,10 @@ interface SwapBalanceScope {
 }
 
 interface SwapTokenSelectorProps extends Omit<
-  TokenSelectorProps,
+  SwapCatalogTokenPickerProps,
   'tokens' | 'onSelect' | 'balances' | 'onDiscoveredToken'
 > {
+  readonly accountScope?: Readonly<{ walletId: string; accountId: string }> | null
   readonly initialTokens: readonly RheaSwapToken[]
   readonly loadTokens: (
     filter: SelectorFilter,
@@ -94,6 +95,7 @@ export function SwapTokenSelector({
   openingWalletPointer,
   onScopeInvalidated,
   catalogDirection,
+  accountScope,
   ...props
 }: SwapTokenSelectorProps) {
   const scopeInvalidated = useRef(false)
@@ -104,8 +106,8 @@ export function SwapTokenSelector({
         network: scopeNetwork ?? state.currentNetwork,
         walletId: openingWalletPointer ? openingWalletPointer.walletId : state.currentWalletId,
         accountId: openingWalletPointer ? openingWalletPointer.accountId : state.currentAccountId,
-        scopedWalletId: props.accountScope?.walletId ?? balanceScope?.walletId ?? null,
-        scopedAccountId: props.accountScope?.accountId ?? balanceScope?.accountId ?? null
+        scopedWalletId: accountScope?.walletId ?? balanceScope?.walletId ?? null,
+        scopedAccountId: accountScope?.accountId ?? balanceScope?.accountId ?? null
       }
     })()
   )
@@ -198,8 +200,8 @@ export function SwapTokenSelector({
     ready: managedReady
   } = useManagedTokenCatalog({
     network: scopeNetwork ?? activeNetwork,
-    walletId: props.accountScope?.walletId ?? balanceScope?.walletId ?? null,
-    accountId: props.accountScope?.accountId ?? balanceScope?.accountId ?? null
+    walletId: accountScope?.walletId ?? balanceScope?.walletId ?? null,
+    accountId: accountScope?.accountId ?? balanceScope?.accountId ?? null
   })
   const [receiveTargetsSnapshot, setReceiveTargetsSnapshot] = useState(() => ({
     scope: balanceScope?.scopeKey,
@@ -414,20 +416,13 @@ export function SwapTokenSelector({
   }, [filter, retryRequest])
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <TokenSelector
+      <SwapCatalogTokenPicker
         {...props}
-        accountScope={
-          props.accountScope ??
-          (balanceScope
-            ? { walletId: balanceScope.walletId, accountId: balanceScope.accountId }
-            : null)
-        }
         stableCatalogOrder
         tokenKey={swapTokenKey}
         tokens={resolvedItems.tokens}
         extraItems={guardedExtraItems}
         defaultTokens={defaultTokens}
-        defaultCatalogLoading={false}
         balances={balances}
         pricesByTokenKey={pricesByTokenKey}
         catalogLoading={loadingNetwork === filter.network}

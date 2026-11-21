@@ -27,14 +27,14 @@ import {
   getAssetDetailCategories,
   getZcashPrivacyBalanceDisplay,
   sumZcashDetailBalanceRaw
-} from './asset-detail-balance'
+} from '@/popup/services/asset-detail-balance'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { PageTabsList, PageTabsTrigger } from '@/popup/components/common/PageTabs'
 import { Tabs, TabsContent } from '@/popup/components/ui/tabs'
-import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
+import { WalletActionIcon } from '@/popup/components/portfolio/WalletActionIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
 import {
   CopyFeedbackIcon,
@@ -43,7 +43,7 @@ import {
 } from '@/popup/components/common/CopyToast'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { AssetDetailBalanceRow } from './AssetDetailBalanceRow'
-import { withConfidentialAssetPrices } from '@/popup/components/portfolio/portfolio-prices'
+import { withConfidentialAssetPrices } from '@/popup/services/portfolio-prices'
 import { PrivateAddressWarningDialog } from '@/popup/components/account/PrivateAddressWarningDialog'
 import {
   getPrivateTransferChainIds,
@@ -51,7 +51,7 @@ import {
 } from '@/popup/services/private-balance-transfer'
 import { resolveNearConfidentialZecHolding } from '@/popup/services/near-confidential-holdings'
 
-import { formatDisplayTokenAmount } from '@/popup/components/portfolio/portfolio-format'
+import { formatDisplayTokenAmount } from '@/popup/services/portfolio-format'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { assetMarketHistoryClient } from '@/popup/services/asset-market-history-client'
 import {
@@ -66,7 +66,7 @@ import { MultichainActivityPanel } from '@/popup/components/transaction/Multicha
 import { MultichainActivityDetail } from '@/popup/components/transaction/MultichainActivityDetail'
 import { openModal } from '@/popup/provider/ModalManager'
 import { MarketPriceChart } from '@/popup/components/portfolio/MarketPriceChart'
-import { WalletActionButton } from '@/popup/components/common/WalletActionButton'
+import { WalletActionButton } from '@/popup/components/portfolio/WalletActionButton'
 import {
   bitcoinAddressBalancesClient,
   type BitcoinAddressBalanceCatalogView
@@ -482,7 +482,7 @@ export function AssetDetail() {
     }
     if (chain.chain.family === 'zcash') {
       navigate(
-        `/send/zcash?from=transparent&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
+        `/send?provider=zcash-shield&from=transparent&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
       )
       return
     }
@@ -500,7 +500,6 @@ export function AssetDetail() {
     }
     navigate(`/send?${query.toString()}`, {
       state: {
-        sendEntry: 'asset-detail',
         initialPortfolio: visibleModel,
         initialPrices: prices,
         walletId: effectiveWalletId,
@@ -630,7 +629,7 @@ export function AssetDetail() {
         disabled: unavailable,
         onClick: () =>
           navigate(
-            `/send/zcash?from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
+            `/send?provider=zcash-shield&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
           )
       },
       {

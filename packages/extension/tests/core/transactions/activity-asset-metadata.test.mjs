@@ -1,13 +1,13 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { mergeActivityAssetMetadata } from '../../../src/popup/components/transaction/activity-asset-metadata.ts'
+import { mergeActivityAssetMetadata } from '../../../src/popup/services/activity-presentation-catalog.ts'
 import {
   getActivityDetailTitle,
   getActivityDisplayChanges,
   resolveActivityDisplayAmount
-} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
-import { getActivityInteractionPresentation } from '../../../src/popup/components/transaction/activity-interaction-adapters.ts'
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
+import { getActivityInteractionPresentation } from '../../../src/popup/services/activity-interaction-adapters.ts'
 
 const chainId = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
 const mint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'

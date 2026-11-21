@@ -1,6 +1,9 @@
 import { formatFiatAmount, formatTokenQuantity } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
-import { calculateTokenFiatValue, parseTokenBalanceDecimal } from './token-balance-format'
+import {
+  calculateTokenFiatValue,
+  parseTokenBalanceDecimal
+} from '@/popup/services/token-balance-format'
 
 export function TokenBalanceDisplay({
   amount,

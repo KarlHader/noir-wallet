@@ -17,7 +17,7 @@ import {
   getAssetMarketMappings,
   getAssetProtocolSourceMappings
 } from '@/core/prices/asset-market-mappings'
-import type { Network } from '@/types'
+import type { FundingSource, Network } from '@/types'
 import { isAddress } from 'viem'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import type { PrepareConfidentialFundingRequest } from './confidential-funding-client'
@@ -42,6 +42,30 @@ export type ShieldFundingAsset = Readonly<{
   managed: ShieldTransferAsset
   marketAssetId?: string
 }>
+
+export interface ShieldTokenPickerItem {
+  readonly key: string
+  readonly assetId: string
+  readonly symbol: string
+  readonly name?: string
+  readonly searchTerms?: readonly string[]
+  readonly contractAddress?: string
+  readonly iconUrl?: string
+  readonly chainName: string
+  readonly chainId: string
+  readonly badgeBlockchain?: string
+  readonly nativeIconChain?: string
+  readonly zcashFundingSource?: FundingSource
+  readonly sourceLabel?: string
+  readonly availableRaw?: string
+  readonly displayBalance?: string
+  readonly decimals: number
+  readonly priceUsd?: string | number | null
+  readonly disabledReason?: string
+  readonly subtitle?: string
+  readonly title?: string
+  readonly ariaLabel?: string
+}
 
 export function getZcashTokenPickerChain(network: Network) {
   return {

@@ -13,7 +13,7 @@ import { formatSortAddress, formatSymbol } from '@/lib/format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { resolveEvmChainIconAlias } from '@/config/icons'
 import { useWalletStore } from '@/store/wallet-store'
-import { ReceivingAddressLayout } from '@/popup/components/common/ReceivingAddressLayout'
+import { ReceivingAddressLayout } from '@/popup/components/account/ReceivingAddressLayout'
 import {
   CopyFeedbackIcon,
   CopyToast,

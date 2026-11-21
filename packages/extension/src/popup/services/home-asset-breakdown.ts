@@ -1,4 +1,4 @@
-import type { PortfolioFiatSummary } from '@/popup/components/portfolio/portfolio-prices'
+import type { PortfolioFiatSummary } from '@/popup/services/portfolio-prices'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { buildAccountKey } from '@/core/wallet/account-scope'

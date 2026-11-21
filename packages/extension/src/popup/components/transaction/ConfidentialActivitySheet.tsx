@@ -25,8 +25,8 @@ import type { Network } from '@/types'
 import {
   getActivityStatusPresentation,
   isLegacyPrivateShieldWithdrawDestination
-} from './multichain-activity-presentation'
-import { EvmPendingTransactionActions } from './EvmPendingTransactionActions'
+} from '@/popup/services/multichain-activity-presentation'
+import { EvmPendingTransactionActions } from '../evm/EvmPendingTransactionActions'
 
 export interface ConfidentialActivityTarget {
   readonly network: Network

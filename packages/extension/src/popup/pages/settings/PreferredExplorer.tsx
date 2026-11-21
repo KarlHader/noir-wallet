@@ -6,7 +6,7 @@ import {
 } from '@/core/chains/chain-endpoint-settings'
 import { useSettingsStore } from '@/store/settings-store'
 import { toast } from '@/store/toast-store'
-import { EndpointOption } from '../../components/common/EndpointOption'
+import { EndpointOption } from '../../components/settings/EndpointOption'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog'

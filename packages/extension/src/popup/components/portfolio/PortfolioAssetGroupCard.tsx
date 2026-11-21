@@ -19,10 +19,10 @@ import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import {
   lookupSwapTokenForWalletAsset,
   resolvePortfolioAssetIconUrl
-} from '@/popup/components/tokens/portfolio-token-swap-icon'
+} from '@/popup/services/portfolio-token-swap-icon'
 import { BalanceHelp } from '@/popup/components/transaction/BalanceHelp'
-import { getPortfolioAssetUsdValue } from './portfolio-prices'
-import { formatDisplayAmount } from './portfolio-format'
+import { getPortfolioAssetUsdValue } from '@/popup/services/portfolio-prices'
+import { formatDisplayAmount } from '@/popup/services/portfolio-format'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import {
   getAvailablePortfolioAssetGroupUsdValue,
@@ -36,7 +36,7 @@ import {
   addNearConfidentialZecFiat,
   type NearConfidentialZecRow
 } from '@/popup/services/near-confidential-holdings'
-import { ZcashFundingBadge } from '@/popup/components/account/ZcashFundingBadge'
+import { ZcashFundingBadge } from '@/popup/components/zcash/ZcashFundingBadge'
 import { Tooltip } from '@/popup/components/ui/tooltip'
 
 export const portfolioAssetRowClassName =

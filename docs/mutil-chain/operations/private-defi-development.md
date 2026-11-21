@@ -49,7 +49,7 @@ These rules apply only to wallet same-chain Send. Swap, cross-chain Send, accoun
 
 ### dApp Confidential Asset Transfer
 
-In Private/Confidential mode, native-asset sends, ERC-20 `transfer`, and supported PEA `transferFrom` calls use the RHEA/Intents Confidential route. An unknown token cannot fall back to a direct PEA transfer. An ordinary contract call may execute directly from the PEA, but its approval must identify it as a direct contract interaction. Routing lives in `src/background/evm-dapp-private-transfer.ts`, `evm-transfer-router.ts`, and `evm-dapp-handler.ts`; approval is rendered in `src/popup/pages/dapp/ApprovalPage.tsx`.
+In Private/Confidential mode, native-asset sends, ERC-20 `transfer`, and supported PEA `transferFrom` calls use the RHEA/Intents Confidential route. An unknown token cannot fall back to a direct PEA transfer. An ordinary contract call may execute directly from the PEA, but its approval must identify it as a direct contract interaction. Routing lives in `src/background/evm-dapp-private-transfer.ts`, `evm-transfer-router.ts`, and `evm-dapp-handler.ts`; approval is rendered in `src/popup/pages/dapp/Approval.tsx`.
 
 ## 3. Services and Authoritative State
 

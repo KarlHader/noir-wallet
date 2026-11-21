@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { isAssetVisibleInAssetView } from '../../../src/popup/components/portfolio/portfolio-asset-visibility.ts'
+import { isAssetVisibleInAssetView } from '../../../src/popup/services/portfolio-presentation.ts'
 import { applyTokenDisplayPolicy } from '../../../src/core/portfolio/portfolio-visibility.ts'
 
 function chain(id, family, displayName) {

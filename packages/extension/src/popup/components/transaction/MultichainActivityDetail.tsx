@@ -35,8 +35,8 @@ import { Button } from '../ui/button'
 import {
   getActivityApprovalDetails,
   getActivityInteractionPresentation
-} from './activity-interaction-adapters'
-import { resolveActivityChainId } from './activity-chain'
+} from '@/popup/services/activity-interaction-adapters'
+import { resolveActivityChainId } from '@/core/activity/activity-chain'
 import { getActivityTransactionReferences } from '@/popup/services/activity-transaction-references'
 import {
   getActivityDetailTitle,
@@ -53,7 +53,7 @@ import {
   buildActivityExecutionAddressModes,
   isLegacyPrivateShieldWithdrawDestination,
   isActivityRecoveryTransition
-} from './multichain-activity-presentation'
+} from '@/popup/services/multichain-activity-presentation'
 import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
 import { resolveScopedZcashActivityTransaction } from '@/popup/services/zcash-activity-detail'
 import { InlineError } from '../common/InlineError'
@@ -61,7 +61,7 @@ import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-c
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { selectActivityObservation } from '@/popup/services/activity-observation'
-import { EvmPendingTransactionActions } from './EvmPendingTransactionActions'
+import { EvmPendingTransactionActions } from '../evm/EvmPendingTransactionActions'
 import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
 
 interface MultichainActivityDetailProps {

@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import {
   getActivitySwapPresentation,
   resolveActivityChainMetadata
-} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 function activity(destinationChainId) {
   return {

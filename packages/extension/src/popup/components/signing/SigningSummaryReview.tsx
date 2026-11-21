@@ -19,12 +19,12 @@ import {
 import { Button } from '@/popup/components/ui/button'
 import {
   buildSigningSummaryReviewModel,
+  type EvmReviewPresentationOptions,
   type SigningSummaryReviewRow,
   type SigningSummaryReviewSection
-} from './signing-summary-review-model'
+} from '@/popup/services/signing-review'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
 import { ExecutionAccountBadge } from '@/popup/components/account/ExecutionAccountSelector'
-import type { EvmReviewPresentationOptions } from './signing-summary-review-model-other'
 
 export type SigningRequestSource =
   | { readonly kind: 'wallet' }

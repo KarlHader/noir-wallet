@@ -26,7 +26,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '../../components/ui/dialog'
-import { Input } from '../../components/ui/input'
+import { Input, SearchInput } from '../../components/ui/input'
 import { userEvmAssetsClient } from '../../services/user-evm-assets-client'
 import { swapTokenCatalogClient } from '../../services/swap-token-catalog-client'
 import {
@@ -368,13 +368,13 @@ export function ManageTokens() {
       <PageHeader title="Manage Tokens" showBack />
 
       <div className="page-content space-y-3 pb-5">
-        <Input
+        <SearchInput
           aria-label="Search Tokens"
           value={searchQuery}
           onChange={event => setSearchQuery(event.target.value)}
           placeholder="Search Tokens by symbol or address"
           className="h-[46px] rounded-xl"
-          startContent={<Icon icon="lucide:search" width={18} height={18} className="text-muted" />}
+          iconSize={18}
         />
 
         <NetworkFilter

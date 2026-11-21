@@ -4,7 +4,7 @@ import { useTransaction } from './useTransaction'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useNavigate } from '../provider/Router'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
-import { SpeedUpConfirmSheet } from '../components/transaction/SpeedUpConfirmSheet'
+import { SpeedUpConfirmSheet } from '../components/zcash/SpeedUpConfirmSheet'
 import type { Network, Transaction } from '@/types/wallet'
 import {
   getSpeedUpConfirmationError,

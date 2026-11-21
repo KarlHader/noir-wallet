@@ -17,6 +17,7 @@ export type BalanceRefreshRequest =
       chainIds?: readonly string[]
       additionalChainIds?: readonly string[]
       forceDiscovery?: boolean
+      refreshConfidential?: boolean
     }>
   | Readonly<{
       source: 'near-confidential'
@@ -39,6 +40,7 @@ const chainAdapter: BalanceRefreshAdapter<Extract<BalanceRefreshRequest, { sourc
       forceRefresh: request.force,
       allowStaleOnError: false,
       forceDiscovery: request.forceDiscovery,
+      refreshConfidential: request.refreshConfidential,
       refreshChainIds: request.chainIds,
       additionalChainIds: request.additionalChainIds
     })
@@ -69,6 +71,7 @@ export function balanceRefreshRequestKey(request: BalanceRefreshRequest): string
       request.source,
       request.force === true,
       request.forceDiscovery === true,
+      request.refreshConfidential !== false,
       chainIds
     ])
   }

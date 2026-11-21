@@ -34,16 +34,33 @@ export function matchesSwapTokenSearch(token: SwapToken, search: string): boolea
   return rankTokenSearchFields(token, search) < 99
 }
 
-export function rankTokenSearchFields(
-  token: Readonly<{
-    symbol?: string
-    name?: string
-    contractAddress?: string | null
-    assetId?: string
-    searchTerms?: readonly string[]
-  }>,
-  search: string
-): number {
+export type TokenSearchFields = Readonly<{
+  symbol?: string
+  name?: string
+  contractAddress?: string | null
+  assetId?: string
+  searchTerms?: readonly string[]
+}>
+
+export function filterTokenPickerRows<Row>(
+  rows: readonly Row[],
+  network: string,
+  search: string,
+  adapter: Readonly<{
+    chainId: (row: Row) => string
+    searchFields: (row: Row) => TokenSearchFields
+  }>
+): readonly Row[] {
+  const candidates = network === 'all' ? rows : rows.filter(row => adapter.chainId(row) === network)
+  if (!search.trim()) return candidates
+  return candidates
+    .map(row => ({ row, rank: rankTokenSearchFields(adapter.searchFields(row), search) }))
+    .filter(({ rank }) => rank < 99)
+    .sort((left, right) => left.rank - right.rank)
+    .map(({ row }) => row)
+}
+
+export function rankTokenSearchFields(token: TokenSearchFields, search: string): number {
   const query = search.trim().toLowerCase()
   if (!query) return 0
   if (token.contractAddress?.toLowerCase() === query) return 0

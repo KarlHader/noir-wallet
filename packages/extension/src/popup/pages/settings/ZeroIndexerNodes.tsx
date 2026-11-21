@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 import {
   EndpointLatencyBadge,
   EndpointSelectionIndicator
-} from '../../components/common/EndpointStatus'
+} from '../../components/settings/EndpointStatus'
 import { PageHeader } from '../../components/common/PageHeader'
 import { InlineError } from '../../components/common/InlineError'
 import { Button } from '../../components/ui/button'

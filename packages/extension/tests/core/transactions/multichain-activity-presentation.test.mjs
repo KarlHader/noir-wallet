@@ -21,7 +21,7 @@ import {
   hasMatchingActivityTokenIcons,
   isAccountModeTransfer,
   isLegacyPrivateShieldWithdrawDestination
-} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 const transactionHash = `0x${'a'.repeat(64)}`
 const replacementTransactionHash = `0x${'b'.repeat(64)}`

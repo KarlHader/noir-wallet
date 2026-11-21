@@ -17,11 +17,11 @@ import {
   resolveActivityDisplayAmount,
   type ActivityDisplayAmount,
   type ActivitySwapPresentation
-} from './multichain-activity-presentation'
+} from '@/popup/services/multichain-activity-presentation'
 import {
   getActivityInteractionPresentation,
   type ActivityInteractionPresentation
-} from './activity-interaction-adapters'
+} from '@/popup/services/activity-interaction-adapters'
 import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import type {
   ActivityAssetMetadata,

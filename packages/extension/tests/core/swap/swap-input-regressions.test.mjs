@@ -3,11 +3,11 @@ import { test } from 'node:test'
 import Big from '../../../src/lib/big.ts'
 import { formatTokenQuantity, formatBaseUnitDecimalAmount } from '../../../src/lib/number-format.ts'
 
-import { formatDisplayTokenAmount } from '../../../src/popup/components/portfolio/portfolio-format.ts'
+import { formatDisplayTokenAmount } from '../../../src/popup/services/portfolio-format.ts'
 import {
   calculateSwapPriceImpact,
   getSwapAmountValues
-} from '../../../src/popup/components/swap/swap-estimate.ts'
+} from '../../../src/popup/services/swap-estimate.ts'
 import { resolveSelectedSwapMaximum } from '../../../src/popup/services/swap-maximum.ts'
 import {
   resolveSwapSelectorBalanceMode,

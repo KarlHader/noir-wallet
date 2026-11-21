@@ -5,7 +5,7 @@ import {
   selectDifferentVerificationIndices,
   selectVerificationIndices,
   shuffleVerificationWordOptions
-} from '../../../src/popup/utils/recovery-phrase-confirmation.ts'
+} from '../../../src/core/wallet/recovery-phrase-confirmation.ts'
 import {
   getWalletsNeedingSecretPhraseBackup,
   matchesWalletBackupWords

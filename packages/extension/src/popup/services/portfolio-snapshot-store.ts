@@ -162,6 +162,7 @@ export function refreshPortfolioSnapshot(
     readonly chainIds?: readonly string[]
     readonly additionalChainIds?: readonly string[]
     readonly forceDiscovery?: boolean
+    readonly refreshConfidential?: boolean
   } = {}
 ): Promise<boolean> {
   return refreshBalanceSnapshot(key, { source: 'chain', force, ...options }).catch(() => false)

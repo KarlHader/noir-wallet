@@ -23,7 +23,7 @@ async function closeCurrentTab(): Promise<boolean> {
   }
 }
 
-export function UpdatePage() {
+export function Update() {
   const { state, isLoading, applyUpdate } = useExtensionUpdate()
   const { navigate } = useNavigate()
   const location = useLocation()

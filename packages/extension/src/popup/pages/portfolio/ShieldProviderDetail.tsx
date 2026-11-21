@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import type { ActivityItem } from '@/core/activity'
-import { formatFiatAmount } from '@/lib/number-format'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { useWalletStore } from '@/store/wallet-store'
 import Big from '@/lib/big'
@@ -12,8 +11,8 @@ import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { useNavigate } from '@/popup/provider/Router'
-import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
-import { WalletActionButton } from '@/popup/components/common/WalletActionButton'
+import { WalletActionIcon } from '@/popup/components/portfolio/WalletActionIcon'
+import { WalletActionButton } from '@/popup/components/portfolio/WalletActionButton'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-manager-client'
@@ -32,7 +31,7 @@ import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { PortfolioChainAssetRow } from '@/popup/components/portfolio/PortfolioAssetGroupCard'
 import {
-  NearShieldSupport,
+  ShieldProviderSupport,
   ShieldProviderLogo,
   SHIELD_PROVIDERS
 } from '@/popup/components/portfolio/shield-providers'
@@ -49,6 +48,7 @@ import {
 } from '@/popup/services/shield-zcash-entry'
 import { canSwapNativeShieldZec } from '@/popup/services/shield-swap-zec-sources'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
+import { formatShieldProviderFiat } from '@/popup/services/shield-provider-presentation'
 
 export function ShieldProviderDetail() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
@@ -190,13 +190,10 @@ function ShieldProviderContent() {
     ? availableDepositTokens(directoryTokens, supportedNetworks)
     : null
   const providerFiat = provider === 'near-confidential' ? near.fiat : group?.fiat
-  const displayFiat = balancesHidden
-    ? '••••'
-    : providerFiat === null || providerFiat === undefined
-      ? status === 'loading' || (provider === 'zcash-shield' && pricesLoading)
-        ? '…'
-        : '—'
-      : formatFiatAmount(providerFiat, { showSign: true })
+  const displayFiat = formatShieldProviderFiat(providerFiat, {
+    hidden: balancesHidden,
+    loading: status === 'loading' || (provider === 'zcash-shield' && pricesLoading)
+  })
   const canSpendNativeZec =
     hasZcashAccount && !getFundingSourceUnavailableReason(currentWallet?.keySource, 'shielded')
   const canSwapNativeZec = canSwapNativeShieldZec({
@@ -295,7 +292,11 @@ function ShieldProviderContent() {
           )}
           {provider === 'near-confidential' ? (
             <div className="mt-5">
-              <NearShieldSupport networks={supportedNetworks} tokens={supportedTokens} />
+              <ShieldProviderSupport
+                provider={provider}
+                networks={supportedNetworks}
+                tokens={supportedTokens}
+              />
             </div>
           ) : (
             <div className="mt-5 flex min-h-5 items-center justify-between gap-3 text-left">

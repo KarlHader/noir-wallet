@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { getTokenIconCandidates } from '../../../src/popup/components/tokens/token-icon-candidates.ts'
+import { getTokenIconCandidates } from '../../../src/popup/services/token-icon-candidates.ts'
 import {
   clearTokenIconUrlFailure,
   hasTokenIconUrlFailed,
   recordTokenIconUrlFailure
-} from '../../../src/popup/components/tokens/token-icon-failure-cache.ts'
+} from '../../../src/popup/services/token-icon-failure-cache.ts'
 
 test('leaves native assets without metadata images to the neutral placeholder', () => {
   expect(

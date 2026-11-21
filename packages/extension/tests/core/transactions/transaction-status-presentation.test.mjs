@@ -4,7 +4,7 @@ import { getLifecycleStatusPresentation } from '../../../src/lib/transaction-sta
 import {
   getActivityProgressSteps,
   getActivityStatusPresentation
-} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
 import { getOnchainTransactionStatusPresentation } from '../../../src/popup/services/onchain-transaction-result.ts'
 import {
   getIntentsStatusCopy,

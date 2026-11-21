@@ -1,14 +1,20 @@
 import { type SwapToken } from '@/core/services/intents-api'
 import { cn } from '@/lib/utils'
 import { formatSymbol } from '@/lib/format'
-import { findBundledWalletMarketAssetId, isBundledWalletAsset } from './token-display-policy'
+import {
+  findBundledWalletMarketAssetId,
+  isBundledWalletAsset
+} from '@/popup/services/token-display-policy'
 import { MARKET_ASSETS } from '@/config/asset-market-assets'
-import { getTokenIconCandidates, isBundledEthIconIdentity } from './token-icon-candidates'
+import {
+  getTokenIconCandidates,
+  isBundledEthIconIdentity
+} from '@/popup/services/token-icon-candidates'
 import {
   clearTokenIconUrlFailure,
   hasTokenIconUrlFailed,
   recordTokenIconUrlFailure
-} from './token-icon-failure-cache'
+} from '@/popup/services/token-icon-failure-cache'
 import { ChainIcon } from '../common/ChainIcon'
 import { Icon } from '@iconify/react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'

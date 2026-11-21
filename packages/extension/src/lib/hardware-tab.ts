@@ -563,15 +563,7 @@ export async function consumePreparedHardwareSignRequest(
   return prepared
 }
 
-export function openKeystoneBitcoinSignTab(transactionId: TransactionId): Promise<chrome.tabs.Tab> {
-  return chrome.tabs.create({
-    url: chrome.runtime.getURL(
-      `index.html#/hardware/bitcoin-sign?tx=${encodeURIComponent(transactionId)}`
-    )
-  })
-}
-
-async function openMultichainHardwareSignTab(
+export async function openMultichainHardwareSignTab(
   transactionId: TransactionId,
   family: 'evm' | 'bitcoin'
 ): Promise<chrome.tabs.Tab> {
@@ -581,28 +573,14 @@ async function openMultichainHardwareSignTab(
     family
   })
   if (typeof response?.error === 'string') throw new Error(response.error)
-  if (response?.result === 'ledger')
-    return chrome.tabs.create({
-      url: chrome.runtime.getURL(
-        `index.html#/hardware/ledger-sign?family=${family}&tx=${encodeURIComponent(transactionId)}`
-      )
-    })
-  if (response?.result !== 'keystone') throw new Error('Unsupported hardware signing device')
-  return family === 'evm'
-    ? openKeystoneEvmSignTab(transactionId)
-    : openKeystoneBitcoinSignTab(transactionId)
-}
-export function openHardwareEvmSignTab(transactionId: TransactionId): Promise<chrome.tabs.Tab> {
-  return openMultichainHardwareSignTab(transactionId, 'evm')
-}
-export function openHardwareBitcoinSignTab(transactionId: TransactionId): Promise<chrome.tabs.Tab> {
-  return openMultichainHardwareSignTab(transactionId, 'bitcoin')
-}
-
-export function openKeystoneEvmSignTab(transactionId: TransactionId): Promise<chrome.tabs.Tab> {
+  const vendor = response?.result
+  if (vendor !== 'ledger' && vendor !== 'keystone') {
+    throw new Error('Unsupported hardware signing device')
+  }
+  const tx = encodeURIComponent(transactionId)
+  const route =
+    vendor === 'ledger' ? `ledger-sign?family=${family}&tx=${tx}` : `${family}-sign?tx=${tx}`
   return chrome.tabs.create({
-    url: chrome.runtime.getURL(
-      `index.html#/hardware/evm-sign?tx=${encodeURIComponent(transactionId)}`
-    )
+    url: chrome.runtime.getURL(`index.html#/hardware/${route}`)
   })
 }

@@ -20,8 +20,8 @@ import {
 import { getZcashChainId } from '@/core/chains/registry'
 import { useSettingsStore } from '@/store/settings-store'
 import { toast } from '@/store/toast-store'
-import { EndpointOption } from '../../components/common/EndpointOption'
-import { EndpointLatencyBadge as PingBadge } from '../../components/common/EndpointStatus'
+import { EndpointOption } from '../../components/settings/EndpointOption'
+import { EndpointLatencyBadge as PingBadge } from '../../components/settings/EndpointStatus'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import {

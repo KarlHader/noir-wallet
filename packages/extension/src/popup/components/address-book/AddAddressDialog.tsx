@@ -20,7 +20,7 @@ import {
   getAddressBookNetworkChoice,
   resolveAddressBookNetwork,
   type AddressBookNetworkChoice
-} from './address-book-network'
+} from '@/popup/services/address-book-network'
 
 export function AddAddressDialog({
   open,

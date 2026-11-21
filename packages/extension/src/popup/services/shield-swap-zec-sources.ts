@@ -3,7 +3,6 @@ import { getEvmNetworkConfigs } from '@/config/networks'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { getZcashChainId } from '@/core/chains/registry'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
-import { getConfidentialAvailableForAsset } from '@/core/services/confidential-funding'
 import {
   isNewWalletFamilyEnabled,
   resolveEvmFeatureRuntimePolicy
@@ -14,7 +13,6 @@ import {
 } from '@/core/chains/registry'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
-import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { KeySource, Network } from '@/types'
 import type { AccountNetworksView } from './account-networks-client'
 import { getAssetDomainRaw } from './asset-domains'
@@ -198,19 +196,6 @@ export function buildShieldSwapZecSourceOptions(input: {
   return Object.freeze(options)
 }
 
-export function shieldSwapZecIntentsBalanceDecimal(
-  kind: ShieldSwapZecSourceKind,
-  options: readonly ShieldSwapZecSourceOption[]
-): string | null {
-  const row = options.find(option => option.kind === kind)
-  if (!row) return null
-  try {
-    return formatBaseUnitDecimalAmount(row.availableRaw, row.decimals)
-  } catch {
-    return null
-  }
-}
-
 export function resolveShieldConfidentialFromAssetId(
   fromId: string | null,
   zecOptions: readonly ShieldSwapZecSourceOption[]
@@ -220,11 +205,4 @@ export function resolveShieldConfidentialFromAssetId(
     return intents?.intentsWalletAssetId ?? null
   }
   return fromId
-}
-
-export function confidentialBalanceForIntentsZec(
-  balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
-): string {
-  if (!balances) return '0'
-  return getConfidentialAvailableForAsset(balances, ZEC_ZCASH_ASSET) ?? '0'
 }

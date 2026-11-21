@@ -2,10 +2,11 @@ import nearLogo from '@/images/figma-near-confidential.svg'
 import zcashLogo from '@/images/figma-zcash-shield.svg'
 import type { ChainDefinition } from '@/core/chains/registry'
 import type { SwapToken } from '@/core/services/intents-api'
-import { resolveChainIconAlias } from '@/lib/chain-icon'
+import { cn } from '@/lib/utils'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import type { ShieldProvider } from '@/popup/services/asset-domains'
+import { shieldSupportAdapters } from '@/popup/services/shield-provider-presentation'
 
 export const SHIELD_PROVIDERS: Readonly<
   Record<
@@ -30,13 +31,16 @@ export const SHIELD_PROVIDERS: Readonly<
   }
 }
 
-export function NearShieldSupport({
+export function ShieldProviderSupport({
+  provider,
   networks,
   tokens
 }: {
+  readonly provider: ShieldProvider
   readonly networks: readonly ChainDefinition[]
   readonly tokens: readonly SwapToken[] | null
 }) {
+  const support = shieldSupportAdapters[provider](networks, tokens)
   return (
     <span className="grid grid-cols-2 gap-2 text-center text-sm text-wallet-secondary">
       <span className="min-w-0">
@@ -44,38 +48,38 @@ export function NearShieldSupport({
           aria-hidden="true"
           className="flex min-h-5 flex-wrap items-center justify-center gap-1"
         >
-          {networks.some(network => network.family === 'evm') && (
-            <ChainIcon chain="evm" width={17} height={17} showTooltip={false} />
-          )}
-          {networks
-            .filter(network => network.family !== 'evm')
-            .slice(0, 4)
-            .map(network => (
-              <ChainIcon
-                key={network.id}
-                chain={resolveChainIconAlias(network.family, network.displayName)}
-                width={17}
-                height={17}
-                showTooltip={false}
-                className="shrink-0 rounded-full border border-background"
-              />
-            ))}
-        </span>
-        <span className="mt-1 block">{networks.length} Supported networks</span>
-      </span>
-      <span className="min-w-0">
-        <span aria-hidden="true" className="flex min-h-5 items-center justify-center -space-x-1">
-          {tokens?.slice(0, 5).map(token => (
-            <TokenIcon
-              key={token.assetId}
-              token={token}
-              showChainBadge={false}
-              size={17}
-              className="shrink-0 rounded-full border border-background"
+          {support.networks.map((chain, index) => (
+            <ChainIcon
+              key={`${chain}:${index}`}
+              chain={chain}
+              width={17}
+              height={17}
+              showTooltip={false}
+              className={cn(
+                chain !== 'evm' &&
+                  provider === 'near-confidential' &&
+                  'shrink-0 rounded-full border border-background'
+              )}
             />
           ))}
         </span>
-        <span className="mt-1 block">{tokens?.length ?? '—'} Supported tokens</span>
+        <span className="mt-1 block">{support.networkLabel}</span>
+      </span>
+      <span className="min-w-0">
+        <span aria-hidden="true" className="flex min-h-5 items-center justify-center -space-x-1">
+          {support.tokens.map(entry => (
+            <TokenIcon
+              key={'token' in entry ? entry.token.assetId : entry.symbol}
+              {...entry}
+              showChainBadge={false}
+              size={17}
+              className={
+                'token' in entry ? 'shrink-0 rounded-full border border-background' : undefined
+              }
+            />
+          ))}
+        </span>
+        <span className="mt-1 block">{support.tokenLabel}</span>
       </span>
     </span>
   )

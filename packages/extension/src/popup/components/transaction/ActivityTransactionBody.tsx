@@ -24,7 +24,7 @@ import { ChainIcon } from '../common/ChainIcon'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyToast'
 import { DetailRow } from '../common/DetailRow'
 import { PrivateAddressWarningDialog } from '../account/PrivateAddressWarningDialog'
-import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
+import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
@@ -33,8 +33,8 @@ import { TransactionReferenceValue } from './TransactionReferenceValue'
 import {
   getActivityApprovalDetails,
   getActivityInteractionPresentation
-} from './activity-interaction-adapters'
-import { resolveActivityChainId } from './activity-chain'
+} from '@/popup/services/activity-interaction-adapters'
+import { resolveActivityChainId } from '@/core/activity/activity-chain'
 import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
 import {
   getActivityCancellationPresentation,
@@ -46,7 +46,7 @@ import {
   isDirectAccountMove,
   isOwnedAccountTransfer,
   resolveActivityChainMetadata
-} from './multichain-activity-presentation'
+} from '@/popup/services/multichain-activity-presentation'
 
 type ActivitySwap = NonNullable<ReturnType<typeof getActivitySwapPresentation>>
 type ActivityStatus = ReturnType<typeof getActivityStatusPresentation>

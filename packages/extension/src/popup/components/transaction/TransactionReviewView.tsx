@@ -4,7 +4,9 @@ import { Icon } from '@iconify/react'
 import { Button } from '@/popup/components/ui/button'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import { Skeleton } from '@/popup/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 import { TransactionResult, TransactionResultDetailRow } from './TransactionResult'
 
 export interface TransactionReviewAsset {
@@ -18,6 +20,48 @@ export interface TransactionReviewAsset {
 export interface TransactionReviewRow {
   readonly label: string
   readonly content: ReactNode
+}
+
+export function TransactionReviewDialog({
+  open,
+  onOpenChange,
+  title,
+  titleId,
+  description,
+  walletMode,
+  containOverflow = true,
+  children
+}: {
+  readonly open: boolean
+  readonly onOpenChange: (open: boolean) => void
+  readonly title: string
+  readonly titleId?: string
+  readonly description: string
+  readonly walletMode?: 'public' | 'private' | 'shield'
+  readonly containOverflow?: boolean
+  readonly children: ReactNode
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        position="bottom"
+        showCloseButton={false}
+        aria-label={titleId ? undefined : title}
+        aria-labelledby={titleId}
+        data-wallet-mode={walletMode}
+        className={cn(
+          'flex h-dvh max-h-dvh flex-col gap-0 rounded-none border-0 bg-background p-0 shadow-none',
+          containOverflow && 'overflow-hidden'
+        )}
+      >
+        <DialogTitle className="sr-only" aria-hidden={titleId ? true : undefined}>
+          {title}
+        </DialogTitle>
+        <DialogDescription className="sr-only">{description}</DialogDescription>
+        {children}
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 export function ReviewDownTriangle({ className }: { readonly className?: string }) {
@@ -53,6 +97,59 @@ interface TransactionReviewViewProps {
   readonly cancelDisabled?: boolean
   readonly onCancel: () => void
   readonly onConfirm: () => void
+}
+
+export type SendReview = Omit<
+  TransactionReviewViewProps,
+  'title' | 'titleId' | 'variant' | 'amountPrefix' | 'onCancel' | 'onConfirm' | 'cancelDisabled'
+>
+
+export function SendReviewDialog({
+  review,
+  titleId,
+  description,
+  walletMode,
+  active = true,
+  approving,
+  onCancel,
+  onConfirm
+}: {
+  readonly review: SendReview | null
+  readonly titleId: string
+  readonly description: string
+  readonly walletMode?: 'public' | 'private' | 'shield'
+  readonly active?: boolean
+  readonly approving: boolean
+  readonly onCancel: () => void
+  readonly onConfirm: () => void
+}) {
+  return (
+    <TransactionReviewDialog
+      open={active && review !== null}
+      title="Confirm Send"
+      titleId={titleId}
+      description={description}
+      walletMode={walletMode}
+      onOpenChange={open => {
+        if (!open && !approving) onCancel()
+      }}
+    >
+      {review && (
+        <TransactionReviewView
+          {...review}
+          title="Confirm Send"
+          titleId={titleId}
+          variant="figma"
+          amountPrefix="-"
+          confirming={approving}
+          submitting={approving}
+          cancelDisabled={approving}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      )}
+    </TransactionReviewDialog>
+  )
 }
 
 export function TransactionReviewView({

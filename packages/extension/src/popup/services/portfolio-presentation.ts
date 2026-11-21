@@ -7,8 +7,7 @@ import {
   getPortfolioAssetUsdValue,
   LOW_VALUE_USD_THRESHOLD,
   withConfidentialAssetPrices
-} from '@/popup/components/portfolio/portfolio-prices'
-import { isAssetVisibleInAssetView } from '@/popup/components/portfolio/portfolio-asset-visibility'
+} from '@/popup/services/portfolio-prices'
 import {
   addNearConfidentialZecFiat,
   getNearConfidentialChainId,
@@ -19,11 +18,18 @@ import {
   type NearConfidentialZecRow
 } from './near-confidential-holdings'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
+import { getEvmNetworkConfigs } from '@/config/networks'
 import type { Network } from '@/types'
 import { isSelectableChainFamily } from './chain-selection-availability'
 import type { AssetDomain } from './asset-domains'
 
 const ASSET_FALLBACK_ORDER = ['USDC', 'USDT', 'ZEC', 'BTC', 'ETH', 'SOL', 'NEAR'] as const
+const ETHEREUM_CHAIN_IDS = new Set<string>(
+  (['mainnet', 'testnet'] as const satisfies readonly Network[])
+    .flatMap(network => getEvmNetworkConfigs(network))
+    .filter(network => network.displayName.startsWith('Ethereum'))
+    .map(network => network.chainId)
+)
 
 function listSelectablePortfolioChains(
   chains: readonly PortfolioChainView[],
@@ -492,4 +498,19 @@ export function getPortfolioChainSection(
       LOW_VALUE_USD_THRESHOLD
     )
   }
+}
+
+export function isAssetVisibleInAssetView(
+  chain: PortfolioChainView['chain'],
+  asset: PortfolioAssetView,
+  options: { readonly includeZeroBalanceNativeAssets?: boolean } = {}
+): boolean {
+  if (BigInt(asset.balance.totalRaw) !== 0n) return true
+  if (asset.asset.kind === 'token') return true
+  if (options.includeZeroBalanceNativeAssets) return true
+
+  const symbol = asset.metadata.symbol.toUpperCase()
+  if (chain.family === 'zcash' && symbol === 'ZEC') return true
+  if (chain.family === 'bitcoin' && symbol === 'BTC') return true
+  return ETHEREUM_CHAIN_IDS.has(chain.id) && symbol === 'ETH'
 }

@@ -4,7 +4,7 @@ import { Icon } from '@iconify/react'
 import { useNavigate } from '../../provider/Router'
 import { PageHeader } from '../../components/common/PageHeader'
 import { InlineError } from '../../components/common/InlineError'
-import { ReceivingAddressLayout } from '../../components/common/ReceivingAddressLayout'
+import { ReceivingAddressLayout } from '../../components/account/ReceivingAddressLayout'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../../components/common/CopyToast'
 import {
   PRIVATE_ADDRESS_WARNING,
@@ -21,7 +21,7 @@ import evmGroupIcon from '@/images/figma-evm-group.svg'
 import { Button } from '../../components/ui/button'
 import { ListSkeleton } from '../../components/ui/skeleton'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../components/ui/dialog'
-import { Input } from '../../components/ui/input'
+import { SearchInput } from '../../components/ui/input'
 import { Tooltip } from '../../components/ui/tooltip'
 import type { AddressType } from '@/types/wallet'
 import {
@@ -586,13 +586,13 @@ export function AddressesList({ receive = false }: { readonly receive?: boolean 
       <PageHeader title="Address" showBack />
 
       <div className="page-content min-h-0 !px-4 !pt-2">
-        <Input
+        <SearchInput
           value={networkQuery}
           onChange={event => setNetworkQuery(event.target.value)}
           placeholder="Search Network"
           aria-label="Search Network"
           className="h-[46px] rounded-lg text-sm font-normal leading-[18px]"
-          startContent={<Icon icon="lucide:search" width={18} height={18} className="text-muted" />}
+          iconSize={18}
         />
 
         {loading ? (

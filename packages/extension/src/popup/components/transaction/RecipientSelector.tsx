@@ -14,11 +14,11 @@ import {
   getAddressBookContactIconChain,
   getAddressBookNetworkChoice,
   getAddressBookNetworkChoices
-} from '../address-book/address-book-network'
+} from '@/popup/services/address-book-network'
 import { InlineError } from '../common/InlineError'
 import { ChainIcon } from '../common/ChainIcon'
 import { Button } from '../ui/button'
-import { Input } from '../ui/input'
+import { SearchInput } from '../ui/input'
 import { ListSkeleton } from '../ui/skeleton'
 import { Tabs, TabsContent } from '../ui/tabs'
 import { PageTabsList, PageTabsTrigger } from '../common/PageTabs'
@@ -29,7 +29,7 @@ import {
   buildMyWalletRecipientGroups,
   buildSavedRecipientList,
   getMyAccountRecipientUnavailableReason
-} from './recipient-selector-model'
+} from '@/popup/services/recipient-selector-model'
 
 const EMPTY_ADDRESSES: readonly string[] = Object.freeze([])
 function addressSchemeLabel(scheme: string): string | null {
@@ -189,13 +189,13 @@ export function RecipientSelector({
   return (
     <Tabs defaultValue="accounts" className="min-h-0 min-w-0 w-full max-w-full gap-0">
       <div className="px-1 pb-3">
-        <Input
+        <SearchInput
           value={query}
           onChange={event => setQuery(event.target.value)}
           placeholder="Search accounts or addresses"
           aria-label="Search accounts or addresses"
           className="h-[46px] rounded-lg text-sm"
-          startContent={<Icon icon="lucide:search" width={18} height={18} className="text-muted" />}
+          iconSize={18}
         />
       </div>
       <PageTabsList className="w-full border-b border-white/8 px-3">

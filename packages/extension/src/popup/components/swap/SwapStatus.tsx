@@ -18,7 +18,7 @@ import {
   ActivityTransactionBody,
   buildActivityTransactionView
 } from '../transaction/ActivityTransactionBody'
-import { buildActivityExecutionAddressModes } from '../transaction/multichain-activity-presentation'
+import { buildActivityExecutionAddressModes } from '@/popup/services/multichain-activity-presentation'
 import type { AccountNetworksView } from '@/popup/services/account-networks-client'
 import { getIntentsProgressPresentation } from '@/popup/services/transaction-progress'
 import { TransactionProgressSteps } from '../transaction/TransactionProgressSteps'
@@ -29,7 +29,7 @@ import {
   getSwapResultAction,
   getSwapActionLabels,
   type ConfidentialFundingStatusView
-} from './swap-status-model'
+} from '@/popup/services/swap-status-model'
 
 interface SwapStatusDisplayProps {
   network: Network

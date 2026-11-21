@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { summarizePortfolioFiat } from '../../../src/popup/components/portfolio/portfolio-prices.ts'
+import { summarizePortfolioFiat } from '../../../src/popup/services/portfolio-prices.ts'
 import { getActivityTransactionReferences } from '../../../src/popup/services/activity-transaction-references.ts'
 import { shouldWarnSmallTransfer } from '../../../src/popup/services/activity-small-transfer-warning.ts'
 import { getActivityAddressAlias } from '../../../src/popup/services/activity-address-alias.ts'
@@ -35,7 +35,7 @@ import {
 import {
   getAssetDetailCategories,
   sumZcashDetailBalanceRaw
-} from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
+} from '../../../src/popup/services/asset-detail-balance.ts'
 import { resolveShieldZcashVaultEntry } from '../../../src/popup/services/shield-zcash-entry.ts'
 
 test('Zcash Shield requires the active V2 account source and network capability', () => {

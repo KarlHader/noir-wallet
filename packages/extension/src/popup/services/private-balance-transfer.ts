@@ -8,6 +8,10 @@ export type PrivateBalanceTransferDirection = 'main-to-private' | 'private-to-ma
 
 export type TransferDomain = Exclude<AssetDomain, 'all'>
 
+export function balanceTransferDomainLabel(domain: TransferDomain): string {
+  return domain === 'shield' ? 'Shield' : domain === 'private' ? 'Private' : 'Public'
+}
+
 export function resolveBalanceTransferIntent(value: string | null | undefined) {
   return value === 'deposit' || value === 'withdraw' ? value : null
 }

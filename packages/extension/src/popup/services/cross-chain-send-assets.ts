@@ -23,7 +23,7 @@ import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import { isSelectableChainFamily } from './chain-selection-availability'
 import { getEnabledSwapChains } from './swap-catalog-loading'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
-import { sortTokenSelectorNetworks } from '@/popup/components/tokens/token-selector-chain-order'
+import { sortTokenSelectorNetworks } from '@/popup/services/token-selector-chain-order'
 
 type SendAssetIdentity = Readonly<{
   chainId: string
@@ -34,32 +34,13 @@ type SendAssetIdentity = Readonly<{
 export type CrossChainSendAssetGroup = MarketAssetId | `protocol:${string}`
 export type CrossChainSendCapabilities = Readonly<{ evm: boolean; solana: boolean }>
 
-export function readCrossChainSendRoute(
-  searchParams: URLSearchParams,
-  navigationState: unknown,
-  crossChainSendRequested: boolean
-) {
-  const sourceAssetId = searchParams.get('source')
-  const state = navigationState && typeof navigationState === 'object' ? navigationState : null
-  return {
-    sourceAssetId,
-    destinationAssetId: searchParams.get('destination'),
-    destinationChainId: crossChainSendRequested ? searchParams.get('destinationChainId') : null,
-    recipient: crossChainSendRequested ? searchParams.get('recipient') : null,
-    amount: crossChainSendRequested ? searchParams.get('amount') : null,
-    sourceMode: searchParams.get('sourceMode'),
-    returnToSendAssetId:
-      state && 'returnToSendAssetId' in state && state.returnToSendAssetId === sourceAssetId
-        ? sourceAssetId
-        : null,
-    sendEntry:
-      state &&
-      'sendEntry' in state &&
-      (state.sendEntry === 'asset-detail' || state.sendEntry === 'shield')
-        ? state.sendEntry
-        : null
-  }
-}
+export type CrossChainSendDraft = Readonly<{
+  sourceAssetId: string
+  destinationAssetId: string | null
+  destinationChainId: string
+  recipient: string
+  amount: string
+}>
 
 interface CrossChainSendNetwork {
   readonly chain: ChainDefinition
@@ -185,71 +166,16 @@ export function resolveCrossChainSendRouteAssetDisplay(
   }
 }
 
-export function resolveCrossChainSendRouteDraft(
-  input: Readonly<{
-    network: Network
-    walletId: string | null
-    accountId: string | null
-    currentWalletId: string | null
-    currentAccountId: string | null
-    routeWalletId: string | null
-    routeAccountId: string | null
-    navigationState: unknown
-    sourceAssetId: string | null
-    destinationAssetId?: string | null
-    destinationChainId?: string | null
-    recipient: string | null
-    amount: string | null
-  }>
-) {
-  const display = resolveCrossChainSendRouteAssetDisplay(input)
-  const routeAccount =
-    typeof input.navigationState === 'object' &&
-    input.navigationState !== null &&
-    'crossChainSendRouteAccount' in input.navigationState
-      ? input.navigationState.crossChainSendRouteAccount
-      : null
-  const destinationChainId =
-    input.destinationChainId ?? input.destinationAssetId?.split('/')[0] ?? null
-  const navigationMatches =
-    !input.walletId &&
-    !input.accountId &&
-    !input.currentWalletId &&
-    !input.currentAccountId &&
-    typeof routeAccount === 'object' &&
-    routeAccount !== null &&
-    'walletId' in routeAccount &&
-    routeAccount.walletId === input.routeWalletId &&
-    'accountId' in routeAccount &&
-    routeAccount.accountId === input.routeAccountId &&
-    'sourceAssetId' in routeAccount &&
-    routeAccount.sourceAssetId === input.sourceAssetId &&
-    (input.destinationAssetId
-      ? 'destinationAssetId' in routeAccount &&
-        routeAccount.destinationAssetId === input.destinationAssetId &&
-        (!('destinationChainId' in routeAccount) ||
-          routeAccount.destinationChainId === destinationChainId)
-      : Boolean(destinationChainId) &&
-        'destinationChainId' in routeAccount &&
-        routeAccount.destinationChainId === destinationChainId &&
-        (!('destinationAssetId' in routeAccount) || routeAccount.destinationAssetId == null))
-  if (
-    !display ||
-    !input.routeWalletId ||
-    !input.routeAccountId ||
-    !(
-      (input.walletId === input.routeWalletId && input.accountId === input.routeAccountId) ||
-      navigationMatches
-    )
-  )
-    return null
-  return {
-    ...display,
-    walletId: input.routeWalletId,
-    accountId: input.routeAccountId,
-    recipient: input.recipient ?? '',
-    amount: input.amount ?? ''
-  }
+export function resolveCrossChainSendDraft(input: {
+  network: Network
+  walletId: string | null
+  accountId: string | null
+  draft: CrossChainSendDraft & { walletId: string; accountId: string }
+}) {
+  const { draft } = input
+  if (draft.walletId !== input.walletId || draft.accountId !== input.accountId) return null
+  const display = resolveCrossChainSendRouteAssetDisplay({ network: input.network, ...draft })
+  return display ? { ...draft, ...display } : null
 }
 
 const SOLANA_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'

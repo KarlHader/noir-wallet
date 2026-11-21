@@ -24,8 +24,8 @@ import { NetworkFilter } from '../common/NetworkFilter'
 import { InlineError } from '../common/InlineError'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
 import { MultichainActivityRow } from './MultichainActivityRow'
-import { EvmNonceRecoveryBanner } from './EvmNonceRecoveryBanner'
-import { resolveActivityChainId } from './activity-chain'
+import { EvmNonceRecoveryBanner } from '../evm/EvmNonceRecoveryBanner'
+import { resolveActivityChainId } from '@/core/activity/activity-chain'
 import { cn } from '@/lib/utils'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
@@ -40,7 +40,7 @@ import {
   resolveAvailableActivityChainSelection,
   type ActivityStatusFilter
 } from '@/popup/services/activity-list-model'
-import { buildActivityExecutionAddressModes } from './multichain-activity-presentation'
+import { buildActivityExecutionAddressModes } from '@/popup/services/multichain-activity-presentation'
 import type { ActivityPerspective } from '@/popup/services/activity-action-label'
 import { accountNetworksClient } from '@/popup/services/account-networks-client'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
@@ -53,7 +53,7 @@ import {
   confidentialFundingClient,
   getConfidentialFundingPlanId
 } from '@/popup/services/confidential-funding-client'
-import { getClusterSettledDestination } from './multichain-activity-presentation'
+import { getClusterSettledDestination } from '@/popup/services/multichain-activity-presentation'
 import type { SyncStateSnapshot } from '@/background/sync-scheduler'
 import { useWalletStore } from '@/store/wallet-store'
 

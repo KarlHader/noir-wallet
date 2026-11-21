@@ -1,5 +1,5 @@
 import type { PortfolioAssetView } from '@/core/portfolio'
-import { findBundledWalletMarketAssetId } from '@/popup/components/tokens/token-display-policy'
+import { findBundledWalletMarketAssetId } from '@/popup/services/token-display-policy'
 import type { NearConfidentialHolding } from './near-confidential-holdings'
 
 export interface ShieldVaultNearIconEntry {

@@ -6,7 +6,7 @@ import {
   prepareManagedSendAsset,
   resolveSendAssetSelection,
   sortSendAssetsByBalanceValue
-} from '../../../src/popup/pages/transactions/send-asset-order.ts'
+} from '../../../src/popup/services/send-asset-order.ts'
 import { estimateShieldSendRouteFee } from '../../../src/popup/services/shield-transfer.ts'
 import { createInitialProductChainRegistry } from '../../../src/core/chains/registry/index.ts'
 import { resolveEvmSendAvailableRaw } from '../../../src/popup/services/evm-send-routing.ts'

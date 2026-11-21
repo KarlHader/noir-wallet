@@ -16,8 +16,8 @@ import {
   formatBaseUnitDecimalAmount,
   parseDisplayUnitAmount
 } from '@/lib/number-format'
-import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
-import { openHardwareBitcoinSignTab } from '@/lib/hardware-tab'
+import { formatPortfolioNetworkName } from '@/popup/services/portfolio-format'
+import { openMultichainHardwareSignTab } from '@/lib/hardware-tab'
 import {
   recordSendApprovalFailure,
   recordSendResult,
@@ -25,9 +25,11 @@ import {
 } from '@/popup/services/send-transaction-analytics'
 import {
   formatBitcoinInputAddressType,
+  getBitcoinSendApprovalError,
+  getBitcoinSendPrepareError,
   isBitcoinBalanceKnown,
   isBitcoinSendAmountValid
-} from '@/popup/pages/transactions/bitcoin-send-display'
+} from '@/popup/services/bitcoin-send-model'
 import { openModal } from '@/popup/provider/ModalManager'
 import {
   bitcoinAddressBalancesClient,
@@ -46,10 +48,6 @@ import {
   estimateNativeTransferMaximum,
   fallbackTransferMaximum
 } from '@/popup/services/transfer-maximum'
-import {
-  getBitcoinSendApprovalError,
-  getBitcoinSendPrepareError
-} from '@/popup/services/bitcoin-send-validation'
 
 interface BitcoinSendAsset {
   readonly asset: PortfolioAssetView
@@ -399,7 +397,7 @@ export function useBitcoinSendTransfer({
       setReview(null)
       if (submission.status === 'external-signature-required') {
         try {
-          await openHardwareBitcoinSignTab(submission.transactionId)
+          await openMultichainHardwareSignTab(submission.transactionId, 'bitcoin')
         } catch (handoffError) {
           await bitcoinWalletClient.rejectTransfer(submission.transactionId)
           throw handoffError
@@ -430,7 +428,7 @@ export function useBitcoinSendTransfer({
     : '0'
 
   const testnet = chain.chain.network.kind === 'testnet'
-  const input: Omit<SendTransferViewState, 'priceUsd' | 'review'> = {
+  const input: Omit<SendTransferViewState, 'review'> = {
     family: 'bitcoin',
     asset: {
       assetId: asset.asset.id,

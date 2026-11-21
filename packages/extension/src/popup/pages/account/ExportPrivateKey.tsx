@@ -9,11 +9,11 @@ import { Input } from '../../components/ui/input'
 import { WarningBox } from '../../components/ui/WarningBox'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../../components/common/CopyToast'
 import { ChainIcon } from '../../components/common/ChainIcon'
-import { accountNetworkIconChain } from '@/popup/services/account-network-presentation'
 import {
+  accountNetworkIconChain,
   groupAccountNetworksForDisplay,
   type AccountNetworkDisplayGroup
-} from '../../components/account/account-network-groups'
+} from '@/popup/services/account-network-presentation'
 import {
   accountNetworksClient,
   type AccountNetworkView

@@ -7,7 +7,7 @@ import {
   getActivityAccountRouteLabel,
   getActivityRouteTitle,
   getActivityDetailTitle
-} from '../../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+} from '../../../../src/popup/services/multichain-activity-presentation.ts'
 
 const destinationAsset = 'eip155:42161/erc20:0xaf88d065e77c8cc2239327c5edb3a432268e5831'
 const transaction = {

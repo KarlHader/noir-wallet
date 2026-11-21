@@ -1,6 +1,6 @@
 import { getActivityAssetEffects, type ActivityItem, type ActivityReadModel } from '@/core/activity'
 import { getZcashChainId, parseAssetId } from '@/core/chains/registry'
-import { resolveActivityChainId } from '@/popup/components/transaction/activity-chain'
+import { resolveActivityChainId } from '@/core/activity/activity-chain'
 
 const ZCASH_CHAIN_IDS = new Set([getZcashChainId('mainnet'), getZcashChainId('testnet')])
 

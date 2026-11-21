@@ -16,7 +16,7 @@ import {
   ledgerAccountPreviewNetworkName,
   type LedgerAccountPreview
 } from '../../services/ledger-account-preview'
-import { parseLedgerAccountIndex } from './ledger-connect-model'
+import { parseLedgerAccountIndex } from '@/popup/services/ledger-connect-model'
 
 export function LedgerAccountPicker(props: {
   readonly family: LedgerSelectableFamily

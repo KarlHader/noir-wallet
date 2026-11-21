@@ -12,10 +12,7 @@ import {
   resolveZcashFundingAvailability,
   resolveZcashTransferAvailability
 } from '../../../../src/popup/services/transfer-availability.ts'
-import {
-  getDefaultZcashSelfMoveSource,
-  resolveZcashSelfMove
-} from '../../../../src/popup/services/zcash-self-move.ts'
+import { resolveZcashSelfTransfer } from '../../../../src/popup/services/zcash-self-transfer.ts'
 
 const balance = {
   shielded: '2',
@@ -31,31 +28,24 @@ test('ZEC Move binds each source to the current account opposite native address'
     transparent: `t1${'A'.repeat(33)}`,
     shielded: `u1${'q'.repeat(50)}`
   }
-  assert.deepEqual(resolveZcashSelfMove(addresses, 'transparent', 'mainnet'), {
+  assert.deepEqual(resolveZcashSelfTransfer(addresses, 'transparent', 'mainnet'), {
     source: 'transparent',
     fromAddress: addresses.transparent,
     toAddress: addresses.shielded
   })
-  assert.deepEqual(resolveZcashSelfMove(addresses, 'shielded', 'mainnet'), {
+  assert.deepEqual(resolveZcashSelfTransfer(addresses, 'shielded', 'mainnet'), {
     source: 'shielded',
     fromAddress: addresses.shielded,
     toAddress: addresses.transparent
   })
-  assert.equal(resolveZcashSelfMove(addresses, 'transparent', 'testnet'), null)
+  assert.equal(resolveZcashSelfTransfer(addresses, 'transparent', 'testnet'), null)
   assert.equal(
-    resolveZcashSelfMove(
+    resolveZcashSelfTransfer(
       { ...addresses, shielded: addresses.transparent },
       'transparent',
       'mainnet'
     ),
     null
-  )
-  const options = { addresses, balance, network: 'mainnet' }
-  assert.equal(getDefaultZcashSelfMoveSource({ ...options, keySource: 'software' }), 'transparent')
-  assert.equal(getDefaultZcashSelfMoveSource({ ...options, keySource: 'keystone' }), 'shielded')
-  assert.equal(
-    getDefaultZcashSelfMoveSource({ ...options, balance: null, keySource: 'keystone' }),
-    'shielded'
   )
 })
 

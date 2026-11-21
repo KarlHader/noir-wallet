@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { waitForBackgroundWalletInitialization } from '../helpers/extension-fixtures'
+import { waitForBackgroundWalletInitialization } from '../helpers/background-initialization'
 
 const extensionPackageDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

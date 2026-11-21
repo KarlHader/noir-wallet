@@ -20,7 +20,7 @@ import { getActivityAction } from '../../../src/popup/services/activity-action-l
 import {
   getActivityDetailTitle,
   getActivityRouteTitle
-} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 const scope = { keyDomainId: 'wallet:one', accountId: 'account:one' }
 const signerId = '0x1111111111111111111111111111111111111111'
@@ -695,7 +695,7 @@ test.describe('confidential funding persisted recovery', () => {
       { purpose: 'send' }
     ]) {
       await expect(h.coordinator.prepare({ ...request, ...invalid })).rejects.toThrow(
-        'Zcash Move must receive into the current account'
+        'ZEC transfers must use a receive address from the current account'
       )
     }
     expect(h.state.quoteCalls).toHaveLength(0)
@@ -721,7 +721,7 @@ test.describe('confidential funding persisted recovery', () => {
       })
       active = { ...active, accountId: 'account:other' }
       await expect(h.coordinator.confirm(review.planId, review.payloadFingerprint)).rejects.toThrow(
-        'Zcash Move must receive into the current account'
+        'ZEC transfers must use a receive address from the current account'
       )
       active = { ...active, accountId: scope.accountId }
       h.plans.set(review.planId, { ...stored, purpose: undefined })
@@ -965,6 +965,8 @@ test.describe('confidential funding persisted recovery', () => {
       operation: 'cluster',
       sourceDomain: 'public'
     }
+    const session = h.state.session
+    h.state.session = null
     const preview = await h.coordinator.preview(cluster)
     expect(preview).toEqual({
       amountOutRaw: '54',
@@ -977,9 +979,11 @@ test.describe('confidential funding persisted recovery', () => {
     expect(h.state.quoteCalls[0]).toMatchObject({
       amountRaw: '60',
       depositType: 'ORIGIN_CHAIN',
-      recipientType: 'CONFIDENTIAL_INTENTS'
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      referral: 'noir_receive'
     })
     expect(h.state.quoteCalls.slice(1)).toHaveLength(3)
+    expect(h.state.quoteCalls.slice(1).every(quote => quote.referral === 'noir_send')).toBe(true)
     expect(
       h.state.quoteCalls.slice(1).reduce((sum, quote) => sum + BigInt(quote.amountRaw), 0n)
     ).toBe(57n)
@@ -988,10 +992,10 @@ test.describe('confidential funding persisted recovery', () => {
     expect(h.plans.size).toBe(0)
 
     h.state.quoteCalls.length = 0
-    const shieldPreview = await h.coordinator.preview({
-      ...cluster,
-      sourceDomain: 'shield'
-    })
+    const shieldCluster = { ...cluster, sourceDomain: 'shield' }
+    await expect(h.coordinator.preview(shieldCluster)).rejects.toThrow(/Refresh Shield balances/)
+    h.state.session = session
+    const shieldPreview = await h.coordinator.preview(shieldCluster)
     expect(shieldPreview).toMatchObject({
       amountOutRaw: '57',
       minimumOutputRaw: '54',
@@ -1019,6 +1023,7 @@ test.describe('confidential funding persisted recovery', () => {
       estimateGas: async () => '21000'
     }
     h.coordinator.rpcByChain.set('eip155:1', rpc)
+    h.state.session = null
     const privateCluster = { ...cluster, sourceDomain: 'private', destinationDomain: 'public' }
     const fees = await Promise.all([
       h.coordinator.preview(privateCluster, true),

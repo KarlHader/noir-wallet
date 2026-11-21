@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
 import { getAccountDisplayName } from '@/lib/format'
-import { formatSendFiatValue } from '@/popup/components/transaction/send-input-model'
+import { formatSendFiatValue } from '@/popup/services/send-transfer-model'
 import {
   EvmWalletClientError,
   evmWalletClient,
@@ -13,11 +13,12 @@ import {
   formatBaseUnitDecimalAmount,
   parseDisplayUnitAmount
 } from '@/lib/number-format'
-import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
+import { openMultichainHardwareSignTab } from '@/lib/hardware-tab'
 import { openModal } from '@/popup/provider/ModalManager'
 import { useNavigate } from '@/popup/provider/Router'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
-import { DEFAULT_NETWORK_FEE_TIER } from '@/core/transactions/domain'
+import { DEFAULT_NETWORK_FEE_TIER, NETWORK_FEE_TIERS } from '@/core/transactions/domain'
+import type { NetworkFeePreviews } from '@/popup/services/network-fee-presentation'
 import { areEvmFeeSelectionsEqual, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
 import { useEvmConfirmationEstimate } from '@/popup/hooks/useEvmConfirmationEstimate'
@@ -727,25 +728,39 @@ export function useEvmSendTransfer({
     requestMaximum()
   }
 
-  const estimateFee = useCallback(async () => {
-    if (route !== 'onchain' || !amountRaw || !validAmount || !validRecipient) {
-      throw new Error('Incomplete EVM transfer')
-    }
-    const estimate = await evmWalletClient.estimateTransferFee(
-      { assetId: asset.asset.id, recipient, amountRaw },
-      { feeSelection, executionMode: sourceMode }
+  const estimateSelectedFee = useCallback(
+    async (selection: EvmFeeSelection) => {
+      if (route !== 'onchain' || !amountRaw || !validAmount || !validRecipient) {
+        throw new Error('Incomplete EVM transfer')
+      }
+      const estimate = await evmWalletClient.estimateTransferFee(
+        { assetId: asset.asset.id, recipient, amountRaw },
+        { feeSelection: selection, executionMode: sourceMode }
+      )
+      return { amountRaw: estimate.maximumFeeWei, details: estimate }
+    },
+    [amountRaw, asset.asset.id, recipient, sourceMode, route, validAmount, validRecipient]
+  )
+  const estimateFee = useCallback(
+    () => estimateSelectedFee(feeSelection),
+    [estimateSelectedFee, feeSelection]
+  )
+  const loadTierPreviews = useCallback(async (): Promise<NetworkFeePreviews> => {
+    const previews: NetworkFeePreviews = {}
+    await Promise.allSettled(
+      NETWORK_FEE_TIERS.filter(
+        tier => feeSelection.kind !== 'tier' || tier !== feeSelection.tier
+      ).map(async tier => {
+        const { amountRaw } = await estimateSelectedFee({ kind: 'tier', tier })
+        previews[tier] = {
+          amount: formatBaseUnitAmount(amountRaw, nativeDecimals),
+          symbol: nativeSymbol,
+          approximate: true
+        }
+      })
     )
-    return { amountRaw: estimate.maximumFeeWei, details: estimate }
-  }, [
-    amountRaw,
-    asset.asset.id,
-    feeSelection,
-    recipient,
-    sourceMode,
-    route,
-    validAmount,
-    validRecipient
-  ])
+    return previews
+  }, [estimateSelectedFee, feeSelection, nativeDecimals, nativeSymbol])
   const maximumFeeEstimate =
     route === 'onchain' &&
     maxSelected &&
@@ -806,6 +821,9 @@ export function useEvmSendTransfer({
 
   const handleFormFeeSelectionChange = async (nextFeeSelection: EvmFeeSelection) => {
     if (areEvmFeeSelectionsEqual(nextFeeSelection, feeSelection)) return
+    if (nextFeeSelection.kind !== 'tier' && !(asset.asset.kind === 'native' && maxSelected)) {
+      await estimateSelectedFee(nextFeeSelection)
+    }
     setFeeSelection(nextFeeSelection)
     if (asset.asset.kind === 'native' && maxSelected) {
       setAmount('')
@@ -1059,7 +1077,7 @@ export function useEvmSendTransfer({
       setReview(null)
       if (submission.status === 'external-signature-required') {
         try {
-          await openHardwareEvmSignTab(submission.transactionId)
+          await openMultichainHardwareSignTab(submission.transactionId, 'evm')
         } catch (handoffError) {
           await evmWalletClient.rejectTransfer(submission.transactionId).catch(() => {})
           throw handoffError
@@ -1193,6 +1211,7 @@ export function useEvmSendTransfer({
     privatePreviewError,
     privatePreviewKey,
     feePreview,
+    loadTierPreviews,
     previewFee,
     confirmationTime,
     displayedError,

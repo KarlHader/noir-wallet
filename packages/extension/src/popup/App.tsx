@@ -1,14 +1,14 @@
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { ToastContainer } from './components/common/ToastContainer'
-import { TestnetModeBanner } from './components/common/TestnetModeBanner'
+import { TestnetModeBanner } from './components/shell/TestnetModeBanner'
 import { RouterProvider, Routes, Route, useLocation, useNavigate } from './provider/Router'
-import { SecretPhraseBackupBanner } from './components/common/SecretPhraseBackupBanner'
+import { SecretPhraseBackupBanner } from './components/shell/SecretPhraseBackupBanner'
 import { ModalProvider } from './provider/ModalManager'
 import { DialogProvider } from './hooks/useDialog'
 import { RouteLoadingSkeleton } from './components/common/RouteLoadingSkeleton'
 import { WalletInitializing } from './components/ui/wallet-initializing'
-import { BlockingWalletFailure } from './components/common/BlockingWalletFailure'
+import { BlockingWalletFailure } from './components/shell/BlockingWalletFailure'
 import { PageHeader } from './components/common/PageHeader'
 import { useAppRouting } from './hooks/useAppRouting'
 import { usePersistedExtensionContextSync } from './hooks/usePersistedExtensionContextSync'
@@ -25,23 +25,23 @@ import { resolveLegacyShieldFundsPath } from './services/home-navigation'
 import { Home } from './pages/Home'
 
 // Onboarding Pages
-import { WelcomePage } from './pages/onboarding/WelcomePage'
-import { PasswordPage } from './pages/onboarding/PasswordPage'
-import { SecureWalletPage } from './pages/onboarding/SecureWalletPage'
-import { ViewPhrasePage } from './pages/onboarding/ViewPhrasePage'
-import { ConfirmPhrasePage } from './pages/onboarding/ConfirmPhrasePage'
-import { CongratulationsPage } from './pages/onboarding/CongratulationsPage'
-import { ImportWordCountPage } from './pages/onboarding/ImportWordCountPage'
-import { CreateWordCountPage } from './pages/onboarding/CreateWordCountPage'
-import { ImportWalletPage } from './pages/onboarding/ImportWalletPage'
-import { ImportAccountsPage } from './pages/onboarding/ImportAccountsPage'
-import { ImportPasswordPage } from './pages/onboarding/ImportPasswordPage'
-import { UnlockPage } from './pages/onboarding/UnlockPage'
+import { Welcome } from './pages/onboarding/Welcome'
+import { Password } from './pages/onboarding/Password'
+import { SecureWallet } from './pages/onboarding/SecureWallet'
+import { ViewPhrase } from './pages/onboarding/ViewPhrase'
+import { ConfirmPhrase } from './pages/onboarding/ConfirmPhrase'
+import { Congratulations } from './pages/onboarding/Congratulations'
+import { ImportWordCount } from './pages/onboarding/ImportWordCount'
+import { CreateWordCount } from './pages/onboarding/CreateWordCount'
+import { ImportWallet } from './pages/onboarding/ImportWallet'
+import { ImportAccounts } from './pages/onboarding/ImportAccounts'
+import { ImportPassword } from './pages/onboarding/ImportPassword'
+import { Unlock } from './pages/onboarding/Unlock'
 
 // Account Pages
 import { AccountList } from './pages/account/AccountList'
 import { AccountDetail } from './pages/account/AccountDetail'
-import { ManageAccountNetworksPage } from './pages/account/ManageAccountNetworksPage'
+import { ManageAccountNetworks } from './pages/account/ManageAccountNetworks'
 import { AddressesList } from './pages/account/AddressesList'
 import { ZcashSettings } from './pages/account/ZcashSettings'
 import { ImportPrivateKey } from './pages/account/ImportPrivateKey'
@@ -49,26 +49,23 @@ import { ExportPrivateKey } from './pages/account/ExportPrivateKey'
 
 // Transaction Pages
 import { Send } from './pages/transactions/Send'
-import { Transfer } from './pages/transactions/Transfer'
-import { TransactionResultPage } from './pages/transactions/TransactionResultPage'
+import { DepositWithdraw } from './pages/transactions/DepositWithdraw'
+import { TransactionOutcome } from './pages/transactions/TransactionOutcome'
 import { AssetDetail } from './pages/portfolio/AssetDetail'
 import { ShieldProviderDetail } from './pages/portfolio/ShieldProviderDetail'
-import { ShieldWithdrawPage } from './pages/portfolio/ShieldWithdrawPage'
-import { ShieldZcashMovePage } from './pages/portfolio/ShieldZcashMovePage'
-import { ReceivePage } from './pages/portfolio/ReceivePage'
+import { Receive } from './pages/portfolio/Receive'
 
 // Swap Page
 import { Swap } from './pages/swap/Swap'
 
 // Hardware Wallet Pages (full-tab flows)
-import { KeystoneConnectPage } from './pages/hardware/KeystoneConnectPage'
-import { HardwareConnectPage } from './pages/hardware/HardwareConnectPage'
-import { KeystoneSignPage } from './pages/hardware/KeystoneSignPage'
-import { KeystoneBitcoinSignPage } from './pages/hardware/KeystoneBitcoinSignPage'
-import { KeystoneEvmSignPage } from './pages/hardware/KeystoneEvmSignPage'
+import { KeystoneConnect } from './pages/hardware/KeystoneConnect'
+import { HardwareConnect } from './pages/hardware/HardwareConnect'
+import { KeystoneSign } from './pages/hardware/KeystoneSign'
+import { KeystoneTransferSign } from './pages/hardware/KeystoneTransferSign'
 
 // DApp Pages
-import { ApprovalPage } from './pages/dapp/ApprovalPage'
+import { Approval } from './pages/dapp/Approval'
 import { EvmWalletChoice } from './pages/dapp/EvmWalletChoice'
 import { DAppConnections } from './pages/dapp/DAppConnections'
 
@@ -89,7 +86,7 @@ import { TermsOfUse } from './pages/settings/TermsOfUse'
 import { ViewSeedPhrase } from './pages/settings/ViewSeedPhrase'
 import { VotingRounds } from './pages/voting/VotingRounds'
 import { VotingRound } from './pages/voting/VotingRound'
-import { UpdatePage } from './pages/Update'
+import { Update } from './pages/Update'
 
 import { useOnboardingStore } from '@/store/onboarding-store'
 import {
@@ -100,13 +97,13 @@ import {
 } from '@/core/chains/feature-runtime-policy'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 
-const LedgerConnectPage = lazy(() =>
-  import('./pages/hardware/LedgerConnectPage').then(module => ({
-    default: module.LedgerConnectPage
+const LedgerConnect = lazy(() =>
+  import('./pages/hardware/LedgerConnect').then(module => ({
+    default: module.LedgerConnect
   }))
 )
-const LedgerSignPage = lazy(() =>
-  import('./pages/hardware/LedgerSignPage').then(module => ({ default: module.LedgerSignPage }))
+const LedgerSign = lazy(() =>
+  import('./pages/hardware/LedgerSign').then(module => ({ default: module.LedgerSign }))
 )
 import { useActiveAccountNetworks } from './hooks/useActiveAccountNetworks'
 
@@ -163,29 +160,6 @@ function MainnetOnlyEntry() {
   return null
 }
 
-function ZcashCapabilityEntry({
-  children,
-  fallbackPath
-}: {
-  children: ReactNode
-  fallbackPath: string
-}) {
-  const { replace } = useNavigate()
-  const { activeAccount, loading } = useActiveAccountNetworks()
-  const legacyAccountAvailable = useWalletStore(state => Boolean(state.getCurrentAccount()))
-  const supportsZcash =
-    activeAccount?.networks.some(network => network.chain.family === 'zcash') ??
-    legacyAccountAvailable
-
-  useEffect(() => {
-    if (!loading && !supportsZcash) replace(fallbackPath)
-  }, [fallbackPath, loading, replace, supportsZcash])
-
-  if (loading) return <RouteLoadingSkeleton title="Send" variant="form" />
-  if (!supportsZcash) return null
-  return children
-}
-
 function VotingCapabilityEntry({ children }: { children: ReactNode }) {
   const { replace } = useNavigate()
   const { activeAccount, loading } = useActiveAccountNetworks()
@@ -209,49 +183,27 @@ function AppRoutes() {
 
       {/* Onboarding Routes */}
       <Route path="/onboarding">
-        <Route index element={<WelcomePage />} />
-        <Route path="password" element={<PasswordPage />} />
-        <Route path="secure-wallet" element={<SecureWalletPage />} />
-        <Route path="create-word-count" element={<CreateWordCountPage />} />
-        <Route path="view-phrase" element={<ViewPhrasePage />} />
-        <Route path="confirm-phrase" element={<ConfirmPhrasePage />} />
-        <Route path="congratulations" element={<CongratulationsPage />} />
-        <Route path="import-word-count" element={<ImportWordCountPage />} />
-        <Route path="import" element={<ImportWalletPage />} />
-        <Route path="import-accounts" element={<ImportAccountsPage />} />
-        <Route path="import-password" element={<ImportPasswordPage />} />
+        <Route index element={<Welcome />} />
+        <Route path="password" element={<Password />} />
+        <Route path="secure-wallet" element={<SecureWallet />} />
+        <Route path="create-word-count" element={<CreateWordCount />} />
+        <Route path="view-phrase" element={<ViewPhrase />} />
+        <Route path="confirm-phrase" element={<ConfirmPhrase />} />
+        <Route path="congratulations" element={<Congratulations />} />
+        <Route path="import-word-count" element={<ImportWordCount />} />
+        <Route path="import" element={<ImportWallet />} />
+        <Route path="import-accounts" element={<ImportAccounts />} />
+        <Route path="import-password" element={<ImportPassword />} />
       </Route>
 
-      <Route path="/unlock" element={<UnlockPage />} />
+      <Route path="/unlock" element={<Unlock />} />
       <Route path="/send" element={<Send multiChainEnabled={multichainSendEnabled} />} />
-      <Route path="/transfer" element={<Transfer />} />
-      {multichainSendEnabled && (
-        <Route
-          path="/send/cross-chain"
-          element={
-            DEFAULT_NETWORK === 'mainnet' ? (
-              <Swap purpose="cross-chain-send" />
-            ) : (
-              <MainnetOnlyEntry />
-            )
-          }
-        />
-      )}
-      {multichainSendEnabled && (
-        <Route
-          path="/send/zcash"
-          element={
-            <ZcashCapabilityEntry fallbackPath="/send">
-              <Send multiChainEnabled={multichainSendEnabled} initialZcashProvider />
-            </ZcashCapabilityEntry>
-          }
-        />
-      )}
-      <Route path="/transaction-result" element={<TransactionResultPage />} />
+      <Route path="/transfer" element={<DepositWithdraw />} />
+      <Route path="/transaction-result" element={<TransactionOutcome />} />
       <Route path="/asset-detail" element={<AssetDetail />} />
       <Route path="/account-list" element={<AccountList />} />
       <Route path="/account-detail" element={<AccountDetail />} />
-      <Route path="/account-networks" element={<ManageAccountNetworksPage />} />
+      <Route path="/account-networks" element={<ManageAccountNetworks />} />
       <Route path="/add-wallet" element={<AddWalletEntry />} />
       <Route path="/import-wallet" element={<ImportWalletEntry />} />
       <Route path="/import-private-key" element={<ImportPrivateKey />} />
@@ -276,13 +228,13 @@ function AppRoutes() {
       />
 
       {/* Hardware Wallet Routes (opened in a full browser tab) */}
-      <Route path="/hardware/connect" element={<HardwareConnectPage />} />
-      <Route path="/hardware/keystone-connect" element={<KeystoneConnectPage />} />
+      <Route path="/hardware/connect" element={<HardwareConnect />} />
+      <Route path="/hardware/keystone-connect" element={<KeystoneConnect />} />
       <Route
         path="/hardware/ledger-connect"
         element={
           <Suspense fallback={<RouteLoadingSkeleton title="Connect Ledger" variant="form" />}>
-            <LedgerConnectPage />
+            <LedgerConnect />
           </Suspense>
         }
       />
@@ -290,20 +242,18 @@ function AppRoutes() {
         path="/hardware/ledger-sign"
         element={
           <Suspense fallback={<RouteLoadingSkeleton title="Ledger signing" variant="form" />}>
-            <LedgerSignPage />
+            <LedgerSign />
           </Suspense>
         }
       />
-      <Route path="/hardware/sign" element={<KeystoneSignPage />} />
-      <Route path="/hardware/bitcoin-sign" element={<KeystoneBitcoinSignPage />} />
-      <Route path="/hardware/evm-sign" element={<KeystoneEvmSignPage />} />
+      <Route path="/hardware/sign" element={<KeystoneSign />} />
+      <Route path="/hardware/bitcoin-sign" element={<KeystoneTransferSign family="bitcoin" />} />
+      <Route path="/hardware/evm-sign" element={<KeystoneTransferSign family="evm" />} />
 
       <Route path="/dapp-connections" element={<DAppConnections />} />
       <Route path="/shield-provider" element={<ShieldProviderDetail />} />
       <Route path="/shield-funds" element={<LegacyShieldFundsRedirect />} />
-      <Route path="/shield-withdraw" element={<ShieldWithdrawPage />} />
-      <Route path="/shield-zcash-move" element={<ShieldZcashMovePage />} />
-      <Route path="/receive" element={<ReceivePage />} />
+      <Route path="/receive" element={<Receive />} />
       <Route path="/shield-swap" element={<Swap />} />
       <Route path="/settings" element={<Settings />} />
       <Route path="/default-evm-wallet" element={<DefaultEvmWallet />} />
@@ -321,14 +271,14 @@ function AppRoutes() {
       <Route path="/about" element={<About />} />
       <Route path="/help" element={<Help />} />
       <Route path="/terms-of-use" element={<TermsOfUse />} />
-      <Route path="/update" element={<UpdatePage />} />
+      <Route path="/update" element={<Update />} />
 
       <Route path="/view-seed-phrase" element={<ViewSeedPhrase />} />
       <Route
         path="/swap"
         element={DEFAULT_NETWORK === 'mainnet' ? <Swap /> : <MainnetOnlyEntry />}
       />
-      <Route path="/approval" element={<ApprovalPage />} />
+      <Route path="/approval" element={<Approval />} />
     </Routes>
   )
 }

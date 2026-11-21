@@ -41,7 +41,10 @@ import {
   type EvmNonceRecoveryState,
   type EvmTransferIntent
 } from '@/infrastructure/chains/evm'
-import { parseEvmTransferActivityResponse, type EvmTransferActivity } from './evm-transfer-activity'
+import {
+  parseOnchainTransferActivityResponse,
+  type OnchainTransferActivity
+} from './onchain-transfer-activity'
 import { resolveEvmNetworkCatalog } from '@/core/chains/evm-runtime-config'
 import { getActiveChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import {
@@ -53,7 +56,6 @@ import {
   type UserEvmAssetRecord
 } from '@/core/chains/user-assets'
 
-export type { EvmTransferActivity } from './evm-transfer-activity'
 export type { EvmFeeEstimate } from '@/infrastructure/chains/evm'
 
 export type EvmWalletClientErrorCode = EvmWalletRuntimeErrorCode | 'invalid-response'
@@ -151,6 +153,7 @@ export interface EvmWalletClient {
     action: 'read' | 'refresh',
     options?: {
       readonly forceDiscovery?: boolean
+      readonly refreshConfidential?: boolean
       readonly chainIds?: readonly string[]
       readonly automatic?: boolean
       readonly expectedWalletId?: string
@@ -224,7 +227,7 @@ export interface EvmWalletClient {
     signatureCborBase64: string
   ) => Promise<EvmTransferSubmission>
   readonly resumeTransfer: (transactionId: TransactionId) => Promise<EvmTransferSubmission>
-  readonly getTransferActivity: (graph: TransactionGraph) => Promise<EvmTransferActivity | null>
+  readonly getTransferActivity: (graph: TransactionGraph) => Promise<OnchainTransferActivity | null>
 }
 
 export type EvmRuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
@@ -909,6 +912,7 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
       action: 'read' | 'refresh',
       options: {
         readonly forceDiscovery?: boolean
+        readonly refreshConfidential?: boolean
         readonly chainIds?: readonly string[]
         readonly automatic?: boolean
         readonly expectedWalletId?: string
@@ -933,6 +937,9 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         type: 'GET_PORTFOLIO',
         action,
         ...(options.forceDiscovery === undefined ? {} : { forceDiscovery: options.forceDiscovery }),
+        ...(options.refreshConfidential === undefined
+          ? {}
+          : { refreshConfidential: options.refreshConfidential }),
         ...(chainIds === undefined ? {} : { chainIds }),
         ...(options.automatic === undefined ? {} : { automatic: options.automatic }),
         ...(options.expectedWalletId === undefined
@@ -1433,7 +1440,7 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         throw parseRuntimeError(envelope.error)
       }
       try {
-        return parseEvmTransferActivityResponse(envelope, parsedGraph)
+        return parseOnchainTransferActivityResponse(envelope, parsedGraph)
       } catch {
         throw new EvmWalletClientError('invalid-response', 'Invalid EVM runtime result')
       }

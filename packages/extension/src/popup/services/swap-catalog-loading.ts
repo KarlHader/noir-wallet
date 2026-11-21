@@ -349,22 +349,6 @@ export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) 
   }
 }
 
-export const WALLET_SOURCE_CHAIN_IDS = Object.freeze(
-  RHEA_SWAP_CHAIN_CATALOG.filter(chain => chain.walletFamily !== undefined)
-    .sort((left, right) => Number(right.blockchain === 'zec') - Number(left.blockchain === 'zec'))
-    .map(chain => chain.tokenListChainId)
-)
-export const ALL_DESTINATION_CHAIN_IDS = Object.freeze(
-  [
-    ...RHEA_SWAP_CHAIN_CATALOG.filter(chain =>
-      ['eth', 'zec', 'sol', 'near', 'btc'].includes(chain.blockchain)
-    ),
-    ...RHEA_SWAP_CHAIN_CATALOG.filter(
-      chain => !['eth', 'zec', 'sol', 'near', 'btc'].includes(chain.blockchain)
-    )
-  ].map(chain => chain.tokenListChainId)
-)
-
 export function mergeTokenCatalogs(
   ...catalogs: readonly (readonly RheaSwapToken[])[]
 ): readonly RheaSwapToken[] {

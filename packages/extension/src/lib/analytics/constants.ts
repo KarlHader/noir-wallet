@@ -66,8 +66,6 @@ export const PAGE_IDS = {
   /** Send ZEC form + review */
   SEND: 'noir_send',
   TRANSFER: 'noir_transfer',
-  SEND_CROSS_CHAIN: 'noir_send_cross_chain',
-  SEND_ZCASH: 'noir_send_zcash',
   /** Transaction pending/success/failure result page */
   TRANSACTION_RESULT: 'noir_transaction_result',
   ASSET_DETAIL: 'noir_asset_detail',
@@ -89,7 +87,6 @@ export const PAGE_IDS = {
   DAPP_CONNECTIONS: 'noir_dapp_connections',
   SHIELD_PROVIDER: 'noir_shield_provider',
   SHIELD_FUNDS: 'noir_shield_funds',
-  SHIELD_WITHDRAW: 'noir_shield_withdraw',
   RECEIVE: 'noir_receive',
   SHIELD_SWAP: 'noir_shield_swap',
   VOTING: 'noir_voting',
@@ -161,8 +158,6 @@ const ROUTE_PAGE_IDS: Record<string, string> = {
   '/unlock': PAGE_IDS.UNLOCK,
   '/send': PAGE_IDS.SEND,
   '/transfer': PAGE_IDS.TRANSFER,
-  '/send/cross-chain': PAGE_IDS.SEND_CROSS_CHAIN,
-  '/send/zcash': PAGE_IDS.SEND_ZCASH,
   '/transaction-result': PAGE_IDS.TRANSACTION_RESULT,
   '/asset-detail': PAGE_IDS.ASSET_DETAIL,
   '/account-list': PAGE_IDS.ACCOUNT_LIST,
@@ -177,7 +172,6 @@ const ROUTE_PAGE_IDS: Record<string, string> = {
   '/dapp-connections': PAGE_IDS.DAPP_CONNECTIONS,
   '/shield-provider': PAGE_IDS.SHIELD_PROVIDER,
   '/shield-funds': PAGE_IDS.SHIELD_FUNDS,
-  '/shield-withdraw': PAGE_IDS.SHIELD_WITHDRAW,
   '/receive': PAGE_IDS.RECEIVE,
   '/shield-swap': PAGE_IDS.SHIELD_SWAP,
   '/voting': PAGE_IDS.VOTING,

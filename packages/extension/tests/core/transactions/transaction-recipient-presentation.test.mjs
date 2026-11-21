@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mapZcashV1TransactionToActivityItem } from '../../../src/infrastructure/activity/zcash-v1-activity-source.ts'
-import { getActivityTransferRecipient } from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+import { getActivityTransferRecipient } from '../../../src/popup/services/multichain-activity-presentation.ts'
 import {
   getMissingZcashTransactionSource,
   getZcashTransactionRecipient

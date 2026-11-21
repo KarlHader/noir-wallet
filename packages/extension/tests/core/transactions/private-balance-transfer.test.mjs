@@ -26,15 +26,15 @@ import {
   buildShieldSwapPreviewRequest,
   matchesShieldSwapReview
 } from '../../../src/popup/services/shield-swap-form.ts'
-import { initialMoveDraft } from '../../../src/popup/pages/transactions/move-draft.ts'
-import { listMoveSameChainDestinationAssets } from '../../../src/popup/services/move-asset-picker.ts'
+import { initialBalanceTransferDraft } from '../../../src/popup/services/balance-transfer-draft.ts'
+import { listTransferSameChainDestinationAssets } from '../../../src/popup/services/balance-transfer-asset-picker.ts'
 import {
-  readShieldMovePreference,
-  selectShieldMoveAssetId,
-  shieldMovePreferenceKey
-} from '../../../src/popup/pages/transactions/move-preference.ts'
+  readShieldTransferPreference,
+  selectShieldTransferAssetId,
+  shieldTransferPreferenceKey
+} from '../../../src/popup/services/shield-transfer-preference.ts'
 
-test('restores a Move draft only for its wallet account and network', () => {
+test('restores a balance transfer draft only for its wallet account and network', () => {
   const scope = 'mainnet:wallet-1:account-1:rpc-1'
   const draft = {
     scope,
@@ -53,19 +53,19 @@ test('restores a Move draft only for its wallet account and network', () => {
     routeAssetId: null
   }
 
-  expect(initialMoveDraft({ ...input, scope })).toEqual(draft)
+  expect(initialBalanceTransferDraft({ ...input, scope })).toEqual(draft)
   for (const otherScope of [
     'mainnet:wallet-1:account-2:rpc-1',
     'testnet:wallet-1:account-1:rpc-1'
   ]) {
-    expect(initialMoveDraft({ ...input, scope: otherScope })).toMatchObject({
+    expect(initialBalanceTransferDraft({ ...input, scope: otherScope })).toMatchObject({
       assetId: null,
       amount: '',
       maxSelected: false
     })
   }
   expect(
-    initialMoveDraft({
+    initialBalanceTransferDraft({
       ...input,
       scope,
       routeFrom: 'public',
@@ -74,7 +74,7 @@ test('restores a Move draft only for its wallet account and network', () => {
     })
   ).toMatchObject({ from: 'public', to: 'private', assetId: null, amount: '' })
   expect(
-    initialMoveDraft({
+    initialBalanceTransferDraft({
       ...input,
       scope,
       routeFrom: 'private',
@@ -84,10 +84,10 @@ test('restores a Move draft only for its wallet account and network', () => {
   ).toEqual(draft)
 })
 
-test('defaults Shield Move and keeps preferences scoped to a supported account asset', () => {
+test('defaults Shield transfers and keeps preferences scoped to a supported account asset', () => {
   const scope = 'mainnet:wallet-1:account-1:rpc-1'
   expect(
-    initialMoveDraft({
+    initialBalanceTransferDraft({
       state: null,
       scope,
       mode: 'private',
@@ -97,46 +97,33 @@ test('defaults Shield Move and keeps preferences scoped to a supported account a
     })
   ).toMatchObject({ from: 'private', to: 'shield', assetId: null, amount: '' })
   expect(
-    initialMoveDraft({
+    initialBalanceTransferDraft({
       state: null,
       scope,
       mode: 'public',
       routeFrom: null,
       routeTo: null,
-      routeAssetId: null,
-      entry: 'shield'
+      routeAssetId: null
     })
   ).toMatchObject({ from: 'public', to: 'shield', assetId: null, amount: '' })
   expect(
-    initialMoveDraft({
-      state: null,
-      scope,
-      mode: 'private',
-      routeFrom: null,
-      routeTo: null,
-      routeAssetId: null,
-      entry: 'shield'
-    })
-  ).toMatchObject({ from: 'private', to: 'shield', assetId: null, amount: '' })
-  expect(
-    initialMoveDraft({
+    initialBalanceTransferDraft({
       state: null,
       scope,
       mode: 'private',
       routeFrom: 'shield',
       routeTo: 'public',
-      routeAssetId: 'eip155:1/slip44:60',
-      entry: 'asset-detail'
+      routeAssetId: 'eip155:1/slip44:60'
     })
   ).toMatchObject({ from: 'shield', to: 'public', assetId: 'eip155:1/slip44:60' })
-  expect(shieldMovePreferenceKey('mainnet', 'wallet-1', 'account-1')).not.toBe(
-    shieldMovePreferenceKey('testnet', 'wallet-1', 'account-1')
+  expect(shieldTransferPreferenceKey('mainnet', 'wallet-1', 'account-1')).not.toBe(
+    shieldTransferPreferenceKey('testnet', 'wallet-1', 'account-1')
   )
-  expect(shieldMovePreferenceKey('mainnet', 'wallet-1', 'account-1')).not.toBe(
-    shieldMovePreferenceKey('mainnet', 'wallet-1', 'account-2')
+  expect(shieldTransferPreferenceKey('mainnet', 'wallet-1', 'account-1')).not.toBe(
+    shieldTransferPreferenceKey('mainnet', 'wallet-1', 'account-2')
   )
   expect(
-    readShieldMovePreference({
+    readShieldTransferPreference({
       provider: 'near-confidential',
       assetId: 'eip155:1/slip44:60',
       destinationAssetId: null,
@@ -216,7 +203,7 @@ test('lists only supported same-chain Move network choices for the selected asse
   const arbitrum = option('eip155:42161')
   const unavailable = option('eip155:8453', 'ETH', 'unavailable')
   const unrecognized = option('eip155:999999')
-  const choices = listMoveSameChainDestinationAssets({
+  const choices = listTransferSameChainDestinationAssets({
     source: ethereum,
     assets: [ethereum, arbitrum, unavailable, unrecognized],
     from: 'public',
@@ -228,7 +215,7 @@ test('lists only supported same-chain Move network choices for the selected asse
   })
   expect(choices.map(item => item.chain.chain.id)).toEqual(['eip155:1', 'eip155:42161'])
   expect(
-    listMoveSameChainDestinationAssets({
+    listTransferSameChainDestinationAssets({
       source: ethereum,
       assets: [ethereum, arbitrum],
       from: 'public',
@@ -389,7 +376,7 @@ test('uses independently held Shield tokens without adding them to Public assets
     }
   }
   expect(
-    selectShieldMoveAssetId({
+    selectShieldTransferAssetId({
       assets: [publicProjection],
       eligibleChainIds: ['eip155:1'],
       managedAssets: managed,
@@ -727,7 +714,7 @@ test('lists official cross-network USDC destinations from the managed catalog', 
   const options = listShieldFundingAssets(model, managed, tokens, 'mainnet')
   const moveAssets = options.map(({ asset, chain }) => ({ asset, chain }))
   const selectMoveAsset = (eligibleChainIds, preferredAssetId = null, catalog = managed) =>
-    selectShieldMoveAssetId({
+    selectShieldTransferAssetId({
       assets: moveAssets,
       eligibleChainIds,
       managedAssets: catalog,
@@ -758,7 +745,7 @@ test('lists official cross-network USDC destinations from the managed catalog', 
       : item
   )
   expect(
-    selectShieldMoveAssetId({
+    selectShieldTransferAssetId({
       assets: fundedBase,
       eligibleChainIds: ['eip155:1', 'eip155:8453'],
       managedAssets: managed,

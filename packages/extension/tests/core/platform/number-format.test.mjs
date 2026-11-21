@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import Big from '../../../src/lib/big.ts'
-import { formatSendFiatValue } from '../../../src/popup/components/transaction/send-input-model.ts'
+import { formatSendFiatValue } from '../../../src/popup/services/send-transfer-model.ts'
 import {
   formatAmount,
   formatBaseUnitAmount,

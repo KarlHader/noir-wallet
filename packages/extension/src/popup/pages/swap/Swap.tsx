@@ -1,24 +1,24 @@
-import { ShieldSwapPage } from '../portfolio/ShieldSwapPage'
+import { ShieldSwap } from '../portfolio/ShieldSwap'
 import {
-  shieldSourceSelectionItem,
-  type ShieldSourceTokenPickerItem
-} from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
-import { ShieldSourceTokenSelector } from '@/popup/components/tokens/ShieldSourceTokenSelector'
+  ShieldTokenPicker,
+  shieldTokenSelectionItem
+} from '@/popup/components/tokens/ShieldTokenPicker'
 import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
-import { ConfidentialDestinationSelector } from '@/popup/components/tokens/ConfidentialDestinationSelector'
+import { buildShieldDestinationPickerRows } from '@/popup/services/shield-swap-form'
 import {
   TokenSelectorContent,
   TokenSelectorDialog,
   tokenSelectorDialogClassName
 } from '@/popup/components/tokens/TokenSelectorDialog'
-import type { TokenSelectorExtraItem } from '@/popup/components/tokens/TokenSelector'
+import type { TokenSelectorExtraItem } from '@/popup/components/swap/SwapCatalogTokenPicker'
 import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-manager-client'
 import {
   getZcashTokenPickerChain,
   listShieldFundingAssets,
   shieldFundingSources,
   shieldPortfolioBalances,
-  shieldFundingAvailableRaw
+  shieldFundingAvailableRaw,
+  type ShieldTokenPickerItem
 } from '@/popup/services/shield-transfer'
 import {
   buildShieldSwapZecSourceOptions,
@@ -93,8 +93,7 @@ import { sameNativeZecQuoteBinding } from '@/core/services/native-zec-intents-sw
 import {
   openHardwareSignAndWait,
   openHardwareSignTab,
-  openHardwareBitcoinSignTab,
-  openHardwareEvmSignTab
+  openMultichainHardwareSignTab
 } from '@/lib/hardware-tab'
 import { isSidePanelSurface } from '@/lib/extension-display-mode'
 import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent, type TrackOptions } from '@/lib/analytics'
@@ -108,13 +107,14 @@ import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/rep
 import { transactionFailedBeforeBroadcast } from '@/core/transactions/transaction-analytics'
 
 import { SwapTokenSelector } from '../../components/swap/SwapTokenSelector'
-import { isBundledWalletAsset } from '../../components/tokens/token-display-policy'
+import { isBundledWalletAsset } from '@/popup/services/token-display-policy'
 import { SlippageSettingContent, SwapSettingsButton } from '../../components/swap/SlippageSetting'
 import { SwapReviewView } from '../../components/swap/SwapReviewView'
 import { SwapInputView } from '../../components/swap/SwapInputView'
 import { CrossChainSendFormView } from '../../components/transaction/CrossChainSendFormView'
+import { useSharedSendForm } from '../../components/transaction/SendFormLayout'
 import { CrossChainSendReviewView } from '../../components/transaction/CrossChainSendReviewView'
-import { calculateSwapPriceImpact } from '../../components/swap/swap-estimate'
+import { calculateSwapPriceImpact } from '@/popup/services/swap-estimate'
 import { useSwapState } from '../../hooks/useSwapState'
 import {
   buildCrossChainSendNetworkOptions,
@@ -125,16 +125,16 @@ import {
   isCrossChainSendChainEnabled,
   isCrossChainSendDestination,
   isCrossChainSendRecipientValid,
-  readCrossChainSendRoute,
   resolveCrossChainSendDestinationByWalletAssetId,
   resolveCrossChainSendRouteAssetDisplay,
-  resolveCrossChainSendRouteDraft
+  resolveCrossChainSendDraft,
+  type CrossChainSendDraft
 } from '@/popup/services/cross-chain-send-assets'
 import { readEvmSendDestinationSupport } from '@/popup/services/evm-send-catalog'
 import {
   FundingSourceSelector,
   fundingSourceSheetClassName
-} from '../../components/transaction/FundingSourceSelector'
+} from '../../components/zcash/FundingSourceSelector'
 import { RecipientSelector } from '../../components/transaction/RecipientSelector'
 import { getActiveAccountScopeKey } from '@/popup/lib/active-account-scope'
 import {
@@ -151,7 +151,7 @@ import {
 } from '@/popup/services/private-balance-transfer'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { InlineError } from '../../components/common/InlineError'
-import { ZcashSyncProgress } from '../../components/common/ZcashSyncProgress'
+import { ZcashSyncProgress } from '../../components/zcash/ZcashSyncProgress'
 import { useZcashSyncReadStatus } from '@/popup/hooks/usePersistedExtensionContextSync'
 import { AmountDisplay } from '../../components/common/AmountDisplay'
 import { Button } from '../../components/ui/button'
@@ -344,10 +344,29 @@ function sameNativeZecDestination(
   )
 }
 
-export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-send' }) {
+type CrossChainSendOptions = {
+  draft: CrossChainSendDraft & { walletId: string; accountId: string }
+  originPath: string | null
+  onBack: () => void
+  onReturn: (draft: CrossChainSendDraft, action: 'network' | 'asset' | 'shield') => void
+}
+
+const emptySwapSearchParams = new URLSearchParams()
+
+export function Swap() {
+  return <SwapWorkflow />
+}
+
+export function CrossChainSendAdapter(options: CrossChainSendOptions) {
+  return <SwapWorkflow crossChainSend={options} />
+}
+
+function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptions }) {
+  const sharedSendLayout = useSharedSendForm()
   const { goBack, navigate } = useNavigate()
   const location = useLocation()
-  const [searchParams] = useSearchParams()
+  const [routeSearchParams] = useSearchParams()
+  const searchParams = crossChainSend ? emptySwapSearchParams : routeSearchParams
   const [shieldSwapSelected, setShieldSwapSelected] = useState(
     location.pathname === '/shield-swap' || searchParams.get('balanceDomain') === 'shield'
   )
@@ -361,6 +380,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const [shieldDestinationPickerOpen, setShieldDestinationPickerOpen] = useState(false)
   const [shieldPickerNetwork, setShieldPickerNetwork] = useState('all')
   const shieldPickerReady = useTokenSelectorReady(shieldZecPickerOpen)
+  const shieldDestinationPickerReady = useTokenSelectorReady(shieldDestinationPickerOpen)
   const confidentialShieldSwapActive = shieldConfidentialSwapActive({
     shieldSwapSelected,
     shieldZecSource
@@ -383,61 +403,39 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     },
     []
   )
-  const crossChainSendRequested = purpose === 'cross-chain-send'
-  const {
-    sourceAssetId: requestedSourceAssetId,
-    destinationAssetId: requestedDestinationAssetId,
-    destinationChainId: requestedSendDestinationChainId,
-    recipient: requestedCrossChainRecipient,
-    amount: requestedCrossChainAmount,
-    sourceMode: requestedCrossChainSourceMode,
-    returnToSendAssetId,
-    sendEntry
-  } = readCrossChainSendRoute(searchParams, location.state, crossChainSendRequested)
-  const returnFromCrossChainSend = (nextMode?: 'shield', openSourceAssetPicker = false) => {
-    const sourceAssetId = returnToSendAssetId ?? requestedSourceAssetId
-    if (sourceAssetId) {
-      const destinationAssetId = crossChainDraftPending
-        ? requestedDestinationAssetId
+  const crossChainSendRequested = Boolean(crossChainSend)
+  const requestedSourceAssetId = crossChainSend?.draft.sourceAssetId ?? searchParams.get('source')
+  const requestedDestinationAssetId =
+    crossChainSend?.draft.destinationAssetId ?? searchParams.get('destination')
+  const requestedSendDestinationChainId = crossChainSend?.draft.destinationChainId ?? null
+  const requestedCrossChainRecipient = crossChainSend?.draft.recipient ?? null
+  const requestedCrossChainAmount = crossChainSend?.draft.amount ?? null
+  const requestedCrossChainSourceMode = searchParams.get('sourceMode')
+  const returnFromCrossChainSend = (action: 'network' | 'asset' | 'shield') => {
+    if (!crossChainSend || !crossChainSendScopeMatches) return
+    const { draft } = crossChainSend
+    const sourceChainId = draft.sourceAssetId.split('/')[0]
+    const destinationChainId =
+      action === 'network'
+        ? sourceChainId
+        : (selectedSendDestinationChainId ?? draft.destinationChainId)
+    const destinationAssetId =
+      action === 'network'
+        ? draft.sourceAssetId
         : swap.tokenOut
           ? getCrossChainSendWalletAssetId(swap.tokenOut)
-          : requestedDestinationAssetId
-      const destinationChainId =
-        selectedSendDestinationChainId ?? destinationAssetId?.split('/')[0] ?? null
-      const recipient = crossChainDraftPending
-        ? (crossChainRouteDraft?.recipient ?? requestedCrossChainRecipient ?? '')
-        : swap.recipientAddress
-      const amount = crossChainDraftPending
-        ? (crossChainRouteDraft?.amount ?? requestedCrossChainAmount ?? '')
-        : swap.amountIn
-      const params = new URLSearchParams({
-        assetId: sourceAssetId,
-        sourceMode: nextMode ?? 'main',
-        ...(destinationAssetId ? { destination: destinationAssetId } : {}),
-        ...(destinationChainId ? { networkId: destinationChainId } : {}),
-        ...(recipient ? { recipient } : {}),
-        ...(amount ? { amount } : {}),
-        ...(searchParams.get('originPath') ? { originPath: searchParams.get('originPath')! } : {})
-      })
-      navigate(`/send?${params.toString()}`, {
-        replace: true,
-        state: {
-          sendEntry,
-          ...(openSourceAssetPicker ? { openSourceAssetPicker: true } : {}),
-          crossChainReturnDraft: {
-            sourceAssetId,
-            destinationAssetId,
-            destinationChainId,
-            walletId: effectiveWalletId,
-            accountId: effectiveAccountId,
-            recipient,
-            amount
-          }
-        }
-      })
-    } else {
-      goBack()
-    }
+          : draft.destinationAssetId
+    crossChainSend.onReturn(
+      {
+        sourceAssetId: draft.sourceAssetId,
+        destinationAssetId:
+          destinationAssetId?.split('/')[0] === destinationChainId ? destinationAssetId : null,
+        destinationChainId,
+        recipient: crossChainDraftPending ? draft.recipient : swap.recipientAddress,
+        amount: crossChainDraftPending ? draft.amount : swap.amountIn
+      },
+      action
+    )
   }
   const publicPrivacySendRequested = searchParams.get('publicPrivacySend') === '1'
   const privateTransferRequested =
@@ -538,13 +536,15 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           accountDisplayNames
         )
       : undefined)
-  const crossChainSendRouteScopeMatches = Boolean(
-    crossChainSendRequested &&
-    effectiveWalletId &&
-    effectiveAccountId &&
-    searchParams.get('sourceWalletId') === effectiveWalletId &&
-    searchParams.get('sourceAccountId') === effectiveAccountId
-  )
+  const crossChainSendDraft = crossChainSend
+    ? resolveCrossChainSendDraft({
+        network: currentNetwork,
+        walletId: effectiveWalletId,
+        accountId: effectiveAccountId,
+        draft: crossChainSend.draft
+      })
+    : null
+  const crossChainSendScopeMatches = crossChainSendDraft !== null
   const crossChainRouteDisplay = crossChainSendRequested
     ? resolveCrossChainSendRouteAssetDisplay({
         network: currentNetwork,
@@ -553,21 +553,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         destinationChainId: requestedSendDestinationChainId
       })
     : null
-  const crossChainRouteDraft = resolveCrossChainSendRouteDraft({
-    network: currentNetwork,
-    walletId: effectiveWalletId,
-    accountId: effectiveAccountId,
-    currentWalletId,
-    currentAccountId,
-    routeWalletId: crossChainSendRequested ? searchParams.get('sourceWalletId') : null,
-    routeAccountId: crossChainSendRequested ? searchParams.get('sourceAccountId') : null,
-    navigationState: location.state,
-    sourceAssetId: requestedSourceAssetId,
-    destinationAssetId: requestedDestinationAssetId,
-    destinationChainId: requestedSendDestinationChainId,
-    recipient: requestedCrossChainRecipient,
-    amount: requestedCrossChainAmount
-  })
   const accountNetworksReady =
     !accountNetworksLoading &&
     !accountNetworksError &&
@@ -673,16 +658,18 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     searchParams.get('sourceAccountId') === effectiveAccountId
       ? requestedSwapMode
       : null
-  const requestedSourceMode = publicPrivacySendRequested
-    ? 'main'
-    : sourceModeSelection?.scope === walletSourcesScope
-      ? sourceModeSelection.mode
-      : (routeSourceMode ?? walletActionMode.mode)
+  const requestedSourceMode =
+    publicPrivacySendRequested || crossChainSendRequested
+      ? 'main'
+      : sourceModeSelection?.scope === walletSourcesScope
+        ? sourceModeSelection.mode
+        : (routeSourceMode ?? walletActionMode.mode)
   const sourceMode: QuoteDepositExecutionMode =
     requestedSourceMode === 'private' && !privateExecutionSupported ? 'main' : requestedSourceMode
   const sourceModeReady =
     !walletActionMode.loading ||
     publicPrivacySendRequested ||
+    crossChainSendRequested ||
     sourceModeSelection?.scope === walletSourcesScope ||
     routeSourceMode !== null
   const swapPreferenceScope =
@@ -770,7 +757,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       sourceAssetId: requestedSourceAssetId,
       destinationAssetId:
         privateFundingDestinationAsset ??
-        (crossChainSendRouteScopeMatches ? requestedDestinationAssetId : null),
+        (crossChainSendScopeMatches ? requestedDestinationAssetId : null),
       destinationApiChainId: privateFundingDestinationChain,
       enabledChains: selectionSwapChains,
       enabledChainsError: accountNetworksError,
@@ -1085,6 +1072,24 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     [shieldManagedAssets]
   )
   const shieldDisplayBalances = useMemo(() => shieldPortfolioBalances(portfolio), [portfolio])
+  const shieldDestinationPickerRows = useMemo(
+    () =>
+      shieldDestinationPickerReady
+        ? buildShieldDestinationPickerRows({
+            options: nativeConfidentialDestinations,
+            tokens: nativeIntentsCatalog,
+            balances: shieldDisplayBalances,
+            network: currentNetwork
+          })
+        : [],
+    [
+      shieldDestinationPickerReady,
+      nativeConfidentialDestinations,
+      nativeIntentsCatalog,
+      shieldDisplayBalances,
+      currentNetwork
+    ]
+  )
   const shieldFundingCatalogTokens = useMemo(
     () => (shieldPickerReady ? shieldCatalogTokens : shieldCatalogTokens.filter(isZecToken)),
     [shieldCatalogTokens, shieldPickerReady]
@@ -1138,7 +1143,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     walletZecPrice && Number(walletZecPrice) > 0
       ? walletZecPrice
       : shieldCatalogTokens.find(token => token.assetId === ZEC_ZCASH_ASSET)?.price
-  const shieldPickerRows = useMemo((): readonly ShieldSourceTokenPickerItem[] => {
+  const shieldPickerRows = useMemo((): readonly ShieldTokenPickerItem[] => {
     const pricesByAssetId = new Map(shieldCatalogTokens.map(token => [token.assetId, token.price]))
     return [
       ...(nativeZecShieldAvailable &&
@@ -1217,7 +1222,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       ),
     [shieldPickerRows]
   )
-  const zecDestinationPickerRows = useMemo((): readonly ShieldSourceTokenPickerItem[] => {
+  const zecDestinationPickerRows = useMemo((): readonly ShieldTokenPickerItem[] => {
     if (!hasManagedZcashDestination || !nativeZecShieldAvailable) return []
     return (['transparent', 'shielded'] as const).map(source => {
       const key =
@@ -1313,7 +1318,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const [hydratedCrossChainSendScope, setHydratedCrossChainSendScope] = useState<string | null>(
     null
   )
-  const crossChainDraftScope = crossChainRouteDraft
+  const crossChainDraftScope = crossChainSendDraft
     ? [
         walletSourcesScope ?? 'route-pending',
         requestedSourceAssetId,
@@ -2105,7 +2110,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         : [],
     [crossChainSendRequested, lockedSourceToken, swap.sourceTokens, sendDestinationRows]
   )
-  const requestedCrossChainDestinationToken = crossChainSendRouteScopeMatches
+  const requestedCrossChainDestinationToken = crossChainSendScopeMatches
     ? sendDestinationSelection?.scope === sendDestinationSelectionScope ||
       Boolean(requestedSendDestinationChainId)
       ? (crossChainSendDestinations.find(
@@ -2722,7 +2727,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     sendDestinationCatalogRevision,
     requestedCrossChainRecipient,
     requestedCrossChainAmount,
-    crossChainSendRouteScopeMatches,
+    crossChainSendScopeMatches,
     crossChainDraftScope,
     requestedDestinationToken?.assetId,
     requestedSourceToken?.assetId,
@@ -4190,10 +4195,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     onReview: reviewLiveQuote
   })
 
-  const { crossChainOriginPath, resultReturnPath } = resolveSwapResultReturnPaths({
-    sourceAssetId: returnToSendAssetId ?? requestedSourceAssetId ?? swap.tokenIn?.assetId,
-    originPath: searchParams.get('originPath'),
-    crossChainScopeMatches: crossChainSendRouteScopeMatches,
+  const { resultReturnPath } = resolveSwapResultReturnPaths({
+    sourceAssetId: requestedSourceAssetId ?? swap.tokenIn?.assetId,
+    originPath: crossChainSend?.originPath ?? searchParams.get('originPath'),
+    crossChainScopeMatches: crossChainSendScopeMatches,
     crossChainSend: crossChainSendRequested,
     publicPrivacySend: publicPrivacySendRequested,
     privateBalanceTransfer: privateBalanceTransferRequested,
@@ -5059,9 +5064,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 ...(publicPrivacySendRequested ? { purpose: 'public-private-send' as const } : {})
               })
             }
-            await (submission.family === 'bitcoin'
-              ? openHardwareBitcoinSignTab(approvalTransactionId)
-              : openHardwareEvmSignTab(approvalTransactionId))
+            await openMultichainHardwareSignTab(
+              approvalTransactionId,
+              submission.family === 'bitcoin' ? 'bitcoin' : 'evm'
+            )
           } catch (handoffError) {
             if (pendingRheaEvmAfterApproval) {
               await swapApprovalContinuationClient.clear(approvalTransactionId).catch(() => {})
@@ -5582,7 +5588,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             onBack={() => resolve(undefined)}
           >
             <SwapTokenSelector
-              fullHeight
               scopeNetwork={currentNetwork}
               onScopeInvalidated={() => resolve(undefined)}
               openingWalletPointer={{ walletId: currentWalletId, accountId: currentAccountId }}
@@ -5605,7 +5610,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                       )
                       .map(
                         (row): TokenSelectorExtraItem => ({
-                          ...shieldSourceSelectionItem(row, balancesHidden),
+                          ...shieldTokenSelectionItem(row, balancesHidden),
                           blockchain: 'zec',
                           searchTerms: [
                             'ZEC',
@@ -5614,8 +5619,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                               ? 'transparent'
                               : 'shield'
                           ],
-                          lowBalance:
-                            row.availableRaw === undefined || BigInt(row.availableRaw) <= 0n,
                           selected:
                             row.key === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
                               ? swap.isZecSource && fundingSource === 'shielded'
@@ -5650,7 +5653,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                           : catalogTokens,
                         extraItems: rows.map(
                           (row): TokenSelectorExtraItem => ({
-                            ...shieldSourceSelectionItem(row, balancesHidden),
+                            ...shieldTokenSelectionItem(row, balancesHidden),
                             blockchain: 'zec',
                             searchTerms: [
                               'ZEC',
@@ -6018,7 +6021,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       sourceNetwork: currentNetwork
     })
     if (maxSelected) query.set('maximum', '1')
-    navigate(`${swap.isZecSource ? '/send/zcash' : '/send'}?${query.toString()}`, { replace: true })
+    if (swap.isZecSource) {
+      query.set('provider', 'zcash-shield')
+      query.set('from', 'transparent')
+    }
+    navigate(`/send?${query.toString()}`, { replace: true })
   }
 
   const handleSourceModeChange = (mode: QuoteDepositExecutionMode, force = false) => {
@@ -6269,13 +6276,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           showBack: true,
           ...(publicPrivacySendRequested
             ? { onBack: returnFromPublicPrivacySend }
-            : crossChainSendRequested
-              ? {
-                  onBack: () => {
-                    if (crossChainOriginPath) navigate(crossChainOriginPath, { replace: true })
-                    else goBack()
-                  }
-                }
+            : crossChainSend
+              ? { onBack: crossChainSend.onBack }
               : {})
         }
     }
@@ -7011,6 +7013,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       })
       return (
         <CrossChainSendFormView
+          shareForm={sharedSendLayout && crossChainSendMode === 'public'}
           tokenIn={crossChainDraftPending ? lockedSourceToken : swap.tokenIn}
           tokenOut={crossChainDraftPending ? requestedCrossChainDestinationToken : swap.tokenOut}
           initializing={crossChainDraftPending}
@@ -7026,7 +7029,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           destinationNetworksLoading={destinationCatalogLoading}
           onSelectDestination={chainId => {
             if (chainId === sourceDescriptor?.apiChainId) {
-              returnFromCrossChainSend()
+              returnFromCrossChainSend('network')
               return
             }
             const destination = sendDestinationCandidates.find(
@@ -7042,7 +7045,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             swap.clearTokenOutForFlow()
           }}
           amount={
-            crossChainDraftPending ? (crossChainRouteDraft?.amount ?? swap.amountIn) : swap.amountIn
+            crossChainDraftPending ? (crossChainSendDraft?.amount ?? swap.amountIn) : swap.amountIn
           }
           estimatedOut={
             activeQuote && swap.tokenOut
@@ -7052,18 +7055,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           routeCost={routeCost}
           recipient={
             crossChainDraftPending
-              ? (crossChainRouteDraft?.recipient ?? resolvedRecipientAddress)
+              ? (crossChainSendDraft?.recipient ?? resolvedRecipientAddress)
               : resolvedRecipientAddress
           }
           spendableBalance={spendableBalance}
-          sourceBadge={
-            (crossChainDraftPending ? requestedCrossChainSourceMode : executionSourceMode) ===
-            'private'
-              ? 'Private'
-              : 'Public'
-          }
-          onSelectShieldSource={() => returnFromCrossChainSend('shield')}
-          onSelectSourceAsset={() => returnFromCrossChainSend(undefined, true)}
+          onSelectSourceAsset={() => returnFromCrossChainSend('asset')}
           isQuoting={swap.isQuoting}
           quoteError={
             crossChainPrivateSourceUnavailable
@@ -7469,16 +7465,35 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         : null
     : null
 
+  const crossChainSendMode =
+    (crossChainDraftPending ? requestedCrossChainSourceMode : executionSourceMode) === 'private'
+      ? 'private'
+      : 'public'
+  const crossChainSendShieldAvailable =
+    crossChainSendRequested &&
+    (confidentialShieldAvailable ||
+      (currentWalletId === effectiveWalletId &&
+        currentAccountId === effectiveAccountId &&
+        (storageV2Account?.networks.some(network => network.chain.family === 'zcash') ??
+          Boolean(currentAccount?.addresses.shielded)) &&
+        getFundingSourceOptions(storeBalance, currentAccount?.addresses ?? {}, zcashKeySource).some(
+          source => source.type === 'shielded' && !source.disabledReason
+        )))
+
   return (
     <div
-      className="page-container"
+      className={
+        sharedSendLayout && crossChainSendMode === 'public' ? 'contents' : 'page-container'
+      }
       data-wallet-mode={
-        !shieldSwapSelected &&
-        ((ordinarySwapRequested && sourceMode === 'private') ||
-          privateSwapRequested ||
-          executionSourceMode === 'private')
-          ? 'private'
-          : undefined
+        crossChainSendRequested
+          ? crossChainSendMode
+          : !shieldSwapSelected &&
+              ((ordinarySwapRequested && sourceMode === 'private') ||
+                privateSwapRequested ||
+                executionSourceMode === 'private')
+            ? 'private'
+            : undefined
       }
     >
       {!shieldReviewing &&
@@ -7511,7 +7526,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         viewStep !== 'review' &&
         !(resumingApprovalReview && viewStep === 'input') && (
           <PageHeader
-            compactTitle
+            compactTitle={!crossChainSendRequested}
             title={
               viewStep === 'approval-pending'
                 ? 'Token approval'
@@ -7525,14 +7540,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             }
             {...(viewStep === 'approval-pending' ? {} : getHeaderProps())}
             rightContent={
-              ordinarySwapRequested && viewStep === 'input' && !resumingApprovalReview ? (
+              crossChainSendRequested && viewStep === 'input' ? (
+                <TransactionModeDropdown
+                  value={crossChainSendMode}
+                  options={
+                    crossChainSendMode === 'public' && crossChainSendShieldAvailable
+                      ? ['public', 'shield']
+                      : [crossChainSendMode]
+                  }
+                  onChange={mode => {
+                    if (mode === 'shield') returnFromCrossChainSend('shield')
+                  }}
+                  disabled={crossChainDraftPending || isPreparingReview || isSending}
+                />
+              ) : ordinarySwapRequested && viewStep === 'input' && !resumingApprovalReview ? (
                 <div className="flex items-center gap-1">
-                  <TransactionModeDropdown
-                    value={committedBalanceDomain}
-                    options={availableBalanceDomains}
-                    onChange={handleBalanceDomainChange}
-                    disabled={balanceDomainPending || shieldBusy || isPreparingReview || isSending}
-                  />
                   {showSwapSettings && (
                     <SwapSettingsButton
                       disabled={
@@ -7541,6 +7563,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                       onClick={() => void handleOpenSlippageSetting()}
                     />
                   )}
+                  <TransactionModeDropdown
+                    value={committedBalanceDomain}
+                    options={availableBalanceDomains}
+                    onChange={handleBalanceDomainChange}
+                    disabled={balanceDomainPending || shieldBusy || isPreparingReview || isSending}
+                  />
                 </div>
               ) : undefined
             }
@@ -7553,7 +7581,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               hidden={!confidentialShieldSwapActive}
               className={confidentialShieldSwapActive ? 'flex min-h-0 flex-1 flex-col' : undefined}
             >
-              <ShieldSwapPage
+              <ShieldSwap
                 active={confidentialShieldSwapActive}
                 portfolio={portfolio}
                 portfolioLoading={walletSourcesLoading}
@@ -7742,28 +7770,29 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         />
       )}
       {shieldDestinationPickerOpen && shieldNativeZecSwap && swap.isZecSource && (
-        <ConfidentialDestinationSelector
-          accountScope={effectiveAccount}
-          options={nativeConfidentialDestinations}
-          tokens={nativeIntentsCatalog}
-          balances={shieldDisplayBalances}
-          selectedAssetId={swap.tokenOut?.assetId}
-          onClose={() => setShieldDestinationPickerOpen(false)}
-          onSelect={asset => {
-            const token = nativeConfidentialDestinationTokens.find(
-              item => item.assetId === asset.asset.asset.id
-            )
-            if (!token) return
-            reviewAfterQuoteRefresh.current = null
-            setMaxSelected(false)
-            swap.selectTokenOut(token)
-            setShieldDestinationPickerOpen(false)
-          }}
-        />
+        <TokenSelectorDialog open onOpenChange={setShieldDestinationPickerOpen}>
+          <ShieldTokenPicker
+            rows={shieldDestinationPickerRows}
+            balancesHidden={balancesHidden}
+            loading={!shieldDestinationPickerReady}
+            emptyMessage="No tokens found"
+            selectedKey={swap.tokenOut?.assetId}
+            onSelect={row => {
+              const token = nativeConfidentialDestinationTokens.find(
+                item => item.assetId === row.key
+              )
+              if (!token) return
+              reviewAfterQuoteRefresh.current = null
+              setMaxSelected(false)
+              swap.selectTokenOut(token)
+              setShieldDestinationPickerOpen(false)
+            }}
+          />
+        </TokenSelectorDialog>
       )}
       <TokenSelectorDialog open={shieldZecPickerOpen} onOpenChange={setShieldZecPickerOpen}>
         {shieldZecPickerOpen && (
-          <ShieldSourceTokenSelector
+          <ShieldTokenPicker
             rows={shieldPickerRows}
             balancesHidden={balancesHidden}
             initialNetwork={shieldPickerNetwork}
@@ -7775,19 +7804,14 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   ? SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID
                   : SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID
             }
-            onSelect={selectionId => {
+            onSelect={({ key: selectionId }) => {
               if (selectionId === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID)
                 selectNativeZecSource('transparent')
               else if (selectionId === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID)
                 activateShieldNativeZecSwap()
               else if (selectionId === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID)
                 activateShieldIntentsZecSwap()
-              else if (shieldNativeZecSwap) {
-                setShieldZecSource('intents')
-                navigate(
-                  `/shield-swap?${new URLSearchParams({ provider: 'near-confidential', source: selectionId })}`
-                )
-              } else {
+              else {
                 setShieldZecSource('intents')
                 navigate(
                   `/shield-swap?${new URLSearchParams({ provider: 'near-confidential', source: selectionId })}`

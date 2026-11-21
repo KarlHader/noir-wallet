@@ -3,7 +3,7 @@ import { PageHeader } from '../../components/common/PageHeader'
 import { useNavigate } from '../../provider/Router'
 import WalletIcon from '@/images/wallet-icon.svg'
 import { license } from '../../../../package.json'
-import { SocialLinks } from '@/popup/components/common/SocialLinks'
+import { SocialLinks } from '@/popup/components/settings/SocialLinks'
 
 declare const __APP_VERSION__: string
 declare const __BUILD_TIME__: string

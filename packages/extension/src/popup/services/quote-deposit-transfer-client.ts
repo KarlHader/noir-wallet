@@ -69,7 +69,6 @@ import {
   type NearWalletClient
 } from './near-wallet-client'
 
-export type QuoteDepositSourceFamily = 'evm' | 'bitcoin' | 'solana' | 'near'
 export type QuoteDepositExecutionMode = 'main' | 'private'
 
 interface WalletOwnedQuoteAssetBase {

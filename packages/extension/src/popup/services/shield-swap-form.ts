@@ -1,9 +1,12 @@
 import type { Network } from '@/types'
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { ZEC_DECIMALS } from '@/config/wallet'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { getZcashChainId } from '@/core/chains/registry'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
+import type { SwapToken } from '@/core/services/intents-api'
 import Big from '@/lib/big'
+import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatSortAddress } from '@/lib/format'
 import {
   formatBaseUnitDecimalAmount,
@@ -11,7 +14,90 @@ import {
   parseDisplayUnitAmount
 } from '@/lib/number-format'
 import type { PrepareConfidentialFundingRequest } from './confidential-funding-client'
-import { shieldFundingAvailableRaw, type ShieldFundingAsset } from './shield-transfer'
+import {
+  getZcashTokenPickerChain,
+  shieldFundingAvailableRaw,
+  type ShieldFundingAsset,
+  type ShieldTokenPickerItem
+} from './shield-transfer'
+
+export const nativeZecDestinationKey = (source: 'transparent' | 'shielded') =>
+  `native-zec-destination:${source}`
+
+export function buildShieldDestinationPickerRows({
+  options,
+  tokens,
+  balances,
+  network,
+  excludedProtocolAssetId,
+  nativeZecDestinations = []
+}: Readonly<{
+  options: readonly ShieldFundingAsset[]
+  tokens: readonly SwapToken[]
+  balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
+  network: Network
+  excludedProtocolAssetId?: string
+  nativeZecDestinations?: readonly Readonly<{
+    fundingSource: 'transparent' | 'shielded'
+    address: string
+    availableRaw: string | null
+  }>[]
+}>): (ShieldTokenPickerItem &
+  (
+    | { kind: 'native-zec'; fundingSource: 'transparent' | 'shielded' }
+    | { kind: 'confidential' }
+  ))[] {
+  const origins = shieldOriginIdentifiers(options)
+  const prices = new Map(tokens.map(token => [token.assetId, token.price]))
+  const nativePrice = tokens.find(
+    token => token.blockchain === 'zec' && token.symbol === 'ZEC'
+  )?.price
+  return [
+    ...nativeZecDestinations.map(({ address, availableRaw, fundingSource }) => ({
+      ...getZcashTokenPickerChain(network),
+      kind: 'native-zec' as const,
+      fundingSource,
+      key: nativeZecDestinationKey(fundingSource),
+      assetId: 'zec',
+      searchTerms: [address],
+      symbol: 'ZEC',
+      name: 'Zcash',
+      nativeIconChain: 'zcash',
+      zcashFundingSource: fundingSource,
+      decimals: ZEC_DECIMALS,
+      availableRaw: availableRaw ?? undefined,
+      displayBalance: availableRaw === null ? '—' : undefined,
+      priceUsd: nativePrice,
+      title: address,
+      ariaLabel: `ZEC ${fundingSource} on Zcash`
+    })),
+    ...options
+      .filter(asset => asset.managed.protocolAssetId !== excludedProtocolAssetId)
+      .map(asset => {
+        const chain = asset.chain.chain
+        const { id, reference } = asset.asset.asset
+        const { symbol, name, iconUrl, decimals } = asset.asset.metadata
+        const origin = origins.get(id)
+        return {
+          kind: 'confidential' as const,
+          key: id,
+          assetId: id,
+          contractAddress: reference,
+          symbol,
+          name,
+          iconUrl,
+          decimals,
+          chainId: chain.id,
+          chainName: chain.displayName,
+          badgeBlockchain: resolveChainIconAlias(chain.family, chain.displayName, chain.id),
+          displayBalance: shieldSwapFormBalance(asset, balances) ?? '—',
+          priceUsd: prices.get(asset.managed.protocolAssetId),
+          title: asset.managed.protocolAssetId,
+          subtitle: origin ? `${chain.displayName} · ${origin}` : chain.displayName
+        }
+      })
+  ]
+}
 
 export function shieldOriginIdentifiers(
   options: readonly ShieldFundingAsset[]

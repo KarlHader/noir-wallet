@@ -23,7 +23,7 @@ import { createIntentsWalletAssetCatalog } from '../../../src/core/services/inte
 import {
   hasRetryablePortfolioPriceGap,
   summarizePortfolioFiat
-} from '../../../src/popup/components/portfolio/portfolio-prices.ts'
+} from '../../../src/popup/services/portfolio-prices.ts'
 
 function token(mapping, now, price, extra = {}) {
   return {

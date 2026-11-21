@@ -13,7 +13,6 @@ import {
 
 import type { FeeTier } from '@/config/fee'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
-import { FeeTierPicker } from '../transaction/FeeTierPicker'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
 import { ReviewDownTriangle } from '../transaction/TransactionReviewView'
 
@@ -325,7 +324,8 @@ export function SwapReviewView({
                     className="font-sans tabular-nums"
                   />
                 ) : feeTier && onFeeTierChange && feeByTier ? (
-                  <FeeTierPicker
+                  <NetworkFeeTierPicker
+                    chainFamily="zcash"
                     tier={feeTier}
                     onTierChange={onFeeTierChange}
                     feeByTier={feeByTier}

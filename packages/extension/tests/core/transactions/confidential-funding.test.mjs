@@ -1161,12 +1161,12 @@ test.describe('confidential funding safety rules', () => {
       expect(feeReads).toBe(1)
       await api.quote({
         ...withdrawal,
-        referral: 'noir_move',
+        referral: 'noir_receive',
         depositType: 'ORIGIN_CHAIN',
         recipientType: 'CONFIDENTIAL_INTENTS'
       })
       expect(quoteRequests[2].appFees).toBeUndefined()
-      expect(quoteRequests[2].referral).toBe('noir_move')
+      expect(quoteRequests[2].referral).toBe('noir_receive')
       expect(quoteRequests[2].dry).toBe(true)
       expect(quoteRequests[3].dry).toBe(false)
       expect(feeReads).toBe(1)

@@ -4,7 +4,7 @@ import { expect } from '@playwright/test'
 import {
   calculateTokenFiatValue,
   parseTokenBalanceDecimal
-} from '../../../src/popup/components/tokens/token-balance-format.ts'
+} from '../../../src/popup/services/token-balance-format.ts'
 import { formatBaseUnitDecimalAmount } from '../../../src/lib/number-format.ts'
 
 test('keeps arithmetic amounts ungrouped and unabridged', () => {

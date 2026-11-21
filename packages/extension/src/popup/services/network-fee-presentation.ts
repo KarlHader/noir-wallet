@@ -1,4 +1,11 @@
-import type { NetworkFeeTier } from '@/core/transactions/domain'
+import { FEE_TIERS, type FeeTier } from '@/config/fee'
+import { ZEC_DECIMALS } from '@/config/wallet'
+import { staticFeeFallbackZats } from '@/core/zcash/fee-policy'
+import {
+  getNetworkFeeTierLabel,
+  NETWORK_FEE_TIERS,
+  type NetworkFeeTier
+} from '@/core/transactions/domain'
 import {
   formatEvmPriorityFeeGwei,
   formatEvmWeiAsGwei,
@@ -6,10 +13,84 @@ import {
   parseEvmPriorityFeeGwei,
   type EvmFeeSelection
 } from '@/infrastructure/chains/evm'
-import { parseDisplayUnitAmount } from '@/lib/number-format'
+import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
 
 export type NetworkFeePreview = Readonly<{ amount: string; symbol: string; approximate?: boolean }>
 export type NetworkFeePreviews = Partial<Record<NetworkFeeTier, NetworkFeePreview>>
+
+export interface FeeOption<T extends string> {
+  readonly id: T
+  readonly label: string
+  readonly caption?: string
+  readonly preview?: NetworkFeePreview
+  readonly loading?: boolean
+}
+
+const bitcoinWait = { low: '~24 blocks', standard: '~6 blocks', fast: '~2 blocks' } as const
+
+export function networkFeeOptions(
+  chainFamily: 'bitcoin' | 'evm',
+  previews: NetworkFeePreviews,
+  loading: boolean
+): readonly FeeOption<NetworkFeeTier>[] {
+  return NETWORK_FEE_TIERS.map(id => ({
+    id,
+    label: getNetworkFeeTierLabel(id),
+    caption: chainFamily === 'bitcoin' ? bitcoinWait[id] : undefined,
+    preview: previews[id],
+    loading: loading && !previews[id]
+  }))
+}
+
+export function zcashFeePresentation({
+  tier,
+  feeByTier,
+  loading,
+  allowFallback = true
+}: {
+  readonly tier: FeeTier
+  readonly feeByTier: Record<FeeTier, number | null>
+  readonly loading?: boolean
+  readonly allowFallback?: boolean
+}) {
+  const withFallback = (id: FeeTier) =>
+    feeByTier[id] ?? (allowFallback ? staticFeeFallbackZats(id) : null)
+  const selectedFee = withFallback(tier)
+  return {
+    amount:
+      selectedFee === null ? null : formatBaseUnitDecimalAmount(String(selectedFee), ZEC_DECIMALS),
+    fees: loading ? feeByTier : { standard: withFallback('standard'), fast: withFallback('fast') },
+    approximate: allowFallback && !loading && feeByTier.standard === null && feeByTier.fast === null
+  }
+}
+
+export function zcashFeeOptions({
+  selected,
+  fees,
+  loading,
+  loadingByTier
+}: {
+  readonly selected: FeeTier
+  readonly fees: Record<FeeTier, number | null>
+  readonly loading?: boolean
+  readonly loadingByTier?: Record<FeeTier, boolean>
+}): readonly FeeOption<FeeTier>[] {
+  return FEE_TIERS.map(({ id, label }) => {
+    const fee = fees[id]
+    return {
+      id,
+      label,
+      preview:
+        fee === null
+          ? undefined
+          : {
+              amount: formatBaseUnitDecimalAmount(String(fee), ZEC_DECIMALS),
+              symbol: 'ZEC'
+            },
+      loading: loadingByTier?.[id] ?? (loading && id === selected)
+    }
+  })
+}
 
 export type EvmFeeDefaults = Readonly<{
   gasLimit: string
@@ -34,13 +115,14 @@ export function evmFeeDraft(selection: EvmFeeSelection, defaults?: EvmFeeDefault
 
 export function parseEvmFeeDraft(
   draft: ReturnType<typeof evmFeeDraft>,
-  model: 'legacy' | 'eip1559'
+  model: 'legacy' | 'eip1559',
+  fixedGasLimit: boolean
 ) {
-  const gasLimit = draft.gasLimit.trim()
+  const limit = fixedGasLimit ? {} : { gasLimit: draft.gasLimit.trim() }
   const wei = (gwei: string) => parseDisplayUnitAmount(gwei.trim(), 9)
   if (model === 'legacy') {
-    return parseEvmFeeSelection({ kind: 'legacy', gasLimit, gasPriceWei: wei(draft.gasPrice) })
+    return parseEvmFeeSelection({ kind: 'legacy', ...limit, gasPriceWei: wei(draft.gasPrice) })
   }
   const priority = parseEvmPriorityFeeGwei(draft.priorityFee)
-  return parseEvmFeeSelection({ ...priority, gasLimit, maxFeePerGasWei: wei(draft.maxFee) })
+  return parseEvmFeeSelection({ ...priority, ...limit, maxFeePerGasWei: wei(draft.maxFee) })
 }

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { WalletActionIcon, type WalletAction } from '@/popup/components/common/WalletActionIcon'
+import { WalletActionIcon, type WalletAction } from '@/popup/components/portfolio/WalletActionIcon'
 import { Tooltip } from '@/popup/components/ui/tooltip'
 
 interface AssetDetailBalanceRowProps {

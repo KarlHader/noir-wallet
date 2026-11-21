@@ -55,12 +55,10 @@ export interface IntentsAppFee {
 /** Swap app fee: 0.35% (35 bps), collected to noir's swap account. */
 export const NOIR_SWAP_APP_FEES: IntentsAppFee[] = [{ recipient: 'noir_swap.near', fee: 35 }]
 export const NOIR_SWAP_REFERRAL = 'noir_swap'
-export const NOIR_MOVE_REFERRAL = 'noir_move'
 export const NOIR_SEND_REFERRAL = 'noir_send'
 export const NOIR_RECEIVE_REFERRAL = 'noir_receive'
 
 export type NoirIntentsReferral =
   | typeof NOIR_SWAP_REFERRAL
-  | typeof NOIR_MOVE_REFERRAL
   | typeof NOIR_SEND_REFERRAL
   | typeof NOIR_RECEIVE_REFERRAL

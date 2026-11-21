@@ -1,10 +1,5 @@
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
-import {
-  resolveRheaPrivateTransferToken,
-  type RheaSwapQuoteRequest,
-  type RheaSwapToken
-} from '@/core/services/rhea-swap'
-import { preferWalletEvmQuoteToken } from './token-address-discovery'
+import type { RheaSwapQuoteRequest, RheaSwapToken } from '@/core/services/rhea-swap'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { BitcoinSupportedAddressType } from '@/core/chains/bitcoin'
 import {
@@ -314,36 +309,4 @@ export async function estimateRheaRouteMaximum(
     }
   }
   throw new Error('Unable to estimate the route maximum')
-}
-
-export async function estimateConfidentialTransferMaximum(input: {
-  readonly asset: PortfolioAssetView
-  readonly chain: PortfolioChainView
-  readonly availableRaw: string
-  readonly sender: string
-  readonly recipient: string
-  readonly executionMode: 'main' | 'private'
-  readonly purpose: 'public-private-send' | 'confidential-funding' | 'private-transfer'
-}) {
-  const catalog = await rheaSwapClient
-    .listTokens({
-      direction: 'from',
-      tokenListChainIds: [Number(input.chain.chain.id.split(':')[1])]
-    })
-    .catch(() => null)
-  const catalogToken = resolveRheaPrivateTransferToken(
-    catalog?.tokens ?? [],
-    input.asset.asset.kind === 'native' ? null : input.asset.asset.reference
-  )
-  const token = preferWalletEvmQuoteToken(input.asset, catalogToken)
-  if (!token) throw new Error('This asset is unavailable for the transfer')
-  return estimateRheaRouteMaximum({
-    source: createNativeTransferSource(input),
-    tokenIn: token,
-    tokenOut: token,
-    recipient: input.recipient,
-    confidential: true,
-    purpose: input.purpose,
-    executionMode: input.executionMode
-  })
 }

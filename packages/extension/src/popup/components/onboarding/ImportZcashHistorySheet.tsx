@@ -6,7 +6,7 @@ import {
   ZcashHistoryFields,
   type ZcashHistoryMode,
   type ZcashRestoreMethod
-} from '../common/ZcashHistoryFields'
+} from '../zcash/ZcashHistoryFields'
 import { useNavigate } from '../../provider/Router'
 import { useOnboardingStore } from '@/store/onboarding-store'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'

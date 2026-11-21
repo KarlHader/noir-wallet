@@ -22,7 +22,7 @@ import {
   getAddressBookContactIconChain,
   getAddressBookNetworkChoices,
   type AddressBookNetworkChoice
-} from '@/popup/components/address-book/address-book-network'
+} from '@/popup/services/address-book-network'
 import {
   Dialog,
   DialogContent,

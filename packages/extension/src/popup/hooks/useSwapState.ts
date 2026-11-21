@@ -16,10 +16,7 @@ import {
   isSameSwapTokenRouteIdentity,
   type SwapInitialCatalogOptions
 } from '@/popup/services/swap-catalog-loading'
-import {
-  estimateSwapOutputFromPrices,
-  getSwapAmountValues
-} from '@/popup/components/swap/swap-estimate'
+import { estimateSwapOutputFromPrices, getSwapAmountValues } from '@/popup/services/swap-estimate'
 import {
   getSavedSwapDestinationAssetId,
   getSwapDestinationTokens

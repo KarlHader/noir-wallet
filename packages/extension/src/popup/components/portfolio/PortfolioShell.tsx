@@ -35,26 +35,24 @@ import {
   type PortfolioAssetGroup
 } from '@/popup/services/portfolio-presentation'
 
-export type PortfolioViewMode = 'assets' | 'chains'
+type PortfolioViewMode = 'assets' | 'chains'
 
 interface PortfolioShellProps {
-  readonly domain?: AssetDomain
-  readonly hideToolbar?: boolean
+  readonly domain: AssetDomain
   readonly model: PortfolioReadModel
-  readonly sourceModel?: PortfolioReadModel
+  readonly sourceModel: PortfolioReadModel
   readonly network: Network
   readonly prices: AssetPriceReadModel | null
   readonly priceStatus?: 'loading' | 'ready' | 'error'
   readonly balancesHidden?: boolean
-  readonly initialView?: PortfolioViewMode
-  readonly view?: PortfolioViewMode
-  readonly onViewChange?: (view: PortfolioViewMode) => void
+  readonly view: PortfolioViewMode
+  readonly onViewChange: (view: PortfolioViewMode) => void
   readonly chainListExpanded: boolean
   readonly onChainListExpandedChange: (expanded: boolean) => void
-  readonly refreshing?: boolean
-  readonly refreshDisabled?: boolean
-  readonly selectedChainIds?: readonly string[]
-  readonly onSelectedChainIdsChange?: (chainIds: readonly string[]) => void
+  readonly refreshing: boolean
+  readonly refreshDisabled: boolean
+  readonly selectedChainIds: readonly string[]
+  readonly onSelectedChainIdsChange: (chainIds: readonly string[]) => void
   readonly onSelectAsset?: (assetId: string) => void
   readonly onSelectConfidentialAsset?: (tokenId: string) => void
   readonly onRefresh?: () => void
@@ -232,30 +230,23 @@ export function PortfolioShell({
   model,
   sourceModel,
   network,
-  domain = 'all',
-  hideToolbar = false,
+  domain,
   prices: sourcePrices,
   priceStatus = 'ready',
   balancesHidden = false,
-  initialView = 'assets',
-  view: controlledView,
+  view,
   onViewChange,
   chainListExpanded,
   onChainListExpandedChange,
-  refreshing = false,
-  refreshDisabled = refreshing,
-  selectedChainIds: controlledSelectedChainIds,
+  refreshing,
+  refreshDisabled,
+  selectedChainIds: requestedChainIds,
   onSelectedChainIdsChange,
   onSelectAsset,
   onSelectConfidentialAsset,
   onRefresh,
   onManageTokens
 }: PortfolioShellProps) {
-  const [localView, setLocalView] = useState<PortfolioViewMode>(initialView)
-  const view = controlledView ?? localView
-  const setView = onViewChange ?? setLocalView
-  const [localSelectedChainIds, setLocalSelectedChainIds] = useState<readonly string[] | null>(null)
-  const requestedChainIds = controlledSelectedChainIds ?? localSelectedChainIds
   const {
     prices,
     confidentialZec,
@@ -272,7 +263,7 @@ export function PortfolioShell({
     () =>
       buildPortfolioDisplay({
         model,
-        sourceModel: sourceModel ?? model,
+        sourceModel,
         network,
         domain,
         sourcePrices,
@@ -289,7 +280,6 @@ export function PortfolioShell({
       onSelectAsset?.(assetId)
     }
   }
-  const setSelectedChainIds = onSelectedChainIdsChange ?? setLocalSelectedChainIds
   const [expandedChainIds, setExpandedChainIds] = useState<ReadonlySet<string>>(() => new Set())
   const swapCatalog = useSwapTokenCatalog() ?? undefined
   const [lowValueExpanded, setLowValueExpanded] = useState(false)
@@ -343,75 +333,73 @@ export function PortfolioShell({
       className="flex min-h-0 flex-1 flex-col"
     >
       <h2 className="sr-only">Portfolio</h2>
-      {!hideToolbar && (
-        <div className="flex h-[46px] shrink-0 items-center justify-between px-4 pb-1 pt-2.5">
-          <NetworkFilter
-            ariaLabelPrefix="Filter portfolio by network"
-            options={networkOptions}
-            selectedIds={selectedChainIds}
-            onSelectionChange={setSelectedChainIds}
-          />
+      <div className="flex h-[46px] shrink-0 items-center justify-between px-4 pb-1 pt-2.5">
+        <NetworkFilter
+          ariaLabelPrefix="Filter portfolio by network"
+          options={networkOptions}
+          selectedIds={selectedChainIds}
+          onSelectionChange={onSelectedChainIdsChange}
+        />
 
-          <div className="flex shrink-0 items-center gap-2">
-            {refreshing && (
-              <span role="status" aria-label="Portfolio data is syncing" className="sr-only">
-                Syncing portfolio
-              </span>
-            )}
-            <div
-              role="group"
-              aria-label="Portfolio view"
-              className="flex h-8 items-center rounded-xl bg-[var(--color-wallet-surface)] p-1"
-            >
-              <Tooltip content="View by token" side="bottom">
-                <button
-                  type="button"
-                  aria-label="Show token view"
-                  aria-pressed={view === 'assets'}
-                  onClick={() => setView('assets')}
-                  className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
-                >
-                  <PortfolioViewIcon view="assets" active={view === 'assets'} />
-                </button>
-              </Tooltip>
-              <Tooltip content="View by network" side="bottom">
-                <button
-                  type="button"
-                  aria-label="Show chain view"
-                  aria-pressed={view === 'chains'}
-                  onClick={() => setView('chains')}
-                  className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
-                >
-                  <PortfolioViewIcon view="chains" active={view === 'chains'} />
-                </button>
-              </Tooltip>
-            </div>
-            {(onRefresh || onManageTokens) && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Portfolio options"
-                    className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-[var(--color-wallet-secondary)] hover:bg-white/5 hover:text-foreground active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-                  >
-                    <Icon icon="lucide:ellipsis" width={21} height={21} />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="bg-[var(--color-wallet-surface)]">
-                  {onManageTokens && (
-                    <DropdownMenuItem onSelect={onManageTokens}>Manage tokens</DropdownMenuItem>
-                  )}
-                  {onRefresh && (
-                    <DropdownMenuItem disabled={refreshDisabled} onSelect={onRefresh}>
-                      Refresh list
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+        <div className="flex shrink-0 items-center gap-2">
+          {refreshing && (
+            <span role="status" aria-label="Portfolio data is syncing" className="sr-only">
+              Syncing portfolio
+            </span>
+          )}
+          <div
+            role="group"
+            aria-label="Portfolio view"
+            className="flex h-8 items-center rounded-xl bg-[var(--color-wallet-surface)] p-1"
+          >
+            <Tooltip content="View by token" side="bottom">
+              <button
+                type="button"
+                aria-label="Show token view"
+                aria-pressed={view === 'assets'}
+                onClick={() => onViewChange('assets')}
+                className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
+              >
+                <PortfolioViewIcon view="assets" active={view === 'assets'} />
+              </button>
+            </Tooltip>
+            <Tooltip content="View by network" side="bottom">
+              <button
+                type="button"
+                aria-label="Show chain view"
+                aria-pressed={view === 'chains'}
+                onClick={() => onViewChange('chains')}
+                className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
+              >
+                <PortfolioViewIcon view="chains" active={view === 'chains'} />
+              </button>
+            </Tooltip>
           </div>
+          {(onRefresh || onManageTokens) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Portfolio options"
+                  className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-[var(--color-wallet-secondary)] hover:bg-white/5 hover:text-foreground active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                >
+                  <Icon icon="lucide:ellipsis" width={21} height={21} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-[var(--color-wallet-surface)]">
+                {onManageTokens && (
+                  <DropdownMenuItem onSelect={onManageTokens}>Manage tokens</DropdownMenuItem>
+                )}
+                {onRefresh && (
+                  <DropdownMenuItem disabled={refreshDisabled} onSelect={onRefresh}>
+                    Refresh list
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
-      )}
+      </div>
 
       <div className="min-h-0 flex-1 pb-4">
         {model.status === 'loading' && visibleConfidential.length === 0 ? (

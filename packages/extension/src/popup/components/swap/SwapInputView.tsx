@@ -12,7 +12,7 @@ import {
 } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
-import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
+import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
@@ -20,68 +20,31 @@ import { BalanceHelp } from '../transaction/BalanceHelp'
 import { SendRecipientInputCard } from '../transaction/SendInputCards'
 import { safeBig } from '@/lib/big'
 import { shouldDeferSwapAmountFocus } from '@/popup/services/swap-page-model'
+import {
+  getRheaProviderIconUrl,
+  providerDisplayName
+} from '@/popup/services/swap-provider-presentation'
 import { InlineError } from '../common/InlineError'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import nearIntentsIcon from '@/images/figma-near-confidential.svg'
 
-const PROVIDER_NAMES: Readonly<Record<string, string>> = {
-  bitget: 'Bitget',
-  okx: 'OKX',
-  binance: 'Binance',
-  '1inch': '1inch',
-  paraswap: 'ParaSwap',
-  kodiak: 'Kodiak',
-  openocean: 'OpenOcean',
-  cow: 'CoW',
-  zerox: 'Robinhood',
-  jupiter: 'Jupiter',
-  titan: 'Titan',
-  dflow: 'DFlow',
-  hyperion: 'Hyperion',
-  'near-smart': 'SmartV1',
-  'near-smartx': 'SmartV2',
-  nearintents: 'NEAR Intents',
-  'preswap-nearintents': 'NEAR Intents',
-  rango: 'Rango',
-  lifi: 'LI.FI',
-  jumper: 'Jumper',
-  bungee: 'Bungee',
-  swapkit: 'SwapKit',
-  omnibridge: 'OmniBridge',
-  stableflow: 'StableFlow',
-  'near-mca-withdraw': 'NEAR Intents',
-  'near-confidential': 'NEAR Confidential Intents'
-}
-const PROVIDER_MARKS: Readonly<Record<string, { readonly slug: string; readonly color: string }>> =
-  {
-    binance: { slug: 'binance', color: '#F0B90B' },
-    okx: { slug: 'okx', color: '#FFFFFF' }
-  }
-
-function providerDisplayName(router: string): string {
-  return PROVIDER_NAMES[router.trim().toLowerCase()] ?? router
-}
-
 function ProviderMark({ router, size }: { readonly router: string; readonly size: 24 | 28 }) {
-  const normalized = router.trim().toLowerCase()
-  const mark = PROVIDER_MARKS[normalized]
-  const [failedRouter, setFailedRouter] = useState<string | null>(null)
-  if (normalized === 'near-confidential' || providerDisplayName(router) === 'NEAR Intents') {
-    return (
-      <img src={nearIntentsIcon} alt="" width={size} height={size} className="shrink-0 rounded" />
-    )
-  }
-  if (mark && failedRouter !== normalized) {
+  const iconUrl =
+    router.trim().toLowerCase() === 'near-confidential'
+      ? nearIntentsIcon
+      : getRheaProviderIconUrl(router)
+  const [failedIcon, setFailedIcon] = useState<string | null>(null)
+  if (iconUrl && failedIcon !== iconUrl) {
     return (
       <img
-        src={`https://cdn.jsdelivr.net/npm/simple-icons@v15/icons/${mark.slug}.svg`}
+        src={iconUrl}
         crossOrigin="anonymous"
+        referrerPolicy="no-referrer"
         alt=""
         width={size}
         height={size}
-        className={cn('shrink-0 rounded p-1', size === 24 ? 'size-6' : 'size-7')}
-        style={{ backgroundColor: mark.color }}
-        onError={() => setFailedRouter(normalized)}
+        className={cn('shrink-0 rounded object-contain', size === 24 ? 'size-6' : 'size-7')}
+        onError={() => setFailedIcon(iconUrl)}
       />
     )
   }

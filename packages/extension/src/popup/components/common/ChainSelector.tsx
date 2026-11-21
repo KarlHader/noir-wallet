@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { cn } from '@/lib/utils'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
-import { TokenSelectionSearch } from '../tokens/TokenSelectionList'
-import { sortTokenSelectorNetworks } from '../tokens/token-selector-chain-order'
+import { SearchInput } from '../ui/input'
+import { sortTokenSelectorNetworks } from '@/popup/services/token-selector-chain-order'
 import { ChainIcon } from './ChainIcon'
 import { PageHeader } from './PageHeader'
 
@@ -97,11 +97,11 @@ export function ChainSelector({
           onBack={() => onOpenChange(false)}
         />
         <div className="shrink-0 px-4 pt-1 pb-2">
-          <TokenSelectionSearch
+          <SearchInput
             value={search}
-            onChange={setSearch}
+            onChange={event => setSearch(event.target.value)}
             placeholder="Search network"
-            ariaLabel="Search networks"
+            aria-label="Search networks"
             className="h-[45px] rounded-xl border-white/5 bg-card"
           />
         </div>
