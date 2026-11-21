@@ -39,6 +39,8 @@ export class FetchHttpError extends Error {
 interface FetchOptions extends RequestInit {
   timeoutMs?: number
   maxBytes?: number
+  /** Sends the request instead of the global fetch, e.g. through the Nym tunnel. */
+  transport?: typeof fetch
 }
 
 function joinChunks(chunks: Uint8Array[], length: number): Uint8Array<ArrayBuffer> {
@@ -127,6 +129,7 @@ async function fetchBytes(
     timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     maxBytes = DEFAULT_MAX_BYTES,
     signal: externalSignal,
+    transport = fetch,
     ...fetchInit
   } = init || {}
   const controller = new AbortController()
@@ -148,7 +151,7 @@ async function fetchBytes(
     return await Promise.race([
       (async () => {
         if (controller.signal.aborted) throw controller.signal.reason
-        const response = await fetch(input, { ...fetchInit, signal: controller.signal })
+        const response = await transport(input, { ...fetchInit, signal: controller.signal })
         if (controller.signal.aborted) {
           void response.body?.cancel().catch(() => {})
           throw controller.signal.reason
@@ -219,13 +222,21 @@ export async function fetchWithTimeout(
   })
 }
 
+export async function readBoundedResponseBytes(
+  response: Response,
+  maximumBytes: number
+): Promise<Uint8Array<ArrayBuffer>> {
+  const { bytes } = await readBody(response, maximumBytes, () => {})
+  return bytes
+}
+
 export async function readBoundedResponseText(
   response: Response,
   maximumBytes: number,
   responseTooLarge: () => Error
 ): Promise<string> {
   try {
-    const { bytes } = await readBody(response, maximumBytes, () => {})
+    const bytes = await readBoundedResponseBytes(response, maximumBytes)
     return new TextDecoder().decode(bytes)
   } catch (error) {
     if (error instanceof FetchResponseTooLargeError) throw responseTooLarge()

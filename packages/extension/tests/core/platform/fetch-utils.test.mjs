@@ -6,7 +6,8 @@ import {
   FetchResponseTooLargeError,
   FetchTimeoutError,
   fetchJsonWithTimeout,
-  fetchWithTimeout
+  fetchWithTimeout,
+  readBoundedResponseBytes
 } from '../../../src/lib/fetch-utils'
 async function withFetch(mock, action) {
   const originalFetch = globalThis.fetch
@@ -220,6 +221,24 @@ test('Response clients receive a bounded body and preserve status and headers', 
       assert.equal(await response.text(), '')
     }
   )
+})
+
+test('bounded response bytes stop an oversized chunked body without Content-Length', async () => {
+  let cancelled = false
+  const response = new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(6))
+        controller.enqueue(new Uint8Array(6))
+      },
+      cancel() {
+        cancelled = true
+      }
+    })
+  )
+
+  await assert.rejects(readBoundedResponseBytes(response, 10), FetchResponseTooLargeError)
+  assert.equal(cancelled, true)
 })
 
 test('a stalled cancellation does not keep the caller pending after the deadline', async () => {

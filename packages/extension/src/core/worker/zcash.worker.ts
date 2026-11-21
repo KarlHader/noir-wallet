@@ -6,6 +6,8 @@ import { findWasmAccountIdByHdIndex, mapWasmAccountIdsByHdIndex } from './accoun
  */
 
 import './wasm-worker-runtime-setup'
+import { beginSend, duringWalletSync, nymPrivateBroadcast } from './nym-private-broadcast-setup'
+import { NYM_PRIVATE_BROADCAST } from '../../config/nym-private-broadcast'
 
 self.addEventListener('error', e => e.preventDefault())
 self.addEventListener('unhandledrejection', e => e.preventDefault())
@@ -198,6 +200,18 @@ function feeQuoteContext(walletId: string, accountId: number): FeeQuoteContext {
   return { walletId, accountId, network: entry.network, rpcUrl: entry.lightwalletdUrl }
 }
 
+async function recommendStandardMarginalFee(rpcUrl: string): Promise<number> {
+  const routing =
+    NYM_PRIVATE_BROADCAST.routes.feeQuote && nymPrivateBroadcast
+      ? await nymPrivateBroadcast.readRoutingChoice()
+      : false
+  return fetchStandardMarginalFee(
+    rpcUrl,
+    undefined,
+    routing === true ? NYM_PRIVATE_BROADCAST.feeQuoteTimeoutMs : undefined
+  )
+}
+
 function approvedFee(walletId: string, accountId: number, rate?: number, id?: string) {
   const feeQuote = feeQuotes.validate(feeQuoteContext(walletId, accountId), id, rate)
   return {
@@ -217,7 +231,7 @@ async function estimateFeeSelection(
 ) {
   if (id !== undefined || rate !== undefined) return approvedFee(walletId, accountId, rate, id)
   const context = feeQuoteContext(walletId, accountId)
-  const feeQuote = await feeQuotes.get(context, () => fetchStandardMarginalFee(context.rpcUrl))
+  const feeQuote = await feeQuotes.get(context, () => recommendStandardMarginalFee(context.rpcUrl))
   return { feeQuote, marginalFeeZats: feeQuote.standardMarginalFeeZats }
 }
 const latestZeroIndexerOptions = new Map<string, ZeroIndexerOptions | null>()
@@ -653,10 +667,23 @@ async function initializeWasm() {
   await initPromise
 }
 
+/**
+ * RPCs that build or broadcast a transaction, including the sync each build runs first. From
+ * the moment one arrives until it ends, no routed request goes direct.
+ */
+const SEND_RPC_METHODS: ReadonlySet<string> = new Set([
+  'transaction.send',
+  'transaction.oneclick_shield',
+  'pczt.create',
+  'pczt.shieldCreate',
+  'pczt.proveSend'
+])
+
 // Message Handler
 self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) => {
   const { id, method, payload } = event.data
   activeWalletId = (payload as any)?.walletId
+  const endSend = SEND_RPC_METHODS.has(method) ? beginSend() : undefined
 
   try {
     // Ensure WASM is initialized for all methods
@@ -1102,36 +1129,42 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       }
       case 'wallet.sync': {
         const { walletId } = payload as RPCSchema['wallet.sync']['request']
-        result = await runForWallet(walletId, async () => {
-          const w = getWallet(walletId)
-          await w.sync()
-          subtreeRootsFresh.add(walletId)
-          summaryGateClosed.delete(walletId)
-          return undefined
-        })
+        result = await runForWallet(walletId, () =>
+          duringWalletSync(async () => {
+            const w = getWallet(walletId)
+            await w.sync()
+            subtreeRootsFresh.add(walletId)
+            summaryGateClosed.delete(walletId)
+            return undefined
+          })
+        )
         break
       }
       case 'wallet.syncNextBatch': {
         const { walletId, batchSize } = payload as RPCSchema['wallet.syncNextBatch']['request']
-        result = await runForWallet(walletId, async () => {
-          const w = getWallet(walletId)
-          const processed = await w.sync_next_batch(batchSize ?? undefined)
-          subtreeRootsFresh.add(walletId)
-          summaryGateClosed.delete(walletId)
-          return processed
-        })
+        result = await runForWallet(walletId, () =>
+          duringWalletSync(async () => {
+            const w = getWallet(walletId)
+            const processed = await w.sync_next_batch(batchSize ?? undefined)
+            subtreeRootsFresh.add(walletId)
+            summaryGateClosed.delete(walletId)
+            return processed
+          })
+        )
         break
       }
       case 'wallet.syncNextBatchOptimized': {
         const { walletId, batchSize } =
           payload as RPCSchema['wallet.syncNextBatchOptimized']['request']
-        result = await runForWallet(walletId, async () => {
-          const w = getWallet(walletId)
-          const processed = await w.sync_next_batch_optimized(batchSize ?? undefined)
-          subtreeRootsFresh.add(walletId)
-          summaryGateClosed.delete(walletId)
-          return processed
-        })
+        result = await runForWallet(walletId, () =>
+          duringWalletSync(async () => {
+            const w = getWallet(walletId)
+            const processed = await w.sync_next_batch_optimized(batchSize ?? undefined)
+            subtreeRootsFresh.add(walletId)
+            summaryGateClosed.delete(walletId)
+            return processed
+          })
+        )
         break
       }
       case 'wallet.dbToBytes': {
@@ -1172,27 +1205,31 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           batchSize?: number
           refresh?: boolean
         }
-        result = await runForWallet(walletId, async () => {
-          const w = getWallet(walletId)
-          const journalData = await w.prepare_sync_batch(batchSize ?? undefined, refresh ?? true)
-          // Subtree roots are fresh after either a refreshing batch or a prior
-          // syncSessionSetup; the session contract guarantees one of these ran.
-          subtreeRootsFresh.add(walletId)
-          summaryGateClosed.delete(walletId)
-          return journalData ?? null
-        })
+        result = await runForWallet(walletId, () =>
+          duringWalletSync(async () => {
+            const w = getWallet(walletId)
+            const journalData = await w.prepare_sync_batch(batchSize ?? undefined, refresh ?? true)
+            // Subtree roots are fresh after either a refreshing batch or a prior
+            // syncSessionSetup; the session contract guarantees one of these ran.
+            subtreeRootsFresh.add(walletId)
+            summaryGateClosed.delete(walletId)
+            return journalData ?? null
+          })
+        )
         break
       }
       case 'wallet.syncSessionSetup': {
         const { walletId } = payload as { walletId: string }
-        result = await runForWallet(walletId, async () => {
-          const w = getWallet(walletId)
-          await w.sync_session_setup()
-          // Session setup refreshed subtree roots: summary is safe again.
-          subtreeRootsFresh.add(walletId)
-          summaryGateClosed.delete(walletId)
-          return true
-        })
+        result = await runForWallet(walletId, () =>
+          duringWalletSync(async () => {
+            const w = getWallet(walletId)
+            await w.sync_session_setup()
+            // Session setup refreshed subtree roots: summary is safe again.
+            subtreeRootsFresh.add(walletId)
+            summaryGateClosed.delete(walletId)
+            return true
+          })
+        )
         break
       }
       case 'wallet.replayJournalEntries': {
@@ -1484,7 +1521,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
                 resolveRequestedAccountId(walletId, getWallet(walletId), accountId, accountIndex)
               )
         const context = feeQuoteContext(walletId, targetId)
-        result = await feeQuotes.get(context, () => fetchStandardMarginalFee(context.rpcUrl))
+        result = await feeQuotes.get(context, () => recommendStandardMarginalFee(context.rpcUrl))
         break
       }
       case 'transaction.send': {
@@ -1912,6 +1949,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
     self.postMessage(response)
   } finally {
     activeWalletId = undefined
+    endSend?.()
   }
 })
 

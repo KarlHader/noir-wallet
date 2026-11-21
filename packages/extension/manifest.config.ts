@@ -13,6 +13,8 @@ const { version, description } = packageJson
 const extensionVersion = version.split('-')[0]
 const isTestnet = process.env.NETWORK_MODE === 'testnet'
 const developmentExtensionKey = resolveDevelopmentExtensionKey(process.env)
+// Nym gateways are chosen at runtime and reached over WebSocket Secure.
+const nymGatewayConnectSource = process.env.NYM_PRIVATE_BROADCAST === '1' ? ' wss:' : ''
 const earlyEvmProviderEnabled = parseEnabledChainFeatureFlags(
   process.env.ENABLED_CHAIN_FEATURE_FLAGS,
   ALL_CHAIN_FEATURE_FLAGS
@@ -82,8 +84,7 @@ export default defineManifest(async env => ({
     }
   ],
   content_security_policy: {
-    extension_pages:
-      "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;"
+    extension_pages: `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*${nymGatewayConnectSource};`
   },
   cross_origin_embedder_policy: {
     value: 'credentialless'

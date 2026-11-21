@@ -8,6 +8,19 @@ export async function withWalletSettingsLock<T>(operation: () => Promise<T>): Pr
 
 export type PersistedWalletSettings = Record<string, unknown>
 
+/**
+ * Applies `patch` to the settings as stored right now, under the shared lock. Writing back a
+ * snapshot read earlier would undo what another extension context saved in between.
+ */
+export async function patchStoredWalletSettings(patch: PersistedWalletSettings): Promise<void> {
+  await withWalletSettingsLock(async () => {
+    const stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: updatePersistedWalletSettings(stored[SETTINGS_STORAGE_KEY], patch)
+    })
+  })
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }

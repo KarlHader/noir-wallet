@@ -7,6 +7,8 @@ import {
   ZERO_INDEXER_RUNTIME_STORAGE_KEY
 } from '@/infrastructure/chains/zero-indexer-preferences'
 import { DEFAULT_ZERO_INDEXER_REGISTRY, ZERO_INDEXER_REGISTRY_URL } from '@/config/zero-indexer'
+import { NYM_PRIVATE_BROADCAST } from '@/config/nym-private-broadcast'
+import { readNymPrivateBroadcastEnabled } from '@/infrastructure/chains/nym-private-broadcast-preferences'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
 import {
   createCustomZeroIndexerEndpoint,
@@ -23,6 +25,15 @@ import {
 
 const REGISTRY_TIMEOUT_MS = 3_000
 const PROBE_CACHE_MAX_AGE_MS = 5 * 60_000
+
+/** Broadcast and its ZeroIndexer transaction lookup share the WASM per-endpoint timeout. */
+async function nymSendTimeout(): Promise<Pick<ZeroIndexerOptions, 'sendTimeoutMs'>> {
+  if (!NYM_PRIVATE_BROADCAST.routes.broadcast && !NYM_PRIVATE_BROADCAST.routes.transactionLookup)
+    return {}
+  const routed = await readNymPrivateBroadcastEnabled().catch(() => NYM_PRIVATE_BROADCAST.available)
+  return routed ? { sendTimeoutMs: NYM_PRIVATE_BROADCAST.zeroIndexerSendTimeoutMs } : {}
+}
+
 const mutationQueue = new SerialTaskQueue()
 const refreshDedup = new DedupPromise<ZeroIndexerNodeStatus>()
 let registrySuccessAt = 0
@@ -342,11 +353,11 @@ export async function getZeroIndexerBroadcastOptions(
     const selected = [...status.managedEndpoints, ...status.customEndpoints].find(
       endpoint => endpoint.id === status.selectedEndpointId
     )
-    return selected ? { urls: [selected.url] } : null
+    return selected ? { urls: [selected.url], ...(await nymSendTimeout()) } : null
   }
   const managedById = new Map(status.managedEndpoints.map(endpoint => [endpoint.id, endpoint]))
   const urls = status.orderedEndpointIds
     .map(id => managedById.get(id)?.url)
     .filter((url): url is string => typeof url === 'string')
-  return { urls }
+  return { urls, ...(await nymSendTimeout()) }
 }

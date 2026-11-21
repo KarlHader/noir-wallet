@@ -1,9 +1,9 @@
 import {
   SETTINGS_STORAGE_KEY,
   decodePersistedWalletSettings,
+  patchStoredWalletSettings,
   resolvePersistedNetworkChainEndpointSettings,
-  resolvePersistedNetworkMode,
-  updatePersistedWalletSettings
+  resolvePersistedNetworkMode
 } from '@/lib/wallet-settings-storage'
 import type { Network } from '@/types'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
@@ -181,16 +181,10 @@ async function readStoredRpcPreferences(): Promise<StoredRpcPreferences> {
   return { raw, persistedEndpointId: readPersistedEndpointId(raw) }
 }
 
-async function persistRpcEndpointPreferences(
-  stored: StoredRpcPreferences,
-  preferences: RpcEndpointPreferences
-): Promise<void> {
+async function persistRpcEndpointPreferences(preferences: RpcEndpointPreferences): Promise<void> {
   if (DEFAULT_NETWORK !== 'mainnet') return
-  await chrome.storage.local.set({
-    [SETTINGS_STORAGE_KEY]: updatePersistedWalletSettings(stored.raw, {
-      rpcEndpointPreferences: preferences
-    })
-  })
+  // A registry refresh may finish after another context updated wallet settings.
+  await patchStoredWalletSettings({ rpcEndpointPreferences: preferences })
 }
 
 function applyRegistryGroups(registry: ReturnType<typeof parseRpcRegistryDocument>): void {
@@ -337,7 +331,7 @@ export function refreshRpcEndpointRegistry(): Promise<RpcEndpointPreferences> {
       setActiveRpcEndpointPreferences(preferences)
 
       if (stored.persistedEndpointId !== selected.id) {
-        await persistRpcEndpointPreferences(stored, preferences).catch(() => {})
+        await persistRpcEndpointPreferences(preferences).catch(() => {})
       }
       return { ...preferences }
     })().catch(() => syncActiveRpcEndpointPreferencesFromStorage())

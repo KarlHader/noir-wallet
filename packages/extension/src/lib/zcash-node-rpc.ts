@@ -1,6 +1,11 @@
-import { fetchJsonWithTimeout } from './fetch-utils.ts'
+import { NYM_PRIVATE_BROADCAST } from '../config/nym-private-broadcast.ts'
+import { requiresZcashNodeRpcNymRoute } from '../core/nym/private-broadcast-protocol.ts'
+import { nymPrivateTextFetchUntil } from '../core/nym/private-fetch-relay.ts'
+import { readNymPrivateBroadcastEnabled } from '../infrastructure/chains/nym-private-broadcast-preferences.ts'
+import { FetchHttpError, fetchJsonWithTimeout } from './fetch-utils.ts'
 
 const RPC_TIMEOUT_MS = 10_000
+const MAX_RESPONSE_CHARS = 32 * 1024 * 1024
 
 interface JsonRpcResponse<T> {
   result?: T
@@ -53,18 +58,50 @@ export async function zcashNodeRpc<T>(
   params: unknown[] = [],
   signal?: AbortSignal
 ): Promise<T> {
-  const json = await fetchJsonWithTimeout<JsonRpcResponse<T>>(baseUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    timeoutMs: RPC_TIMEOUT_MS,
-    maxBytes: 32 * 1024 * 1024,
-    signal
-  })
+  if (signal?.aborted) throw signal.reason
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
+  const usePrivate =
+    NYM_PRIVATE_BROADCAST.available &&
+    requiresZcashNodeRpcNymRoute(method, NYM_PRIVATE_BROADCAST.routes) &&
+    (await readNymPrivateBroadcastEnabled())
+  const json = usePrivate
+    ? await privateNodeRpc<T>(baseUrl, body, signal)
+    : await fetchJsonWithTimeout<JsonRpcResponse<T>>(baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        timeoutMs: RPC_TIMEOUT_MS,
+        maxBytes: MAX_RESPONSE_CHARS,
+        signal
+      })
   if (json.error) {
     throw new ZcashRpcError(`RPC ${method} failed: ${json.error.message}`, json.error.code)
   }
   return json.result as T
+}
+
+async function privateNodeRpc<T>(
+  baseUrl: string,
+  body: string,
+  signal?: AbortSignal
+): Promise<JsonRpcResponse<T>> {
+  const response = await nymPrivateTextFetchUntil(
+    {
+      url: baseUrl,
+      method: 'POST',
+      headers: [['content-type', 'application/json']],
+      bodyText: body
+    },
+    signal
+  )
+  // Match fetchJsonWithTimeout: a non-2xx status is an HTTP error, not a JSON-RPC result.
+  if (response.status < 200 || response.status > 299) {
+    throw new FetchHttpError(response.status, response.statusText)
+  }
+  if (response.bodyText.length > MAX_RESPONSE_CHARS) {
+    throw new Error('Private RPC response is too large')
+  }
+  return JSON.parse(response.bodyText) as JsonRpcResponse<T>
 }
 
 /**
@@ -192,7 +229,7 @@ export async function pollingTransactionConfirmations(
  */
 export async function getBlockCount(baseUrl: string): Promise<number | null> {
   try {
-    const height = await zcashNodeRpc<number>(baseUrl, 'getblockcount', [])
+    const height = await zcashNodeRpc<number>(baseUrl, 'getblockcount')
     return typeof height === 'number' ? height : null
   } catch {
     return null

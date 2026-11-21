@@ -17,6 +17,11 @@ import {
 } from '@/lib/fetch-utils'
 import { DedupPromise } from '@/lib/async-utils'
 import { assertMainnetProtocolFeature } from '@/lib/runtime-network'
+import { parseZcashAddress } from '@/core/address-book/address-book'
+import { NYM_PRIVATE_BROADCAST } from '@/config/nym-private-broadcast'
+import { NymPrivateFetchError, nymPrivateFetch } from '@/core/nym/private-fetch-relay'
+import { NYM_BROADCAST_UNAVAILABLE_MESSAGE } from '@/core/zcash/wallet-rpc-errors'
+import { readNymPrivateBroadcastEnabled } from '@/infrastructure/chains/nym-private-broadcast-preferences'
 import Big from 'big.js'
 import type { QuoteBinding } from '@/types/wallet'
 
@@ -670,7 +675,32 @@ export function isZecToken(token: SwapToken | null): boolean {
   return token.blockchain === 'zec' || token.blockchain === 'zcash'
 }
 
+/**
+ * Options that send a swap request spending ZEC through the Nym tunnel while the user routes
+ * Zcash requests there. An unreadable routing choice rejects instead of sending directly.
+ */
+async function zecSwapRouteOptions(
+  spendsZec: boolean
+): Promise<{ transport: typeof fetch; timeoutMs: number } | null> {
+  if (!spendsZec || !NYM_PRIVATE_BROADCAST.available || !NYM_PRIVATE_BROADCAST.routes.zecSwap) {
+    return null
+  }
+  if (!(await readNymPrivateBroadcastEnabled())) return null
+  return { transport: nymPrivateFetch, timeoutMs: NYM_PRIVATE_BROADCAST.relayTimeoutMs }
+}
+
+/** A swap that spends ZEC takes its deposit on Zcash; swaps run on mainnet only. */
+function isZcashDepositAddress(depositAddress: string): boolean {
+  try {
+    parseZcashAddress(depositAddress, 'mainnet')
+    return true
+  } catch {
+    return false
+  }
+}
+
 function getSwapQuoteErrorMessage(error: unknown): string {
+  if (error instanceof NymPrivateFetchError) return NYM_BROADCAST_UNAVAILABLE_MESSAGE
   if (error instanceof FetchTimeoutError) return 'Swap quote request timed out. Please try again.'
   if (error instanceof FetchResponseTooLargeError)
     return 'Swap quotes are temporarily unavailable. Please try again.'
@@ -707,13 +737,15 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
       appFees: NOIR_SWAP_APP_FEES
     }
 
+    const route = await zecSwapRouteOptions(params.originAsset === ZEC_ZCASH_ASSET)
     const response = await fetchWithTimeout(`${INTENTS_API_BASE}/quote`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
       timeoutMs: 20000,
       maxBytes: 1024 * 1024,
-      signal: params.signal
+      signal: params.signal,
+      ...route
     })
 
     const data = await response.json()
@@ -771,13 +803,18 @@ export async function fetchSwapStatus(depositAddress: string): Promise<SwapStatu
   ])
   let lastError: unknown
 
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetchWithTimeout(endpoint, { maxBytes: 1024 * 1024 })
-      return parseSwapStatusResponse(await response.json())
-    } catch (error) {
-      lastError = error
+  try {
+    const route = await zecSwapRouteOptions(isZcashDepositAddress(depositAddress))
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetchWithTimeout(endpoint, { maxBytes: 1024 * 1024, ...route })
+        return parseSwapStatusResponse(await response.json())
+      } catch (error) {
+        lastError = error
+      }
     }
+  } catch (error) {
+    lastError = error
   }
 
   console.error(

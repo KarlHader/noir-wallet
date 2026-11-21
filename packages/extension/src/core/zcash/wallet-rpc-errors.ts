@@ -1,9 +1,14 @@
 import { MIN_SHIELDING_BALANCE_MESSAGE } from './shielding'
 import { isRpcEndpointError } from '@/lib/errors'
+import { NYM_INCOMPLETE_ERROR, NYM_UNAVAILABLE_ERROR } from '../nym/private-broadcast-protocol'
 
 export const WALLET_BUSY_MESSAGE = 'Wallet is temporarily busy. Please try again in a moment.'
 export const RPC_ENDPOINT_UNAVAILABLE_MESSAGE =
   'The wallet RPC endpoint is unavailable. Try again or switch RPC endpoint in Settings.'
+export const NYM_BROADCAST_UNAVAILABLE_MESSAGE =
+  'Could not reach the Nym network. Try again, or turn off Broadcast over Nym in Settings.'
+export const NYM_BROADCAST_INCOMPLETE_MESSAGE =
+  'Broadcast over Nym did not complete. Check Activity before trying again.'
 
 export function isSyncBusyError(message: string): boolean {
   return message.includes('SYNC_BUSY')
@@ -44,5 +49,7 @@ export function getRetryableWalletRpcUserMessage(message: string): string {
     return MIN_SHIELDING_BALANCE_MESSAGE
   }
   if (isRetryableWalletRpcError(message)) return WALLET_BUSY_MESSAGE
+  if (message.includes(NYM_INCOMPLETE_ERROR)) return NYM_BROADCAST_INCOMPLETE_MESSAGE
+  if (message.includes(NYM_UNAVAILABLE_ERROR)) return NYM_BROADCAST_UNAVAILABLE_MESSAGE
   return isRpcEndpointError(message) ? RPC_ENDPOINT_UNAVAILABLE_MESSAGE : message
 }

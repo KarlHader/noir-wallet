@@ -108,9 +108,23 @@ import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
 import { buildAccountKey, type AccountScope } from '@/core/wallet/account-scope'
 import {
   applyZeroIndexerOptionsToActiveWorker,
+  closeNymTunnelInOffscreen,
   forwardKeyringRpcToOffscreen,
+  forwardNymPrivateFetchToOffscreen,
   getWorkerClient
 } from '@/core/worker/client'
+import { NYM_PRIVATE_BROADCAST } from '@/config/nym-private-broadcast'
+import { nymPrewarmOrigins } from '@/core/nym/private-broadcast-protocol'
+import {
+  readNymPrivateBroadcastEnabled,
+  writeNymPrivateBroadcastEnabled
+} from '@/infrastructure/chains/nym-private-broadcast-preferences'
+import {
+  NYM_PRIVATE_FETCH_MESSAGE,
+  parseNymTextRequest,
+  setNymPrivateFetchRelay,
+  type NymTextReply
+} from '@/core/nym/private-fetch-relay'
 import {
   addCustomZeroIndexerNode,
   getZeroIndexerBroadcastOptions,
@@ -439,6 +453,9 @@ import {
   getPreferredRpcEndpointOption,
   refreshRpcEndpointRegistry
 } from '@/infrastructure/chains/rpc-endpoints'
+
+// Background txid lookups reach the offscreen tunnel directly instead of messaging themselves.
+if (NYM_PRIVATE_BROADCAST.available) setNymPrivateFetchRelay(forwardNymPrivateFetchToOffscreen)
 
 const MULTICHAIN_WORKER_RPC_METHODS = new Set(['multichain.execute', 'multichain.abort'])
 if (__MULTICHAIN_CONFORMANCE_RPC_ENABLED__) {
@@ -2632,6 +2649,18 @@ async function applyLatestZeroIndexerRuntime(): Promise<string | undefined> {
   }
 }
 
+async function getNymPrewarmOrigins(): Promise<string[]> {
+  if (!Object.values(NYM_PRIVATE_BROADCAST.routes).some(Boolean)) return []
+  if (!(await readNymPrivateBroadcastEnabled())) return []
+  const zeroIndexer =
+    NYM_PRIVATE_BROADCAST.routes.broadcast || NYM_PRIVATE_BROADCAST.routes.transactionLookup
+      ? await readZeroIndexerEnabled()
+          .then(enabled => getZeroIndexerBroadcastOptions(DEFAULT_NETWORK, enabled))
+          .catch(() => null)
+      : null
+  return nymPrewarmOrigins([...(zeroIndexer?.urls ?? []), getNetworkConfig(DEFAULT_NETWORK).rpcUrl])
+}
+
 const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListener>[0] = (
   message,
   sender,
@@ -3134,6 +3163,30 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       )
     return true
   }
+  if (NYM_PRIVATE_BROADCAST.available && message.type === NYM_PRIVATE_FETCH_MESSAGE) {
+    const reply = (value: NymTextReply) => sendResponse(value)
+    if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'extension-page') {
+      reply({ ok: false, error: 'Unauthorized private request sender' })
+      return true
+    }
+    let request
+    try {
+      request = parseNymTextRequest(runtimeMessage.request)
+    } catch {
+      reply({ ok: false, error: 'Invalid private request' })
+      return true
+    }
+    void forwardNymPrivateFetchToOffscreen(request).then(
+      response => reply({ ok: true, response }),
+      error =>
+        reply({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Private network unavailable'
+        })
+    )
+    return true
+  }
+
   if (message.type === 'WORKER_RPC') {
     if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'extension-page') {
       sendResponse({ error: 'Unauthorized Worker RPC sender' })
@@ -3603,6 +3656,43 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           error: error instanceof Error ? error.message : 'Could not save privacy preference'
         })
       )
+    return true
+  }
+
+  if (message.type === 'GET_NYM_PRIVATE_BROADCAST_ENABLED') {
+    void readNymPrivateBroadcastEnabled()
+      .then(enabled => sendResponse({ success: true, enabled }))
+      .catch(() => sendResponse({ success: false, error: 'Could not load privacy preference' }))
+    return true
+  }
+
+  if (message.type === 'SET_NYM_PRIVATE_BROADCAST_ENABLED') {
+    if (!NYM_PRIVATE_BROADCAST.available || typeof message.enabled !== 'boolean') {
+      sendResponse({ success: false, error: 'Invalid privacy broadcast preference' })
+      return true
+    }
+    void enqueueZeroIndexerUpdate(async () => {
+      await writeNymPrivateBroadcastEnabled(message.enabled)
+      const warning = await applyLatestZeroIndexerRuntime()
+      if (!message.enabled) await closeNymTunnelInOffscreen().catch(() => undefined)
+      return { enabled: message.enabled, warning }
+    })
+      .then(({ enabled, warning }) => {
+        sendResponse({ success: true, enabled, ...(warning ? { warning } : {}) })
+      })
+      .catch(error =>
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : 'Could not save privacy preference'
+        })
+      )
+    return true
+  }
+
+  if (message.type === 'GET_NYM_PREWARM_ORIGINS') {
+    void getNymPrewarmOrigins()
+      .then(origins => sendResponse({ success: true, origins }))
+      .catch(() => sendResponse({ success: false }))
     return true
   }
 

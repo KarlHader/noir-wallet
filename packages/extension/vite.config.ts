@@ -64,6 +64,11 @@ if (rheaSwapAccessToken.length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(rhe
   throw new Error('RHEA_SWAP_ACCESS_TOKEN is invalid')
 }
 const historyApiOrigin = resolveHistoryApiOrigin(process.env.EVM_HISTORY_API_ORIGIN, buildChannel)
+// Nym private broadcast is under evaluation and stays out of release channels.
+const nymPrivateBroadcastEnabled = process.env.NYM_PRIVATE_BROADCAST === '1'
+if (nymPrivateBroadcastEnabled && (buildChannel === 'beta' || buildChannel === 'production')) {
+  throw new Error('NYM_PRIVATE_BROADCAST is limited to isolated evaluation builds')
+}
 const isExtensionDevServer = process.env.EXTENSION_DEV_SERVER === '1' && !isPlaywrightBuild
 const extensionUpdatesEnabled = buildChannel === 'production' || isPlaywrightBuild
 const e2eBuildProfile = process.env.E2E_BUILD_PROFILE ?? `${networkMode}-default`
@@ -166,6 +171,7 @@ export default defineConfig({
       process.env.CONFIDENTIAL_ONE_CLICK_API_URL ?? ''
     ),
     __ENABLED_CHAIN_FEATURE_FLAGS__: JSON.stringify(enabledChainFeatureFlags),
+    __NYM_PRIVATE_BROADCAST__: JSON.stringify(nymPrivateBroadcastEnabled),
     'import.meta.env.NOIR_PROVIDER_ICON_DATA_URL': JSON.stringify(providerIconDataUrl),
     'import.meta.env.NOIR_WALLET_RDNS': JSON.stringify(NOIR_WALLET_RDNS),
     'import.meta.env.NOIR_APP_VERSION': JSON.stringify(version),
@@ -379,6 +385,7 @@ export default defineConfig({
       input: {
         popup: 'index.html',
         offscreen: 'src/offscreen/index.html',
+        ...(nymPrivateBroadcastEnabled ? { nymTunnel: 'src/offscreen/nym-tunnel.html' } : {}),
         ...(isPlaywrightBuild
           ? {
               credentialRepositoryIntegration:

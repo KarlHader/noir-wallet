@@ -13,6 +13,7 @@ declare const __CUSTOM_ANALYTICS_PASSWORD__: string
 declare const __RHEA_SWAP_ACCESS_TOKEN__: string
 declare const __CONFIDENTIAL_ONE_CLICK_API_URL__: string
 declare const __ENABLED_CHAIN_FEATURE_FLAGS__: readonly `chain.${string}`[]
+declare const __NYM_PRIVATE_BROADCAST__: boolean
 
 interface ImportMetaEnv {
   /** Optional build-time cap on the WASM Rayon thread pool (perf/low-power builds). */
