@@ -13,6 +13,7 @@ import {
 
 import type { FeeTier } from '@/config/fee'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
+import type { NetworkFeePreviews } from '@/popup/services/network-fee-presentation'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
 import { ReviewDownTriangle } from '../transaction/TransactionReviewView'
 
@@ -73,6 +74,7 @@ interface SwapReviewViewProps {
   sourceFeeTier?: NetworkFeeTier
   sourceFeeFamily?: 'evm' | 'bitcoin'
   onSourceFeeTierChange?: (tier: NetworkFeeTier) => void | Promise<void>
+  loadSourceFeeTierPreviews?: () => Promise<NetworkFeePreviews>
   sourceTransferDetails?: {
     readonly network: string
     readonly chainIcon: string
@@ -140,6 +142,7 @@ export function SwapReviewView({
   sourceFeeTier,
   sourceFeeFamily,
   onSourceFeeTierChange,
+  loadSourceFeeTierPreviews,
   sourceTransferDetails,
   destinationDetails,
   approvalDetails,
@@ -314,6 +317,7 @@ export function SwapReviewView({
                     amount={sourceNetworkFee.amount}
                     symbol={sourceNetworkFee.symbol}
                     onTierChange={onSourceFeeTierChange}
+                    loadTierPreviews={loadSourceFeeTierPreviews}
                     disabled={isLoading}
                   />
                 ) : sourceNetworkFee ? (

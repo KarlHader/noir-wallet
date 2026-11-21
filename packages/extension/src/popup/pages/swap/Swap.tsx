@@ -196,6 +196,7 @@ import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {
   createRheaSwapBinding,
   listWalletSwapSourceTokens,
+  loadQuoteDepositEvmFeePreviews,
   quoteDepositTransferClient,
   resolveRheaSwapDestinationIdentity,
   resolveWalletOwnedQuoteAsset,
@@ -3037,6 +3038,22 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     safeBig(swap.amountIn).gt(0) &&
     walletAmountRaw === null
   const preparedFeeUnaffordable = isPreparedSwapFeeUnaffordable(preparedQuoteTransfer)
+  const reviewedFeeTier = isPrivateFunding
+    ? evmMoveFeeSelection.kind === 'tier'
+      ? evmMoveFeeSelection.tier
+      : undefined
+    : networkFeeTier
+  const loadSourceFeeTierPreviews = useCallback(
+    () =>
+      preparedQuoteTransfer?.family === 'evm'
+        ? loadQuoteDepositEvmFeePreviews(
+            preparedQuoteTransfer,
+            executionSourceMode,
+            reviewedFeeTier
+          )
+        : Promise.resolve({}),
+    [preparedQuoteTransfer, executionSourceMode, reviewedFeeTier]
+  )
 
   const liveQuoteRequest = useMemo(() => {
     if (shieldNativeZecSwap) return null
@@ -6591,6 +6608,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                         amount={sourceNetworkFee.amount}
                         symbol={sourceNetworkFee.symbol}
                         onTierChange={reviewLiveQuote}
+                        loadTierPreviews={
+                          preparedQuoteTransfer.family === 'evm'
+                            ? loadSourceFeeTierPreviews
+                            : undefined
+                        }
                         onSelectionChange={
                           isPrivateFunding && walletOwnedSource.family === 'evm'
                             ? async selection => {
@@ -6871,6 +6893,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             walletOwnedSource?.family === 'evm' || walletOwnedSource?.family === 'bitcoin'
               ? reviewLiveQuote
               : undefined
+          }
+          loadSourceFeeTierPreviews={
+            preparedQuoteTransfer?.family === 'evm' ? loadSourceFeeTierPreviews : undefined
           }
           sourceTransferDetails={
             walletOwnedSource

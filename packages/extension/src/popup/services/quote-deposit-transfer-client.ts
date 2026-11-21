@@ -2,6 +2,7 @@ import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from 
 import type { EvmFeeEstimate, EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { NetworkFeeTier, TransactionGraph } from '@/core/transactions/domain'
 import {
+  NETWORK_FEE_TIERS,
   parseNearIntentsTransactionBinding,
   parseRheaSwapTransactionBinding,
   type NearIntentsTransactionBinding,
@@ -24,6 +25,7 @@ import {
   type AssetProtocolSourceMapping
 } from '@/core/prices/asset-market-mappings'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { formatBaseUnitAmount } from '@/lib/number-format'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import {
   createAssetId,
@@ -44,6 +46,7 @@ import type {
   EvmWalletClient
 } from './evm-wallet-client'
 import { evmWalletClient } from './evm-wallet-client'
+import type { NetworkFeePreviews } from './network-fee-presentation'
 import type {
   BitcoinTransferReview,
   BitcoinTransferApprovalResult,
@@ -108,6 +111,49 @@ export type QuoteDepositTransferSubmission =
   | Readonly<{ family: 'bitcoin'; value: BitcoinTransferApprovalResult }>
   | Readonly<{ family: 'solana'; value: SolanaTransferSubmission }>
   | Readonly<{ family: 'near'; value: NearTransferSubmission }>
+
+export async function loadQuoteDepositEvmFeePreviews(
+  prepared: Extract<PreparedQuoteDepositTransfer, { family: 'evm' }>,
+  executionMode: QuoteDepositExecutionMode,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const transaction = prepared.review.graph.root.intent?.evm?.unsignedTransaction
+  if (!transaction) return {}
+
+  const { source } = prepared
+  const { symbol, decimals } = source.networkFeeAsset.metadata
+  const previews: NetworkFeePreviews = {}
+  await Promise.allSettled(
+    NETWORK_FEE_TIERS.filter(tier => tier !== reviewedTier).map(async tier => {
+      const options = { feeTier: tier, executionMode }
+      const estimate =
+        transaction.input === '0x' && source.asset.asset.kind === 'native'
+          ? await evmWalletClient.estimateTransferFee(
+              {
+                assetId: source.asset.asset.id,
+                recipient: transaction.to,
+                amountRaw: transaction.value
+              },
+              options
+            )
+          : await evmWalletClient.estimateContractCallFee(
+              {
+                chainId: source.chain.chain.id,
+                contractAddress: transaction.to,
+                valueRaw: transaction.value,
+                calldata: transaction.input
+              },
+              options
+            )
+      previews[tier] = {
+        amount: formatBaseUnitAmount(estimate.maximumFeeWei, decimals),
+        symbol,
+        approximate: true
+      }
+    })
+  )
+  return previews
+}
 
 export interface QuoteDepositMaximum {
   readonly amountRaw: string
