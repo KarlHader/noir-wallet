@@ -62,6 +62,10 @@ export interface RheaSwapTransactionBinding {
 
 export type TransactionProtocolBinding = NearIntentsTransactionBinding | RheaSwapTransactionBinding
 
+export function isRheaIntentsRoute(router: string): boolean {
+  return /near[-_ ]?intents/i.test(router)
+}
+
 export function getTransactionProtocolIntentKind(
   binding: TransactionProtocolBinding
 ): 'swap' | 'supply' | 'transfer' {

@@ -7,7 +7,7 @@ import type {
   TransactionSegmentEvidence,
   TransactionSegmentTarget
 } from '@/core/transactions/domain'
-import { hasDestinationSettlementEvidence } from '@/core/transactions/domain'
+import { hasDestinationSettlementEvidence, isRheaIntentsRoute } from '@/core/transactions/domain'
 import { formatSortAddress, formatSymbol } from '@/lib/format'
 import { detectZcashAddressType } from '@/lib/zcash-memo'
 import { parseAssetId } from '@/core/chains/registry'
@@ -598,7 +598,7 @@ function isIntentsRelaySegment(segment: ActivitySegment, item?: ActivityItem): b
   return (
     segment.target.provider === 'RHEA CrossChainDex' &&
     binding?.provider === 'rhea-cross-chain-dex' &&
-    /near[-_ ]?intents/i.test(binding.router)
+    isRheaIntentsRoute(binding.router)
   )
 }
 

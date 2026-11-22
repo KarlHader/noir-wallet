@@ -51,11 +51,11 @@ function sameChainBinding() {
   }
 }
 
-function sameChainGraph(signedOrder = true) {
+function sameChainGraph(signedOrder = true, binding = sameChainBinding()) {
   const input = {
     transactionId: parseTransactionId('tx:rhea:same-chain-monitor'),
     scope,
-    binding: sameChainBinding(),
+    binding,
     segmentIds: {
       origin: parseTransactionSegmentId('segment:rhea:same-chain:origin'),
       relay: parseTransactionSegmentId('segment:rhea:same-chain:relay'),
@@ -150,9 +150,9 @@ test('marks same-chain signed orders failed for backend terminal outcomes', asyn
   }
 })
 
-test('keeps ordinary same-chain onchain completion independent of backend status', async () => {
+async function prepareConfirmedSameChainSource(binding) {
   const repository = new InMemoryTransactionRepository()
-  const initial = sameChainGraph(false)
+  const initial = sameChainGraph(false, binding)
   await repository.create(initial)
   const origin = initial.segments.find(segment => segment.role === 'origin')
   const result = await repository.applySegmentEvent({
@@ -169,6 +169,11 @@ test('keeps ordinary same-chain onchain completion independent of backend status
     expectedSegmentRevision: origin.revision
   })
   assert.equal(result.status, 'applied')
+  return { repository, graph: result.graph, origin }
+}
+
+test('keeps ordinary same-chain onchain completion independent of backend status', async () => {
+  const { repository, graph, origin } = await prepareConfirmedSameChainSource()
   const monitor = new RheaSwapTransactionMonitor(
     {
       async recordTransactionSubmission() {},
@@ -182,12 +187,56 @@ test('keeps ordinary same-chain onchain completion independent of backend status
   )
   monitor.repository = repository
 
-  assert.equal(await monitor.checkGraph(result.graph), true)
-  const completed = await repository.get(scope, initial.root.id)
+  assert.equal(await monitor.checkGraph(graph), true)
+  const completed = await repository.get(scope, graph.root.id)
   assert.equal(completed.root.status, 'final')
   assert.equal(
     completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
     origin.evidence.transactionHash
+  )
+})
+
+test('keeps a same-chain Intents transfer open until its separate destination transaction is known', async () => {
+  const { repository, graph, origin } = await prepareConfirmedSameChainSource({
+    ...sameChainBinding(),
+    router: 'preswap-nearintents',
+    userAction: 'transfer'
+  })
+  let observation = { status: 'pending', destinationHash: null }
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async recordTransactionSubmission() {},
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return observation
+      },
+      async retireReportedSubmission() {}
+    },
+    { notifyStatus: () => {} }
+  )
+  monitor.repository = repository
+
+  for (const status of ['pending', 'completed']) {
+    observation = { status, destinationHash: null }
+    assert.equal(await monitor.checkGraph(graph), false)
+    const current = await repository.get(scope, graph.root.id)
+    assert.notEqual(current.root.status, 'final')
+    assert.equal(
+      current.segments.find(segment => segment.role === 'destination').evidence?.transactionHash,
+      undefined
+    )
+  }
+  observation = { status: 'completed', destinationHash }
+  assert.equal(await monitor.checkGraph(graph), true)
+  const completed = await repository.get(scope, graph.root.id)
+  assert.equal(completed.root.status, 'final')
+  assert.equal(
+    completed.segments.find(segment => segment.role === 'origin').evidence.transactionHash,
+    origin.evidence.transactionHash
+  )
+  assert.equal(
+    completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
+    destinationHash
   )
 })
 

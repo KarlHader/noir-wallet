@@ -1,6 +1,7 @@
 import type { RheaSwapService } from '@/core/services/rhea-swap'
 import type { SwapStatus } from '@/core/services/intents-api'
 import {
+  isRheaIntentsRoute,
   parseTransactionEventId,
   type TransactionAccountScope,
   type TransactionGraph,
@@ -652,7 +653,8 @@ export class RheaSwapTransactionMonitor {
       // A persisted submission retries independently of graph finality.
     }
 
-    if (!binding.isCrossChain && !isSignedOrder) {
+    // Intents can settle with a separate destination transaction on the source chain.
+    if (!binding.isCrossChain && !isSignedOrder && !isRheaIntentsRoute(binding.router)) {
       if (origins.some(origin => origin.target.kind === 'onchain' && origin.status !== 'final')) {
         return false
       }
@@ -707,7 +709,6 @@ export class RheaSwapTransactionMonitor {
     }
     if (status === 'completed') {
       if (
-        isSignedOrder &&
         !binding.isCrossChain &&
         !orderStatus.destinationHash &&
         !graph.segments.some(
@@ -773,7 +774,7 @@ export class RheaSwapTransactionMonitor {
       undefined,
       failure
     )
-    if (isSignedOrder && !binding.isCrossChain) {
+    if (!binding.isCrossChain) {
       await this.applyGraphSegment(
         graph.root.scope,
         graph.root.id,

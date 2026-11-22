@@ -64,6 +64,7 @@ export {
 export {
   assertNearIntentsTransferBinding,
   getTransactionProtocolIntentKind,
+  isRheaIntentsRoute,
   parseNearIntentsTransactionBinding,
   parseRheaSwapTransactionBinding,
   parseTransactionProtocolBinding,
