@@ -5296,7 +5296,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     phase: viewStep,
     approval: submittedApproval,
     continuation: approvalToRestore?.record,
-    chainId: walletOwnedSource?.family === 'evm' ? walletOwnedSource.chain.chain.id : null,
     walletId: effectiveWalletId,
     accountId: effectiveAccountId,
     intent: {
@@ -5311,7 +5310,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     quote: quoteResult,
     quoteKey: liveQuoteKey,
     preparing: preparingReview,
-    isPreparing: isPreparingReview,
     sequence: quoteRequestSequence,
     onPreparing: setIsPreparingReview,
     onError: setApprovalError,

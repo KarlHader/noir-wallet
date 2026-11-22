@@ -53,11 +53,12 @@ export function SwapApprovalSubmittedView({
       footer={
         <div className="w-full space-y-2">
           {error && <InlineError message={error} />}
-          {continuingAutomatically ? (
+          {!error && !awaitingHardwareSignature && (
             <p className="text-center text-xs text-muted" role="status">
               Waiting for token approval
             </p>
-          ) : awaitingHardwareSignature ? null : (
+          )}
+          {!continuingAutomatically && !awaitingHardwareSignature && (
             <Button
               className="h-[45px] w-full"
               onClick={onContinue}
