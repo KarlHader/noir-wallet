@@ -366,6 +366,7 @@ export function AccountSwitcher({
   accountName,
   accountIdentity,
   accountCatalog,
+  publicAccountCatalog,
   accountCatalogError,
   defaultEvmMode = 'public'
 }: {
@@ -373,6 +374,7 @@ export function AccountSwitcher({
   readonly accountName?: string
   readonly accountIdentity: ActiveAccountIdentity | null
   readonly accountCatalog: AccountNetworksCatalogView | null
+  readonly publicAccountCatalog: AccountNetworksCatalogView | null
   readonly accountCatalogError: boolean
   readonly defaultEvmMode?: 'public' | 'private' | null
 }) {
@@ -383,7 +385,15 @@ export function AccountSwitcher({
   const { wallets, accountDisplayNames, currentWalletId, currentAccountId } = useWalletStore()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [addressesOpen, setAddressesOpen] = useState(false)
-  const catalogAccounts = accountCatalog?.accounts ?? []
+  const catalogAccounts = useMemo(
+    () =>
+      accountCatalog?.accounts ??
+      // Account management reads persisted addresses only. Use that catalog for the
+      // roster while the full address preview (including private addresses) loads.
+      publicAccountCatalog?.accounts.map(account => ({ ...account, networks: [] })) ??
+      [],
+    [accountCatalog, publicAccountCatalog]
+  )
   const addressesStatus = accountCatalog ? 'ready' : accountCatalogError ? 'error' : 'loading'
   const selectedWalletId = accountIdentity?.walletId ?? null
   const selectedAccountId = accountIdentity?.accountId ?? null

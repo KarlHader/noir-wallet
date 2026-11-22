@@ -131,6 +131,7 @@ export function Home() {
   const {
     activeAccount: storageV2Account,
     catalog: accountCatalog,
+    publicCatalog: publicAccountCatalog,
     loading: accountNetworksLoading,
     error: accountNetworksError,
     refresh: refreshAccountNetworks
@@ -756,6 +757,7 @@ export function Home() {
           accountName={accountDisplayName}
           accountIdentity={effectiveAccount}
           accountCatalog={accountCatalog}
+          publicAccountCatalog={publicAccountCatalog}
           accountCatalogError={accountNetworksError}
           defaultEvmMode={assetDomain === 'shield' ? null : walletMode}
           className="min-w-0 flex-1"
