@@ -1,19 +1,10 @@
-/** Cloudflare Worker for bounded EVM history JSON-RPC and wallet asset discovery. */
+/** Cloudflare Worker for bounded Ankr history JSON-RPC and wallet asset discovery. */
 
 import { getAnkrClient, UpstreamError, type AnkrClient } from './ankr-client'
-import {
-  getNativeInternalTransfers,
-  InvalidNativeInternalPageToken,
-  MAX_NATIVE_INTERNAL_PAGE_SIZE,
-  MAX_NATIVE_INTERNAL_PAGE_TOKEN_LENGTH,
-  NATIVE_INTERNAL_METHOD,
-  type NativeInternalParams
-} from './native-internal-transfers'
 import { readBoundedBody } from './read-bounded-body'
 
 interface Env {
   ANKR_API_KEYS: string
-  ALCHEMY_API_KEY?: string
   ALLOWED_ORIGIN: string
   HISTORY_RATE_LIMITER: RateLimit
 }
@@ -45,14 +36,6 @@ const MAX_TRANSACTION_PAGE_SIZE = 200
 const MAX_TOKEN_PAGE_SIZE = 2_000
 const MAX_RPC_REQUEST_BYTES = 16 * 1024
 const MAX_PAGE_TOKEN_LENGTH = 512
-const HISTORY_PARAMS = new Set([
-  'blockchain',
-  'address',
-  'pageSize',
-  'descOrder',
-  'fromBlock',
-  'pageToken'
-])
 const MAX_REQUEST_CHAINS = 16
 const MAX_DISCOVERED_TOKEN_COUNT = 512
 const MAX_TOKEN_ICON_BYTES = 256 * 1024
@@ -93,20 +76,12 @@ async function rateLimitKey(request: Request): Promise<string> {
 type HistoryMethod = 'ankr_getTransactionsByAddress' | 'ankr_getTokenTransfers'
 type RpcId = number | string | null
 
-interface AnkrHistoryRpcRequest {
+interface HistoryRpcRequest {
   readonly id: number | string
   readonly method: HistoryMethod
   readonly params: Record<string, unknown>
   readonly blockchains: ReadonlySet<string>
 }
-
-type HistoryRpcRequest =
-  | AnkrHistoryRpcRequest
-  | {
-      readonly id: number | string
-      readonly method: typeof NATIVE_INTERNAL_METHOD
-      readonly params: NativeInternalParams
-    }
 
 class RpcRequestError extends Error {
   constructor(
@@ -178,44 +153,13 @@ function parseHistoryRpcRequest(value: unknown): HistoryRpcRequest {
   }
   if (
     value.method !== 'ankr_getTransactionsByAddress' &&
-    value.method !== 'ankr_getTokenTransfers' &&
-    value.method !== NATIVE_INTERNAL_METHOD
+    value.method !== 'ankr_getTokenTransfers'
   ) {
     throw new RpcRequestError(-32601, 'Method not found', 400, id)
   }
-  if (!isRecord(value.params) || Object.keys(value.params).some(key => !HISTORY_PARAMS.has(key))) {
-    throw new RpcRequestError(-32602, 'Invalid params', 400, id)
-  }
+  if (!isRecord(value.params)) throw new RpcRequestError(-32602, 'Invalid params', 400, id)
   const params = value.params
   const blockchains = params.blockchain
-  if (value.method === NATIVE_INTERNAL_METHOD) {
-    const { address, pageSize, fromBlock = 0, pageToken } = params
-    if (
-      !Array.isArray(blockchains) ||
-      blockchains.length !== 1 ||
-      blockchains[0] !== 'base' ||
-      !isEvmAddress(address) ||
-      params.descOrder !== true ||
-      typeof pageSize !== 'number' ||
-      !Number.isSafeInteger(pageSize) ||
-      pageSize < 1 ||
-      pageSize > MAX_NATIVE_INTERNAL_PAGE_SIZE ||
-      typeof fromBlock !== 'number' ||
-      !Number.isSafeInteger(fromBlock) ||
-      fromBlock < 0 ||
-      (pageToken !== undefined &&
-        (typeof pageToken !== 'string' ||
-          pageToken.length === 0 ||
-          pageToken.length > MAX_NATIVE_INTERNAL_PAGE_TOKEN_LENGTH))
-    ) {
-      throw new RpcRequestError(-32602, 'Invalid params', 400, id)
-    }
-    return {
-      id,
-      method: value.method,
-      params: { address: address.toLowerCase(), pageSize, fromBlock, pageToken }
-    }
-  }
   const maxPageSize =
     value.method === 'ankr_getTransactionsByAddress'
       ? MAX_TRANSACTION_PAGE_SIZE
@@ -245,7 +189,11 @@ function parseHistoryRpcRequest(value: unknown): HistoryRpcRequest {
       (typeof params.pageToken !== 'string' ||
         params.pageToken.length < 1 ||
         params.pageToken.length > MAX_PAGE_TOKEN_LENGTH ||
-        /[\u0000-\u001f\u007f]/.test(params.pageToken)))
+        /[\u0000-\u001f\u007f]/.test(params.pageToken))) ||
+    Object.keys(params).some(
+      key =>
+        !['blockchain', 'address', 'pageSize', 'descOrder', 'fromBlock', 'pageToken'].includes(key)
+    )
   ) {
     throw new RpcRequestError(-32602, 'Invalid params', 400, id)
   }
@@ -257,7 +205,7 @@ function parseHistoryRpcRequest(value: unknown): HistoryRpcRequest {
   }
 }
 
-function validateHistoryResult(result: unknown, request: AnkrHistoryRpcRequest): void {
+function validateHistoryResult(result: unknown, request: HistoryRpcRequest): void {
   const key = request.method === 'ankr_getTransactionsByAddress' ? 'transactions' : 'transfers'
   if (!isRecord(result) || !Array.isArray(result[key])) {
     throw new UpstreamError(502, 'Ankr returned invalid history data')
@@ -451,66 +399,6 @@ async function handleAccountBalances(
   }
 }
 
-async function handleHistoryRpc(
-  request: Request,
-  env: Env,
-  cors: Record<string, string>
-): Promise<Response> {
-  let rpcRequest: HistoryRpcRequest
-  try {
-    if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) {
-      throw new RpcRequestError(-32600, 'Content-Type must be application/json', 415)
-    }
-    rpcRequest = parseHistoryRpcRequest(await readRpcBody(request))
-  } catch (error) {
-    if (error instanceof RpcRequestError) {
-      return rpcErrorResponse(error.id, error.code, error.message, error.status, cors)
-    }
-    return rpcErrorResponse(null, -32600, 'Invalid request', 400, cors)
-  }
-
-  try {
-    const { success } = await env.HISTORY_RATE_LIMITER.limit({ key: await rateLimitKey(request) })
-    if (!success) {
-      return rpcErrorResponse(rpcRequest.id, -32001, 'Rate limit exceeded', 429, cors, {
-        'Retry-After': '60'
-      })
-    }
-    let result: unknown
-    if (rpcRequest.method === NATIVE_INTERNAL_METHOD) {
-      result = await getNativeInternalTransfers(
-        env.ALCHEMY_API_KEY,
-        rpcRequest.params,
-        request.signal
-      )
-    } else {
-      let client: AnkrClient
-      try {
-        client = getAnkrClient(env.ANKR_API_KEYS)
-      } catch {
-        return rpcErrorResponse(null, -32000, 'Service unavailable', 503, cors)
-      }
-      result = await client.request(rpcRequest.method, rpcRequest.params, request.signal)
-      validateHistoryResult(result, rpcRequest)
-    }
-    return jsonResponse({ jsonrpc: '2.0', id: rpcRequest.id, result }, 200, cors)
-  } catch (error) {
-    if (error instanceof InvalidNativeInternalPageToken) {
-      return rpcErrorResponse(rpcRequest.id, -32602, 'Invalid page token', 400, cors)
-    }
-    console.error(
-      `[evm-history-proxy] ${rpcRequest.method} status=${error instanceof UpstreamError ? error.status : 502} reason=${error instanceof UpstreamError ? error.message : 'internal-error'}`
-    )
-    return rpcErrorResponse(
-      rpcRequest.id,
-      -32000,
-      'Upstream unavailable',
-      error instanceof UpstreamError ? error.status : 502,
-      upstreamErrorHeaders(error, cors)
-    )
-  }
-}
-
 export const evmHistoryWorker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const cors = corsHeaders(env.ALLOWED_ORIGIN)
@@ -531,13 +419,14 @@ export const evmHistoryWorker = {
         ? rpcErrorResponse(null, -32000, 'Service unavailable', 503, cors)
         : jsonResponse({ error: 'Service unavailable' }, 503, cors)
     }
-    if (isHistoryRpc) return handleHistoryRpc(request, env, cors)
 
     let client: AnkrClient
     try {
       client = getAnkrClient(env.ANKR_API_KEYS)
     } catch {
-      return jsonResponse({ error: 'Service unavailable' }, 503, cors)
+      return isHistoryRpc
+        ? rpcErrorResponse(null, -32000, 'Service unavailable', 503, cors)
+        : jsonResponse({ error: 'Service unavailable' }, 503, cors)
     }
 
     if (url.pathname === '/health') {
@@ -621,7 +510,45 @@ export const evmHistoryWorker = {
     }
 
     if (url.pathname !== '/') return jsonResponse({ error: 'Not found' }, 404, cors)
-    return jsonResponse({ error: 'Method not allowed' }, 405, cors)
+    if (request.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405, cors)
+
+    let rpcRequest: HistoryRpcRequest
+    try {
+      if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) {
+        throw new RpcRequestError(-32600, 'Content-Type must be application/json', 415)
+      }
+      rpcRequest = parseHistoryRpcRequest(await readRpcBody(request))
+    } catch (error) {
+      if (error instanceof RpcRequestError) {
+        return rpcErrorResponse(error.id, error.code, error.message, error.status, cors)
+      }
+      return rpcErrorResponse(null, -32600, 'Invalid request', 400, cors)
+    }
+
+    try {
+      const { success } = await env.HISTORY_RATE_LIMITER.limit({
+        key: await rateLimitKey(request)
+      })
+      if (!success) {
+        return rpcErrorResponse(rpcRequest.id, -32001, 'Rate limit exceeded', 429, cors, {
+          'Retry-After': '60'
+        })
+      }
+      const result = await client.request(rpcRequest.method, rpcRequest.params, request.signal)
+      validateHistoryResult(result, rpcRequest)
+      return jsonResponse({ jsonrpc: '2.0', id: rpcRequest.id, result }, 200, cors)
+    } catch (error) {
+      console.error(
+        `[evm-history-proxy] ${rpcRequest.method} status=${error instanceof UpstreamError ? error.status : 502} reason=${error instanceof UpstreamError ? error.message : 'internal-error'}`
+      )
+      return rpcErrorResponse(
+        rpcRequest.id,
+        -32000,
+        'Upstream unavailable',
+        error instanceof UpstreamError ? error.status : 502,
+        upstreamErrorHeaders(error, cors)
+      )
+    }
   }
 } satisfies ExportedHandler<Env>
 

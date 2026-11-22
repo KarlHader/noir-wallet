@@ -27,11 +27,7 @@ import type {
   FindEvmConfirmedReplacementInput,
   TrackedErc20Asset
 } from './evm-indexed-activity'
-import {
-  createEvmAnkrHistoryClient,
-  EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID,
-  type EvmAnkrHistoryChain
-} from './evm-ankr-history-client'
+import { createEvmAnkrHistoryClient, type EvmAnkrHistoryChain } from './evm-ankr-history-client'
 import {
   createCachedEvmAnkrHistoryBatchSource,
   createCachedEvmActivityHistorySource,
@@ -121,17 +117,11 @@ export function createConfiguredEvmActivityHistorySource(
       if (!result || 'error' in result || 'incomplete' in result) {
         throw result && 'error' in result ? result.error : new Error('Missing Ankr history result')
       }
-      return {
-        items: result.items,
-        hasMore: result.hasMore ?? false,
-        sourceIncomplete: result.sourceIncomplete,
-        windowTruncated: result.windowTruncated
-      }
+      return { items: result.items, hasMore: result.hasMore ?? false }
     }
     return createCachedEvmActivityHistorySource({
       chainId: config.chainId,
       trackedAssetKey: trackedErc20AssetKey(trackedErc20Assets),
-      usesInternalHistory: config.chainId === EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID,
       source: Object.freeze({
         readAddressActivity: async (input: ReadEvmAddressActivityInput) =>
           (await readAddressActivityWithMetadata(input)).items,
