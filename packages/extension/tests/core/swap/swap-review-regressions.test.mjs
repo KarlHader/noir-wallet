@@ -575,6 +575,33 @@ it('keeps a quote timeout retryable when a successful HTTP response also mention
   })
 })
 
+it('distinguishes an exhausted route from retryable aggregate quote failures', async () => {
+  const noRoute = [
+    'lifi: LI.FI unsupported destination chain',
+    'rango: route does not support this chain pair'
+  ]
+  for (const [errors, expected] of [
+    [noRoute, { message: 'no route', retryable: false }],
+    [[...noRoute, 'nearintents quote timeout after 2s'], { message: 'no route', retryable: true }],
+    [
+      [...noRoute, 'contract: all Rhea bridge quotes failed'],
+      { message: 'RHEA Swap HTTP 400', retryable: true }
+    ]
+  ]) {
+    const api = new RheaSwapApi({
+      baseUrl: 'https://quote.invalid',
+      retry: { maxRetries: 0 },
+      fetch: async () =>
+        Response.json({ code: 400, data: { errors }, errorCode: '' }, { status: 400 })
+    })
+    await assert.rejects(api.quote({}), error => {
+      const runtimeMessage = getSafeRheaSwapRuntimeErrorMessage(error)
+      assert.deepEqual(getRheaSwapQuoteFailure(new RheaSwapClientError(runtimeMessage)), expected)
+      return true
+    })
+  }
+})
+
 it('uses the native RHEA paths and retries quote reads without replaying writes', async () => {
   const requests = []
   let quoteCalls = 0

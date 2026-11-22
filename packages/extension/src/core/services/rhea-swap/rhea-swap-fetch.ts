@@ -2,6 +2,9 @@ import { readBoundedResponseText } from '@/lib/fetch-utils'
 import { getRheaSwapMinimumAmountMessage, RheaSwapHttpError } from './rhea-swap-error'
 
 const MAXIMUM_QUOTE_ERROR_BYTES = 64 * 1024
+const PROVIDER_TIMEOUT = /\b(?:timed? out|timeout|deadline exceeded)\b/i
+const PROVIDER_NO_ROUTE =
+  /\b(?:unsupported (?:source|destination) chain|route does not support this chain pair|no (?:supported |swap )?route(?: found)?|no liquidity)\.?$/i
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -28,6 +31,19 @@ function readQuoteFailure(value: unknown, depth = 0): 'timeout' | 'no-route' | n
     failure ??= nested
   }
   return failure
+}
+
+function readAggregateQuoteFailure(
+  payload: Record<string, unknown>
+): 'timeout' | 'no-route' | null {
+  const errors = isRecord(payload.data) ? payload.data.errors : undefined
+  if (!Array.isArray(errors) || errors.length === 0) return null
+  if (errors.some(error => typeof error === 'string' && PROVIDER_TIMEOUT.test(error))) {
+    return 'timeout'
+  }
+  return errors.every(error => typeof error === 'string' && PROVIDER_NO_ROUTE.test(error))
+    ? 'no-route'
+    : null
 }
 
 /** Preserve the provider's fixed quote failure categories without exposing its payload. */
@@ -62,7 +78,7 @@ export function createRheaSwapFetch(fetchImplementation: typeof fetch): typeof f
     if (typeof payload.msg === 'string' && getRheaSwapMinimumAmountMessage(payload.msg)) {
       return response
     }
-    const failure = readQuoteFailure(payload)
+    const failure = readQuoteFailure(payload) ?? readAggregateQuoteFailure(payload)
     if (!failure) return response
     // Only fixed categories cross the error boundary; provider payloads remain private.
     void response.body?.cancel().catch(() => {})

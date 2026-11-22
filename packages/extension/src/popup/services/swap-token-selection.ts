@@ -3,6 +3,8 @@ import type { ChainDefinition } from '@/core/chains/registry'
 import type { SavedSwapTokenSelection } from '@/store/swap-store'
 import { getEnabledSwapChains } from './swap-catalog-loading'
 import { EVM_USDC_PROTOCOL_ASSET_BY_CHAIN_ID } from '@/config/asset-market-assets'
+import { getEvmNetworkConfigs } from '@/config/networks'
+import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { ManagedTokenRow } from './managed-token-list'
 import { toManagedEvmSwapToken, toWalletEvmQuoteToken } from './token-address-discovery'
@@ -32,6 +34,36 @@ export interface ResolvedSwapTokenSelection<T extends SwapToken = SwapToken> {
 
 export function matchesSwapTokenSearch(token: SwapToken, search: string): boolean {
   return rankTokenSearchFields(token, search) < 99
+}
+
+export function getNativeEvmSwapDisplayId(token: SwapToken): string | null {
+  if (token.contractAddress) return null
+  const canonicalId = resolveRheaSwapCanonicalAssetId(token.assetId)
+  const chainId = canonicalId?.split('/')[0]
+  const network = getEvmNetworkConfigs('mainnet').find(network => network.chainId === chainId)
+  if (!network) return null
+  const nativeId = `${network.chainId}/slip44:${network.nativeCurrency.slip44Reference}`
+  return canonicalId === nativeId ? nativeId : null
+}
+
+export function deduplicateNativeEvmSwapDisplayRows(
+  tokens: readonly SwapToken[],
+  tokenKey: (token: SwapToken) => string,
+  selectedKey?: string
+): readonly SwapToken[] {
+  const displayRows: SwapToken[] = []
+  const shownNative = new Map<string, number>()
+  for (const token of tokens) {
+    const displayId = getNativeEvmSwapDisplayId(token)
+    const priorIndex = displayId ? shownNative.get(displayId) : undefined
+    if (priorIndex === undefined) {
+      if (displayId) shownNative.set(displayId, displayRows.length)
+      displayRows.push(token)
+    } else if (selectedKey !== undefined && tokenKey(token) === selectedKey) {
+      displayRows[priorIndex] = token
+    }
+  }
+  return displayRows
 }
 
 export type TokenSearchFields = Readonly<{

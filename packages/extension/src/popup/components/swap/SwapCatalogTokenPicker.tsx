@@ -14,7 +14,11 @@ import {
   type TokenSelectionItem
 } from '../tokens/TokenPicker'
 import { sortTokensByBalanceValue } from '@/popup/services/token-balance-order'
-import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
+import {
+  deduplicateNativeEvmSwapDisplayRows,
+  getNativeEvmSwapDisplayId,
+  rankTokenSearchFields
+} from '@/popup/services/swap-token-selection'
 import { createDebugRequestId, logDebugTiming } from '@/lib/debug-performance'
 import {
   deferredChainChoices,
@@ -134,6 +138,7 @@ export function SwapCatalogTokenPicker({
     onFilterChangeRef.current?.({ search: deferredSearch.trim(), network: effectiveBlockchain })
   }, [deferredSearch, effectiveBlockchain])
   const availableTokenKeys = useMemo(() => new Set(tokens.map(tokenKey)), [tokens, tokenKey])
+  const selectedTokenKey = selectedToken ? tokenKey(selectedToken) : undefined
   const filterKey = `${effectiveBlockchain}:${deferredSearch}`
   const filteredTokens = useMemo(() => {
     const startedAt = performance.now()
@@ -170,7 +175,7 @@ export function SwapCatalogTokenPicker({
       `filter-sort input=${tokens.length} output=${ranked.length} queryLength=${deferredSearch.length}`,
       startedAt
     )
-    return ranked
+    return deduplicateNativeEvmSwapDisplayRows(ranked, tokenKey, selectedTokenKey)
   }, [
     tokens,
     defaultTokens,
@@ -182,7 +187,8 @@ export function SwapCatalogTokenPicker({
     selectionTraceId,
     stableCatalogOrder,
     filterKey,
-    tokenKey
+    tokenKey,
+    selectedTokenKey
   ])
   useEffect(() => {
     previousRows.current = {
@@ -238,6 +244,10 @@ export function SwapCatalogTokenPicker({
   const discoveryChain = RHEA_SWAP_CHAIN_CATALOG.find(
     chain => chain.walletFamily === 'evm' && chain.blockchain === effectiveBlockchain
   )
+  const selectedDisplayId = selectedToken ? getNativeEvmSwapDisplayId(selectedToken) : null
+  const selectedDisplayToken = selectedDisplayId
+    ? filteredTokens.find(token => getNativeEvmSwapDisplayId(token) === selectedDisplayId)
+    : undefined
   return (
     <TokenPicker
       networks={selectorNetworks}
@@ -253,7 +263,7 @@ export function SwapCatalogTokenPicker({
       isDisabled={row => 'onSelect' in row && Boolean(row.disabledReason)}
       selectedKey={
         visibleExtraItems.find(item => item.selected)?.key ??
-        (selectedToken ? tokenKey(selectedToken) : undefined)
+        (selectedDisplayToken ? tokenKey(selectedDisplayToken) : selectedTokenKey)
       }
       onSelect={row => {
         if ('onSelect' in row) row.onSelect()
