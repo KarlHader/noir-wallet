@@ -1,7 +1,7 @@
 import type { AddressBookContact } from '@/core/address-book/address-book'
 import { selectAddressBookContactsForChain } from '@/core/address-book/address-book'
 import type { Network } from '@/types'
-import { isGeneratedWalletTimestampName } from '@/lib/format'
+import type { SwitcherGroup } from '@/popup/services/account-list-model'
 import type {
   AccountNetworkAddressView,
   AccountNetworksCatalogView
@@ -15,16 +15,14 @@ export interface MyAccountRecipientGroup {
   readonly key: string
   readonly walletId: string
   readonly accountId: string
-  readonly walletDisplayName: string
-  readonly accountDisplayName: string
   readonly active: boolean
   readonly addresses: readonly MyAccountRecipientAddress[]
 }
 
 export interface MyWalletRecipientGroup {
-  readonly walletId: string
-  readonly walletDisplayName: string
-  readonly accounts: readonly MyAccountRecipientGroup[]
+  readonly id: string
+  readonly name: string
+  readonly accounts: readonly (MyAccountRecipientGroup & { readonly name: string })[]
 }
 
 export interface MyAccountRecipientGroupOptions {
@@ -56,6 +54,10 @@ export function getMyAccountRecipientUnavailableReason(
 
 function normalizedAddress(chainId: string, address: string): string {
   return chainId.startsWith('eip155:') ? address.toLowerCase() : address
+}
+
+function recipientAccountKey(walletId: string, accountId: string): string {
+  return `${walletId}:${accountId}`
 }
 
 export function buildMyAccountRecipientGroups(
@@ -115,13 +117,9 @@ export function buildMyAccountRecipientGroups(
 
     groups.push(
       Object.freeze({
-        key: `${account.walletId}:${account.accountId}`,
+        key: recipientAccountKey(account.walletId, account.accountId),
         walletId: account.walletId,
         accountId: account.accountId,
-        walletDisplayName: isGeneratedWalletTimestampName(account.walletDisplayName)
-          ? ''
-          : account.walletDisplayName,
-        accountDisplayName: account.accountDisplayName,
         active: account.active,
         addresses: Object.freeze(addresses)
       })
@@ -151,23 +149,17 @@ export function buildMyAccountRecipientGroups(
 }
 
 export function buildMyWalletRecipientGroups(
-  accounts: readonly MyAccountRecipientGroup[]
+  accounts: readonly MyAccountRecipientGroup[],
+  displayGroups: readonly SwitcherGroup[]
 ): readonly MyWalletRecipientGroup[] {
-  const wallets = new Map<string, MyAccountRecipientGroup[]>()
-  for (const account of accounts) {
-    const existing = wallets.get(account.walletId)
-    if (existing) existing.push(account)
-    else wallets.set(account.walletId, [account])
-  }
-  return Object.freeze(
-    [...wallets].map(([walletId, walletAccounts]) =>
-      Object.freeze({
-        walletId,
-        walletDisplayName: walletAccounts[0]!.walletDisplayName,
-        accounts: Object.freeze(walletAccounts)
-      })
-    )
-  )
+  const byKey = new Map(accounts.map(account => [account.key, account]))
+  return displayGroups.flatMap(group => {
+    const groupAccounts = group.accounts.flatMap(account => {
+      const recipient = byKey.get(recipientAccountKey(account.walletId, account.accountId))
+      return recipient ? [{ ...recipient, name: account.name }] : []
+    })
+    return groupAccounts.length ? [{ id: group.id, name: group.name, accounts: groupAccounts }] : []
+  })
 }
 
 export function buildSavedRecipientList(

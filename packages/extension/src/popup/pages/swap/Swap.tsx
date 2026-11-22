@@ -976,10 +976,18 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       searchParams.get('balanceDomain') === 'private' ||
       requestedCrossChainSourceMode === 'private')
   const [nativeIntentsCatalog, setNativeIntentsCatalog] = useState<readonly SwapToken[]>([])
-  const [nativeIntentsCatalogSettled, setNativeIntentsCatalogSettled] = useState(false)
+  const nativeIntentsCatalogScope = shieldNativeZecSwap
+    ? `${effectiveWalletId}:${effectiveAccountId}`
+    : null
+  const [settledNativeIntentsCatalogScope, setSettledNativeIntentsCatalogScope] = useState<
+    string | null
+  >(null)
+  const nativeIntentsCatalogSettled =
+    nativeIntentsCatalogScope !== null &&
+    nativeIntentsCatalogScope === settledNativeIntentsCatalogScope
   useEffect(() => {
-    setNativeIntentsCatalogSettled(false)
-    if (!shieldNativeZecSwap) {
+    if (nativeIntentsCatalogScope === null) {
+      setSettledNativeIntentsCatalogScope(null)
       setNativeIntentsCatalog([])
       return
     }
@@ -1008,12 +1016,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         }
       })
       .finally(() => {
-        if (active) setNativeIntentsCatalogSettled(true)
+        if (active) setSettledNativeIntentsCatalogScope(nativeIntentsCatalogScope)
       })
     return () => {
       active = false
     }
-  }, [shieldNativeZecSwap, effectiveWalletId, effectiveAccountId])
+  }, [nativeIntentsCatalogScope, effectiveWalletId, effectiveAccountId])
   const nativeIntentsManagedAssets = useMemo(
     () => resolveManagedIntentsCatalog(nativeIntentsCatalog),
     [nativeIntentsCatalog]
@@ -2334,7 +2342,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     )
     if (
       initializedNativeDestinationScope.current !== swapPreferenceScope &&
-      savedTokenSelection?.tokenOutId &&
       !saved &&
       !nativeIntentsCatalogSettled
     )
@@ -2371,12 +2378,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     (!swapPreferencesHydrated ||
       !swap.selectionReady ||
       (initializedNativeDestinationScope.current !== swapPreferenceScope &&
-        Boolean(savedTokenSelection?.tokenOutId) &&
-        swap.tokenOut?.assetId !== savedTokenSelection?.tokenOutId &&
         (!nativeIntentsCatalogSettled ||
-          nativeConfidentialDestinationTokens.some(
-            token => token.assetId === savedTokenSelection?.tokenOutId
-          ))))
+          (swap.tokenOut?.assetId !== savedTokenSelection?.tokenOutId &&
+            nativeConfidentialDestinationTokens.some(
+              token => token.assetId === savedTokenSelection?.tokenOutId
+            )))))
 
   const isDestinationNetworkEnabled = useCallback(
     (token: RheaSwapToken) =>

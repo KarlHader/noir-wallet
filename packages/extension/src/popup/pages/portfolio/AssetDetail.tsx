@@ -16,14 +16,14 @@ import {
   formatPercentage,
   formatFiatAmount,
   formatTokenPrice,
-  formatBaseUnitAmount,
-  formatBaseUnitDecimalAmount
+  formatBaseUnitAmount
 } from '@/lib/number-format'
 
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { cn } from '@/lib/utils'
 import { formatSortAddress, formatSymbol } from '@/lib/format'
 import {
+  getAssetDetailBalanceFiat,
   getAssetDetailCategories,
   getZcashPrivacyBalanceDisplay,
   sumZcashDetailBalanceRaw
@@ -784,12 +784,7 @@ export function AssetDetail() {
     displayRaw === null ? '—' : formatDisplayTokenAmount(displayRaw, asset.metadata.decimals)
   const detailBalanceLoading =
     detailMode === 'shield' && displayRaw === null && loadingConfidentialBalance
-  const detailFiat =
-    displayRaw === null || !quote
-      ? null
-      : new Big(formatBaseUnitDecimalAmount(displayRaw, asset.metadata.decimals))
-          .times(quote.priceUsd)
-          .toFixed()
+  const detailFiat = getAssetDetailBalanceFiat(displayRaw, asset.metadata.decimals, quote?.priceUsd)
   const contractAddress = asset.asset.kind === 'token' ? asset.asset.reference : null
   const hasPendingBalance = asset.balance.pendingRaw !== '0'
   const change = quote?.marketChange ? new Big(quote.marketChange.percent24h) : null
@@ -1235,9 +1230,11 @@ export function AssetDetail() {
                   )
                 }
                 fiat={formatBalanceFiat(
-                  nearConfidentialZec && quote
-                    ? new Big(nearConfidentialZec.amount).times(quote.priceUsd).toFixed()
-                    : null
+                  getAssetDetailBalanceFiat(
+                    nearConfidentialZec?.availableRaw ?? null,
+                    asset.metadata.decimals,
+                    quote?.priceUsd
+                  )
                 )}
               />
             )}

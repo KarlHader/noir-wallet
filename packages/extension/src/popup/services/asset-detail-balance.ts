@@ -18,6 +18,16 @@ export function sumZcashDetailBalanceRaw(
     : (BigInt(nativeRaw) + BigInt(confidentialRaw)).toString()
 }
 
+export function getAssetDetailBalanceFiat(
+  amountRaw: string | null,
+  decimals: number,
+  priceUsd?: string
+): string | null {
+  if (amountRaw === '0') return '0'
+  if (amountRaw === null || priceUsd === undefined) return null
+  return new Big(formatBaseUnitDecimalAmount(amountRaw, decimals)).times(priceUsd).toFixed()
+}
+
 export function getAssetDetailCategories(
   asset: PortfolioAssetView,
   model: PortfolioReadModel,
@@ -78,14 +88,7 @@ export function getAssetDetailCategories(
     (['all', 'public', 'shield', 'private'] as const).map(domain => {
       const amount = raw[domain]
       const quote = domain === 'shield' ? (priceUsd ?? shieldPriceUsd) : priceUsd
-      return [
-        domain,
-        amount === null || quote === undefined
-          ? null
-          : new Big(formatBaseUnitDecimalAmount(amount, asset.metadata.decimals))
-              .times(quote)
-              .toFixed()
-      ]
+      return [domain, getAssetDetailBalanceFiat(amount, asset.metadata.decimals, quote)]
     })
   ) as Record<AssetDomain, string | null>
   return { domains, raw, fiat }

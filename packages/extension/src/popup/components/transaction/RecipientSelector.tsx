@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Icon } from '@iconify/react'
-import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
+import { formatSortAddress } from '@/lib/format'
 import { resolveEvmAddressRole } from '@/core/accounts/evm-address-role'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
@@ -24,6 +24,7 @@ import { Tabs, TabsContent } from '../ui/tabs'
 import { PageTabsList, PageTabsTrigger } from '../common/PageTabs'
 import { Tooltip } from '../ui/tooltip'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
+import { buildAccountSwitcherGroups } from '@/popup/services/account-list-model'
 import {
   buildMyAccountRecipientGroups,
   buildMyWalletRecipientGroups,
@@ -89,6 +90,7 @@ export function RecipientSelector({
   readonly onSelect: (address: string, displayName?: string) => void
 }) {
   const contacts = useAddressBookStore(state => state.contacts)
+  const wallets = useWalletStore(state => state.wallets)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const [catalog, setCatalog] = useState<AccountNetworksCatalogView | null>(null)
   const [loading, setLoading] = useState(true)
@@ -164,21 +166,29 @@ export function RecipientSelector({
     [chainId, contacts, excludeAddresses]
   )
   const normalizedQuery = query.trim().toLowerCase()
-  const visibleWalletGroups = buildMyWalletRecipientGroups(accountGroups).flatMap(wallet => {
-    const walletMatches = wallet.walletDisplayName.toLowerCase().includes(normalizedQuery)
+  const walletGroups = useMemo(
+    () =>
+      buildMyWalletRecipientGroups(
+        accountGroups,
+        buildAccountSwitcherGroups({
+          wallets,
+          catalogAccounts: catalog?.accounts ?? [],
+          accountDisplayNames,
+          currentWalletId: null,
+          currentAccountId: null
+        })
+      ),
+    [accountGroups, accountDisplayNames, catalog, wallets]
+  )
+  const visibleWalletGroups = walletGroups.flatMap(wallet => {
+    const walletMatches = wallet.name.toLowerCase().includes(normalizedQuery)
     const accounts = walletMatches
       ? wallet.accounts
-      : wallet.accounts.filter(account => {
-          const displayName = getAccountDisplayName(
-            account.walletId,
-            account.accountId,
-            account.accountDisplayName,
-            accountDisplayNames
-          )
-          return `${displayName} ${account.addresses.map(address => address.value).join(' ')}`
+      : wallet.accounts.filter(account =>
+          `${account.name} ${account.addresses.map(address => address.value).join(' ')}`
             .toLowerCase()
             .includes(normalizedQuery)
-        })
+        )
     return accounts.length > 0 ? [{ ...wallet, accounts }] : []
   })
   const isEvm = chainId.startsWith('eip155:')
@@ -224,32 +234,22 @@ export function RecipientSelector({
           <div className="space-y-5 pb-1">
             {visibleWalletGroups.map(wallet => {
               return (
-                <section key={wallet.walletId}>
+                <section key={wallet.id} aria-label={wallet.name}>
+                  <p className="mb-2 truncate px-1 text-xs text-muted" title={wallet.name}>
+                    {wallet.name}
+                  </p>
                   <div className="space-y-5">
                     {wallet.accounts.map(group => {
-                      const displayName = getAccountDisplayName(
-                        group.walletId,
-                        group.accountId,
-                        group.accountDisplayName,
-                        accountDisplayNames
-                      )
+                      const displayName = group.name
                       return (
                         <div key={group.key} className="space-y-2">
                           <div className="flex min-w-0 items-center gap-2 px-1">
-                            <div className="flex min-w-0 flex-1 items-baseline gap-2">
-                              <p
-                                className="max-w-[45%] shrink-0 truncate text-xs text-muted"
-                                title={wallet.walletDisplayName || 'Wallet'}
-                              >
-                                {wallet.walletDisplayName || 'Wallet'}
-                              </p>
-                              <p
-                                className="min-w-0 flex-1 truncate text-sm font-medium"
-                                title={displayName}
-                              >
-                                {displayName}
-                              </p>
-                            </div>
+                            <p
+                              className="min-w-0 flex-1 truncate text-sm font-medium"
+                              title={displayName}
+                            >
+                              {displayName}
+                            </p>
                             {group.active && (
                               <span className="shrink-0 rounded bg-wallet-selected px-2 py-0.5 text-xs font-medium text-foreground">
                                 Current
