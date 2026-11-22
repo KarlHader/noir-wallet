@@ -97,7 +97,11 @@ export function useZcashTransfer({
     readonly retryPath: string
   }
   readonly initialFundingSource?: FundingSource
-  readonly fundingSourceSelection?: Readonly<{ source: FundingSource; revision: number }> | null
+  readonly fundingSourceSelection?: Readonly<{
+    source: FundingSource
+    revision: number
+    resetDraft?: boolean
+  }> | null
   readonly onStateChange?: (state: { readonly reviewing: boolean; readonly busy: boolean }) => void
 } = {}) {
   const { navigate, goBack } = useNavigate()
@@ -645,6 +649,15 @@ export function useZcashTransfer({
     appliedFundingSourceRevision.current = fundingSourceSelection.revision
     if (fundingSource !== fundingSourceSelection.source)
       handleSelectFundingSource(fundingSourceSelection.source)
+    if (fundingSourceSelection.resetDraft) {
+      setPrivateSendScope(null)
+      setToAddress('')
+      setSelectedRecipient(null)
+      setAmount('')
+      setMaxSelected(false)
+      setMemo('')
+      setShowReview(false)
+    }
   }, [fundingSourceSelection, fundingSource])
 
   const handleContinue = () => {

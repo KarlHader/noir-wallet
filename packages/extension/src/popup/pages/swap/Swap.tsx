@@ -352,6 +352,10 @@ type CrossChainSendOptions = {
   draft: CrossChainSendDraft & { walletId: string; accountId: string }
   originPath: string | null
   onBack: () => void
+  localDestination?: {
+    option: { id: string; name: string; icon: string }
+    onSelect: () => void
+  }
   onReturn: (draft: CrossChainSendDraft, action: 'network' | 'asset' | 'shield') => void
 }
 
@@ -6993,6 +6997,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             : null,
         support: sendDestinationSupport
       })
+      const localDestination =
+        crossChainSendScopeMatches && crossChainSendMode === 'public'
+          ? crossChainSend?.localDestination
+          : undefined
       return (
         <CrossChainSendFormView
           shareForm={sharedSendLayout && crossChainSendMode === 'public'}
@@ -7006,10 +7014,16 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           destinationNameFallback={
             destinationChain?.chain.displayName ?? crossChainRouteDisplay?.destinationName
           }
-          destinationOptions={destinationOptions}
+          destinationOptions={
+            localDestination ? [...destinationOptions, localDestination.option] : destinationOptions
+          }
           selectedDestinationChainId={requestedDestinationChainId}
           destinationNetworksLoading={destinationCatalogLoading}
           onSelectDestination={chainId => {
+            if (localDestination && chainId === localDestination.option.id) {
+              localDestination.onSelect()
+              return
+            }
             if (chainId === sourceDescriptor?.apiChainId) {
               returnFromCrossChainSend('network')
               return

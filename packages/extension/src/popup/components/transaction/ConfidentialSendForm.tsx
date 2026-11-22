@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PortfolioReadModel, PortfolioAssetView } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { Icon } from '@iconify/react'
@@ -55,7 +55,7 @@ import {
   isUnsignedShieldTerminal,
   matchesExternalShieldWithdrawReview,
   listShieldFundingAssets,
-  listShieldSendDestinations,
+  createShieldSendRoutes,
   estimateShieldSendRouteFee,
   isShieldWithdrawRecipient,
   shieldPortfolioBalances,
@@ -63,7 +63,6 @@ import {
   shieldFundingSources,
   selectDefaultShieldWithdrawSource,
   resolveShieldManagedAsset,
-  selectShieldWithdrawDestinationForNetwork,
   type ShieldFundingAsset
 } from '@/popup/services/shield-transfer'
 import {
@@ -162,13 +161,17 @@ export function ConfidentialSendForm({
   const [managedAssets, setManagedAssets] = useState<readonly IntentsManagedAsset[]>(() =>
     resolveManagedIntentsCatalog(getCachedTokens())
   )
-  const [catalogResolved, setCatalogResolved] = useState(false)
+  const [catalogSettled, setCatalogSettled] = useState(false)
   const [priceSnapshot, setPriceSnapshot] = useState<{
     scopeKey: string
     value: AssetPriceReadModel
   } | null>(null)
-  const [sourceId, setSourceId] = useState(routeAssetId)
-  const [destinationNetworkId, setDestinationNetworkId] = useState<string | null>(routeNetworkId)
+  const [routeSelection, setRouteSelection] = useState({
+    sourceId: routeAssetId,
+    destinationNetworkId: routeNetworkId,
+    awaitingCatalog: false
+  })
+  const { sourceId, destinationNetworkId, awaitingCatalog } = routeSelection
   const [amount, setAmount] = useState(routeAmount)
   const [recipient, setRecipient] = useState(routeRecipient)
   const [picker, setPicker] = useState<'recipient' | 'slippage' | null>(null)
@@ -204,11 +207,6 @@ export function ConfidentialSendForm({
   const confirmationAttempt = useRef<string | null>(null)
   const cancelledPlanId = useRef<string | null>(null)
   const reviewRequestId = useRef(0)
-  const pendingSourceNetworkCheck = useRef<{
-    sourceAssetId: string
-    networkId: string
-    previousFamily?: string
-  } | null>(null)
   const {
     balances: currentBalances,
     spendableBalances,
@@ -268,8 +266,11 @@ export function ConfidentialSendForm({
     preparedRef.current = null
     quoteReview.reset()
     cancelledPlanId.current = null
-    setSourceId(routeAssetId)
-    setDestinationNetworkId(routeNetworkId)
+    setRouteSelection({
+      sourceId: routeAssetId,
+      destinationNetworkId: routeNetworkId,
+      awaitingCatalog: false
+    })
     setAmount(routeAmount)
     setRecipient(routeRecipient)
     setPicker(null)
@@ -280,7 +281,6 @@ export function ConfidentialSendForm({
     setBusy(false)
     setUncertain(false)
     setError(null)
-    pendingSourceNetworkCheck.current = null
     confirmationAttempt.current = null
   }, [scopeKey, routeAssetId, routeNetworkId, routeRecipient, routeAmount, entry.provider])
 
@@ -292,13 +292,11 @@ export function ConfidentialSendForm({
   useEffect(() => {
     if (!active && !sourceSelectorActive) return
     let current = true
-    let directoryAvailable = catalogTokens.length > 0
-    setCatalogResolved(false)
+    setCatalogSettled(false)
     const load = async () => {
       try {
         const cached = await swapTokenCatalogClient.readCached()
         if (!current) return
-        if (cached.length > 0) directoryAvailable = true
         if (cached.length > 0 && catalogTokens.length === 0) {
           setCatalogTokens(cached)
           setManagedAssets(resolveManagedIntentsCatalog(cached))
@@ -311,14 +309,13 @@ export function ConfidentialSendForm({
           return
         const refreshed = await swapTokenCatalogClient.refresh()
         if (current && refreshed.length) {
-          directoryAvailable = true
           setCatalogTokens(refreshed)
           setManagedAssets(resolveManagedIntentsCatalog(refreshed))
         }
       } catch {
         // Cached portfolio remains visible while the token catalog is unavailable.
       } finally {
-        if (current) setCatalogResolved(directoryAvailable)
+        if (current) setCatalogSettled(true)
       }
     }
     void load()
@@ -398,130 +395,78 @@ export function ConfidentialSendForm({
       null)
     : selectDefaultShieldWithdrawSource(options, displayBalances, model, prices, network)
   const selectedSourceAssetId = source?.asset.asset.id
-  const reportedPickerState = useRef<{
-    scopeKey: string
-    items: readonly ShieldTokenPickerItem[]
-    selectedAssetId?: string
-    balancesHidden: boolean
-    callback: typeof onSourcePickerState
-    source: ShieldFundingAsset | null
-    destinationNetworkId: string | null
-    options: readonly ShieldFundingAsset[]
-    catalogResolved: boolean
-    activeAccount: typeof activeAccount
-    modelChains: PortfolioReadModel['chains'] | undefined
-  } | null>(null)
+  const routes = useMemo(() => createShieldSendRoutes(options, network), [options, network])
+  const selectedDestinationNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
+  const destination = routes.getDestination(source, selectedDestinationNetworkId)
+  const destinationNetwork = destination?.chain.chain
+  const applyRouteSelection = useCallback(
+    (nextSourceId: string, nextNetworkId: string | null, waitForCatalog = false) => {
+      const networkChanged = nextNetworkId !== selectedDestinationNetworkId
+      if (networkChanged) setRecipient('')
+      if (networkChanged || nextSourceId !== selectedSourceAssetId) setAmount('')
+      setRouteSelection({
+        sourceId: nextSourceId,
+        destinationNetworkId: nextNetworkId,
+        awaitingCatalog: waitForCatalog
+      })
+    },
+    [selectedDestinationNetworkId, selectedSourceAssetId]
+  )
+  const selectSource = useCallback(
+    (assetId: string) => {
+      const nextSource = sources.find(item => item.asset.asset.id === assetId)
+      if (!nextSource || assetId === selectedSourceAssetId) return
+      const keepsNetwork = Boolean(routes.getDestination(nextSource, selectedDestinationNetworkId))
+      const waitForCatalog =
+        !keepsNetwork && !catalogSettled && Boolean(selectedDestinationNetworkId)
+      applyRouteSelection(
+        assetId,
+        keepsNetwork || waitForCatalog ? selectedDestinationNetworkId : nextSource.chain.chain.id,
+        waitForCatalog
+      )
+    },
+    [
+      sources,
+      selectedSourceAssetId,
+      routes,
+      selectedDestinationNetworkId,
+      catalogSettled,
+      applyRouteSelection
+    ]
+  )
   useEffect(() => {
     if (!sourceSelectorActive || !onSourcePickerState) return
-    if (
-      reportedPickerState.current?.scopeKey === scopeKey &&
-      reportedPickerState.current?.items === sourcePickerItems &&
-      reportedPickerState.current.selectedAssetId === selectedSourceAssetId &&
-      reportedPickerState.current.balancesHidden === balancesHidden &&
-      reportedPickerState.current.callback === onSourcePickerState &&
-      reportedPickerState.current.source === source &&
-      reportedPickerState.current.destinationNetworkId === destinationNetworkId &&
-      reportedPickerState.current.options === options &&
-      reportedPickerState.current.catalogResolved === catalogResolved &&
-      reportedPickerState.current.activeAccount === activeAccount &&
-      reportedPickerState.current.modelChains === model?.chains
-    )
-      return
-    reportedPickerState.current = {
-      scopeKey,
-      items: sourcePickerItems,
-      selectedAssetId: selectedSourceAssetId,
-      balancesHidden,
-      callback: onSourcePickerState,
-      source,
-      destinationNetworkId,
-      options,
-      catalogResolved,
-      activeAccount,
-      modelChains: model?.chains
-    }
     onSourcePickerState({
       items: sourcePickerItems,
       selectedAssetId: selectedSourceAssetId,
       balancesHidden,
-      onSelect: assetId => {
-        if (assetId === selectedSourceAssetId) {
-          setPicker(null)
-          return
-        }
-        const nextSource = sources.find(item => item.asset.asset.id === assetId)
-        if (!nextSource) return
-        setSourceId(assetId)
-        pendingSourceNetworkCheck.current = null
-        const currentNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
-        const nextDestinations = listShieldSendDestinations(nextSource, options, network)
-        const stillSupported = currentNetworkId
-          ? selectShieldWithdrawDestinationForNetwork(
-              nextDestinations,
-              nextSource,
-              currentNetworkId
-            )
-          : null
-        const previousFamily =
-          (currentNetworkId === source?.chain.chain.id ? source.chain.chain.family : undefined) ??
-          activeAccount?.networks.find(item => item.chain.id === currentNetworkId)?.chain.family ??
-          model?.chains.find(item => item.chain.id === currentNetworkId)?.chain.family
-        if (stillSupported || !catalogResolved) {
-          setDestinationNetworkId(currentNetworkId)
-          if (!stillSupported && currentNetworkId) {
-            pendingSourceNetworkCheck.current = {
-              sourceAssetId: assetId,
-              networkId: currentNetworkId,
-              previousFamily
-            }
-          }
-        } else {
-          const fallback =
-            nextDestinations.find(item => item.chain.chain.id === nextSource.chain.chain.id) ??
-            nextDestinations[0]
-          setDestinationNetworkId(fallback?.chain.chain.id ?? null)
-          if (previousFamily !== fallback?.chain.chain.family) setRecipient('')
-        }
-        setAmount('')
-        setPicker(null)
-      }
+      onSelect: selectSource
     })
   }, [
     sourceSelectorActive,
     onSourcePickerState,
-    scopeKey,
     sourcePickerItems,
     selectedSourceAssetId,
     balancesHidden,
-    sources,
-    source,
-    destinationNetworkId,
-    options,
-    network,
-    catalogResolved,
-    activeAccount,
-    model?.chains
+    selectSource
   ])
   const keepSelectedSource = () => {
-    if (!sourceId && source) setSourceId(source.asset.asset.id)
+    if (!sourceId && selectedSourceAssetId)
+      setRouteSelection(selection => ({ ...selection, sourceId: selectedSourceAssetId }))
   }
-  const destinations = useMemo(
-    () => (source ? listShieldSendDestinations(source, options, network) : []),
-    [source, options, network]
-  )
   const networkOptions: ChainSelectorOption[] = useMemo(() => {
     if (!networkPickerOpen) return []
-    const supportedIds = new Set(destinations.map(item => item.chain.chain.id))
+    const supportedIds = new Set(routes.networks.map(chain => chain.id))
     const chains = new Map<string, ShieldFundingAsset['chain']['chain']>()
     for (const item of activeAccount?.networks ?? model?.chains ?? []) {
       chains.set(item.chain.id, item.chain)
     }
-    for (const item of destinations) chains.set(item.chain.chain.id, item.chain.chain)
+    for (const chain of routes.networks) chains.set(chain.id, chain)
     return sortSendNetworks(
       [...chains.values()].map(chain => {
         const supported = supportedIds.has(chain.id)
         const checkingRoute =
-          !supported && !catalogResolved && (chain.family === 'evm' || chain.family === 'zcash')
+          !supported && !catalogSettled && (chain.family === 'evm' || chain.family === 'zcash')
         return {
           id: chain.id,
           name: chain.displayName,
@@ -533,39 +478,17 @@ export function ConfidentialSendForm({
             : checkingRoute
               ? 'Checking route'
               : chain.family === 'evm' || chain.family === 'zcash'
-                ? 'No route for this token'
+                ? 'No route available'
                 : 'Shield Send unavailable'
         }
       }),
       option => option
     )
-  }, [networkPickerOpen, activeAccount, model?.chains, destinations, catalogResolved])
-  const selectedDestinationNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
-  const destination =
-    source && selectedDestinationNetworkId
-      ? selectShieldWithdrawDestinationForNetwork(
-          destinations,
-          source,
-          selectedDestinationNetworkId
-        )
-      : null
-  const destinationNetwork = destination?.chain.chain
+  }, [networkPickerOpen, activeAccount, model?.chains, routes, catalogSettled])
   useEffect(() => {
-    const pending = pendingSourceNetworkCheck.current
-    if (!catalogResolved || !pending) return
-    pendingSourceNetworkCheck.current = null
-    if (source?.asset.asset.id !== pending.sourceAssetId) return
-    const currentNetworkId = destinationNetworkId ?? source.chain.chain.id
-    if (
-      currentNetworkId !== pending.networkId ||
-      selectShieldWithdrawDestinationForNetwork(destinations, source, pending.networkId)
-    )
-      return
-    const fallback =
-      destinations.find(item => item.chain.chain.id === source.chain.chain.id) ?? destinations[0]
-    setDestinationNetworkId(fallback?.chain.chain.id ?? null)
-    if (pending.previousFamily !== fallback?.chain.chain.family) setRecipient('')
-  }, [catalogResolved, source, destinationNetworkId, destinations])
+    if (!catalogSettled || !awaitingCatalog || !source) return
+    applyRouteSelection(source.asset.asset.id, destination?.chain.chain.id ?? source.chain.chain.id)
+  }, [catalogSettled, awaitingCatalog, source, destination, applyRouteSelection])
   const availableRaw = shieldFundingAvailableRaw(source, spendableBalances ?? displayBalances)
   const displayedAsset = source?.asset ?? initialAsset
   const amountState =
@@ -1254,9 +1177,6 @@ export function ConfidentialSendForm({
           }
         />
       </div>
-      {source && destinations.length === 0 && (
-        <InlineError message="No supported network for this token" tone="muted" />
-      )}
       {!error && !balanceError && !previewLoading && previewError && (
         <InlineError
           message={
@@ -1321,7 +1241,7 @@ export function ConfidentialSendForm({
               name: destinationNetwork?.displayName ?? 'Select network',
               icon: destinationNetwork ? withdrawChainIconAlias(destinationNetwork) : undefined,
               selectorLabel: `Destination network, ${destinationNetwork?.displayName ?? 'select network'}`,
-              disabled: busy || !source,
+              disabled: busy || options.length === 0,
               onSelect: () => {
                 keepSelectedSource()
                 setNetworkPickerOpen(true)
@@ -1429,10 +1349,16 @@ export function ConfidentialSendForm({
         enabledFirst
         selectedId={selectedDestinationNetworkId}
         onSelect={id => {
-          const next = selectShieldWithdrawDestinationForNetwork(destinations, source, id)
-          if (!next) return
-          if (selectedDestinationNetworkId !== id) setRecipient('')
-          setDestinationNetworkId(id)
+          const nextSource = routes.getDestination(source, id)
+            ? source
+            : selectDefaultShieldWithdrawSource(
+                routes.getSources(id),
+                displayBalances,
+                model,
+                prices,
+                network
+              )
+          if (nextSource) applyRouteSelection(nextSource.asset.asset.id, id)
         }}
       />
     </div>

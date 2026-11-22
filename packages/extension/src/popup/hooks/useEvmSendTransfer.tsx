@@ -136,6 +136,7 @@ export function useEvmSendTransfer({
     chainId: string
     name: string
     icon: string
+    switchesAsset?: boolean
   }[]
   onOpenDestinationNetworks: () => void
   onSelectDestinationNetwork: (
@@ -254,6 +255,9 @@ export function useEvmSendTransfer({
     () =>
       networkPickerOpen
         ? destinationNetworks.map(option => {
+            if (option.switchesAsset) {
+              return { id: option.chainId, name: option.name, icon: option.icon, priority: 0 }
+            }
             const availability = readEvmSendDestinationSupport({
               sourceAssetId: asset.asset.id,
               destinationChainId: option.chainId
