@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseCompatibilityWorkerRequest } from '../../../src/infrastructure/keyring/migration/compatibility-worker-protocol.ts'
+import { assertCredentialOnlyVaultMatchesMnemonic } from '../../../src/infrastructure/keyring/migration/credential-only-vault-proof.ts'
 import {
   assertKeystoneZcashVerificationMatches,
   parseKeystoneZcashVerificationInput
@@ -97,4 +98,39 @@ test('V1 discovery preserves only valid optional transparent indexes', () => {
   discovery = discoverV1Metadata(local)
   assert.equal(discovery.status, 'ready')
   assert.equal('transparentAddressIndex' in discovery.wallets[0].accounts[0].addresses, false)
+})
+
+test('credential-only migration request requires an explicit empty-account mode', () => {
+  const request = { ...compatibilityRequest(expected), accounts: [] }
+  assert.throws(() => parseCompatibilityWorkerRequest(request))
+  assert.deepEqual(
+    parseCompatibilityWorkerRequest({ ...request, credentialOnly: true }).accounts,
+    []
+  )
+  assert.throws(() =>
+    parseCompatibilityWorkerRequest({ ...compatibilityRequest(expected), credentialOnly: true })
+  )
+})
+
+test('credential-only target vault must derive the retained mnemonic identity', () => {
+  const account = address => ({
+    accountId: `eip155:1:${address}`,
+    address,
+    derivationPath: "m/44'/60'/0'/0/0",
+    publicKey: `0x02${'11'.repeat(32)}`,
+    curve: 'secp256k1',
+    addressScheme: 'evm',
+    derivationScheme: 'bip44'
+  })
+  const target = account(`0x${'22'.repeat(20)}`)
+  const retained = account(`0x${'33'.repeat(20)}`)
+  const engine = {
+    deriveEvmAccount(sessionId) {
+      return sessionId === 1 ? target : retained
+    }
+  }
+  assert.throws(() => assertCredentialOnlyVaultMatchesMnemonic(engine, 1, 2, 'eip155:1'))
+  target.address = retained.address
+  target.accountId = retained.accountId
+  assert.doesNotThrow(() => assertCredentialOnlyVaultMatchesMnemonic(engine, 1, 2, 'eip155:1'))
 })

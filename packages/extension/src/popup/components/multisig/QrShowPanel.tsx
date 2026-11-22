@@ -71,11 +71,11 @@ export function QrShowPanel({
   return (
     <div className="flex flex-col items-center text-center">
       <QrPanelHeading {...heading} />
-      <p className="mt-2 text-xs text-muted">{description}</p>
-      <p className="mt-5 text-sm font-medium">{scanLabel}</p>
+      <p className="mt-2 text-sm text-[#BCBCC8]">{description}</p>
+      <p className="my-5 text-base font-medium text-white">{scanLabel}</p>
 
       {/* A white quiet zone around the code is what phone cameras need to read it. */}
-      <div className="mt-3 rounded-2xl bg-white p-4">
+      <div className="mt-3 rounded-2xl bg-white p-2">
         {envelopes && encoder ? (
           <EncoderAnimatedQR
             // New envelopes are a new code: remount so the frame cycle starts from its first
@@ -102,15 +102,21 @@ export function QrShowPanel({
       </div>
 
       {remainingMs !== null && (
-        <div className="mt-3 flex items-center gap-2 text-xs text-muted">
+        <div className="mt-5 flex items-center gap-2 text-xs text-[#7E8A93]">
           <span className="tabular-nums">Expires in {formatCountdown(remainingMs)}</span>
           <button
             type="button"
             aria-label="Refresh code"
             onClick={onRefresh}
-            className="flex size-6 cursor-pointer items-center justify-center rounded-full bg-card text-foreground transition-colors hover:bg-accent"
+            className="flex size-6 cursor-pointer items-center justify-center rounded-full transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
           >
-            <Icon icon="lucide:refresh-cw" width={12} height={12} aria-hidden="true" />
+            <img
+              src="https://img.rhea.finance/noir/refresh-icon-multi.svg"
+              width={12}
+              height={12}
+              alt=""
+              aria-hidden="true"
+            />
           </button>
         </div>
       )}

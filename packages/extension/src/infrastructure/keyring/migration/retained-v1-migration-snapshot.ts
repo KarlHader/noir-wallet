@@ -66,7 +66,8 @@ export function buildRetainedV1Snapshot(
       credentialRef: prepared.credentialSetRef,
       source: {
         kind: 'software' as const,
-        mnemonicWordCount: prepared.result.mnemonicWordCount
+        mnemonicWordCount: prepared.result.mnemonicWordCount,
+        ...(prepared.wallet.credentialOnly ? { credentialOnlyFirstAccount: true as const } : {})
       },
       displayName: wallet.displayName,
       createdAt: wallet.createdAt

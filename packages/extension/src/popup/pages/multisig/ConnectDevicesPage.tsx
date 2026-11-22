@@ -274,8 +274,8 @@ function ConnectDevices({ session }: { session: CreateSessionState }) {
         </FlowButton>
       }
     >
-      <h2 className="text-lg font-semibold mt-1">Connect devices</h2>
-      <div className="mt-2 text-xs text-muted">
+      <h2 className="mt-1 text-xl font-semibold text-white">Connect devices</h2>
+      <div className="mt-2 text-sm text-[#BCBCC8]">
         Open Noir Guardians on each phone and stay on its waiting screen.
       </div>
 

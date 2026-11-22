@@ -48,3 +48,25 @@ export async function provisionAdditionalSoftwareWallet(input: {
   }
   return record.walletId
 }
+
+export async function provisionPendingAdditionalMultisigWallet(input: {
+  readonly mnemonic: string
+  readonly accountName: string
+  readonly selectedNetworkFamilies: readonly AccountNetworkFamily[]
+}): Promise<{ walletId: string; pendingFirstAccountId: string }> {
+  const record = responseRecord(
+    await chrome.runtime.sendMessage({
+      type: 'ADD_PENDING_MULTISIG_WALLET',
+      mode: 'create',
+      ...input
+    })
+  )
+  if (
+    record?.success !== true ||
+    typeof record.walletId !== 'string' ||
+    typeof record.pendingFirstAccountId !== 'string'
+  ) {
+    throw new Error(getResponseErrorMessage(record) ?? 'Multisig wallet setup failed')
+  }
+  return { walletId: record.walletId, pendingFirstAccountId: record.pendingFirstAccountId }
+}

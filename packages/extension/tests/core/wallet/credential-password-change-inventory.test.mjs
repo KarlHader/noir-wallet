@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { assertPasswordChangeCredentialInventorySupported } from '../../../src/infrastructure/keyring/migration/credential-password-change-support.ts'
+import {
+  assertAccountAnchors,
+  assertPasswordChangeCredentialInventorySupported
+} from '../../../src/infrastructure/keyring/migration/credential-password-change-support.ts'
 
 function discovery(keySource) {
   return {
@@ -16,6 +19,37 @@ function snapshot(source) {
 }
 
 test.describe('password-change credential inventory gate', () => {
+  test('accepts an explicitly verified credential-only wallet without a derived account', () => {
+    const wallet = { id: 'wallet:1', keySource: 'software', credentialOnly: true, accounts: [] }
+    const snapshot = {
+      keyDomains: [
+        { id: wallet.id, source: { kind: 'software', credentialOnlyFirstAccount: true } }
+      ],
+      accounts: []
+    }
+    const result = { credentialOnly: true, accounts: [] }
+    expect(() => assertAccountAnchors(snapshot, wallet, result, {})).not.toThrow()
+    expect(() =>
+      assertAccountAnchors(
+        { ...snapshot, keyDomains: [{ id: wallet.id, source: { kind: 'software' } }] },
+        wallet,
+        result,
+        {}
+      )
+    ).toThrow(/credential-only/)
+    expect(() => assertAccountAnchors(snapshot, wallet, { accounts: [] }, {})).toThrow(
+      /credential-only/
+    )
+    expect(() =>
+      assertAccountAnchors(
+        { ...snapshot, accounts: [{ id: 'derived:1', keyDomainId: wallet.id }] },
+        wallet,
+        result,
+        {}
+      )
+    ).toThrow(/credential-only/)
+  })
+
   test('allows a software-only retained V1 and Storage V2 inventory', () => {
     expect(() =>
       assertPasswordChangeCredentialInventorySupported(

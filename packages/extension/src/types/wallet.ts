@@ -98,6 +98,10 @@ export interface WalletItem {
   name: string
   seedPhraseKey: string
   accounts: AccountData[]
+  /** A new wallet awaiting its first multisig account; no address has been published yet. */
+  pendingFirstAccountId?: string
+  pendingFirstAccountName?: string
+  pendingFirstAccountNetwork?: Network
   createdAt: number
   isPinned: boolean
   keySource?: KeySource

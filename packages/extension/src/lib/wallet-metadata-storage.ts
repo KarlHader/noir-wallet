@@ -57,6 +57,24 @@ function parseSnapshot(value: unknown): WalletSnapshot | null {
     throw new Error('Wallet metadata is unavailable')
   }
   for (const wallet of parsed.state.wallets) {
+    if (
+      wallet.pendingFirstAccountId !== undefined ||
+      wallet.pendingFirstAccountName !== undefined ||
+      wallet.pendingFirstAccountNetwork !== undefined
+    ) {
+      if (
+        typeof wallet.pendingFirstAccountId !== 'string' ||
+        wallet.pendingFirstAccountId.length === 0 ||
+        typeof wallet.pendingFirstAccountName !== 'string' ||
+        wallet.pendingFirstAccountName.length === 0 ||
+        (wallet.pendingFirstAccountNetwork !== 'mainnet' &&
+          wallet.pendingFirstAccountNetwork !== 'testnet') ||
+        wallet.accounts.length !== 0 ||
+        (wallet.keySource !== undefined && wallet.keySource !== 'software')
+      ) {
+        throw new Error('Invalid pending first account metadata')
+      }
+    }
     for (const account of wallet.accounts) {
       if (Object.prototype.hasOwnProperty.call(account, 'source')) {
         parseAccountSource(account.source)
@@ -140,12 +158,15 @@ function filterDeleted(
       accounts: wallet.accounts.filter(account => !isDeletedAccount(wallet.id, account.id))
     }))
   const state = { ...snapshot.state, wallets }
-  if (
-    state.currentWalletId &&
-    !wallets
-      .find(wallet => wallet.id === state.currentWalletId)
-      ?.accounts.some(account => account.id === state.currentAccountId)
-  ) {
+  const selectedWallet = wallets.find(wallet => wallet.id === state.currentWalletId)
+  const selectedAccountValid = selectedWallet?.accounts.some(
+    account => account.id === state.currentAccountId
+  )
+  const pendingFirstAccountSelected =
+    selectedWallet?.accounts.length === 0 &&
+    typeof selectedWallet.pendingFirstAccountId === 'string' &&
+    state.currentAccountId == null
+  if (state.currentWalletId && !selectedAccountValid && !pendingFirstAccountSelected) {
     const next = wallets.find(wallet => wallet.accounts.length > 0)
     state.currentWalletId = next?.id ?? null
     state.currentAccountId = next?.accounts[0]?.id ?? null
@@ -316,28 +337,40 @@ function preserveCommittedFrostAccounts(
 ): WalletSnapshot {
   if (!current) return incoming
   const priorWallets = new Map(current.state.wallets.map(wallet => [wallet.id, wallet]))
+  let stalePendingSelection = false
+  const wallets = incoming.state.wallets.map(wallet => {
+    const saved = priorWallets.get(wallet.id)
+    if (
+      !saved ||
+      saved.createdAt !== wallet.createdAt ||
+      saved.seedPhraseKey !== wallet.seedPhraseKey ||
+      (wallet.keySource !== undefined && wallet.keySource !== 'software')
+    ) {
+      return wallet
+    }
+    const incomingIds = new Set(wallet.accounts.map(account => account.id))
+    const omitted = saved.accounts.filter(
+      account => isFrostAccount(account) && !incomingIds.has(account.id)
+    )
+    if (wallet.pendingFirstAccountId && !saved.pendingFirstAccountId && omitted.length) {
+      // An older popup can flush its pending snapshot after the first account was committed.
+      if (incoming.state.currentWalletId === wallet.id && !incoming.state.currentAccountId)
+        stalePendingSelection = true
+      return saved
+    }
+    return omitted.length > 0 ? { ...wallet, accounts: [...wallet.accounts, ...omitted] } : wallet
+  })
   return {
     ...incoming,
     state: {
       ...incoming.state,
-      wallets: incoming.state.wallets.map(wallet => {
-        const saved = priorWallets.get(wallet.id)
-        if (
-          !saved ||
-          saved.createdAt !== wallet.createdAt ||
-          saved.seedPhraseKey !== wallet.seedPhraseKey ||
-          (wallet.keySource !== undefined && wallet.keySource !== 'software')
-        ) {
-          return wallet
-        }
-        const incomingIds = new Set(wallet.accounts.map(account => account.id))
-        const omitted = saved.accounts.filter(
-          account => isFrostAccount(account) && !incomingIds.has(account.id)
-        )
-        return omitted.length > 0
-          ? { ...wallet, accounts: [...wallet.accounts, ...omitted] }
-          : wallet
-      })
+      ...(stalePendingSelection
+        ? {
+            currentWalletId: current.state.currentWalletId,
+            currentAccountId: current.state.currentAccountId
+          }
+        : {}),
+      wallets
     }
   }
 }

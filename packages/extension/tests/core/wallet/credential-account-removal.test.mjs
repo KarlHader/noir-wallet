@@ -77,6 +77,7 @@ function worker({ wrongAccount = false } = {}) {
         operation: 'migrate',
         vault: VAULT,
         mnemonicWordCount: 24,
+        ...(input.credentialOnly ? { credentialOnly: true } : {}),
         accounts: input.accounts.map(({ accountIndex, expectedZcash }) => ({
           accountIndex,
           zcash: {
@@ -103,6 +104,99 @@ function worker({ wrongAccount = false } = {}) {
     }
   }
 }
+
+test('pending multisig wallet migrates without publishing a derived Account', async () => {
+  const local = structuredClone(
+    V1_MIGRATION_FIXTURES.find(item => item.id === 'software-single-account').local
+  )
+  const state = JSON.parse(local.wallet_state)
+  const wallet = state.state.wallets[0]
+  wallet.accounts = []
+  wallet.pendingFirstAccountId = '3f5c0c86-d66b-4d61-bd5f-f9a0bb42727f'
+  wallet.pendingFirstAccountName = 'Account 1'
+  wallet.pendingFirstAccountNetwork = 'mainnet'
+  state.state.currentAccountId = null
+  local.wallet_state = JSON.stringify(state)
+  const discovery = discoverV1Metadata(local)
+  assert.equal(discovery.status, 'ready')
+  const credentials = new InMemoryCredentialRepository()
+  const storage = new MemoryStorage()
+  const compatibilityWorker = worker()
+  const migration = new RetainedV1MigrationCoordinator({
+    credentialRepository: credentials,
+    storageRepository: storage,
+    compatibilityWorker,
+    now: () => NOW
+  })
+
+  const result = await migration.migrate({
+    discovery,
+    credentialEnvelopes: local,
+    password: PASSWORD,
+    chains: CHAINS
+  })
+  assert.equal(result.status, 'committed')
+  assert.equal(compatibilityWorker.calls[0].credentialOnly, true)
+  const snapshot = await storage.getSnapshot(result.generationId)
+  assert.equal(snapshot.accounts.length, 0)
+  assert.equal(snapshot.chainAccounts.length, 0)
+  assert.equal(snapshot.keyDomains[0].source.credentialOnlyFirstAccount, true)
+  const credentialSet = await credentials.getCredentialSet(snapshot.keyDomains[0].credentialRef)
+  for (const engine of ['zcash', 'multichain']) {
+    assert.equal(
+      credentialSet.manifest.engines[engine].verificationAnchorRef,
+      `key-domain:${encodeURIComponent(wallet.id)}:${engine}`
+    )
+  }
+})
+
+test('retained inventory adds a pending multisig wallet once beside existing Accounts', async () => {
+  const state = await fixture()
+  const local = structuredClone(
+    V1_MIGRATION_FIXTURES.find(item => item.id === 'software-multi-account').local
+  )
+  const persisted = JSON.parse(local.wallet_state)
+  const pending = {
+    ...structuredClone(persisted.state.wallets[0]),
+    id: 'pending-multisig-wallet',
+    name: 'Pending multisig',
+    accounts: [],
+    pendingFirstAccountId: '3f5c0c86-d66b-4d61-bd5f-f9a0bb42727f',
+    pendingFirstAccountName: 'Account 1',
+    pendingFirstAccountNetwork: 'mainnet'
+  }
+  persisted.state.wallets.push(pending)
+  persisted.state.currentWalletId = pending.id
+  persisted.state.currentAccountId = null
+  local.wallet_state = JSON.stringify(persisted)
+  local[`seed_${pending.id}`] = local.seed_wallet_with_underscores
+  const reconciliation = new RetainedV1ReconciliationCoordinator({
+    credentialRepository: state.credentialRepository,
+    storageRepository: state.storageRepository,
+    compatibilityWorker: state.compatibilityWorker,
+    now: () => NOW + 1
+  })
+  const input = {
+    discovery: discoverV1Metadata(local),
+    credentialEnvelopes: local,
+    password: PASSWORD,
+    chains: CHAINS
+  }
+  const first = await reconciliation.synchronize(input)
+  assert.equal(first.status, 'synchronized')
+  const snapshot = await state.storageRepository.getSnapshot(first.generationId)
+  assert.equal(snapshot.keyDomains.length, 2)
+  assert.equal(snapshot.accounts.length, state.snapshot.accounts.length)
+  assert.equal(snapshot.chainAccounts.length, state.snapshot.chainAccounts.length)
+  assert.equal(
+    snapshot.keyDomains.find(keyDomain => keyDomain.id === pending.id).source
+      .credentialOnlyFirstAccount,
+    true
+  )
+  const again = await reconciliation.synchronize(input)
+  assert.equal(again.status, 'already-synchronized')
+  assert.equal(again.generationId, first.generationId)
+})
 
 async function fixture(options = {}) {
   const credentialRepository = new InMemoryCredentialRepository()

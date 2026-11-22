@@ -27,6 +27,7 @@ import { SecureWalletPage } from './pages/onboarding/SecureWalletPage'
 import { ViewPhrasePage } from './pages/onboarding/ViewPhrasePage'
 import { ConfirmPhrasePage } from './pages/onboarding/ConfirmPhrasePage'
 import { CongratulationsPage } from './pages/onboarding/CongratulationsPage'
+import { PendingMultisigPage } from './pages/onboarding/PendingMultisigPage'
 import { ImportWordCountPage } from './pages/onboarding/ImportWordCountPage'
 import { CreateWordCountPage } from './pages/onboarding/CreateWordCountPage'
 import { ImportWalletPage } from './pages/onboarding/ImportWalletPage'
@@ -218,6 +219,7 @@ function AppRoutes() {
         <Route path="view-phrase" element={<ViewPhrasePage />} />
         <Route path="confirm-phrase" element={<ConfirmPhrasePage />} />
         <Route path="congratulations" element={<CongratulationsPage />} />
+        <Route path="multisig-pending" element={<PendingMultisigPage />} />
         <Route path="import-word-count" element={<ImportWordCountPage />} />
         <Route path="import" element={<ImportWalletPage />} />
         <Route path="import-accounts" element={<ImportAccountsPage />} />

@@ -10,8 +10,10 @@ const STROKE_WIDTH = 4
 export function RingProgress({ current, total, size = 72 }: RingProgressProps) {
   const radius = (size - STROKE_WIDTH) / 2
   const circumference = 2 * Math.PI * radius
-  // Clamp so an out-of-range step count can never draw a negative or overlapping arc.
-  const ratio = total > 0 ? Math.min(Math.max(current / total, 0), 1) : 0
+  const segmentCount = Number.isInteger(total) && total > 0 ? total : 0
+  const segmentLength = segmentCount > 0 ? circumference / segmentCount : 0
+  // Center a narrow gap on every step boundary, including the one at 12 o'clock.
+  const gap = segmentCount > 1 ? Math.min(1.2, segmentLength / 4) : 0
 
   return (
     <div
@@ -24,29 +26,23 @@ export function RingProgress({ current, total, size = 72 }: RingProgressProps) {
       className="relative shrink-0"
       style={{ width: size, height: size }}
     >
-      {/* Rotated so the arc starts at 12 o'clock and fills clockwise. */}
+      {/* Rotated so the first segment starts at 12 o'clock and steps fill clockwise. */}
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={STROKE_WIDTH}
-          className="text-card"
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={STROKE_WIDTH}
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - ratio)}
-          className="text-primary transition-[stroke-dashoffset] duration-300 motion-reduce:transition-none"
-        />
+        {Array.from({ length: segmentCount }, (_, index) => (
+          <circle
+            key={index}
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={STROKE_WIDTH}
+            strokeLinecap="butt"
+            strokeDasharray={`${segmentLength - gap} ${circumference - segmentLength + gap}`}
+            strokeDashoffset={-(index * segmentLength + gap / 2)}
+            className={index < current ? 'text-primary' : 'text-card'}
+          />
+        ))}
       </svg>
       <span
         aria-hidden="true"

@@ -38,6 +38,9 @@ export interface MultisigVaultWallet {
   mnemonic: boolean
   accountIds: readonly string[]
   derivedAccountIds?: readonly string[]
+  pendingFirstAccountId?: string
+  pendingFirstAccountName?: string
+  pendingFirstAccountNetwork?: VaultNetwork
 }
 
 export interface MultisigVaultDeps {
@@ -266,19 +269,25 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
   async function authorizeOperation(op: MultisigCreationOperation): Promise<void> {
     const state = await deps.readWalletState()
     const wallet = state.wallets.find(w => w.id === op.scope.walletId)
+    const pendingFirstAccount =
+      wallet?.accountIds.length === 0 &&
+      wallet.pendingFirstAccountId === op.parentAccountId &&
+      wallet.pendingFirstAccountNetwork === op.scope.network
+    const committedAccount = wallet?.accountIds.includes(op.scope.accountId) && !!op.group
     if (
       !wallet?.mnemonic ||
       state.network !== op.scope.network ||
       !(op.phase === 'ready'
         ? wallet.accountIds.includes(op.scope.accountId)
-        : wallet.accountIds.includes(op.parentAccountId))
+        : wallet.accountIds.includes(op.parentAccountId) || pendingFirstAccount || committedAccount)
     )
       throw new Error(SCOPE_UNAVAILABLE)
     if (state.activeWalletId !== op.scope.walletId) throw new Error(NOT_ACTIVE)
     if (
       state.activeAccountId !== undefined &&
       state.activeAccountId !== op.parentAccountId &&
-      state.activeAccountId !== op.scope.accountId
+      state.activeAccountId !== op.scope.accountId &&
+      !(state.activeAccountId === null && (pendingFirstAccount || committedAccount))
     )
       throw new Error(NOT_ACTIVE)
     if (!(await deps.isUnlocked())) throw new Error(LOCKED)
@@ -376,7 +385,7 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
       await creation().write(op)
       const account: AccountData = {
         id: op.scope.accountId,
-        name: 'Multisig',
+        name: op.accountName ?? 'Multisig',
         source: {
           kind: 'frost-vault',
           version: 1,
@@ -422,12 +431,24 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
   ): Promise<unknown> {
     const request = parseCreationRequest(method, payload)
     if (method === 'vault.group.reserve') {
-      const { activeWalletId } = await checkScope(request.scope)
+      const { activeWalletId } = await checkScope(request.scope, true)
       const state = await deps.readWalletState()
       const wallet = state.wallets.find(w => w.id === request.scope.walletId)
-      if (state.activeAccountId !== undefined && state.activeAccountId !== request.scope.accountId)
+      const pendingFirstAccount =
+        wallet?.accountIds.length === 0 &&
+        wallet.pendingFirstAccountId === request.scope.accountId &&
+        wallet.pendingFirstAccountNetwork === request.scope.network
+      if (
+        state.activeAccountId !== undefined &&
+        state.activeAccountId !== request.scope.accountId &&
+        !(pendingFirstAccount && state.activeAccountId === null)
+      )
         throw new Error(NOT_ACTIVE)
-      if (wallet?.derivedAccountIds && !wallet.derivedAccountIds.includes(request.scope.accountId))
+      if (
+        !pendingFirstAccount &&
+        wallet?.derivedAccountIds &&
+        !wallet.derivedAccountIds.includes(request.scope.accountId)
+      )
         throw new Error(SCOPE_UNAVAILABLE)
       await requireBoundActiveWallet(request.scope, activeWalletId)
       const birthdayHeight = await creation().birthdayHeight()
@@ -436,6 +457,9 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
         operationId: crypto.randomUUID(),
         scope: { ...request.scope, accountId: crypto.randomUUID() },
         parentAccountId: request.scope.accountId,
+        ...(pendingFirstAccount && wallet?.pendingFirstAccountName
+          ? { accountName: wallet.pendingFirstAccountName }
+          : {}),
         groupId: crypto.randomUUID(),
         birthdayHeight,
         threshold: request.threshold!,
@@ -476,14 +500,23 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
       return true
     })
   }
-  async function checkScope(scope: MultisigGroupScope): Promise<{ activeWalletId: string | null }> {
+  async function checkScope(
+    scope: MultisigGroupScope,
+    allowPendingFirstAccount = false
+  ): Promise<{ activeWalletId: string | null }> {
     const state = await deps.readWalletState()
     const wallet = state.wallets.find(candidate => candidate.id === scope.walletId)
     if (
       scope.network !== state.network ||
       !wallet ||
       !wallet.mnemonic ||
-      !wallet.accountIds.includes(scope.accountId)
+      (!wallet.accountIds.includes(scope.accountId) &&
+        !(
+          allowPendingFirstAccount &&
+          wallet.accountIds.length === 0 &&
+          wallet.pendingFirstAccountId === scope.accountId &&
+          wallet.pendingFirstAccountNetwork === scope.network
+        ))
     ) {
       throw new Error(SCOPE_UNAVAILABLE)
     }
@@ -685,15 +718,21 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
         case 'vault.group.pending':
           run = (async () => {
             const { scope } = parseVaultGroupSummaryRequest(payload)
-            const { activeWalletId } = await checkScope(scope)
-            await requireBoundActiveWallet(scope, activeWalletId)
-            const pending = (await creation().list()).filter(
-              op =>
-                op.scope.network === scope.network &&
-                op.scope.walletId === scope.walletId &&
-                op.parentAccountId === scope.accountId &&
-                op.phase !== 'ready'
-            )
+            const readAuthorizedPending = async () => {
+              const pending = (await creation().list()).filter(
+                op =>
+                  op.scope.network === scope.network &&
+                  op.scope.walletId === scope.walletId &&
+                  op.parentAccountId === scope.accountId &&
+                  op.phase !== 'ready'
+              )
+              const committed = pending.find(op => op.group)
+              if (committed) await authorizeOperation(committed)
+              else await checkScope(scope, true)
+              return pending
+            }
+            const pending = await readAuthorizedPending()
+            await requireBoundActiveWallet(scope, scope.walletId)
             const observed = await Promise.all(
               pending.map(async op =>
                 op.phase === 'reserved' && (await deps.readRecord(op.scope))
@@ -701,7 +740,7 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
                   : op
               )
             )
-            await checkScope(scope)
+            await readAuthorizedPending()
             if (!(await deps.isUnlocked())) throw new Error(LOCKED)
             return observed
           })()

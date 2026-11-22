@@ -8,6 +8,7 @@ import { BITCOIN_ADDRESS_POLICY } from '@/core/chains/bitcoin'
 import { parseChainId } from '@/core/chains/registry'
 import {
   buildChainAccountVerificationAnchorRef,
+  buildKeyDomainVerificationAnchorRef,
   commitCredentialBoundStorageV2Pointer
 } from '@/core/keyring/application'
 import {
@@ -127,7 +128,7 @@ function assertMixedDiscovery(discovery: V1MetadataDiscovery): readonly V1Discov
     throw new Error('Mixed V1 migration requires software and hardware Wallet Sets')
   }
   for (const wallet of discovery.wallets) {
-    if (wallet.accounts.length === 0) {
+    if (wallet.accounts.length === 0 && !wallet.pendingFirstAccountId) {
       throw new Error('Mixed V1 migration requires at least one Account per Wallet Set')
     }
     if (isZcashHardwareKeySource(wallet.keySource) && wallet.accounts.length !== 1) {
@@ -203,7 +204,11 @@ function buildSnapshot(
       credentialRef: prepared.credentialSetRef,
       source:
         prepared.kind === 'software'
-          ? { kind: 'software' as const, mnemonicWordCount: prepared.result.mnemonicWordCount }
+          ? {
+              kind: 'software' as const,
+              mnemonicWordCount: prepared.result.mnemonicWordCount,
+              ...(wallet.credentialOnly ? { credentialOnlyFirstAccount: true as const } : {})
+            }
           : {
               kind: 'hardware' as const,
               ...zcashHardwareMetadataForKeySource(wallet.keySource as 'keystone' | 'ledger')
@@ -447,12 +452,17 @@ export class MixedRetainedV1MigrationCoordinator {
             envelope: envelopes[index].value,
             password: input.password,
             ...input.chains,
+            ...(wallet.credentialOnly ? { credentialOnly: true as const } : {}),
             accounts: wallet.accounts.map(account => ({
               accountIndex: account.accountIndex,
               expectedZcash: account.addresses
             }))
           })
-          if (result.operation !== 'migrate' || result.accounts.length !== wallet.accounts.length) {
+          if (
+            result.operation !== 'migrate' ||
+            result.accounts.length !== wallet.accounts.length ||
+            result.credentialOnly !== wallet.credentialOnly
+          ) {
             throw new Error('Compatibility Worker returned an incomplete Account set')
           }
           prepared.push(
@@ -531,9 +541,11 @@ export class MixedRetainedV1MigrationCoordinator {
       const stagedSets: CredentialSetRecord[] = []
       for (const item of prepared) {
         const firstAccount = item.wallet.accounts[0]
-        const zcashChainAccountId = parseChainAccountId(
-          stableEntityId(item, 'chain-account', firstAccount.accountIndex, 'zcash')
-        )
+        const zcashChainAccountId = firstAccount
+          ? parseChainAccountId(
+              stableEntityId(item, 'chain-account', firstAccount.accountIndex, 'zcash')
+            )
+          : null
         const rawZcashEnvelope = {
           schemaVersion: CREDENTIAL_REPOSITORY_SCHEMA_VERSION,
           transactionId,
@@ -549,9 +561,11 @@ export class MixedRetainedV1MigrationCoordinator {
           createdAt
         }
         if (item.kind === 'software') {
-          const evmChainAccountId = parseChainAccountId(
-            stableEntityId(item, 'chain-account', firstAccount.accountIndex, 'evm')
-          )
+          const evmChainAccountId = firstAccount
+            ? parseChainAccountId(
+                stableEntityId(item, 'chain-account', firstAccount.accountIndex, 'evm')
+              )
+            : null
           const rawMultichainEnvelope = {
             schemaVersion: CREDENTIAL_REPOSITORY_SCHEMA_VERSION,
             transactionId,
@@ -586,12 +600,19 @@ export class MixedRetainedV1MigrationCoordinator {
                 zcash: {
                   credentialRef: item.zcashCredentialRef,
                   formatVersion: 1,
-                  verificationAnchorRef: buildChainAccountVerificationAnchorRef(zcashChainAccountId)
+                  verificationAnchorRef: zcashChainAccountId
+                    ? buildChainAccountVerificationAnchorRef(zcashChainAccountId)
+                    : buildKeyDomainVerificationAnchorRef(parseKeyDomainId(item.wallet.id), 'zcash')
                 },
                 multichain: {
                   credentialRef: item.multichainCredentialRef,
                   formatVersion: 1,
-                  verificationAnchorRef: buildChainAccountVerificationAnchorRef(evmChainAccountId)
+                  verificationAnchorRef: evmChainAccountId
+                    ? buildChainAccountVerificationAnchorRef(evmChainAccountId)
+                    : buildKeyDomainVerificationAnchorRef(
+                        parseKeyDomainId(item.wallet.id),
+                        'multichain'
+                      )
                 }
               },
               createdAt,
@@ -620,7 +641,7 @@ export class MixedRetainedV1MigrationCoordinator {
               zcash: {
                 credentialRef: item.zcashCredentialRef,
                 formatVersion: 2,
-                verificationAnchorRef: buildChainAccountVerificationAnchorRef(zcashChainAccountId)
+                verificationAnchorRef: buildChainAccountVerificationAnchorRef(zcashChainAccountId!)
               }
             },
             createdAt,

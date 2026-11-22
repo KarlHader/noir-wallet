@@ -1551,13 +1551,27 @@ export class BackgroundZcashWalletRuntime {
     shouldReset = false,
     skipInit = false,
     birthdayHeight?: number,
-    selectedNetworkFamilies?: readonly AccountNetworkFamily[]
+    selectedNetworkFamilies?: readonly AccountNetworkFamily[],
+    pendingFirstAccount = false
   ): Promise<WalletItem> {
     const walletId = crypto.randomUUID()
     const previousWalletId = this.currentWalletId
 
     await SecureStorage.saveWalletSeedPhrase(walletId, seedPhrase, password)
     try {
+      if (pendingFirstAccount) {
+        return {
+          id: walletId,
+          name: walletName || 'Wallet 1',
+          seedPhraseKey: `seed_${walletId}`,
+          accounts: [],
+          pendingFirstAccountId: crypto.randomUUID(),
+          pendingFirstAccountName: accountName,
+          pendingFirstAccountNetwork: this.network,
+          createdAt: Date.now(),
+          isPinned: false
+        }
+      }
       const core = this.getOrCreateWalletCore(walletId)
       this.currentWalletId = walletId
 
@@ -1636,14 +1650,15 @@ export class BackgroundZcashWalletRuntime {
 
   private async setPrimaryWalletState(wallet: WalletItem, password: string): Promise<void> {
     this.store.setWallets([wallet])
-    this.store.setCurrentAccount(wallet.id, wallet.accounts[0].id)
+    this.store.setCurrentAccount(wallet.id, wallet.accounts[0]?.id ?? null)
     this.store.setCurrentNetwork(this.network)
+    this.currentWalletId = wallet.id
 
     await Promise.all([flushWalletStore(), SecureStorage.saveLastActivityTime()])
     this.setSessionPassword(password)
     this.sessionCredentialWalletId = null
 
-    this.startSyncFor(wallet.id)
+    if (wallet.accounts.length > 0) this.startSyncFor(wallet.id)
 
     logger.refreshCache(this.store.wallets)
   }
@@ -1692,7 +1707,8 @@ export class BackgroundZcashWalletRuntime {
     accountName: string = 'Account 1',
     birthdayHeight?: number,
     selectedNetworkFamilies?: readonly AccountNetworkFamily[],
-    secretPhraseOrigin: 'created' | 'imported' = 'imported'
+    secretPhraseOrigin: 'created' | 'imported' = 'imported',
+    pendingFirstAccount = false
   ): Promise<void> {
     if (!this.isInitialized) {
       throw new Error('Zcash wallet runtime not initialized')
@@ -1710,9 +1726,25 @@ export class BackgroundZcashWalletRuntime {
         password
       )
       if (existingSeedPhrase === normalizedSeedPhrase) {
+        if (pendingFirstAccount) {
+          if (
+            this.store.wallets.length !== 1 ||
+            existingWallet.accounts.length !== 0 ||
+            !existingWallet.pendingFirstAccountId ||
+            existingWallet.pendingFirstAccountNetwork !== this.network
+          ) {
+            throw new Error('This recovery phrase already belongs to a wallet')
+          }
+          await this.setPrimaryWalletState(existingWallet, password)
+          return
+        }
         await this.switchWallet(existingWallet.id)
         return
       }
+    }
+
+    if (pendingFirstAccount && this.store.wallets.length !== 0) {
+      throw new Error('Primary wallet setup requires an empty wallet inventory')
     }
 
     const preImportWalletId = this.store.currentWalletId
@@ -1730,7 +1762,8 @@ export class BackgroundZcashWalletRuntime {
       true,
       selectedNetworkFamilies?.includes('zcash') === false, // skipInit
       birthdayHeight,
-      selectedNetworkFamilies
+      selectedNetworkFamilies,
+      pendingFirstAccount
     )
 
     await this.setPrimaryWalletState(
@@ -1946,6 +1979,22 @@ export class BackgroundZcashWalletRuntime {
       const currentAccount = storeAccountId
         ? latestWallet.accounts.find(account => account.id === storeAccountId)
         : latestWallet.accounts[0]
+      if (
+        !currentAccount &&
+        latestWallet.accounts.length === 0 &&
+        latestWallet.pendingFirstAccountId &&
+        latestWallet.pendingFirstAccountNetwork === this.network &&
+        storeAccountId === null
+      ) {
+        this.currentWalletId = storeWalletId
+        await SecureStorage.resetLoginAttempts()
+        this.cancelActiveRestore()
+        await SecureStorage.saveLastActivityTime()
+        this.setSessionPassword(password)
+        this.sessionCredentialWalletId = null
+        logger.refreshCache(this.store.wallets)
+        return { success: true }
+      }
       if (!currentAccount) return { success: false, failure: 'credential_invalid' }
       if (
         this.store.currentWalletId !== storeWalletId ||
@@ -2184,6 +2233,10 @@ export class BackgroundZcashWalletRuntime {
       throw new Error('Wallet not found')
     }
 
+    if (wallet.pendingFirstAccountId) {
+      throw new Error('Finish multisig setup before adding another account')
+    }
+
     if (isZcashHardwareKeySource(wallet.keySource)) {
       throw new Error(
         'Hardware wallets cannot derive new accounts. Reconnect the device to import another account.'
@@ -2232,6 +2285,10 @@ export class BackgroundZcashWalletRuntime {
     const wallet = this.store.getWallet(walletId)
     if (!wallet) {
       throw new Error('Wallet not found')
+    }
+
+    if (wallet.pendingFirstAccountId) {
+      throw new Error('Finish multisig setup before adding another account')
     }
 
     if (isZcashHardwareKeySource(wallet.keySource)) {
@@ -2660,7 +2717,43 @@ export class BackgroundZcashWalletRuntime {
       ? wallet.accounts.find(candidate => candidate.id === accountId)
       : wallet.accounts.find(candidate => candidate.id === this.store.currentAccountId) ||
         wallet.accounts[0]
-    if (!account) return false
+    if (!account) {
+      if (
+        accountId ||
+        wallet.accounts.length !== 0 ||
+        !wallet.pendingFirstAccountId ||
+        wallet.pendingFirstAccountNetwork !== this.network ||
+        this.store.currentWalletId !== walletId ||
+        this.store.currentAccountId !== null
+      ) {
+        return false
+      }
+      const passwordGeneration = this.passwordGeneration
+      const epoch = await credentialSession.getUnlockEpoch()
+      if (epoch === null) return false
+      const password = await credentialSession.getProvisioningPassword()
+      const inspected = await this.inspectWalletCredential(wallet, password)
+      const current = this.store.getWallet(walletId)
+      if (
+        inspected.status !== 'valid' ||
+        inspected.credential.kind !== 'seed' ||
+        (await credentialSession.getUnlockEpoch()) !== epoch ||
+        this.passwordGeneration !== passwordGeneration ||
+        this.network !== wallet.pendingFirstAccountNetwork ||
+        this.store.currentWalletId !== walletId ||
+        this.store.currentAccountId !== null ||
+        current?.createdAt !== wallet.createdAt ||
+        current?.seedPhraseKey !== wallet.seedPhraseKey ||
+        current?.pendingFirstAccountId !== wallet.pendingFirstAccountId
+      ) {
+        return false
+      }
+      this.cancelActiveRestore()
+      this.setSessionPassword(password)
+      this.sessionCredentialWalletId = null
+      this.currentWalletId = walletId
+      return true
+    }
     if (isZcashHardwareKeySource(wallet.keySource)) {
       return this.restoreHardwareFromCredentialSession(wallet, account)
     }
@@ -3874,7 +3967,8 @@ export class BackgroundZcashWalletRuntime {
     seedPhrase: string,
     walletName?: string,
     accountName: string = 'Account 1',
-    selectedNetworkFamilies?: readonly AccountNetworkFamily[]
+    selectedNetworkFamilies?: readonly AccountNetworkFamily[],
+    pendingFirstAccount = false
   ): Promise<{ walletId: string; seedPhrase: string }> {
     if (!this.password) {
       throw new Error('Password not set')
@@ -3896,13 +3990,24 @@ export class BackgroundZcashWalletRuntime {
         this.password
       )
       if (existingSeedPhrase === seedString) {
+        if (pendingFirstAccount) {
+          if (
+            existingWallet.accounts.length !== 0 ||
+            !existingWallet.pendingFirstAccountId ||
+            existingWallet.pendingFirstAccountNetwork !== this.network
+          ) {
+            throw new Error('This recovery phrase already belongs to a wallet')
+          }
+          await this.switchWallet(existingWallet.id)
+          return { walletId: existingWallet.id, seedPhrase: seedString }
+        }
         await this.switchWallet(existingWallet.id)
         return { walletId: existingWallet.id, seedPhrase: seedString }
       }
     }
 
     let birthdayHeight: number | undefined
-    if (selectedNetworkFamilies?.includes('zcash') !== false) {
+    if (!pendingFirstAccount && selectedNetworkFamilies?.includes('zcash') !== false) {
       const cachedChainTip = selectCachedChainTipHeight(
         this.store.wallets.flatMap(wallet => {
           const syncState = this.accountDataStore.getWalletSyncState(this.network, wallet.id)
@@ -3941,14 +4046,18 @@ export class BackgroundZcashWalletRuntime {
       false, // shouldReset (ignored if skipInit)
       true, // skipInit
       birthdayHeight,
-      selectedNetworkFamilies
+      selectedNetworkFamilies,
+      pendingFirstAccount
     )
 
-    await this.addWalletToList({
-      ...wallet,
-      secretPhraseOrigin: 'created',
-      secretPhraseCreationRevision: 1
-    })
+    await this.addWalletToList(
+      {
+        ...wallet,
+        secretPhraseOrigin: 'created',
+        secretPhraseCreationRevision: 1
+      },
+      pendingFirstAccount
+    )
 
     return { walletId: wallet.id, seedPhrase: seedString }
   }
@@ -4007,11 +4116,12 @@ export class BackgroundZcashWalletRuntime {
     return wallet.id
   }
 
-  private async addWalletToList(wallet: WalletItem): Promise<void> {
+  private async addWalletToList(wallet: WalletItem, activatePending = false): Promise<void> {
     this.store.addWallet(wallet)
 
-    if (!this.store.currentWalletId) {
-      this.store.setCurrentAccount(wallet.id, wallet.accounts[0].id)
+    if (activatePending || !this.store.currentWalletId) {
+      this.store.setCurrentAccount(wallet.id, wallet.accounts[0]?.id ?? null)
+      this.currentWalletId = wallet.id
     }
     await flushWalletStore()
   }
@@ -4306,6 +4416,12 @@ export class BackgroundZcashWalletRuntime {
       throw new Error('Wallet not found')
     }
 
+    if (wallet.accounts.length === 0 && wallet.pendingFirstAccountId) {
+      this.store.setCurrentAccount(walletId, null)
+      this.currentWalletId = walletId
+      logger.refreshCache(this.store.wallets)
+      return
+    }
     this.store.setCurrentAccount(walletId, wallet.accounts[0].id)
     this.currentWalletId = walletId
 

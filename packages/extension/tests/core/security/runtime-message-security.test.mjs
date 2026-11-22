@@ -504,6 +504,9 @@ test.describe('Runtime message security', () => {
     expect(isTrustedRuntimeMessageSender('ADD_SOFTWARE_WALLET', popupSender, extensionId)).toBe(
       true
     )
+    expect(
+      isTrustedRuntimeMessageSender('ADD_PENDING_MULTISIG_WALLET', popupSender, extensionId)
+    ).toBe(true)
     expect(isTrustedRuntimeMessageSender('RESYNC_ZCASH_WALLET', popupSender, extensionId)).toBe(
       true
     )
@@ -584,6 +587,9 @@ test.describe('Runtime message security', () => {
     ).toBe(false)
     expect(
       isTrustedRuntimeMessageSender('ADD_SOFTWARE_WALLET', contentScriptSender, extensionId)
+    ).toBe(false)
+    expect(
+      isTrustedRuntimeMessageSender('ADD_PENDING_MULTISIG_WALLET', contentScriptSender, extensionId)
     ).toBe(false)
     expect(
       isTrustedRuntimeMessageSender(
@@ -1254,6 +1260,23 @@ test.describe('Runtime message security', () => {
         birthdayHeight: 3_000_000
       })
     ).toMatchObject({ type: 'ADD_SOFTWARE_WALLET', mode: 'import' })
+    expect(
+      parseTrustedExtensionRuntimeMessage({
+        type: 'PROVISION_PENDING_MULTISIG_WALLET',
+        mode: 'create',
+        mnemonic: `${'abandon '.repeat(11)}about`,
+        password: 'legacy-compatible-password',
+        accountName: 'My multisig'
+      })
+    ).toMatchObject({ type: 'PROVISION_PENDING_MULTISIG_WALLET', mode: 'create' })
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({
+        type: 'ADD_PENDING_MULTISIG_WALLET',
+        mode: 'import',
+        mnemonic: `${'abandon '.repeat(11)}about`,
+        accountName: 'Imported Account'
+      })
+    ).toThrow(/schema/i)
     expect(
       parseTrustedExtensionRuntimeMessage({
         type: 'PREVIEW_SOFTWARE_WALLET_ADDRESSES',

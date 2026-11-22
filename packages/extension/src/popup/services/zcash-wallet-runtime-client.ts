@@ -240,6 +240,26 @@ export const zcashWalletRuntimeClient = Object.freeze({
     )
   },
 
+  async provisionPendingPrimaryMultisigWallet(input: {
+    readonly mnemonic: string
+    readonly password: string
+    readonly accountName: string
+    readonly selectedNetworkFamilies: readonly AccountNetworkFamily[]
+  }): Promise<{ walletId: string; pendingFirstAccountId: string }> {
+    const response = await expectSuccess(
+      { type: 'PROVISION_PENDING_MULTISIG_WALLET', mode: 'create', ...input },
+      'Multisig wallet setup failed'
+    )
+    return {
+      walletId: requireString(response, 'walletId', 'Wallet setup returned no wallet'),
+      pendingFirstAccountId: requireString(
+        response,
+        'pendingFirstAccountId',
+        'Wallet setup returned no pending account'
+      )
+    }
+  },
+
   async getSeedPhrase(password: string, walletId?: string): Promise<string | null> {
     const response = await expectSuccess(
       { type: 'GET_ZCASH_SEED_PHRASE', password, ...(walletId ? { walletId } : {}) },

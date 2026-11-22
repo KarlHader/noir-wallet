@@ -153,13 +153,13 @@ export function VerifyPage() {
             aria-hidden="true"
           />
         </div>
-        <h2 className="mt-5 text-lg font-semibold">{copy.title}</h2>
+        <h2 className="mt-5 text-xl font-semibold text-white">{copy.title}</h2>
       </div>
 
       <div className="mt-5">
         <FingerprintBlock value={formatFingerprint(fingerprint ?? '')} />
       </div>
-      <p className="mt-3 text-center text-xs text-muted">{description}</p>
+      <p className="mt-3 text-center text-sm text-[#BCBCC8]">{description}</p>
 
       <div className="mt-5 space-y-3">
         {devices.map(entry => (

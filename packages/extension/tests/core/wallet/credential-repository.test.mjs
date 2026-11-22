@@ -4,13 +4,16 @@ import { readFileSync } from 'node:fs'
 
 import {
   buildChainAccountVerificationAnchorRef,
+  buildKeyDomainVerificationAnchorRef,
   commitCredentialBoundStorageV2Pointer,
   parseChainAccountVerificationAnchorRef,
+  parseKeyDomainVerificationAnchorRef,
   validateCredentialBindings
 } from '../../../src/core/keyring/application/index.ts'
 import { CREDENTIAL_SET_SCHEMA_VERSION } from '../../../src/core/keyring/domain/index.ts'
 import { InMemoryCredentialRepository } from '../../../src/infrastructure/persistence/repositories/index.ts'
 import { CredentialRepositoryState } from '../../../src/infrastructure/persistence/repositories/credential-repository-state.ts'
+import { selectAccountRemovalAnchors } from '../../../src/infrastructure/keyring/migration/credential-removal-anchor.ts'
 import {
   parseCredentialTransactionJournal,
   parseEncryptedCredentialEnvelopeRecord,
@@ -116,7 +119,7 @@ function envelope(transactionId, keyDomainId, generationId, engine, bytes = [1, 
   }
 }
 
-function credentialSet(transactionId, keyDomainId, generationId, credentialSetRef) {
+function credentialSet(transactionId, keyDomainId, generationId, credentialSetRef, anchors) {
   return {
     schemaVersion: 1,
     transactionId,
@@ -132,12 +135,12 @@ function credentialSet(transactionId, keyDomainId, generationId, credentialSetRe
         zcash: {
           credentialRef: engineRef(keyDomainId, generationId, 'zcash'),
           formatVersion: 1,
-          verificationAnchorRef: anchorRef(keyDomainId, 'zcash')
+          verificationAnchorRef: anchors?.zcash ?? anchorRef(keyDomainId, 'zcash')
         },
         multichain: {
           credentialRef: engineRef(keyDomainId, generationId, 'multichain'),
           formatVersion: 1,
-          verificationAnchorRef: anchorRef(keyDomainId, 'multichain')
+          verificationAnchorRef: anchors?.multichain ?? anchorRef(keyDomainId, 'multichain')
         }
       },
       createdAt: 1_001,
@@ -148,7 +151,15 @@ function credentialSet(transactionId, keyDomainId, generationId, credentialSetRe
 
 async function stageSoftwareCredentialSet(
   repository,
-  { transactionId, keyDomainId, generationId, credentialSetRef, operation = 'create', transition }
+  {
+    transactionId,
+    keyDomainId,
+    generationId,
+    credentialSetRef,
+    operation = 'create',
+    transition,
+    anchors
+  }
 ) {
   const firstJournal = journal({
     transactionId,
@@ -164,7 +175,7 @@ async function stageSoftwareCredentialSet(
   ).resolves.toBe('created')
   await expect(
     repository.putCredentialSet(
-      credentialSet(transactionId, keyDomainId, generationId, credentialSetRef)
+      credentialSet(transactionId, keyDomainId, generationId, credentialSetRef, anchors)
     )
   ).resolves.toBe('created')
   return firstJournal
@@ -272,6 +283,128 @@ function fakeStorageRepository(snapshot) {
 }
 
 test.describe('Credential repository', () => {
+  test('binds software credentials to an empty or FROST-only wallet domain', async () => {
+    const keyDomainId = 'wallet:pending/1'
+    const anchors = {
+      zcash: buildKeyDomainVerificationAnchorRef(keyDomainId, 'zcash'),
+      multichain: buildKeyDomainVerificationAnchorRef(keyDomainId, 'multichain')
+    }
+    expect(parseKeyDomainVerificationAnchorRef(anchors.zcash)).toEqual({
+      keyDomainId,
+      engine: 'zcash'
+    })
+    expect(() => parseKeyDomainVerificationAnchorRef('key-domain:wallet:pending/1:zcash')).toThrow()
+
+    const repository = new InMemoryCredentialRepository()
+    let current = await stageSoftwareCredentialSet(repository, {
+      transactionId: 'transaction:pending',
+      keyDomainId,
+      generationId: 'generation:pending',
+      credentialSetRef: 'set:pending',
+      anchors
+    })
+    current = await advanceJournal(repository, current, 'verified')
+    current = await advanceJournal(repository, current, 'committing')
+    const markedDomain = {
+      ...softwareKeyDomain(keyDomainId, 'set:pending'),
+      source: { kind: 'software', mnemonicWordCount: 12, credentialOnlyFirstAccount: true }
+    }
+    const base = storageSnapshot([markedDomain], current.targetMetadataGenerationId)
+    const pending = parseStorageV2Snapshot({
+      ...base,
+      manifest: {
+        ...base.manifest,
+        counts: { keyDomains: 1, accounts: 0, chainAccounts: 0, addresses: 0 }
+      },
+      accounts: [],
+      chainAccounts: []
+    })
+    await expect(
+      validateCredentialBindings(pending, repository, current.transactionId)
+    ).resolves.toEqual({ status: 'valid' })
+
+    const external = parseStorageV2Snapshot({
+      ...pending,
+      manifest: {
+        ...pending.manifest,
+        counts: { keyDomains: 1, accounts: 1, chainAccounts: 1, addresses: 0 }
+      },
+      accounts: [
+        {
+          id: 'frost:1',
+          keyDomainId,
+          displayName: 'Multisig',
+          source: { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'mainnet' },
+          createdAt: 1_000
+        }
+      ],
+      chainAccounts: [
+        {
+          id: 'frost-chain:1',
+          scope: {
+            keyDomainId,
+            accountId: 'frost:1',
+            chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d'
+          },
+          source: { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'mainnet' },
+          identity: { kind: 'account-identifier', value: 'u1test' },
+          createdAt: 1_000
+        }
+      ]
+    })
+    await expect(
+      validateCredentialBindings(external, repository, current.transactionId)
+    ).resolves.toEqual({ status: 'valid' })
+
+    const derived = storageSnapshot([markedDomain], current.targetMetadataGenerationId)
+    await expect(
+      validateCredentialBindings(derived, repository, current.transactionId)
+    ).resolves.toEqual({ status: 'valid' })
+    const unmarked = storageSnapshot(
+      [softwareKeyDomain(keyDomainId, 'set:pending')],
+      current.targetMetadataGenerationId
+    )
+    await expect(
+      validateCredentialBindings(unmarked, repository, current.transactionId)
+    ).resolves.toEqual({ status: 'invalid', reason: 'credential-anchor-invalid' })
+    expect(
+      selectAccountRemovalAnchors(
+        derived,
+        keyDomainId,
+        derived.accounts[0].id,
+        credentialSet(
+          'transaction:pending',
+          keyDomainId,
+          'generation:pending',
+          'set:pending',
+          anchors
+        ).manifest
+      ).replacements
+    ).toEqual({})
+    expect(() =>
+      selectAccountRemovalAnchors(
+        unmarked,
+        keyDomainId,
+        unmarked.accounts[0].id,
+        credentialSet(
+          'transaction:pending',
+          keyDomainId,
+          'generation:pending',
+          'set:pending',
+          anchors
+        ).manifest
+      )
+    ).toThrow(/anchor/)
+    const differentOwner = parseStorageV2Snapshot({
+      ...pending,
+      manifest: { ...pending.manifest, mainKeyDomainId: 'wallet:other' },
+      keyDomains: [{ ...markedDomain, id: 'wallet:other' }]
+    })
+    await expect(
+      validateCredentialBindings(differentOwner, repository, current.transactionId)
+    ).resolves.toEqual({ status: 'invalid', reason: 'credential-key-domain-mismatch' })
+  })
+
   test('accepts only canonical encoded ChainAccount verification anchors', () => {
     const chainAccountId = 'wallet:1:evm/account:0'
     const anchor = buildChainAccountVerificationAnchorRef(chainAccountId)

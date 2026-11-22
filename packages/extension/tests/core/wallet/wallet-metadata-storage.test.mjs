@@ -196,6 +196,48 @@ test.describe('Wallet metadata persistence', () => {
     }
   })
 
+  test('a stale first-account setup cannot reopen a completed multisig setup or deselect it', async () => {
+    const other = { ...wallet, id: 'older-wallet' }
+    const external = {
+      id: 'new-account',
+      source: { kind: 'frost-vault', version: 1, groupId: 'group', network: 'testnet' }
+    }
+    const storage = mockStorage({
+      wallet_state: {
+        state: {
+          wallets: [other, { ...wallet, accounts: [external] }],
+          currentWalletId: wallet.id,
+          currentAccountId: external.id
+        }
+      }
+    })
+    try {
+      await writeWalletMetadata({
+        state: {
+          wallets: [
+            other,
+            {
+              ...wallet,
+              accounts: [],
+              pendingFirstAccountId: 'setup',
+              pendingFirstAccountNetwork: 'testnet',
+              pendingFirstAccountName: 'First'
+            }
+          ],
+          currentWalletId: wallet.id,
+          currentAccountId: null
+        }
+      })
+      const { state } = await readWalletMetadata()
+      expect(state.currentWalletId).toBe(wallet.id)
+      expect(state.currentAccountId).toBe(external.id)
+      expect(state.wallets[1].accounts).toEqual([external])
+      expect(state.wallets[1].pendingFirstAccountId).toBeUndefined()
+    } finally {
+      storage.restore()
+    }
+  })
+
   test('external deletion retains its source for recovery without reserving an HD index', async () => {
     const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
     const external = { id: 'external-account', source }

@@ -76,7 +76,10 @@ export function assertPasswordChangeCredentialInventorySupported(
       const keyDomain = snapshot.keyDomains.find(item => item.id === wallet.id)
       return (
         keyDomain === undefined ||
-        (wallet.keySource === 'software') !== (keyDomain.source.kind === 'software')
+        (wallet.keySource === 'software') !== (keyDomain.source.kind === 'software') ||
+        (wallet.credentialOnly === true &&
+          (keyDomain.source.kind !== 'software' ||
+            keyDomain.source.credentialOnlyFirstAccount !== true))
       )
     }) ||
     snapshot.keyDomains.some(keyDomain => {
@@ -186,6 +189,23 @@ export function assertAccountAnchors(
   result: CompatibilityWorkerResult,
   chains: RetainedV1MigrationChainProfile
 ): void {
+  if (wallet.credentialOnly) {
+    const owner = snapshot.keyDomains.find(item => item.id === wallet.id)
+    if (
+      owner?.source.kind !== 'software' ||
+      owner.source.credentialOnlyFirstAccount !== true ||
+      wallet.accounts.length !== 0 ||
+      result.credentialOnly !== true ||
+      result.accounts.length !== 0 ||
+      snapshot.accounts.some(
+        account => account.keyDomainId === wallet.id && isDerivedAccount(account)
+      )
+    ) {
+      throw new Error('Password-change credential-only Wallet proof is invalid')
+    }
+    return
+  }
+  if (result.credentialOnly) throw new Error('Unexpected credential-only Wallet proof')
   if (result.accounts.length !== wallet.accounts.length) {
     throw new Error('Compatibility Worker returned an incomplete Account set')
   }

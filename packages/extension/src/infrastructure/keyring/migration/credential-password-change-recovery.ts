@@ -168,7 +168,8 @@ export class CredentialPasswordChangeRecovery {
             targetPassword: password,
             targetVault: decodeVault(payloads.multichain),
             ...input.chains,
-            accounts: workerAccounts(retainedWallet)
+            accounts: workerAccounts(retainedWallet),
+            ...(retainedWallet.credentialOnly ? { credentialOnly: true as const } : {})
           })
           if (result.operation !== 'change-password') throw new Error('Wrong Worker operation')
           assertAccountAnchors(snapshot, retainedWallet, result, input.chains)

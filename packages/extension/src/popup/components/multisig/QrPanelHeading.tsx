@@ -19,7 +19,7 @@ export function QrPanelHeading({ counter, ringLabel, ringCaption, title }: QrPan
         <RingProgress current={counter.current} total={counter.total} />
         {ringCaption}
       </div>
-      <h2 className="mt-5 text-lg font-semibold">{title}</h2>
+      <h2 className="mt-5 text-xl font-semibold text-white">{title}</h2>
     </>
   )
 }

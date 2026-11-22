@@ -21,6 +21,7 @@ export interface MultisigCreationOperation {
   operationId: string
   scope: MultisigGroupScope
   parentAccountId: string
+  accountName?: string
   groupId: string
   threshold: MultisigThreshold
   birthdayHeight: number
@@ -41,6 +42,7 @@ function parse(value: unknown): MultisigCreationOperation | null {
     'operationId',
     'scope',
     'parentAccountId',
+    'accountName',
     'groupId',
     'threshold',
     'birthdayHeight',
@@ -62,6 +64,10 @@ function parse(value: unknown): MultisigCreationOperation | null {
     typeof op.scope.walletId !== 'string' ||
     typeof op.scope.accountId !== 'string' ||
     typeof op.parentAccountId !== 'string' ||
+    (op.accountName !== undefined &&
+      (typeof op.accountName !== 'string' ||
+        !op.accountName.trim() ||
+        op.accountName.length > 128)) ||
     typeof op.groupId !== 'string' ||
     !['2-of-2', '2-of-3', '3-of-3'].includes(op.threshold) ||
     !Number.isSafeInteger(op.birthdayHeight) ||
@@ -98,6 +104,7 @@ function parse(value: unknown): MultisigCreationOperation | null {
       accountId: op.scope.accountId
     },
     parentAccountId: op.parentAccountId,
+    ...(op.accountName ? { accountName: op.accountName } : {}),
     groupId: op.groupId,
     threshold: op.threshold,
     birthdayHeight: op.birthdayHeight,

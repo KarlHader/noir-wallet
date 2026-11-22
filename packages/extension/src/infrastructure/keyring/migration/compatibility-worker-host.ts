@@ -52,6 +52,9 @@ export class CompatibilityWorkerHost {
           if ('error' in response) {
             finish(() => reject(new CompatibilityWorkerError(response.error)))
           } else {
+            if (response.result.credentialOnly !== request.credentialOnly) {
+              throw new Error('Compatibility Worker credential-only mode mismatch')
+            }
             finish(() => resolve(response.result))
           }
         } catch {

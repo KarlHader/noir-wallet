@@ -261,8 +261,11 @@ export function inventoryAlreadyMatches(
     return false
   }
   const active = snapshot.manifest.activeAccount
+  const selectedCredentialOnly = discovery.wallets.some(
+    wallet => wallet.id === discovery.currentWalletId && wallet.credentialOnly
+  )
   return (
-    (discovery.currentWalletId === null && discovery.currentAccountId === null && !active) ||
+    (discovery.currentAccountId === null && (selectedCredentialOnly || !active)) ||
     (active?.keyDomainId === discovery.currentWalletId &&
       active.accountId === discovery.currentAccountId)
   )

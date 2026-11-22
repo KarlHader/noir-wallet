@@ -6,7 +6,8 @@ import { LatestAttempt } from '@/lib/async-utils'
 import { classifyError } from '@/lib/errors'
 import {
   generateAddWalletMnemonic,
-  provisionAdditionalSoftwareWallet
+  provisionAdditionalSoftwareWallet,
+  provisionPendingAdditionalMultisigWallet
 } from '@/core/wallet/software-wallet-provisioning-client'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
@@ -71,10 +72,12 @@ export interface OnboardingState {
   generateSeedPhrase: () => Promise<void>
   verifySeedPhrase: () => boolean
   createWallet: () => Promise<boolean>
+  createPendingMultisigWallet: () => Promise<boolean>
   importWallet: () => Promise<boolean>
   reset: () => void
   validatePassword: () => boolean
   addWallet: () => Promise<boolean>
+  addPendingMultisigWallet: () => Promise<boolean>
   addImportedWallet: () => Promise<boolean>
 }
 
@@ -118,6 +121,29 @@ function clearedSensitiveOnboardingState(): Pick<
     verificationPassed: false,
     isLoading: false,
     error: null
+  }
+}
+
+function pendingMultisigInput(state: OnboardingState) {
+  if (!state.verificationPassed || state.seedPhrase.length !== state.mnemonicWordCount) {
+    throw new Error('Confirm your recovery phrase before creating the wallet')
+  }
+  return {
+    mnemonic: state.seedPhrase.join(' '),
+    accountName: normalizeAccountName(state.accountName),
+    selectedNetworkFamilies: ['zcash'] as const
+  }
+}
+
+async function finishPendingMultisigWallet(result: {
+  walletId: string
+  pendingFirstAccountId: string
+}) {
+  await rehydrateWalletStore()
+  sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, { params: { method: 'create' } })
+  return {
+    ...clearedSensitiveOnboardingState(),
+    createdWallet: { walletId: result.walletId, accountId: result.pendingFirstAccountId }
   }
 }
 
@@ -317,6 +343,22 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     }
   },
 
+  createPendingMultisigWallet: async () => {
+    set({ isLoading: true, error: null, createdWallet: null })
+    try {
+      const result = await zcashWalletRuntimeClient.provisionPendingPrimaryMultisigWallet({
+        ...pendingMultisigInput(get()),
+        password: get().password
+      })
+      set(await finishPendingMultisigWallet(result))
+      return true
+    } catch (err) {
+      const { userMessage } = classifyError(err)
+      set({ isLoading: false, error: userMessage })
+      return false
+    }
+  },
+
   importWallet: async () => {
     const importAttemptId = importAttempts.begin()
     set({ isLoading: true, error: null })
@@ -424,6 +466,19 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, { params: { method: 'create' } })
 
       set({ ...clearedSensitiveOnboardingState(), createdWallet: createdWalletFor(walletId) })
+      return true
+    } catch (err) {
+      const { userMessage } = classifyError(err)
+      set({ isLoading: false, error: userMessage })
+      return false
+    }
+  },
+
+  addPendingMultisigWallet: async () => {
+    set({ isLoading: true, error: null, createdWallet: null })
+    try {
+      const result = await provisionPendingAdditionalMultisigWallet(pendingMultisigInput(get()))
+      set(await finishPendingMultisigWallet(result))
       return true
     } catch (err) {
       const { userMessage } = classifyError(err)

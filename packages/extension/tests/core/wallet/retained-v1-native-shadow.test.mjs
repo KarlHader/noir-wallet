@@ -115,3 +115,37 @@ it('retains legacy hardware and mismatched native IDs for V1 reconciliation', ()
     3
   )
 })
+
+it('treats a selected pending multisig wallet with no active Account as synchronized', () => {
+  const pending = {
+    ...software,
+    accounts: [],
+    credentialOnly: true,
+    pendingFirstAccountId: '3f5c0c86-d66b-4d61-bd5f-f9a0bb42727f'
+  }
+  assert.equal(
+    inventoryAlreadyMatches(
+      {
+        manifest: { activeAccount: { keyDomainId: 'older-wallet', accountId: 'older-account' } },
+        keyDomains: [
+          {
+            id: pending.id,
+            displayName: pending.displayName,
+            source: { kind: 'software', credentialOnlyFirstAccount: true }
+          }
+        ],
+        accounts: []
+      },
+      {
+        status: 'ready',
+        source: 'wallet_state',
+        currentWalletId: pending.id,
+        currentAccountId: null,
+        wallets: [pending],
+        issues: []
+      },
+      [{ wallet: pending, existingCredentialSet: {}, newAccounts: [] }]
+    ),
+    true
+  )
+})

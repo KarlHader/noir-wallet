@@ -50,11 +50,13 @@ export interface AddSoftwareWalletInput {
   readonly accountName: string
   readonly birthdayHeight?: number
   readonly selectedNetworkFamilies?: readonly AccountNetworkFamily[]
+  readonly initialAccount?: 'multisig-pending'
 }
 
 export interface AddSoftwareWalletResult {
   readonly walletId: string
   readonly credentialStatus: string
+  readonly pendingFirstAccountId?: string
 }
 
 export interface ProvisionPrimarySoftwareWalletInput {
@@ -64,6 +66,7 @@ export interface ProvisionPrimarySoftwareWalletInput {
   readonly accountName: string
   readonly birthdayHeight?: number
   readonly selectedNetworkFamilies?: readonly AccountNetworkFamily[]
+  readonly initialAccount?: 'multisig-pending'
 }
 
 export interface SoftwareWalletAddressPreview {
@@ -283,6 +286,12 @@ export async function provisionPrimarySoftwareWallet(
   const birthdayHeight = validateBirthdayHeight(input.birthdayHeight)
   const accountName = normalizeAccountName(input.accountName)
   const selectedNetworkFamilies = importNetworkFamilies(input.selectedNetworkFamilies)
+  const pendingFirstAccount = input.initialAccount === 'multisig-pending'
+  if (
+    pendingFirstAccount &&
+    (input.mode !== 'create' || !selectedNetworkFamilies?.includes('zcash'))
+  )
+    throw new Error('Multisig setup requires a new wallet with Zcash selected')
 
   syncScheduler.pauseForTx()
   syncScheduler.abortSync()
@@ -295,7 +304,8 @@ export async function provisionPrimarySoftwareWallet(
       accountName,
       birthdayHeight,
       selectedNetworkFamilies,
-      input.mode === 'create' ? 'created' : 'imported'
+      input.mode === 'create' ? 'created' : 'imported',
+      pendingFirstAccount
     )
 
     const credentials = await credentialLifecycle.synchronizeRetainedV1(input.password)
@@ -314,10 +324,15 @@ export async function provisionPrimarySoftwareWallet(
     ) {
       throw new Error('Unable to bind the Zcash credential session')
     }
-    await synchronizeNetworkMetadata?.()
+    if (!pendingFirstAccount) await synchronizeNetworkMetadata?.()
 
-    if (selectedNetworkFamilies?.includes('zcash') !== false) syncScheduler.onRequestSync()
-    return Object.freeze({ walletId: currentWalletId, credentialStatus: credentials.status })
+    if (!pendingFirstAccount && selectedNetworkFamilies?.includes('zcash') !== false)
+      syncScheduler.onRequestSync()
+    return Object.freeze({
+      walletId: currentWalletId,
+      credentialStatus: credentials.status,
+      ...(pendingFirstAccount ? { pendingFirstAccountId: currentWallet.pendingFirstAccountId } : {})
+    })
   } catch (error) {
     await lockProvisioningSession()
     throw error
@@ -334,6 +349,12 @@ export async function addSoftwareWallet(
   const birthdayHeight = validateBirthdayHeight(input.birthdayHeight)
   const accountName = normalizeAccountName(input.accountName)
   const selectedNetworkFamilies = importNetworkFamilies(input.selectedNetworkFamilies)
+  const pendingFirstAccount = input.initialAccount === 'multisig-pending'
+  if (
+    pendingFirstAccount &&
+    (input.mode !== 'create' || !selectedNetworkFamilies?.includes('zcash'))
+  )
+    throw new Error('Multisig setup requires a new wallet with Zcash selected')
   const password = await requireProvisioningPassword()
 
   syncScheduler.pauseForTx()
@@ -347,7 +368,8 @@ export async function addSoftwareWallet(
               mnemonic,
               undefined,
               accountName,
-              selectedNetworkFamilies
+              selectedNetworkFamilies,
+              pendingFirstAccount
             )
           ).walletId
         : await backgroundZcashWalletRuntime.addImportedWallet(
@@ -378,10 +400,16 @@ export async function addSoftwareWallet(
     ) {
       throw new Error('Unable to bind the Zcash credential session')
     }
-    await synchronizeNetworkMetadata?.()
+    if (!pendingFirstAccount) await synchronizeNetworkMetadata?.()
 
-    if (selectedNetworkFamilies?.includes('zcash') !== false) syncScheduler.onRequestSync()
-    return Object.freeze({ walletId, credentialStatus: credentials.status })
+    if (!pendingFirstAccount && selectedNetworkFamilies?.includes('zcash') !== false)
+      syncScheduler.onRequestSync()
+    const pendingWallet = pendingFirstAccount ? useWalletStore.getState().getWallet(walletId) : null
+    return Object.freeze({
+      walletId,
+      credentialStatus: credentials.status,
+      ...(pendingWallet ? { pendingFirstAccountId: pendingWallet.pendingFirstAccountId } : {})
+    })
   } catch (error) {
     await lockProvisioningSession()
     throw error

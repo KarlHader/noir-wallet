@@ -319,9 +319,15 @@ export function useAppRouting() {
       // This ensures activity time is updated even if user closes popup immediately
       await SecureStorage.saveLastActivityTime()
 
-      // dApp windows and hardware tabs stay on their route; normal popup goes home
+      // An unfinished first-account setup has no account for Home to display.
       if ((!isDApp.current || isActivationDApp.current) && !isHardwareTab.current) {
-        replace(walletEntryRoute.current)
+        const state = useWalletStore.getState()
+        const activeWallet = state.wallets.find(wallet => wallet.id === state.currentWalletId)
+        replace(
+          activeWallet?.pendingFirstAccountId
+            ? '/onboarding/multisig-pending'
+            : walletEntryRoute.current
+        )
       }
     } catch (error) {
       console.error('[useAppRouting] Initialization error:', error)

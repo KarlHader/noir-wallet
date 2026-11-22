@@ -1,5 +1,6 @@
 import {
   buildChainAccountVerificationAnchorRef,
+  buildKeyDomainVerificationAnchorRef,
   commitCredentialBoundStorageV2Pointer
 } from '@/core/keyring/application'
 import { parseChainAccountId } from '@/core/accounts/domain'
@@ -171,9 +172,14 @@ export class RetainedV1InventoryCoordinator {
         password: input.password,
         ...(targetVault === undefined ? {} : { targetVault }),
         ...input.chains,
+        ...(wallet.credentialOnly ? { credentialOnly: true as const } : {}),
         accounts: workerAccounts(wallet)
       })
-      if (result.operation !== 'migrate' || result.accounts.length !== wallet.accounts.length) {
+      if (
+        result.operation !== 'migrate' ||
+        result.accounts.length !== wallet.accounts.length ||
+        result.credentialOnly !== wallet.credentialOnly
+      ) {
         throw new Error('Compatibility Worker returned an incomplete inventory result')
       }
       const existingKeyDomain = sourceKeyDomains.get(parseKeyDomainId(wallet.id))
@@ -260,7 +266,7 @@ export class RetainedV1InventoryCoordinator {
     const preparedWallets: PreparedV1Wallet[] = []
 
     for (const item of prepared) {
-      if (item.newAccounts.length === 0) continue
+      if (item.newAccounts.length === 0 && item.existingCredentialSet !== undefined) continue
       const suffix = (await sha256(`${fingerprint}:${item.wallet.id}`)).slice(0, 32)
       const existing = item.existingCredentialSet
       preparedWallets.push({
@@ -303,17 +309,26 @@ export class RetainedV1InventoryCoordinator {
         const target = preparedByWalletId.get(item.wallet.id)
         if (!target) throw new Error('Provisioned Wallet target is missing')
         const firstAccount = item.wallet.accounts[0]
-        const zcashChainAccountId = parseChainAccountId(
-          retainedV1EntityId(
-            'chain-account',
-            target.stableSuffix,
-            firstAccount.accountIndex,
-            'zcash'
-          )
-        )
-        const evmChainAccountId = parseChainAccountId(
-          retainedV1EntityId('chain-account', target.stableSuffix, firstAccount.accountIndex, 'evm')
-        )
+        const zcashChainAccountId = firstAccount
+          ? parseChainAccountId(
+              retainedV1EntityId(
+                'chain-account',
+                target.stableSuffix,
+                firstAccount.accountIndex,
+                'zcash'
+              )
+            )
+          : null
+        const evmChainAccountId = firstAccount
+          ? parseChainAccountId(
+              retainedV1EntityId(
+                'chain-account',
+                target.stableSuffix,
+                firstAccount.accountIndex,
+                'evm'
+              )
+            )
+          : null
         const envelopes = await authenticateSoftwareCredentialEnvelopePair(
           {
             zcash: {
@@ -363,12 +378,19 @@ export class RetainedV1InventoryCoordinator {
               zcash: {
                 credentialRef: target.zcashCredentialRef,
                 formatVersion: 1,
-                verificationAnchorRef: buildChainAccountVerificationAnchorRef(zcashChainAccountId)
+                verificationAnchorRef: zcashChainAccountId
+                  ? buildChainAccountVerificationAnchorRef(zcashChainAccountId)
+                  : buildKeyDomainVerificationAnchorRef(parseKeyDomainId(item.wallet.id), 'zcash')
               },
               multichain: {
                 credentialRef: target.multichainCredentialRef,
                 formatVersion: 1,
-                verificationAnchorRef: buildChainAccountVerificationAnchorRef(evmChainAccountId)
+                verificationAnchorRef: evmChainAccountId
+                  ? buildChainAccountVerificationAnchorRef(evmChainAccountId)
+                  : buildKeyDomainVerificationAnchorRef(
+                      parseKeyDomainId(item.wallet.id),
+                      'multichain'
+                    )
               }
             },
             createdAt,

@@ -122,6 +122,9 @@ export class FrostAccountMetadataCoordinator {
       const target = parseStorageV2Snapshot({
         manifest: {
           ...source.manifest,
+          ...(source.accounts.some(existing => existing.keyDomainId === owner.id)
+            ? {}
+            : { activeAccount: { keyDomainId: owner.id, accountId: account.id } }),
           generationId,
           sourceFingerprint: fingerprint,
           createdAt: timestamp,
@@ -172,6 +175,16 @@ export class FrostAccountMetadataCoordinator {
         existing.source.network !== op.scope.network)
     )
       throw new Error('Retained account identity conflicts')
+    const pendingFirstAccount =
+      wallet.pendingFirstAccountId === op.parentAccountId &&
+      wallet.pendingFirstAccountNetwork === op.scope.network &&
+      wallet.accounts.length === 0
+    if (
+      !existing &&
+      !pendingFirstAccount &&
+      !wallet.accounts.some((a: AccountData) => a.id === op.parentAccountId)
+    )
+      throw new Error('Retained account owner is unavailable')
     const retained = {
       ...account,
       networkAddresses: { [op.scope.network]: account.addresses },
@@ -181,6 +194,16 @@ export class FrostAccountMetadataCoordinator {
     wallet.accounts = existing
       ? wallet.accounts.map((a: AccountData) => (a.id === account.id ? retained : a))
       : [...wallet.accounts, retained]
+    if (pendingFirstAccount) {
+      delete wallet.pendingFirstAccountId
+      delete wallet.pendingFirstAccountName
+      delete wallet.pendingFirstAccountNetwork
+      if (
+        snapshot.state.currentWalletId === op.scope.walletId &&
+        snapshot.state.currentAccountId === null
+      )
+        snapshot.state.currentAccountId = account.id
+    }
     await chrome.storage.local.set({
       [WALLET_STATE_KEY]: typeof raw === 'string' ? JSON.stringify(snapshot) : snapshot
     })

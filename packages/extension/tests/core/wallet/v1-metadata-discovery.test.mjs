@@ -32,6 +32,44 @@ function createStorage(initial, setTransform = values => values) {
 }
 
 test.describe('V1 metadata discovery', () => {
+  test('identifies only marked pending or external-only software wallets as credential-only', () => {
+    const local = clone(
+      V1_MIGRATION_FIXTURES.find(item => item.id === 'software-single-account').local
+    )
+    const stored = JSON.parse(local.wallet_state)
+    const wallet = stored.state.wallets[0]
+    wallet.accounts = []
+    wallet.pendingFirstAccountId = 'd45b84bd-8cf4-4991-9f60-a8055039f084'
+    wallet.pendingFirstAccountName = 'First account'
+    wallet.pendingFirstAccountNetwork = 'mainnet'
+    stored.state.currentAccountId = null
+    local.wallet_state = JSON.stringify(stored)
+    const pending = discoverV1Metadata(local)
+    expect(pending.status).toBe('ready')
+    expect(pending.wallets[0].credentialOnly).toBe(true)
+
+    delete wallet.pendingFirstAccountId
+    delete wallet.pendingFirstAccountName
+    delete wallet.pendingFirstAccountNetwork
+    local.wallet_state = JSON.stringify(stored)
+    const unmarked = discoverV1Metadata(local)
+    expect(unmarked.wallets[0].credentialOnly).toBeUndefined()
+
+    wallet.accounts = [
+      {
+        id: 'frost-first',
+        name: 'Multisig',
+        source: { kind: 'frost-vault', version: 1, groupId: 'group', network: 'mainnet' },
+        addresses: { transparent: '', shielded: 'u1sample' },
+        birthdayHeight: 1
+      }
+    ]
+    stored.state.currentAccountId = 'frost-first'
+    local.wallet_state = JSON.stringify(stored)
+    const external = discoverV1Metadata(local)
+    expect(external.status).toBe('ready')
+    expect(external.wallets[0].credentialOnly).toBe(true)
+  })
   test('keeps external accounts out of mnemonic migration inventories', () => {
     const local = clone(
       V1_MIGRATION_FIXTURES.find(item => item.id === 'software-multi-account').local

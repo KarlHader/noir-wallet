@@ -1,5 +1,6 @@
 import {
   buildChainAccountVerificationAnchorRef,
+  buildKeyDomainVerificationAnchorRef,
   commitCredentialBoundStorageV2Pointer
 } from '@/core/keyring/application'
 import { bytesToHex } from '@/lib/bytes'
@@ -108,7 +109,9 @@ function assertDiscovery(discovery: V1MetadataDiscovery): readonly V1DiscoveredW
   if (discovery.wallets.some(wallet => wallet.keySource !== 'software')) {
     throw new Error('Retained V1 software migration cannot include hardware Wallet Sets')
   }
-  if (discovery.wallets.some(wallet => wallet.accounts.length === 0)) {
+  if (
+    discovery.wallets.some(wallet => wallet.accounts.length === 0 && !wallet.pendingFirstAccountId)
+  ) {
     throw new Error('Retained V1 software migration requires at least one Account per Wallet Set')
   }
   return discovery.wallets
@@ -216,12 +219,16 @@ export class RetainedV1MigrationCoordinator {
           envelope: legacyEnvelope,
           password: input.password,
           ...input.chains,
+          ...(wallet.credentialOnly ? { credentialOnly: true as const } : {}),
           accounts: wallet.accounts.map(account => ({
             accountIndex: account.accountIndex,
             expectedZcash: account.addresses
           }))
         })
-        if (result.accounts.length !== wallet.accounts.length) {
+        if (
+          result.accounts.length !== wallet.accounts.length ||
+          result.credentialOnly !== wallet.credentialOnly
+        ) {
           throw new Error('Compatibility Worker returned an incomplete Account set')
         }
         if (result.operation !== 'migrate') {
@@ -282,23 +289,27 @@ export class RetainedV1MigrationCoordinator {
 
       for (const prepared of preparedWallets) {
         const firstAccount = prepared.wallet.accounts[0]
-        const anchors = findPreparedAccount(prepared, firstAccount)
-        const zcashChainAccountId = parseChainAccountId(
-          retainedV1EntityId(
-            'chain-account',
-            prepared.stableSuffix,
-            firstAccount.accountIndex,
-            'zcash'
-          )
-        )
-        const multichainChainAccountId = parseChainAccountId(
-          retainedV1EntityId(
-            'chain-account',
-            prepared.stableSuffix,
-            firstAccount.accountIndex,
-            'evm'
-          )
-        )
+        const anchors = firstAccount ? findPreparedAccount(prepared, firstAccount) : null
+        const zcashChainAccountId = firstAccount
+          ? parseChainAccountId(
+              retainedV1EntityId(
+                'chain-account',
+                prepared.stableSuffix,
+                firstAccount.accountIndex,
+                'zcash'
+              )
+            )
+          : null
+        const multichainChainAccountId = firstAccount
+          ? parseChainAccountId(
+              retainedV1EntityId(
+                'chain-account',
+                prepared.stableSuffix,
+                firstAccount.accountIndex,
+                'evm'
+              )
+            )
+          : null
         const rawZcashEnvelope = {
           schemaVersion: CREDENTIAL_REPOSITORY_SCHEMA_VERSION,
           transactionId,
@@ -361,14 +372,22 @@ export class RetainedV1MigrationCoordinator {
                   zcash: {
                     credentialRef: prepared.zcashCredentialRef,
                     formatVersion: 1,
-                    verificationAnchorRef:
-                      buildChainAccountVerificationAnchorRef(zcashChainAccountId)
+                    verificationAnchorRef: zcashChainAccountId
+                      ? buildChainAccountVerificationAnchorRef(zcashChainAccountId)
+                      : buildKeyDomainVerificationAnchorRef(
+                          parseKeyDomainId(prepared.wallet.id),
+                          'zcash'
+                        )
                   },
                   multichain: {
                     credentialRef: prepared.multichainCredentialRef,
                     formatVersion: 1,
-                    verificationAnchorRef:
-                      buildChainAccountVerificationAnchorRef(multichainChainAccountId)
+                    verificationAnchorRef: multichainChainAccountId
+                      ? buildChainAccountVerificationAnchorRef(multichainChainAccountId)
+                      : buildKeyDomainVerificationAnchorRef(
+                          parseKeyDomainId(prepared.wallet.id),
+                          'multichain'
+                        )
                   }
                 },
                 createdAt,
@@ -378,7 +397,7 @@ export class RetainedV1MigrationCoordinator {
             'CredentialSet staging'
           )
         }
-        if (anchors.zcash.chainId !== input.chains.zcashChainId) {
+        if (anchors && anchors.zcash.chainId !== input.chains.zcashChainId) {
           throw new Error('Zcash verification anchor chain mismatch')
         }
       }

@@ -78,6 +78,82 @@ function setup(overrides: Partial<MultisigVaultDeps> = {}) {
 const INVALID = 'Invalid vault group request'
 
 test.describe('multisig vault background', () => {
+  test('a pending first account can reserve once, while an unmarked empty wallet cannot', async () => {
+    let operation: MultisigCreationOperation | null = null
+    let marker: string | undefined = 'pending-first-account'
+    let accountIds: string[] = []
+    let pendingNetwork: 'mainnet' | 'testnet' = 'testnet'
+    const { handler } = setup({
+      readWalletState: async () => ({
+        network: 'testnet',
+        activeWalletId: 'w',
+        activeAccountId: null,
+        wallets: [
+          {
+            id: 'w',
+            mnemonic: true,
+            accountIds,
+            pendingFirstAccountId: marker,
+            pendingFirstAccountName: 'My multisig',
+            pendingFirstAccountNetwork: pendingNetwork
+          }
+        ]
+      }),
+      creation: {
+        withMutation: async (_walletId, run) => run(),
+        birthdayHeight: async () => 123,
+        read: async () => operation,
+        list: async () => (operation ? [operation] : []),
+        write: async op => {
+          operation = op
+        },
+        remove: async () => {
+          operation = null
+        },
+        withScope: async (_scope, run) => run(),
+        register: async (_walletId, account) => account.addresses,
+        commitMetadata: async () => {},
+        saveGroup: async () => {}
+      }
+    })
+    const scope = { ...SCOPE, accountId: 'pending-first-account' }
+    await expect(
+      handler.handle('vault.group.reserve', { scope: SCOPE, threshold: '2-of-2' })
+    ).rejects.toThrow('Vault group scope is not available')
+    pendingNetwork = 'mainnet'
+    await expect(
+      handler.handle('vault.group.reserve', { scope, threshold: '2-of-2' })
+    ).rejects.toThrow('Vault group scope is not available')
+    pendingNetwork = 'testnet'
+    const reserved = await handler.handle('vault.group.reserve', {
+      scope,
+      threshold: '2-of-2'
+    })
+    expect(reserved.parentAccountId).toBe(scope.accountId)
+    expect(reserved.accountName).toBe('My multisig')
+    expect(reserved.scope.accountId).not.toBe(scope.accountId)
+    expect(await handler.handle('vault.group.pending', { scope })).toEqual([reserved])
+    marker = undefined
+    await expect(handler.handle('vault.group.pending', { scope })).rejects.toThrow(
+      'Vault group scope is not available'
+    )
+    accountIds = [reserved.scope.accountId]
+    operation = {
+      ...reserved,
+      phase: 'metadata_saved',
+      group: {
+        groupId: reserved.groupId,
+        threshold: reserved.threshold,
+        fingerprint: 'ab'.repeat(32),
+        transportKind: 'qr',
+        devices: [],
+        createdAt: 0,
+        mock: false
+      }
+    }
+    expect(await handler.handle('vault.group.pending', { scope })).toEqual([operation])
+  })
+
   test('phone recovery survives Background restart and replaces only after explicit safe completion', async () => {
     const original: SealedVaultRecord = {
       ...RECORD,

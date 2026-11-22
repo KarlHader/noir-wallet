@@ -162,6 +162,7 @@ import {
 } from '@/lib/runtime-message-security'
 import {
   isBackgroundOnlyVaultRpc,
+  isMultisigUiEnabled,
   isVaultRpcBlocked
 } from '@/core/multisig/multisig-runtime-policy'
 import { isVaultGroupMethod } from '@/core/multisig/vault-group-rpc'
@@ -5311,7 +5312,19 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     return true
   }
 
-  if (message.type === 'PROVISION_PRIMARY_SOFTWARE_WALLET') {
+  if (
+    (message.type === 'PROVISION_PENDING_MULTISIG_WALLET' ||
+      message.type === 'ADD_PENDING_MULTISIG_WALLET') &&
+    !isMultisigUiEnabled()
+  ) {
+    sendResponse({ error: 'Multisig setup is unavailable in this build' })
+    return false
+  }
+
+  if (
+    message.type === 'PROVISION_PRIMARY_SOFTWARE_WALLET' ||
+    message.type === 'PROVISION_PENDING_MULTISIG_WALLET'
+  ) {
     enqueueWalletSessionTransition(() =>
       accountContextTransition.runActiveOperation(() =>
         provisionPrimarySoftwareWallet(
@@ -5320,6 +5333,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             mnemonic: message.mnemonic as string,
             password: message.password as string,
             accountName: message.accountName as string,
+            ...(message.type === 'PROVISION_PENDING_MULTISIG_WALLET'
+              ? { initialAccount: 'multisig-pending' as const }
+              : {}),
             ...(message.birthdayHeight === undefined
               ? {}
               : { birthdayHeight: message.birthdayHeight as number }),
@@ -5346,7 +5362,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     return true
   }
 
-  if (message.type === 'ADD_SOFTWARE_WALLET') {
+  if (message.type === 'ADD_SOFTWARE_WALLET' || message.type === 'ADD_PENDING_MULTISIG_WALLET') {
     enqueueWalletSessionTransition(async () => {
       // Provisioning and activation share one pause: resuming between them can
       // start sync readiness work that the account switch then waits to stop.
@@ -5358,6 +5374,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               mode: message.mode as SoftwareWalletProvisioningMode,
               mnemonic: message.mnemonic as string,
               accountName: message.accountName as string,
+              ...(message.type === 'ADD_PENDING_MULTISIG_WALLET'
+                ? { initialAccount: 'multisig-pending' as const }
+                : {}),
               ...(message.birthdayHeight === undefined
                 ? {}
                 : { birthdayHeight: message.birthdayHeight as number }),
@@ -5372,9 +5391,16 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             synchronizeCurrentSoftwareWalletNetworkMetadata
           )
         )
-        const accountId = useWalletStore.getState().getWallet(result.walletId)?.accounts[0]?.id
-        if (!accountId) throw new Error('Wallet setup produced no account')
-        await handleSwitchWalletAccount(result.walletId, accountId)
+        if (message.type === 'ADD_PENDING_MULTISIG_WALLET') {
+          if (!result.pendingFirstAccountId)
+            throw new Error('Wallet setup produced no pending account')
+          useWalletStore.getState().setCurrentAccount(result.walletId, null)
+          await flushWalletStore()
+        } else {
+          const accountId = useWalletStore.getState().getWallet(result.walletId)?.accounts[0]?.id
+          if (!accountId) throw new Error('Wallet setup produced no account')
+          await handleSwitchWalletAccount(result.walletId, accountId)
+        }
         return result
       } finally {
         syncScheduler.resumeAfterTx()
@@ -6598,6 +6624,9 @@ const multisigVault = createMultisigVaultHandler({
           mnemonic:
             !isZcashHardwareKeySource(wallet.keySource) && wallet.keySource !== 'private-key',
           accountIds: wallet.accounts.map(account => account.id),
+          pendingFirstAccountId: wallet.pendingFirstAccountId,
+          pendingFirstAccountName: wallet.pendingFirstAccountName,
+          pendingFirstAccountNetwork: wallet.pendingFirstAccountNetwork,
           derivedAccountIds: wallet.accounts
             .filter(account => !account.source)
             .map(account => account.id)

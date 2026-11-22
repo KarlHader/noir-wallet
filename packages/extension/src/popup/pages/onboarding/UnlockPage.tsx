@@ -3,6 +3,7 @@ import { UnlockForm } from '../../components/common/UnlockForm'
 import { useNavigate, useLocation } from '../../provider/Router'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent } from '@/lib/analytics'
+import { useWalletStore } from '@/store/wallet-store'
 
 export function UnlockPage() {
   const { replace } = useNavigate()
@@ -40,6 +41,11 @@ export function UnlockPage() {
 
     // For normal popup unlock, navigate to redirect target
     let targetUrl = redirect
+    if (targetUrl === '/') {
+      const state = useWalletStore.getState()
+      const activeWallet = state.wallets.find(wallet => wallet.id === state.currentWalletId)
+      if (activeWallet?.pendingFirstAccountId) targetUrl = '/onboarding/multisig-pending'
+    }
 
     if (requestId) {
       const separator = targetUrl.includes('?') ? '&' : '?'

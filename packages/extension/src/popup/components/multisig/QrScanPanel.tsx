@@ -70,7 +70,7 @@ export function QrScanPanel({
       <QrPanelHeading {...heading} />
       {scanning ? (
         <>
-          <p className="mt-2 text-xs text-muted">
+          <p className="mt-2 text-sm text-[#BCBCC8]">
             Hold your phone&apos;s QR code up to the camera.
           </p>
           <QRScanner
@@ -80,7 +80,7 @@ export function QrScanPanel({
           />
         </>
       ) : (
-        <p className="mt-2 text-xs text-muted">{description}</p>
+        <p className="mt-2 text-sm text-[#BCBCC8]">{description}</p>
       )}
       {accepted && (
         <p role="status" className="mt-3 text-xs text-muted">

@@ -37,6 +37,8 @@ export interface CompatibilityWorkerRequest {
   readonly evmChainId: string
   readonly bitcoinChainId: string
   readonly accounts: readonly CompatibilityAccountRequest[]
+  /** Newly provisioned multisig wallet with no published derived Account. */
+  readonly credentialOnly?: true
 }
 
 export interface CompatibilityAccountRequest {
@@ -67,6 +69,7 @@ interface CompatibilityWorkerResultBase {
   readonly vault: RawEncryptedVault
   readonly mnemonicWordCount: 12 | 24
   readonly accounts: readonly CompatibilityAccountAnchors[]
+  readonly credentialOnly?: true
 }
 
 export type CompatibilityWorkerResult =
@@ -115,7 +118,8 @@ export function parseCompatibilityWorkerRequest(value: unknown): CompatibilityWo
       'zcashChainId',
       'evmChainId',
       'bitcoinChainId',
-      'accounts'
+      'accounts',
+      ...(record.credentialOnly === undefined ? [] : ['credentialOnly'])
     ],
     'Compatibility Worker request'
   )
@@ -142,10 +146,13 @@ export function parseCompatibilityWorkerRequest(value: unknown): CompatibilityWo
   }
   if (
     !Array.isArray(record.accounts) ||
-    record.accounts.length === 0 ||
+    (record.accounts.length === 0) !== (record.credentialOnly === true) ||
     record.accounts.length > COMPATIBILITY_WORKER_LIMITS.accounts
   ) {
     throw new Error('Invalid compatibility accounts')
+  }
+  if (record.credentialOnly !== undefined && record.credentialOnly !== true) {
+    throw new Error('Invalid credential-only migration')
   }
   const accountIndexes = new Set<number>()
   const accounts = record.accounts.map((value, position) => {
@@ -223,7 +230,8 @@ export function parseCompatibilityWorkerRequest(value: unknown): CompatibilityWo
     zcashChainId: readString(record.zcashChainId, 'Compatibility Zcash chain ID', 64),
     evmChainId: readString(record.evmChainId, 'Compatibility EVM chain ID', 64),
     bitcoinChainId: readString(record.bitcoinChainId, 'Compatibility Bitcoin chain ID', 64),
-    accounts: Object.freeze(accounts)
+    accounts: Object.freeze(accounts),
+    ...(record.credentialOnly === true ? { credentialOnly: true as const } : {})
   })
 }
 
@@ -282,6 +290,7 @@ export function parseCompatibilityWorkerResult(value: unknown): CompatibilityWor
       'vault',
       'mnemonicWordCount',
       'accounts',
+      ...(record.credentialOnly === undefined ? [] : ['credentialOnly']),
       ...(record.operation === 'change-password' ? ['retainedV1Envelope'] : [])
     ],
     'Compatibility Worker result'
@@ -291,10 +300,13 @@ export function parseCompatibilityWorkerResult(value: unknown): CompatibilityWor
   }
   if (
     !Array.isArray(record.accounts) ||
-    record.accounts.length === 0 ||
+    (record.accounts.length === 0) !== (record.credentialOnly === true) ||
     record.accounts.length > COMPATIBILITY_WORKER_LIMITS.accounts
   ) {
     throw new Error('Invalid Compatibility Worker account results')
+  }
+  if (record.credentialOnly !== undefined && record.credentialOnly !== true) {
+    throw new Error('Invalid credential-only result')
   }
   const accounts = record.accounts.map(parseAccountAnchors)
   if (new Set(accounts.map(account => account.accountIndex)).size !== accounts.length) {
@@ -303,7 +315,8 @@ export function parseCompatibilityWorkerResult(value: unknown): CompatibilityWor
   const base = {
     vault: parseRawEncryptedVault(record.vault),
     mnemonicWordCount: record.mnemonicWordCount,
-    accounts: Object.freeze(accounts)
+    accounts: Object.freeze(accounts),
+    ...(record.credentialOnly === true ? { credentialOnly: true as const } : {})
   } as const
   return record.operation === 'migrate'
     ? Object.freeze({ ...base, operation: 'migrate' as const })

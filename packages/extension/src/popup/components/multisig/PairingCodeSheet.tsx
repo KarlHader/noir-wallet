@@ -138,7 +138,7 @@ function PairingCodeBody({
         </div>
       ) : mode === 'compare' || mode === 'waiting' ? (
         <>
-          <DialogDescription className="text-center text-sm text-muted">
+          <DialogDescription className="text-center text-sm text-[#BCBCC8]">
             {mode === 'compare'
               ? 'Check that the Guardians app shows the same code as this screen.'
               : 'Waiting for the phone to join…'}
@@ -164,7 +164,7 @@ function PairingCodeBody({
         </>
       ) : (
         <>
-          <DialogDescription className="text-center text-sm text-muted">
+          <DialogDescription className="text-center text-sm text-[#BCBCC8]">
             An authorization request has been sent to your phone. Open the Guardians app and enter
             this 6-digit code.
           </DialogDescription>
@@ -182,7 +182,7 @@ function PairingCodeBody({
               <div className="text-danger">Code expired</div>
             ) : (
               expiresAt !== null && (
-                <div className="tabular-nums text-muted">
+                <div className="tabular-nums text-[#7E8A93]">
                   Expires in {formatCountdown(expiresAt - now)}
                 </div>
               )

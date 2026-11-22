@@ -148,6 +148,64 @@ test('FROST unlock waits for the bound credential before restoring its sealed ac
   }
 })
 
+test('a pending first multisig account restores its wallet session without creating an account', async () => {
+  const originalState = useWalletStore.getState()
+  const originalGetUnlockEpoch = credentialSession.getUnlockEpoch
+  const originalGetProvisioningPassword = credentialSession.getProvisioningPassword
+  const originalGetLoginAttempts = SecureStorage.getLoginAttempts
+  const originalResetLoginAttempts = SecureStorage.resetLoginAttempts
+  const originalSaveLastActivityTime = SecureStorage.saveLastActivityTime
+  const runtime = new BackgroundZcashWalletRuntime()
+  const wallet = {
+    id: 'pending-wallet',
+    name: 'Pending wallet',
+    createdAt: 1,
+    seedPhraseKey: 'seed_pending-wallet',
+    accounts: [],
+    pendingFirstAccountId: 'pending-account',
+    pendingFirstAccountName: 'Multisig',
+    pendingFirstAccountNetwork: 'mainnet'
+  }
+  try {
+    useWalletStore.setState({
+      currentWalletId: wallet.id,
+      currentAccountId: null,
+      wallets: [wallet]
+    })
+    credentialSession.getUnlockEpoch = async () => 'test-epoch'
+    credentialSession.getProvisioningPassword = async () => 'test-password'
+    SecureStorage.getLoginAttempts = async () => ({ isLocked: false })
+    SecureStorage.resetLoginAttempts = async () => {}
+    SecureStorage.saveLastActivityTime = async () => {}
+    runtime.inspectWalletCredential = async () => ({
+      status: 'valid',
+      credential: { kind: 'seed', seedPhrase: 'test-only' }
+    })
+    runtime.getOrCreateWalletCore = () => {
+      throw new Error('Pending setup must not create a Zcash account')
+    }
+
+    assert.equal(await runtime.restoreFromCredentialSession(wallet.id), true)
+    assert.equal(runtime.isLocked(), false)
+    assert.equal(useWalletStore.getState().currentAccountId, null)
+
+    runtime.beginLock()
+    assert.equal((await runtime.unlock('test-password')).success, true)
+    assert.equal(useWalletStore.getState().currentAccountId, null)
+
+    runtime.beginLock()
+    useWalletStore.setState({ wallets: [{ ...wallet, pendingFirstAccountNetwork: 'testnet' }] })
+    assert.equal(await runtime.restoreFromCredentialSession(wallet.id), false)
+  } finally {
+    credentialSession.getUnlockEpoch = originalGetUnlockEpoch
+    credentialSession.getProvisioningPassword = originalGetProvisioningPassword
+    SecureStorage.getLoginAttempts = originalGetLoginAttempts
+    SecureStorage.resetLoginAttempts = originalResetLoginAttempts
+    SecureStorage.saveLastActivityTime = originalSaveLastActivityTime
+    useWalletStore.setState(originalState, true)
+  }
+})
+
 test('credential-bound FROST restore refreshes the local balance', async () => {
   const originalState = useWalletStore.getState()
   const runtime = new BackgroundZcashWalletRuntime()
@@ -254,7 +312,7 @@ test('failed first-wallet persistence does not install the session password', as
   }
 })
 
-test('additional software wallet provision succeeds after selecting a native account', async () => {
+test('additional software wallet provisioning preserves native selection and can defer its first account', async () => {
   const source = ts.transpileModule(
     readFileSync(
       new URL('../../../src/background/software-wallet-provisioning.ts', import.meta.url),
@@ -262,10 +320,11 @@ test('additional software wallet provision succeeds after selecting a native acc
     ),
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }
   ).outputText
+  let pendingWallet = null
   const state = {
     wallets: [{ id: 'retained-wallet' }],
     currentWalletId: null,
-    getWallet: () => null
+    getWallet: walletId => (pendingWallet?.id === walletId ? pendingWallet : null)
   }
   let credentialLocked = false
   let syncRequests = 0
@@ -279,8 +338,13 @@ test('additional software wallet provision succeeds after selecting a native acc
       }
       return { success: state.currentWalletId !== null }
     },
-    addNewWallet: async (_mnemonic, _walletName, _accountName, families) => {
+    addNewWallet: async (_mnemonic, _walletName, _accountName, families, pendingFirstAccount) => {
       createdFamilies = families
+      if (pendingFirstAccount) {
+        pendingWallet = { id: 'pending-wallet', accounts: [], pendingFirstAccountId: 'pending-id' }
+        state.currentWalletId = pendingWallet.id
+        return { walletId: pendingWallet.id }
+      }
       return { walletId: 'created-wallet' }
     },
     addImportedWallet: async () => 'imported-wallet',
@@ -356,6 +420,21 @@ test('additional software wallet provision succeeds after selecting a native acc
   })
   assert.equal(created.walletId, 'created-wallet')
   assert.deepEqual(createdFamilies, ['evm', 'bitcoin'])
+  assert.equal(syncRequests, 1)
+
+  const pending = await module.exports.addSoftwareWallet({
+    mode: 'create',
+    mnemonic: [...Array(11).fill('abandon'), 'about'].join(' '),
+    accountName: 'Multisig',
+    selectedNetworkFamilies: ['zcash'],
+    initialAccount: 'multisig-pending'
+  })
+  assert.deepEqual(pending, {
+    walletId: 'pending-wallet',
+    credentialStatus: 'synchronized',
+    pendingFirstAccountId: 'pending-id'
+  })
+  assert.deepEqual(pendingWallet.accounts, [])
   assert.equal(syncRequests, 1)
 })
 

@@ -154,9 +154,15 @@ function chainIdForAddressScheme(
 
 function resolveChainProfile(snapshot: StorageV2Snapshot): RetainedV1MigrationChainProfile {
   const provisioning = getProvisioningChainProfile()
-  const hasSoftwareWallet = snapshot.keyDomains.some(
-    keyDomain => keyDomain.source.kind === 'software'
+  const softwareDomains = snapshot.keyDomains.filter(domain => domain.source.kind === 'software')
+  // A multisig-first wallet has no mnemonic chain projections until it adds a derived account.
+  const hasSoftwareWallet = softwareDomains.some(
+    domain =>
+      domain.source.kind === 'software' &&
+      (!domain.source.credentialOnlyFirstAccount ||
+        snapshot.accounts.some(account => account.keyDomainId === domain.id && !account.source))
   )
+  if (softwareDomains.length > 0 && !hasSoftwareWallet) return provisioning
   const resolve = (
     matches: (scheme: string) => boolean,
     label: string,

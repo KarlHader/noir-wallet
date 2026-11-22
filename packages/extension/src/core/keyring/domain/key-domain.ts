@@ -17,6 +17,8 @@ export type KeyDomainSource =
        * enforced by the credential application boundary.
        */
       readonly mnemonicWordCount?: number
+      /** Credential engines were verified before this wallet published its first Account. */
+      readonly credentialOnlyFirstAccount?: true
     }
   | {
       readonly kind: 'private-key'
@@ -115,10 +117,13 @@ export function parseKeyDomain(value: unknown): KeyDomain {
 
   let source: KeyDomainSource
   if (value.source.kind === 'software') {
-    if (!hasExactKeys(value.source, ['kind'], ['mnemonicWordCount'])) {
+    if (
+      !hasExactKeys(value.source, ['kind'], ['mnemonicWordCount', 'credentialOnlyFirstAccount'])
+    ) {
       throw new Error('KeyDomain source has invalid keys')
     }
     const mnemonicWordCount = value.source.mnemonicWordCount
+    const credentialOnlyFirstAccount = value.source.credentialOnlyFirstAccount
     if (
       mnemonicWordCount !== undefined &&
       (typeof mnemonicWordCount !== 'number' ||
@@ -127,9 +132,13 @@ export function parseKeyDomain(value: unknown): KeyDomain {
     ) {
       throw new Error('Invalid observed BIP-39 word count')
     }
+    if (credentialOnlyFirstAccount !== undefined && credentialOnlyFirstAccount !== true) {
+      throw new Error('Invalid credential-only first account marker')
+    }
     source = Object.freeze({
       kind: 'software',
-      ...(mnemonicWordCount === undefined ? {} : { mnemonicWordCount })
+      ...(mnemonicWordCount === undefined ? {} : { mnemonicWordCount }),
+      ...(credentialOnlyFirstAccount ? { credentialOnlyFirstAccount: true as const } : {})
     })
   } else if (value.source.kind === 'private-key') {
     if (value.source.chainFamily === 'eip155') {

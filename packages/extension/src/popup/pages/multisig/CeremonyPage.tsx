@@ -92,8 +92,8 @@ export function CeremonyPage() {
 
   return (
     <MultisigTabLayout step={3} title="Multisig" showBack={false}>
-      <h2 className="text-lg font-semibold">Key ceremony</h2>
-      <p className="mt-2 text-xs text-muted">
+      <h2 className="text-xl font-semibold text-white">Key ceremony</h2>
+      <p className="mt-2 text-sm text-[#BCBCC8]">
         All devices compute locally. Keep your phones nearby.
       </p>
       <div className="mt-4 space-y-3">

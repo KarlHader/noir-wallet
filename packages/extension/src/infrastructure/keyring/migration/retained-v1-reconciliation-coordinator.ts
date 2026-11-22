@@ -35,8 +35,8 @@ function assertReconciliationDiscovery(
   if (discovery.status !== 'ready' || discovery.wallets.length === 0) {
     throw new Error(`V1 reconciliation metadata is not ready: ${discovery.status}`)
   }
-  if (discovery.wallets.some(wallet => wallet.accounts.length === 0)) {
-    throw new Error('V1 reconciliation cannot include a Wallet without Accounts')
+  if (discovery.wallets.some(wallet => wallet.accounts.length === 0 && !wallet.credentialOnly)) {
+    throw new Error('V1 reconciliation cannot include an unmarked Wallet without Accounts')
   }
   if (!discovery.wallets.some(wallet => wallet.keySource === 'software')) {
     throw new Error('V1 reconciliation requires a software Wallet Set')

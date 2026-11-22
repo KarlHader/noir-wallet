@@ -102,6 +102,82 @@ function coordinator(repository, commitPointer) {
 }
 
 test.describe('Wallet metadata coordinator', () => {
+  test('commits the first FROST account and clears pending wallet markers on retry', async () => {
+    const env = installStorageEnv()
+    try {
+      const source = structuredClone(sourceSnapshot())
+      source.keyDomains[0].source = { kind: 'software', mnemonicWordCount: 12 }
+      source.accounts = []
+      source.manifest.counts.accounts = 0
+      delete source.manifest.activeAccount
+      const walletId = source.keyDomains[0].id
+      const repository = new MemoryStorageV2Repository(source)
+      const credentials = {
+        validateForActivation: async () => ({
+          status: 'active',
+          record: {
+            manifest: { source: 'software', mnemonicWordCount: 12, engines: {} }
+          }
+        })
+      }
+      const account = {
+        id: 'first-multisig',
+        name: 'My multisig',
+        source: { kind: 'frost-vault', version: 1, groupId: 'new-group', network: 'mainnet' },
+        birthdayHeight: 123,
+        addresses: { shielded: 'u1-independent', transparent: '' },
+        isPinned: false,
+        isHidden: false
+      }
+      const operation = {
+        version: 1,
+        operationId: 'operation',
+        scope: { network: 'mainnet', walletId, accountId: account.id },
+        parentAccountId: 'pending-first-account',
+        accountName: account.name,
+        groupId: 'new-group',
+        threshold: '2-of-2',
+        birthdayHeight: 123,
+        createdAt: CREATED_AT + 1,
+        phase: 'external_imported'
+      }
+      env.store.set('wallet_state', {
+        state: {
+          wallets: [
+            {
+              id: walletId,
+              keySource: 'software',
+              accounts: [],
+              pendingFirstAccountId: operation.parentAccountId,
+              pendingFirstAccountName: account.name,
+              pendingFirstAccountNetwork: 'mainnet'
+            }
+          ],
+          currentWalletId: walletId,
+          currentAccountId: null
+        }
+      })
+      const metadata = new FrostAccountMetadataCoordinator(credentials, repository)
+      await metadata.commit(operation, account, async () => {})
+      await metadata.commit(operation, account, async () => {})
+      const target = await repository.getSnapshot(repository.pointer.generationId)
+      expect(target.accounts).toHaveLength(1)
+      expect(target.accounts[0].id).toBe(account.id)
+      expect(target.manifest.activeAccount).toEqual({
+        keyDomainId: walletId,
+        accountId: account.id
+      })
+      const retained = env.store.get('wallet_state').state
+      expect(retained.wallets[0].accounts).toHaveLength(1)
+      expect(retained.wallets[0]).not.toHaveProperty('pendingFirstAccountId')
+      expect(retained.wallets[0]).not.toHaveProperty('pendingFirstAccountName')
+      expect(retained.wallets[0]).not.toHaveProperty('pendingFirstAccountNetwork')
+      expect(retained.currentAccountId).toBe(account.id)
+    } finally {
+      env.restore()
+    }
+  })
+
   test('commits an independent FROST account through credential-bound pointer and retries without duplicating its HD parent', async () => {
     const env = installStorageEnv()
     try {

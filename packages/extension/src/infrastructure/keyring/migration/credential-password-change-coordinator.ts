@@ -382,7 +382,8 @@ export class CredentialPasswordChangeCoordinator {
           password: input.currentPassword,
           targetPassword: input.newPassword,
           ...input.chains,
-          accounts: workerAccounts(retainedWallet)
+          accounts: workerAccounts(retainedWallet),
+          ...(retainedWallet.credentialOnly ? { credentialOnly: true as const } : {})
         })
         if (result.operation !== 'change-password') {
           throw new Error('Compatibility Worker returned the wrong operation result')

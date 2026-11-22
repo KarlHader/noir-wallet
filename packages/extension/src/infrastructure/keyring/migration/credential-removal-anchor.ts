@@ -1,6 +1,7 @@
 import {
   buildChainAccountVerificationAnchorRef,
-  parseChainAccountVerificationAnchorRef
+  parseChainAccountVerificationAnchorRef,
+  parseKeyDomainVerificationAnchorRef
 } from '@/core/keyring/application'
 import { isDerivedAccount, type DerivedChainAccount } from '@/core/accounts/domain'
 import type { CredentialEngine, CredentialSetManifest } from '@/core/keyring/domain'
@@ -46,6 +47,20 @@ export function selectAccountRemovalAnchors(
     .sort((a, b) => a.accountIndex - b.accountIndex || a.id.localeCompare(b.id))
   const replacements: Partial<Record<CredentialEngine, ChainAccount>> = {}
   for (const [engine, metadata] of engineEntries(manifest)) {
+    if (metadata.verificationAnchorRef.startsWith('key-domain:')) {
+      const anchor = parseKeyDomainVerificationAnchorRef(metadata.verificationAnchorRef)
+      const domain = source.keyDomains.find(item => item.id === keyDomainId)
+      if (
+        manifest.source !== 'software' ||
+        anchor.keyDomainId !== keyDomainId ||
+        anchor.engine !== engine ||
+        domain?.source.kind !== 'software' ||
+        domain.source.credentialOnlyFirstAccount !== true
+      ) {
+        throw new Error('Account removal credential anchor is invalid')
+      }
+      continue
+    }
     const anchorId = parseChainAccountVerificationAnchorRef(metadata.verificationAnchorRef)
     const oldAnchor = source.chainAccounts.find(account => account.id === anchorId)
     if (!oldAnchor || !isDerivedAccount(oldAnchor) || oldAnchor.scope.keyDomainId !== keyDomainId) {

@@ -7,5 +7,7 @@ export {
 } from './credential-bound-storage-v2'
 export {
   buildChainAccountVerificationAnchorRef,
-  parseChainAccountVerificationAnchorRef
+  parseChainAccountVerificationAnchorRef,
+  buildKeyDomainVerificationAnchorRef,
+  parseKeyDomainVerificationAnchorRef
 } from './verification-anchor'

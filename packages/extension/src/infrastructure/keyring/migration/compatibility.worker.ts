@@ -27,6 +27,7 @@ import {
   type CompatibilityWorkerResponse,
   type CompatibilityWorkerResult
 } from './compatibility-worker-protocol'
+import { assertCredentialOnlyVaultMatchesMnemonic } from './credential-only-vault-proof'
 import {
   parseV1EncryptedCredentialEnvelope,
   type V1EncryptedCredentialEnvelope
@@ -294,10 +295,51 @@ async function migrate(request: CompatibilityWorkerRequest): Promise<Compatibili
         bitcoin: anchor(bitcoin, request.bitcoinChainId)
       }) satisfies CompatibilityAccountAnchors
     })
+    if (request.credentialOnly) {
+      // Keep the identity proof private: no derived Account is published in the snapshot.
+      parseZcashAddresses(
+        mnemonic_to_addresses(request.zcashNetwork === 'mainnet' ? 'main' : 'test', mnemonic, '', 0)
+      )
+      if (request.targetVault !== undefined) {
+        const mnemonicVault = parseRawEncryptedVault(engine.importWallet(mnemonic, password, ''))
+        const mnemonicSessionId = parseRawSessionInfo(
+          engine.unlock(mnemonicVault, password)
+        ).sessionId
+        assertCredentialOnlyVaultMatchesMnemonic(
+          engine,
+          sessionId,
+          mnemonicSessionId,
+          request.evmChainId
+        )
+      }
+      assertRawEvmAccountMatches(
+        parseRawEvmAccount(engine.deriveEvmAccount(sessionId, request.evmChainId, 0)),
+        request.evmChainId,
+        0
+      )
+      assertRawBitcoinAccountMatches(
+        parseRawBitcoinAccount(
+          engine.deriveBitcoinAccount(
+            sessionId,
+            request.bitcoinChainId,
+            BITCOIN_ADDRESS_POLICY.defaultCreate.addressType,
+            0,
+            false,
+            0
+          )
+        ),
+        request.bitcoinChainId,
+        BITCOIN_ADDRESS_POLICY.defaultCreate.addressType,
+        0,
+        false,
+        0
+      )
+    }
     const commonResult = {
       vault,
       mnemonicWordCount: mnemonic.split(' ').length as 12 | 24,
-      accounts: Object.freeze(accounts)
+      accounts: Object.freeze(accounts),
+      ...(request.credentialOnly ? { credentialOnly: true as const } : {})
     } as const
     return request.operation === 'migrate'
       ? Object.freeze({ ...commonResult, operation: 'migrate' as const })

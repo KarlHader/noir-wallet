@@ -7,14 +7,31 @@ import { useWalletStore } from '@/store/wallet-store'
 import { Pill } from '@/popup/components/multisig/Pill'
 import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
 import { openMultisigCreateTab } from '@/lib/multisig-tab'
+import { InlineError } from '@/popup/components/common/InlineError'
 
 export function CongratulationsPage() {
   const { replace } = useNavigate()
-  const { mode, dappRequestId, reset } = useOnboardingStore()
+  const {
+    flowMode,
+    mode,
+    dappRequestId,
+    createdWallet,
+    isLoading,
+    error,
+    reset,
+    createWallet,
+    addWallet,
+    createPendingMultisigWallet,
+    addPendingMultisigWallet
+  } = useOnboardingStore()
   // Imported wallets and dApp-triggered onboarding keep the single "Got it" action.
   const showMultisig = isMultisigUiEnabled() && mode === 'create' && !dappRequestId
 
   const handleComplete = async () => {
+    if (showMultisig && !createdWallet) {
+      const success = flowMode === 'addWallet' ? await addWallet() : await createWallet()
+      if (!success) return
+    }
     reset()
 
     // If onboarding was triggered by dApp connection, redirect to approval page
@@ -28,23 +45,30 @@ export function CongratulationsPage() {
   }
 
   const handleStartWithMultisig = async () => {
-    // Read before handleComplete resets the onboarding store. Adding a wallet leaves the current
-    // wallet unchanged, so the created one must come from the store, not from the current wallet.
-    const { createdWallet } = useOnboardingStore.getState()
+    if (!createdWallet) {
+      const success =
+        flowMode === 'addWallet'
+          ? await addPendingMultisigWallet()
+          : await createPendingMultisigWallet()
+      if (!success) return
+    }
+    // Existing sessions that already created their first account retain their original target.
+    const provisioned = useOnboardingStore.getState().createdWallet
     const { currentWalletId, currentAccountId } = useWalletStore.getState()
     const target =
-      createdWallet ??
+      provisioned ??
       (currentWalletId && currentAccountId
         ? { walletId: currentWalletId, accountId: currentAccountId }
         : null)
-    // The popup navigates home below; the flow itself runs in the new full tab.
-    if (target) openMultisigCreateTab(target)
-    await handleComplete()
+    if (!target) return
+    reset()
+    replace('/onboarding/multisig-pending')
+    openMultisigCreateTab(target)
   }
 
   return (
     <div className="page-container">
-      <PageHeader />
+      <PageHeader showBack={showMultisig && !createdWallet} />
 
       <div className="flex-1 flex flex-col items-center justify-center px-5">
         <div className="mb-8">
@@ -54,7 +78,9 @@ export function CongratulationsPage() {
         <h1 className="text-lg font-medium text-center mb-3">Congratulations!</h1>
 
         <p className="text-xs text-foreground text-center leading-relaxed">
-          Your wallet is ready. You can now securely send, receive, and store digital assets.
+          {showMultisig && !createdWallet
+            ? 'Your recovery phrase is confirmed. Choose how to set up your first account.'
+            : 'Your wallet is ready. You can now securely send, receive, and store digital assets.'}
         </p>
       </div>
 
@@ -63,7 +89,8 @@ export function CongratulationsPage() {
           <div className="space-y-4">
             <div className="space-y-0.5">
               <Button
-                onClick={handleStartWithMultisig}
+                onClick={() => void handleStartWithMultisig()}
+                disabled={isLoading}
                 className="relative w-full h-[45px] rounded-lg font-bold text-black"
               >
                 Start with Multisig
@@ -78,11 +105,13 @@ export function CongratulationsPage() {
             </div>
             <Button
               variant="outline"
-              onClick={handleComplete}
+              onClick={() => void handleComplete()}
+              disabled={isLoading}
               className="w-full h-[45px] rounded-lg border-primary hover:border-primary"
             >
               Start Directly
             </Button>
+            {error && <InlineError message={error} />}
             <p className="text-xs text-foreground/70 text-center text-balance">
               Your recovery phrase securely manages all supported blockchain accounts.
             </p>

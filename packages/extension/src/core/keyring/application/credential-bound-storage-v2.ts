@@ -6,7 +6,10 @@ import type {
   StorageV2Repository,
   StorageV2Snapshot
 } from '@/ports/repositories'
-import { parseChainAccountVerificationAnchorRef } from './verification-anchor'
+import {
+  parseChainAccountVerificationAnchorRef,
+  parseKeyDomainVerificationAnchorRef
+} from './verification-anchor'
 import { hardwareCredentialMetadataEquals } from '@/core/keyring/domain'
 
 export type CredentialBindingInvalidReason =
@@ -78,7 +81,9 @@ async function changePasswordCoversActiveWallets(
     if (
       currentKeyDomain.source.kind === 'software' &&
       (targetKeyDomain.source.kind !== 'software' ||
-        targetKeyDomain.source.mnemonicWordCount !== currentKeyDomain.source.mnemonicWordCount)
+        targetKeyDomain.source.mnemonicWordCount !== currentKeyDomain.source.mnemonicWordCount ||
+        targetKeyDomain.source.credentialOnlyFirstAccount !==
+          currentKeyDomain.source.credentialOnlyFirstAccount)
     ) {
       return false
     }
@@ -162,14 +167,32 @@ export async function validateCredentialBindings(
         reason: 'credential-source-mismatch'
       })
     }
-    const engineMetadata = Object.values(activation.record.manifest.engines).filter(
-      metadata => metadata !== undefined
+    const engineMetadata = Object.entries(activation.record.manifest.engines).filter(
+      (entry): entry is ['zcash' | 'multichain', NonNullable<(typeof entry)[1]>] =>
+        entry[1] !== undefined
     )
-    const anchorRefs = engineMetadata.map(metadata => metadata.verificationAnchorRef)
+    const anchorRefs = engineMetadata.map(([, metadata]) => metadata.verificationAnchorRef)
     if (new Set(anchorRefs).size !== anchorRefs.length) {
       return Object.freeze({ status: 'invalid', reason: 'credential-anchor-duplicate' })
     }
-    for (const metadata of engineMetadata) {
+    for (const [engine, metadata] of engineMetadata) {
+      if (metadata.verificationAnchorRef.startsWith('key-domain:')) {
+        let anchor
+        try {
+          anchor = parseKeyDomainVerificationAnchorRef(metadata.verificationAnchorRef)
+        } catch {
+          return Object.freeze({ status: 'invalid', reason: 'credential-anchor-invalid' })
+        }
+        if (
+          keyDomain.source.kind !== 'software' ||
+          keyDomain.source.credentialOnlyFirstAccount !== true ||
+          anchor.keyDomainId !== keyDomain.id ||
+          anchor.engine !== engine
+        ) {
+          return Object.freeze({ status: 'invalid', reason: 'credential-anchor-invalid' })
+        }
+        continue
+      }
       let chainAccountId
       try {
         chainAccountId = parseChainAccountVerificationAnchorRef(metadata.verificationAnchorRef)

@@ -57,18 +57,26 @@ export function ThresholdPage() {
   const walletId = target?.walletId ?? null
   const accountId = target?.accountId ?? null
 
-  // Multisig starts from a recovery phrase, so an account that is not in the wallet list, or that
-  // belongs to a hardware or private-key wallet, cannot start a setup.
+  // First-account setup uses its pending account marker until the ceremony commits the account.
   const accountCheck = useWalletStore((state): AccountCheck => {
     if (!walletId || !accountId) return 'missing'
     const wallet = state.wallets.find(candidate => candidate.id === walletId)
-    if (!wallet?.accounts.some(candidate => candidate.id === accountId)) return 'missing'
-    if (wallet.accounts.find(candidate => candidate.id === accountId)?.source) return 'unsupported'
+    if (!wallet) return 'missing'
+    const pendingFirstAccount =
+      wallet.accounts.length === 0 &&
+      wallet.pendingFirstAccountId === accountId &&
+      wallet.pendingFirstAccountNetwork === network
+    const account = wallet.accounts.find(candidate => candidate.id === accountId)
+    if (!account && !pendingFirstAccount) return 'missing'
+    if (account?.source) return 'unsupported'
     if (isZcashHardwareKeySource(wallet.keySource) || wallet.keySource === 'private-key') {
       return 'unsupported'
     }
     // Background binds only the active wallet's credential, so the share could not be sealed.
-    if (state.currentWalletId !== walletId || state.currentAccountId !== accountId)
+    if (
+      state.currentWalletId !== walletId ||
+      (pendingFirstAccount ? state.currentAccountId !== null : state.currentAccountId !== accountId)
+    )
       return 'inactive'
     return 'ok'
   })
@@ -76,9 +84,11 @@ export function ThresholdPage() {
   // The selector returns a string, so the page re-renders only when the name itself changes.
   const ownerName = useWalletStore(state => {
     if (!walletId || !accountId) return FALLBACK_OWNER_NAME
-    const account = state.wallets
-      .find(wallet => wallet.id === walletId)
-      ?.accounts.find(candidate => candidate.id === accountId)
+    const wallet = state.wallets.find(candidate => candidate.id === walletId)
+    if (wallet?.pendingFirstAccountId === accountId) {
+      return wallet.pendingFirstAccountName ?? FALLBACK_OWNER_NAME
+    }
+    const account = wallet?.accounts.find(candidate => candidate.id === accountId)
     if (!account) return FALLBACK_OWNER_NAME
     return getAccountDisplayName(walletId, accountId, account.name, state.accountDisplayNames)
   })

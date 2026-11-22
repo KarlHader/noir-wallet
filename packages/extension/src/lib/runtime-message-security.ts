@@ -505,10 +505,33 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       selectedNetworkFamilies: isSelectedNetworkFamilies
     }
   },
+  PROVISION_PENDING_MULTISIG_WALLET: {
+    required: {
+      mode: value => value === 'create',
+      mnemonic: isMnemonicPhrase,
+      password: isLegacyPasswordString,
+      accountName: isShortString
+    },
+    optional: {
+      birthdayHeight: isBirthdayHeight,
+      selectedNetworkFamilies: isSelectedNetworkFamilies
+    }
+  },
   GENERATE_ADD_WALLET_MNEMONIC: { required: { wordCount: isMnemonicWordCount } },
   ADD_SOFTWARE_WALLET: {
     required: {
       mode: isSoftwareWalletProvisioningMode,
+      mnemonic: isMnemonicPhrase,
+      accountName: isShortString
+    },
+    optional: {
+      birthdayHeight: isBirthdayHeight,
+      selectedNetworkFamilies: isSelectedNetworkFamilies
+    }
+  },
+  ADD_PENDING_MULTISIG_WALLET: {
+    required: {
+      mode: value => value === 'create',
       mnemonic: isMnemonicPhrase,
       accountName: isShortString
     },
@@ -1084,8 +1107,10 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     WALLET_CREATED: ['extension-page'],
     GENERATE_PRIMARY_WALLET_MNEMONIC: ['extension-page'],
     PROVISION_PRIMARY_SOFTWARE_WALLET: ['extension-page'],
+    PROVISION_PENDING_MULTISIG_WALLET: ['extension-page'],
     GENERATE_ADD_WALLET_MNEMONIC: ['extension-page'],
     ADD_SOFTWARE_WALLET: ['extension-page'],
+    ADD_PENDING_MULTISIG_WALLET: ['extension-page'],
     PREVIEW_SOFTWARE_WALLET_ADDRESSES: ['extension-page'],
     PREVIEW_PRIVATE_KEY_WALLET: ['extension-page'],
     IMPORT_PRIVATE_KEY_WALLET: ['extension-page'],

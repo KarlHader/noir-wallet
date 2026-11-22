@@ -161,11 +161,6 @@ export function EncoderAnimatedQR({
   return (
     <div className="flex flex-col items-center">
       <QRCodeSVG value={frame.toUpperCase()} size={size} level={level} marginSize={4} />
-      {encoder.fragmentsLength > 1 && (
-        <p className="mt-2 text-xs text-muted">
-          Keep the QR in view — it cycles through {encoder.fragmentsLength} frames
-        </p>
-      )}
     </div>
   )
 }

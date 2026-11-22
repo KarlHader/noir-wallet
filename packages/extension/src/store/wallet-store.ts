@@ -35,7 +35,7 @@ interface WalletStore {
 
   // Actions
   setCurrentWallet: (walletId: string | null) => void
-  setCurrentAccount: (walletId: string, accountId: string) => void
+  setCurrentAccount: (walletId: string, accountId: string | null) => void
   clearCurrentAccount: () => void
   setCurrentNetwork: (network: Network) => void
   setZecPrice: (price: number) => void

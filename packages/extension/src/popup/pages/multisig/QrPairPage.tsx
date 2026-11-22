@@ -312,7 +312,7 @@ function QrPairIdentity({ session, slot, guardian }: PairStepProps) {
           ringCaption={<PairDeviceLine slot={slot} />}
           title="Confirm device identity"
         />
-        <p className="mt-2 text-xs text-muted">
+        <p className="mt-2 text-sm text-[#BCBCC8]">
           Compare both rows with the phone&apos;s screen, then confirm on both devices.
         </p>
       </div>

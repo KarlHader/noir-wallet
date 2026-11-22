@@ -40,6 +40,8 @@ export interface V1DiscoveredWallet {
   readonly credentialStorageKey: string
   readonly createdAt: number
   readonly accounts: readonly V1DiscoveredAccount[]
+  readonly credentialOnly?: true
+  readonly pendingFirstAccountId?: string
 }
 
 export interface V1MetadataDiscovery {
@@ -149,6 +151,7 @@ function parseWallets(
     }
 
     const accounts: V1DiscoveredAccount[] = []
+    let externalCount = 0
     const accountIds = new Set<string>()
     const accountIndexes = new Set<number>()
     for (const [accountPosition, accountValue] of walletValue.accounts.entries()) {
@@ -171,6 +174,7 @@ function parseWallets(
           }
           accountIds.add(accountId)
           externalAccounts.add(JSON.stringify([id, accountId]))
+          externalCount += 1
         } catch {
           issues.push(`wallet-${id}-account-${accountPosition}-invalid`)
         }
@@ -233,6 +237,30 @@ function parseWallets(
       )
     }
 
+    const hasPendingMarker = Object.prototype.hasOwnProperty.call(
+      walletValue,
+      'pendingFirstAccountId'
+    )
+    const pendingFirstAccountId = hasPendingMarker
+      ? parseNonEmptyString(walletValue.pendingFirstAccountId, 128)
+      : null
+    const pendingFirstAccountName = hasPendingMarker
+      ? parseNonEmptyString(walletValue.pendingFirstAccountName, 128)
+      : null
+    const pendingFirstAccountNetwork = walletValue.pendingFirstAccountNetwork
+    const validPending =
+      hasPendingMarker &&
+      keySource === 'software' &&
+      walletValue.accounts.length === 0 &&
+      pendingFirstAccountId !== null &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        pendingFirstAccountId
+      ) &&
+      pendingFirstAccountName !== null &&
+      (pendingFirstAccountNetwork === 'mainnet' || pendingFirstAccountNetwork === 'testnet')
+    if (hasPendingMarker && !validPending) issues.push(`wallet-${id}-pending-account-invalid`)
+    const credentialOnly =
+      keySource === 'software' && accounts.length === 0 && (validPending || externalCount > 0)
     wallets.push(
       Object.freeze({
         id,
@@ -240,7 +268,9 @@ function parseWallets(
         keySource,
         credentialStorageKey,
         createdAt,
-        accounts: Object.freeze(accounts)
+        accounts: Object.freeze(accounts),
+        ...(credentialOnly ? { credentialOnly: true as const } : {}),
+        ...(validPending ? { pendingFirstAccountId: pendingFirstAccountId! } : {})
       })
     )
   }

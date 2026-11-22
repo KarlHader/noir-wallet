@@ -5,11 +5,13 @@ import { WordTag } from '../../components/seed-phrase/WordTag'
 import { useNavigate } from '../../provider/Router'
 import { useOnboardingStore } from '@/store/onboarding-store'
 import { shuffleVerificationWordOptions } from '../../utils/recovery-phrase-confirmation'
+import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
 
 export function ConfirmPhrasePage() {
   const { navigate } = useNavigate()
   const {
     flowMode,
+    dappRequestId,
     seedPhrase,
     verificationIndices,
     selectedVerificationWords,
@@ -34,6 +36,10 @@ export function ConfirmPhrasePage() {
 
   const handleNext = async () => {
     if (verifySeedPhrase()) {
+      if (isMultisigUiEnabled() && !dappRequestId) {
+        navigate('/onboarding/congratulations')
+        return
+      }
       if (flowMode === 'addWallet') {
         const success = await addWallet()
         if (success) {
