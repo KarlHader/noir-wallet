@@ -91,6 +91,19 @@ export function buildActivityPresentationCatalog({
     ...userEvmAssets.map(userEvmAssetToDefinition)
   ])
   const catalogMetadata = new Map<string, ActivityAssetMetadata>()
+  for (const chain of evmCatalog) {
+    for (const token of chain.historyErc20Assets ?? []) {
+      const asset = parseAssetId(`${chain.chainId}/erc20:${token.contract}`)
+      catalogMetadata.set(asset.id, {
+        asset: { ...asset, kind: 'token' },
+        metadata: parseAssetDisplayMetadata({
+          name: token.name,
+          symbol: token.symbol,
+          decimals: token.decimals
+        })
+      })
+    }
+  }
   for (const token of resolveIntentsEvmAssets(catalogTokens, evmCatalog)) {
     try {
       const asset = parseAssetId(token.assetId)

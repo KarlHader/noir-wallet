@@ -24,7 +24,8 @@ import { createEvmBlockscoutHistoryClient } from './evm-blockscout-history-clien
 import type {
   EvmActivityHistorySource,
   ReadEvmAddressActivityInput,
-  FindEvmConfirmedReplacementInput
+  FindEvmConfirmedReplacementInput,
+  TrackedErc20Asset
 } from './evm-indexed-activity'
 import { createEvmAnkrHistoryClient, type EvmAnkrHistoryChain } from './evm-ankr-history-client'
 import {
@@ -91,6 +92,13 @@ function resolveHistoryApiUrl(config: EvmNetworkConfig): string | undefined {
   return getEvmAnkrHistoryBlockchain(config.chainId) ? undefined : config.historyApiUrl
 }
 
+function trackedErc20AssetKey(assets: readonly TrackedErc20Asset[]): string {
+  return assets
+    .map(asset => `${asset.contract}:${asset.decimals}`)
+    .sort()
+    .join(',')
+}
+
 export function createConfiguredEvmActivityHistorySource(
   network: Network,
   configuredNetwork: EvmNetworkConfig = getEvmNetworkConfig(network)
@@ -113,6 +121,7 @@ export function createConfiguredEvmActivityHistorySource(
     }
     return createCachedEvmActivityHistorySource({
       chainId: config.chainId,
+      trackedAssetKey: trackedErc20AssetKey(trackedErc20Assets),
       source: Object.freeze({
         readAddressActivity: async (input: ReadEvmAddressActivityInput) =>
           (await readAddressActivityWithMetadata(input)).items,
@@ -136,6 +145,7 @@ export function createConfiguredEvmActivityHistorySource(
     })
     return createCachedEvmActivityHistorySource({
       chainId: config.chainId,
+      trackedAssetKey: trackedErc20AssetKey(trackedErc20Assets),
       source
     })
   }
@@ -156,7 +166,10 @@ export function createEvmActivityHistoryBatchReader(configs: readonly EvmNetwork
   return Object.freeze({
     chainIds: new Set(chains.map(chain => chain.chainId)),
     ...createCachedEvmAnkrHistoryBatchSource({
-      source: createEvmAnkrHistoryClient(evmHistoryApiOrigin, chains)
+      source: createEvmAnkrHistoryClient(evmHistoryApiOrigin, chains),
+      trackedAssetKeys: new Map(
+        chains.map(chain => [chain.chainId, trackedErc20AssetKey(chain.trackedErc20Assets)])
+      )
     })
   })
 }

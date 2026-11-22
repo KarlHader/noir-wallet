@@ -187,6 +187,8 @@ export interface EvmNetworkConfig {
   readonly usdcContract?: `0x${string}`
   readonly historyErc20Assets?: readonly {
     readonly contract: `0x${string}`
+    readonly name: string
+    readonly symbol: string
     readonly decimals: number
   }[]
 }
@@ -237,7 +239,20 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
         slip44Reference: '714'
       },
       explorerUrl: 'https://bscscan.com',
-      historyErc20Assets: [{ contract: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', decimals: 18 }]
+      historyErc20Assets: [
+        {
+          contract: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
+          name: 'USD Coin',
+          symbol: 'USDC',
+          decimals: 18
+        },
+        {
+          contract: '0x55d398326f99059ff775485246999027b3197955',
+          name: 'Tether USD',
+          symbol: 'USDT',
+          decimals: 18
+        }
+      ]
     }),
     defineNetwork({
       networkMode: 'mainnet',
