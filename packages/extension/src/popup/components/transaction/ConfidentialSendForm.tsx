@@ -212,7 +212,7 @@ export function ConfidentialSendForm({
     spendableBalances,
     loading: loadingBalances,
     connecting,
-    error: balanceError,
+    errorCode: balanceErrorCode,
     refreshBalances: loadBalances
   } = useShieldBalances({
     active,
@@ -490,6 +490,12 @@ export function ConfidentialSendForm({
     applyRouteSelection(source.asset.asset.id, destination?.chain.chain.id ?? source.chain.chain.id)
   }, [catalogSettled, awaitingCatalog, source, destination, applyRouteSelection])
   const availableRaw = shieldFundingAvailableRaw(source, spendableBalances ?? displayBalances)
+  const balanceAuthorizationRequired = balanceErrorCode === 'authorization_required'
+  const balanceErrorMessage = balanceAuthorizationRequired
+    ? 'Connect your Shield account to load balances.'
+    : balanceErrorCode === 'account_unavailable'
+      ? 'Unable to access your Shield account.'
+      : 'Unable to load Shield balances.'
   const displayedAsset = source?.asset ?? initialAsset
   const amountState =
     source && (spendableBalances ?? displayBalances)
@@ -644,9 +650,9 @@ export function ConfidentialSendForm({
         setPreviewGeneration(value => value + 1)
         setError(null)
       }
-    } catch (cause) {
+    } catch {
       if (scopeStillCurrent() && latestDraftKey.current === requestedDraftKey)
-        setError(cause instanceof Error ? cause.message : 'Shield balance unavailable')
+        setError('Unable to load Shield balances.')
     } finally {
       if (scopeStillCurrent() && latestDraftKey.current === requestedDraftKey)
         setRecoveryPending(false)
@@ -665,7 +671,7 @@ export function ConfidentialSendForm({
       preview.expiresAt <= Date.now() + 5_000 ||
       recoveryPending ||
       Boolean(error) ||
-      Boolean(balanceError) ||
+      Boolean(balanceErrorCode) ||
       busy ||
       !scopeStillCurrent()
     )
@@ -1177,7 +1183,7 @@ export function ConfidentialSendForm({
           }
         />
       </div>
-      {!error && !balanceError && !previewLoading && previewError && (
+      {!error && !balanceErrorCode && !previewLoading && previewError && (
         <InlineError
           message={
             previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
@@ -1206,13 +1212,24 @@ export function ConfidentialSendForm({
           Enter a valid {destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address
         </p>
       )}
-      {(balanceError || (error && !amountState?.error)) && (
+      {balanceErrorCode ? (
         <InlineError
-          message={!amountState?.error && error ? error : balanceError}
+          message={balanceErrorMessage}
           tone="warning"
           onRetry={() => void refreshBalances()}
           retrying={connecting || recoveryPending}
+          retryLabel={balanceAuthorizationRequired ? 'Connect' : 'Refresh balances'}
         />
+      ) : (
+        error &&
+        !amountState?.error && (
+          <InlineError
+            message={error}
+            tone="warning"
+            onRetry={() => void refreshBalances()}
+            retrying={connecting || recoveryPending}
+          />
+        )
       )}
     </>
   )
@@ -1280,7 +1297,12 @@ export function ConfidentialSendForm({
           },
           maximum: {
             disabled: busy || !spendableBalances || !source || availableRaw === '0',
-            title: availableRaw === '0' ? 'Shield balance unavailable' : 'Use maximum balance',
+            title:
+              !source || !displayBalances
+                ? 'Shield balance unavailable'
+                : availableRaw === '0'
+                  ? 'No Shield balance to send'
+                  : 'Use maximum balance',
             onClick: () => {
               if (!source) return
               keepSelectedSource()
@@ -1302,7 +1324,7 @@ export function ConfidentialSendForm({
               previewLoading ||
               recoveryPending ||
               Boolean(error) ||
-              Boolean(balanceError)
+              Boolean(balanceErrorCode)
             }
             onContinue={() => void prepare()}
           />

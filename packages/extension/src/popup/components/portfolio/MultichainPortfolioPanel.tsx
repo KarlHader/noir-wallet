@@ -33,6 +33,7 @@ interface MultichainPortfolioPanelProps {
   model: PortfolioReadModel | null
   activeAccount?: AccountNetworksView | null
   status: 'loading' | 'ready' | 'error'
+  accountLoading: boolean
   prices: AssetPriceReadModel | null
   priceStatus?: 'loading' | 'ready' | 'error'
   balancesHidden?: boolean
@@ -70,6 +71,7 @@ export function MultichainPortfolioPanel({
   model,
   activeAccount,
   status,
+  accountLoading,
   prices,
   priceStatus,
   balancesHidden,
@@ -186,7 +188,7 @@ export function MultichainPortfolioPanel({
     walletId
   ])
 
-  if (status === 'loading' && !visibleModel) {
+  if (!visibleModel && (accountLoading || status === 'loading')) {
     return <ListSkeleton rows={3} label="Loading portfolio" className="px-5 py-3" />
   }
 
@@ -204,8 +206,8 @@ export function MultichainPortfolioPanel({
     return (
       <PortfolioState
         icon="lucide:layers"
-        title="Portfolio is not ready"
-        description="Finish wallet setup or unlock this account to load enabled networks."
+        title="No active account"
+        description="Select an account to view its assets."
       />
     )
   }

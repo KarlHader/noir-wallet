@@ -19,6 +19,7 @@ import { TokenPicker } from '@/popup/components/tokens/TokenPicker'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { ListSkeleton } from '@/popup/components/ui/skeleton'
 import { TransactionModeDropdown } from '@/popup/components/transaction/TransactionModeDropdown'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenBalanceDisplay } from '@/popup/components/tokens/TokenBalanceDisplay'
@@ -279,6 +280,22 @@ function AssetSelection({
       zecPrice
     ]
   )
+  if (!networkOptions.some(option => !option.disabled) && (loadingAdditional || additionalError)) {
+    return (
+      <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
+        {toolbar}
+        {loadingAdditional ? (
+          <ListSkeleton label="Loading tokens" className="py-2" />
+        ) : (
+          <InlineError
+            message="Unable to load tokens."
+            onRetry={() => void onRetry()}
+            className="mt-2 px-3 py-2.5"
+          />
+        )}
+      </div>
+    )
+  }
   return (
     <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
       <TokenPicker
@@ -436,7 +453,7 @@ function AssetSelection({
             else onSelect(row.entry)
           }
         }}
-        emptyMessage={!loadingAdditional && !additionalError ? 'No assets found' : 'Loading tokens'}
+        emptyMessage={loadingAdditional ? 'Loading tokens' : 'No assets found'}
         afterRows={
           <>
             {pendingSelection?.error && (
@@ -774,6 +791,7 @@ function SendAssetFlow() {
     activeAccount: storageV2Account,
     catalog: accountCatalog,
     loading: accountCatalogLoading,
+    error: accountCatalogError,
     refresh: refreshAccountCatalog,
     contextChanging
   } = useActiveAccountNetworks()
@@ -813,6 +831,8 @@ function SendAssetFlow() {
     refresh,
     readLatest
   } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId)
+  const accountLoading =
+    !storageV2Account && !accountCatalogError && (accountCatalogLoading || contextChanging)
   const entryScope = location.state as {
     walletId?: unknown
     accountId?: unknown
@@ -1043,6 +1063,9 @@ function SendAssetFlow() {
       ? navigationSnapshot.initialPortfolio
       : null
   const visibleModel = model
+  const loadingSendAssets = accountLoading || loadStatus === 'loading'
+  const sendAssetsError =
+    !loadingSendAssets && !visibleModel && (loadStatus === 'error' || !effectiveAccount)
   const initialPrices =
     initialPortfolio && navigationSnapshot?.initialPrices?.status !== 'error'
       ? (navigationSnapshot?.initialPrices ?? null)
@@ -1066,6 +1089,12 @@ function SendAssetFlow() {
     },
     [refresh]
   )
+  const retrySendAssets = async (chainId?: string) => {
+    if (!storageV2Account && (!effectiveAccount || accountCatalogError)) {
+      await refreshAccountCatalog()
+    }
+    await load(true, chainId)
+  }
 
   useEffect(() => {
     setSelectionSnapshot(null)
@@ -1517,7 +1546,7 @@ function SendAssetFlow() {
         })
       : null
   const preparingRequestedAsset = Boolean(
-    !assetPickerOpen && requestedAssetId && !selection && loadStatus === 'loading'
+    !assetPickerOpen && requestedAssetId && !selection && loadingSendAssets
   )
   const showPublicAssetPicker =
     !shieldActive &&
@@ -1684,8 +1713,8 @@ function SendAssetFlow() {
           zcashNetwork={currentNetwork}
           zecPrice={zecPrice}
           prices={assetPrices}
-          loadingAdditional={loadStatus === 'loading'}
-          additionalError={loadStatus === 'error' && !visibleModel}
+          loadingAdditional={loadingSendAssets}
+          additionalError={sendAssetsError}
           toolbar={sourcePickerToolbar}
           onSelectZcash={source => {
             selectZcash(source)
@@ -1696,9 +1725,7 @@ function SendAssetFlow() {
             else switchSource('main', asset.asset.asset.id, '', undefined, '', asset)
             setSourcePicker(null)
           }}
-          onRetry={async chainId => {
-            await load(true, chainId)
-          }}
+          onRetry={retrySendAssets}
         />
       )}
       {sourcePicker && nearSourceVisible && (
@@ -1721,7 +1748,7 @@ function SendAssetFlow() {
               })
               setSourcePicker(null)
             }}
-            emptyMessage={visibleModel ? 'No tokens found' : 'Loading tokens'}
+            emptyMessage={loadingSendAssets ? 'Loading tokens' : 'No tokens found'}
           />
         </div>
       )}
@@ -1926,17 +1953,17 @@ function SendAssetFlow() {
           zcashNetwork={currentNetwork}
           zecPrice={zecPrice}
           prices={assetPrices}
-          loadingAdditional={loadStatus === 'loading'}
-          additionalError={loadStatus === 'error' && !visibleModel}
+          loadingAdditional={loadingSendAssets}
+          additionalError={sendAssetsError}
           onSelectZcash={source => selectReturnedSource(null, source)}
-          onRetry={async chainId => {
-            await load(true, chainId)
-          }}
+          onRetry={retrySendAssets}
           onSelect={asset => selectReturnedSource(asset)}
         />
       )}
       {!shieldActive && preparingRequestedAsset && (
-        <div className="page-content" role="status" aria-label="Loading asset" />
+        <div className="page-content !px-4 pt-4">
+          <ListSkeleton label="Loading asset" />
+        </div>
       )}
     </div>
   )

@@ -134,6 +134,7 @@ export function Home() {
     publicCatalog: publicAccountCatalog,
     loading: accountNetworksLoading,
     error: accountNetworksError,
+    contextChanging: accountContextChanging,
     refresh: refreshAccountNetworks
   } = useActiveAccountNetworks()
 
@@ -1027,6 +1028,11 @@ export function Home() {
               accountId={effectiveAccountId}
               model={multichainPortfolio}
               status={portfolioLoadStatus}
+              accountLoading={
+                !storageV2Account &&
+                !accountNetworksError &&
+                (accountNetworksLoading || accountContextChanging)
+              }
               prices={assetPrices}
               priceStatus={assetPriceStatus}
               balancesHidden={balancesHidden}
