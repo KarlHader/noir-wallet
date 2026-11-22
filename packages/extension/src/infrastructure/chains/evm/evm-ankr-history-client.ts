@@ -6,8 +6,10 @@ import { readBoundedResponseText } from '@/lib/fetch-utils'
 import {
   mapEvmIndexedActivity,
   EVM_ACTIVITY_ITEM_LIMIT,
+  EVM_HISTORY_LIMIT,
   type EvmConfirmedReplacement,
   type FindEvmConfirmedReplacementInput,
+  type IndexedNativeInternalTransfer,
   type IndexedTokenTransfer,
   type IndexedTransaction,
   type TrackedErc20Asset
@@ -18,6 +20,12 @@ const MAXIMUM_RESPONSE_BYTES = 8 * 1024 * 1024
 const TX_PAGE_SIZE = 200
 const TOKEN_PAGE_SIZE = 2_000
 const UINT256_LIMIT = 1n << 256n
+export const EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID = 'eip155:8453'
+
+type HistoryMethod =
+  | 'ankr_getTransactionsByAddress'
+  | 'ankr_getTokenTransfers'
+  | 'noir_getNativeInternalTransfers'
 export interface EvmAnkrHistoryChain {
   readonly chainId: string
   readonly nativeAssetId: string
@@ -38,6 +46,8 @@ export type EvmAnkrHistoryResult =
       readonly partial: boolean
       readonly hasMore?: boolean
       readonly retrySingleChain?: boolean
+      readonly sourceIncomplete?: boolean
+      readonly windowTruncated?: boolean
     }
   | { readonly incomplete: true; readonly retrySingleChain: boolean }
   | { readonly error: unknown }
@@ -154,7 +164,8 @@ function parseTransfer(
 function parsePage(
   value: unknown,
   field: 'transactions' | 'transfers',
-  limit: number
+  limit: number,
+  tokenLimit = 512
 ): {
   readonly items: readonly unknown[]
   readonly partial: boolean
@@ -163,7 +174,10 @@ function parsePage(
   const result = record(value, 'result')
   if (!Array.isArray(result[field]) || result[field].length > limit) invalid(field)
   const next = result.nextPageToken
-  if (next !== undefined && (typeof next !== 'string' || next.length === 0 || next.length > 512)) {
+  if (
+    next !== undefined &&
+    (typeof next !== 'string' || next.length === 0 || next.length > tokenLimit)
+  ) {
     invalid('page token')
   }
   return Object.freeze({
@@ -171,6 +185,63 @@ function parsePage(
     partial: !!next,
     ...(next ? { nextPageToken: next as string } : {})
   })
+}
+
+function parseInternalTransfers(
+  items: readonly unknown[],
+  wallet: string,
+  nativeAssetId: IndexedNativeInternalTransfer['assetId'],
+  fromBlock?: number
+): IndexedNativeInternalTransfer[] {
+  const byId = new Map<string, IndexedNativeInternalTransfer>()
+  for (const item of items) {
+    const raw = record(item, 'internal transfer')
+    const transactionHash = hash(raw.hash, 'internal transaction hash')
+    const transferId = raw.transferId
+    if (typeof transferId !== 'string' || !/^[!-~]{1,256}$/.test(transferId)) {
+      invalid('internal transfer ID')
+    }
+    const from = address(raw.from, 'internal transfer sender')
+    const to = address(raw.to, 'internal transfer recipient')
+    const blockHeight = safeNumber(raw.blockNumber, 'internal transfer block')
+    const amountRaw = quantity(raw.value, 'internal transfer value')
+    const milliseconds = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN
+    if (
+      typeof raw.timestamp !== 'string' ||
+      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(raw.timestamp) ||
+      !Number.isSafeInteger(milliseconds) ||
+      milliseconds < 0 ||
+      (from !== wallet && to !== wallet) ||
+      (fromBlock !== undefined && blockHeight < fromBlock)
+    )
+      invalid('internal transfer inclusion')
+    if (amountRaw === '0') continue
+    const key = `${transactionHash}:${transferId}`
+    const previous = byId.get(key)
+    if (previous) {
+      if (
+        previous.blockHeight !== blockHeight ||
+        previous.from !== from ||
+        previous.to !== to ||
+        previous.amountRaw !== amountRaw ||
+        previous.timestamp !== milliseconds
+      )
+        invalid('conflicting internal transfer ID')
+      continue
+    }
+    byId.set(key, {
+      transferId,
+      transactionHash,
+      blockHeight,
+      confirmations: 0,
+      from,
+      to,
+      amountRaw,
+      timestamp: milliseconds,
+      assetId: nativeAssetId
+    })
+  }
+  return [...byId.values()]
 }
 
 function parseOrigin(value: string): string {
@@ -205,7 +276,7 @@ export function createEvmAnkrHistoryClient(
   }
 
   async function request(
-    method: 'ankr_getTransactionsByAddress' | 'ankr_getTokenTransfers',
+    method: HistoryMethod,
     params: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<unknown> {
@@ -317,7 +388,7 @@ export function createEvmAnkrHistoryClient(
       ...(fromBlock === undefined ? {} : { fromBlock })
     }
     async function readPages(
-      method: 'ankr_getTransactionsByAddress' | 'ankr_getTokenTransfers',
+      method: HistoryMethod,
       field: 'transactions' | 'transfers',
       pageSize: number,
       requestedAddress: string | string[]
@@ -337,6 +408,7 @@ export function createEvmAnkrHistoryClient(
               method,
               {
                 ...common,
+                ...(method === 'noir_getNativeInternalTransfers' ? { blockchain: ['base'] } : {}),
                 address: requestedAddress,
                 pageSize,
                 ...(pageToken ? { pageToken } : {})
@@ -344,7 +416,8 @@ export function createEvmAnkrHistoryClient(
               signal
             ),
             field,
-            pageSize
+            pageSize,
+            method === 'noir_getNativeInternalTransfers' ? 1_024 : undefined
           )
         } catch (error) {
           if (page === 0) throw error
@@ -360,9 +433,13 @@ export function createEvmAnkrHistoryClient(
       }
       return { items, partial: true, failed: false }
     }
-    const [native, tokens] = await Promise.allSettled([
+    const baseTarget = requested.get(EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID)
+    const [native, tokens, internal] = await Promise.allSettled([
       readPages('ankr_getTransactionsByAddress', 'transactions', TX_PAGE_SIZE, firstAddress),
-      readPages('ankr_getTokenTransfers', 'transfers', TOKEN_PAGE_SIZE, [firstAddress])
+      readPages('ankr_getTokenTransfers', 'transfers', TOKEN_PAGE_SIZE, [firstAddress]),
+      baseTarget
+        ? readPages('noir_getNativeInternalTransfers', 'transfers', TX_PAGE_SIZE, firstAddress)
+        : undefined
     ])
     const output = new Map<string, EvmAnkrHistoryResult>()
     if (signal?.aborted) {
@@ -373,11 +450,7 @@ export function createEvmAnkrHistoryClient(
       }
       return output
     }
-    if (native.status === 'rejected' && tokens.status === 'rejected') {
-      for (const target of targets) output.set(target.chainId, { error: native.reason })
-      return output
-    }
-    if (historyPageCount > 1) {
+    if (historyPageCount > 1 && !baseTarget) {
       const failure =
         native.status === 'rejected'
           ? native.reason
@@ -422,11 +495,32 @@ export function createEvmAnkrHistoryClient(
           branch.reason instanceof EvmRpcError &&
           (branch.reason.code === 'network-unavailable' || branch.reason.code === 'timeout')
       )
-    const partial = branchFailed || pageTruncated
     for (const target of targets) {
       const chain = byChainId.get(target.chainId)!
       const blockchain = getEvmAnkrHistoryBlockchain(target.chainId)!
+      const isBase = target === baseTarget
+      if (native.status === 'rejected' && tokens.status === 'rejected' && !isBase) {
+        output.set(target.chainId, { error: native.reason })
+        continue
+      }
       try {
+        const internalPage = isBase && internal.status === 'fulfilled' ? internal.value : undefined
+        let internalFailed = isBase && (!internalPage || internalPage.failed)
+        let internalTransfers: IndexedNativeInternalTransfer[] = []
+        if (internalPage) {
+          try {
+            internalTransfers = parseInternalTransfers(
+              internalPage.items,
+              firstAddress,
+              parseAssetId(chain.nativeAssetId).id,
+              fromBlock
+            )
+          } catch {
+            internalFailed = true
+          }
+        }
+        let sourceIncomplete = branchFailed || internalFailed
+        const windowTruncated = pageTruncated || internalPage?.partial === true
         const normalTransactions =
           native.status === 'fulfilled'
             ? native.value.items
@@ -440,29 +534,47 @@ export function createEvmAnkrHistoryClient(
                 .map(item => parseTransfer(item, chain.trackedErc20Assets))
                 .filter((item): item is IndexedTokenTransfer => item !== null)
             : []
+        if (isBase && !sourceIncomplete) {
+          const blockByHash = new Map<string, number>()
+          for (const entry of [...normalTransactions, ...tokenTransfers, ...internalTransfers]) {
+            const previous = blockByHash.get(entry.transactionHash)
+            if (previous !== undefined && previous !== entry.blockHeight) {
+              sourceIncomplete = true
+              break
+            }
+            blockByHash.set(entry.transactionHash, entry.blockHeight)
+          }
+        }
+        const partial = sourceIncomplete || windowTruncated
+        const itemLimit = historyPageCount > 1 ? EVM_ACTIVITY_ITEM_LIMIT : EVM_HISTORY_LIMIT
         const items = mapEvmIndexedActivity({
           request: target,
           chainId: target.chainId,
           nativeAssetId: chain.nativeAssetId,
           normalTransactions,
           tokenTransfers,
+          internalTransfers: isBase ? internalTransfers : undefined,
           sourcePartial: partial,
-          itemLimit: historyPageCount > 1 ? EVM_ACTIVITY_ITEM_LIMIT : undefined
+          itemLimit
         })
         if (items.length === 0 && partial) {
           output.set(target.chainId, {
             incomplete: true,
-            retrySingleChain: (pageTruncated && !branchFailed) || retrySharedFailure
+            retrySingleChain: (pageTruncated && !sourceIncomplete) || retrySharedFailure
           })
         } else {
           output.set(target.chainId, {
             items,
             partial,
+            ...(isBase
+              ? { sourceIncomplete, windowTruncated: windowTruncated || items.length >= itemLimit }
+              : {}),
             retrySingleChain: retrySharedFailure,
-            hasMore:
-              historyPageCount > 1 && items.length >= EVM_ACTIVITY_ITEM_LIMIT
+            hasMore: isBase
+              ? partial || (historyPageCount === 1 && items.length >= itemLimit)
+              : historyPageCount > 1 && items.length >= EVM_ACTIVITY_ITEM_LIMIT
                 ? false
-                : pageTruncated || branchFailed || items.length >= 200
+                : partial || items.length >= EVM_HISTORY_LIMIT
           })
         }
       } catch (error) {

@@ -1,6 +1,7 @@
 import { parseActivityReadModel, type ActivityItem, type ActivityScope } from '@/core/activity'
 import { parseChainId } from '@/core/chains/registry'
 import { isZeroValueEvmTokenActivity } from './evm-indexed-activity'
+import { EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID } from './evm-ankr-history-client'
 
 const DB_NAME = 'noir-wallet-evm-history-cache'
 const DB_VERSION = 2
@@ -19,6 +20,7 @@ export interface EvmHistoryCacheRecord {
   readonly historyPageCount?: number
   readonly historySyncAt?: number | null
   readonly trackedAssetKey?: string
+  readonly internalHistory?: { readonly indexedThroughBlock: number | null }
   readonly items: readonly ActivityItem[]
 }
 
@@ -142,7 +144,7 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
         'retryAfter',
         'items'
       ],
-      ['hasMore', 'historyPageCount', 'historySyncAt', 'trackedAssetKey']
+      ['hasMore', 'historyPageCount', 'historySyncAt', 'trackedAssetKey', 'internalHistory']
     ) ||
     value.schemaVersion !== 1
   ) {
@@ -158,6 +160,21 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
       ? null
       : parseTimestamp(value.successfulSyncAt, 'successful sync')
   const retryAfter = parseTimestamp(value.retryAfter, 'retry time')
+  let internalHistory: EvmHistoryCacheRecord['internalHistory']
+  if (value.internalHistory !== undefined) {
+    if (
+      chainId !== EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID ||
+      !isRecord(value.internalHistory) ||
+      !hasExactKeys(value.internalHistory, ['indexedThroughBlock']) ||
+      successfulSyncAt === null
+    ) {
+      throw new Error('Invalid EVM internal history coverage')
+    }
+    const height = value.internalHistory.indexedThroughBlock
+    internalHistory = Object.freeze({
+      indexedThroughBlock: height === null ? null : parseTimestamp(height, 'indexed block')
+    })
+  }
   if (value.hasMore !== undefined && typeof value.hasMore !== 'boolean') {
     throw new Error('Invalid EVM history cache pagination state')
   }
@@ -210,6 +227,7 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
     ...(value.historyPageCount === undefined ? {} : { historyPageCount: value.historyPageCount }),
     ...(historySyncAt === undefined ? {} : { historySyncAt }),
     ...(value.trackedAssetKey === undefined ? {} : { trackedAssetKey: value.trackedAssetKey }),
+    ...(internalHistory === undefined ? {} : { internalHistory }),
     items: parseItems(value.items, parsed.scope, chainId)
   })
 }
@@ -361,6 +379,15 @@ async function writeRecord(record: EvmHistoryCacheRecord): Promise<void> {
   }
 }
 
+export function baseHistoryItemKey(item: ActivityItem): string {
+  const origin = item.segments.find(segment => segment.role === 'origin')
+  return origin?.target.kind === 'onchain' &&
+    origin.target.chainId === EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID &&
+    origin.evidence?.transactionHash
+    ? origin.evidence.transactionHash.toLowerCase()
+    : item.id
+}
+
 export function mergeEvmHistoryCacheRecords(
   current: EvmHistoryCacheRecord | null,
   incoming: EvmHistoryCacheRecord
@@ -374,12 +401,16 @@ export function mergeEvmHistoryCacheRecords(
   ) {
     throw new Error('EVM history cache key does not match its record')
   }
-  const byId = new Map(current.items.map(item => [item.id, item] as const))
-  for (const item of incoming.items) {
-    const previous = byId.get(item.id)
-    if (!previous || item.updatedAt >= previous.updatedAt) byId.set(item.id, item)
-  }
   const newest = current.lastAttemptAt > incoming.lastAttemptAt ? current : incoming
+  const older = newest === current ? incoming : current
+  const isBase = current.chainId === EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID
+  const itemKey = isBase ? baseHistoryItemKey : (item: ActivityItem) => item.id
+  const byId = new Map((isBase ? older : current).items.map(item => [itemKey(item), item] as const))
+  for (const item of (isBase ? newest : incoming).items) {
+    const key = itemKey(item)
+    const previous = byId.get(key)
+    if (!previous || isBase || item.updatedAt >= previous.updatedAt) byId.set(key, item)
+  }
   const currentDepth = current.historyPageCount ?? 1
   const incomingDepth = incoming.historyPageCount ?? 1
   const currentHistorySyncAt = current.historySyncAt ?? current.successfulSyncAt ?? -1
@@ -398,10 +429,16 @@ export function mergeEvmHistoryCacheRecords(
     current.successfulSyncAt ?? -1,
     incoming.successfulSyncAt ?? -1
   )
+  const internalHistory = !isBase
+    ? undefined
+    : !newest.internalHistory || (newest.successfulSyncAt ?? -1) < (older.successfulSyncAt ?? -1)
+      ? (older.internalHistory ?? newest.internalHistory)
+      : newest.internalHistory
   return parseCurrentRecord({
     ...newest,
+    internalHistory,
     successfulSyncAt: latestSuccessfulSyncAt < 0 ? null : latestSuccessfulSyncAt,
-    hasMore: pagination.hasMore,
+    hasMore: isBase && newest.hasMore ? true : pagination.hasMore,
     historyPageCount: pagination.historyPageCount,
     historySyncAt: pagination.historySyncAt ?? pagination.successfulSyncAt,
     items: [...byId.values()]

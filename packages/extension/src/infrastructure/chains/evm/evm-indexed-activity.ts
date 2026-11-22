@@ -39,9 +39,12 @@ export interface EvmActivityHistorySource {
   readonly readAddressActivity: (
     input: ReadEvmAddressActivityInput
   ) => Promise<readonly ActivityItem[]>
-  readonly readAddressActivityWithMetadata?: (
-    input: ReadEvmAddressActivityInput
-  ) => Promise<{ readonly items: readonly ActivityItem[]; readonly hasMore: boolean }>
+  readonly readAddressActivityWithMetadata?: (input: ReadEvmAddressActivityInput) => Promise<{
+    readonly items: readonly ActivityItem[]
+    readonly hasMore: boolean
+    readonly sourceIncomplete?: boolean
+    readonly windowTruncated?: boolean
+  }>
   readonly findConfirmedReplacement: (
     input: FindEvmConfirmedReplacementInput
   ) => Promise<EvmConfirmedReplacement | null>
@@ -74,6 +77,10 @@ export interface IndexedTokenTransfer {
   readonly nonce?: string
   readonly timestamp: number
   readonly assetId: ReturnType<typeof parseAssetId>['id']
+}
+
+export interface IndexedNativeInternalTransfer extends IndexedTokenTransfer {
+  readonly transferId: string
 }
 
 export function isZeroValueEvmTokenActivity(item: ActivityItem): boolean {
@@ -109,13 +116,19 @@ export function filterTrackedEvmTokenActivity(
   trackedAssetIds: ReadonlySet<string>
 ): ActivityItem | undefined {
   if (isUntrackedEvmTokenActivity(item, trackedAssetIds)) return undefined
-  if (item.source !== 'rpc' || !item.id.startsWith('rpc:evm:') || !item.id.endsWith(':token')) {
+  if (
+    item.source !== 'rpc' ||
+    !item.id.startsWith('rpc:evm:') ||
+    !(item.id.endsWith(':token') || item.id.endsWith(':internal'))
+  ) {
     return item
   }
   const segments = item.segments.map(segment => {
     const effects = segment.evidence?.assetEffects
     if (!effects) return segment
-    const changes = effects.changes.filter(change => trackedAssetIds.has(change.assetId))
+    const changes = effects.changes.filter(
+      change => !change.assetId.includes('/erc20:') || trackedAssetIds.has(change.assetId)
+    )
     if (changes.length === effects.changes.length) return segment
     return Object.freeze({
       ...segment,
@@ -220,15 +233,21 @@ function mapNormalActivityItem(
   chainId: ReturnType<typeof parseChainId>['id'],
   nativeAssetId: ReturnType<typeof parseAssetId>['id'],
   partial: boolean,
-  transfers: readonly IndexedTokenTransfer[]
+  transfers: readonly IndexedTokenTransfer[],
+  internalTransfers: readonly IndexedNativeInternalTransfer[]
 ): ActivityItem {
   const address = input.address.toLowerCase()
-  const direction = directionFor(address, transaction.from, transaction.to)
+  const directlyInvolved = transaction.from === address || transaction.to === address
+  const direction = directlyInvolved
+    ? directionFor(address, transaction.from, transaction.to)
+    : 'contract'
   const isApproval = transaction.valueRaw === '0' && isErc20ApproveCalldata(transaction.input)
   const calldata = transaction.input?.toLowerCase() ?? ''
-  const incompatible = hasConflictingInclusion(transaction, transfers)
+  const movements = [...transfers, ...internalTransfers]
+  const incompatible = hasConflictingInclusion(transaction, movements)
   const directTokenTransfer =
     !incompatible &&
+    internalTransfers.length === 0 &&
     transaction.valueRaw === '0' &&
     transfers.length === 1 &&
     transaction.to?.toLowerCase() === parseAssetId(transfers[0].assetId).reference.toLowerCase() &&
@@ -238,10 +257,11 @@ function mapNormalActivityItem(
     BigInt(`0x${calldata.slice(74)}`) === BigInt(transfers[0].amountRaw) &&
     transfers[0].from.toLowerCase() === address
   const isTransfer =
-    (transaction.valueRaw !== '0' &&
+    directlyInvolved &&
+    ((transaction.valueRaw !== '0' &&
       (!transaction.input || transaction.input === '0x') &&
-      transfers.length === 0) ||
-    directTokenTransfer
+      movements.length === 0) ||
+      directTokenTransfer)
   const effects =
     transaction.failed || incompatible
       ? undefined
@@ -249,7 +269,7 @@ function mapNormalActivityItem(
           address,
           nativeAssetId,
           normal: transaction,
-          transfers,
+          transfers: movements,
           partial:
             partial || !isTransfer || transfers.some(transfer => transfer.blockHash === undefined)
         })
@@ -269,7 +289,7 @@ function mapNormalActivityItem(
     snapshot: Object.freeze({
       schemaVersion: 1 as const,
       direction: isTransfer ? direction : ('contract' as const),
-      ...(transaction.valueRaw !== '0' || directTokenTransfer
+      ...((directlyInvolved && transaction.valueRaw !== '0') || directTokenTransfer
         ? {
             primaryAmount: Object.freeze({
               assetId: directTokenTransfer ? transfers[0].assetId : nativeAssetId,
@@ -304,18 +324,19 @@ function mapNormalActivityItem(
   })
 }
 
-function mapTokenActivityItem(
+function mapSupplementalActivityItem(
   transfers: readonly IndexedTokenTransfer[],
   input: ReadEvmAddressActivityInput,
   chainId: ReturnType<typeof parseChainId>['id'],
   nativeAssetId: ReturnType<typeof parseAssetId>['id'],
-  partial: boolean
+  partial: boolean,
+  hasInternalTransfers: boolean
 ): ActivityItem {
   const transfer = transfers[0]
   const address = input.address.toLowerCase()
   const single = transfers.length === 1
   const direction = single ? directionFor(address, transfer.from, transfer.to) : 'contract'
-  const id = `rpc:evm:${chainId}:${transfer.transactionHash}:token`
+  const id = `rpc:evm:${chainId}:${transfer.transactionHash}:${hasInternalTransfers ? 'internal' : 'token'}`
   const status = 'final' as const
   const effects = hasConflictingInclusion(undefined, transfers)
     ? undefined
@@ -365,14 +386,19 @@ export function mapEvmIndexedActivity(input: {
   readonly nativeAssetId: string
   readonly normalTransactions: readonly IndexedTransaction[]
   readonly tokenTransfers: readonly IndexedTokenTransfer[]
+  readonly internalTransfers?: readonly IndexedNativeInternalTransfer[]
   readonly sourcePartial: boolean
   readonly itemLimit?: number
 }): readonly ActivityItem[] {
   const chain = parseChainId(input.chainId)
   const nativeAssetId = parseAssetId(input.nativeAssetId)
+  const wallet = input.request.address.toLowerCase()
+  const hasInternalSource = input.internalTransfers !== undefined
+  const involvesAddress = (movement: { from: string; to?: string }) =>
+    movement.from === wallet || movement.to === wallet
   const tokenTransfersByHash = new Map<string, IndexedTokenTransfer[]>()
   for (const transfer of input.tokenTransfers) {
-    if (transfer.amountRaw === '0') continue
+    if (transfer.amountRaw === '0' || (hasInternalSource && !involvesAddress(transfer))) continue
     const group = tokenTransfersByHash.get(transfer.transactionHash) ?? []
     group.push(transfer)
     tokenTransfersByHash.set(transfer.transactionHash, group)
@@ -380,12 +406,19 @@ export function mapEvmIndexedActivity(input: {
   const normalByHash = new Map(
     input.normalTransactions.map(transaction => [transaction.transactionHash, transaction])
   )
-  const tokenItems: ActivityItem[] = []
-  for (const [hash, transfers] of tokenTransfersByHash) {
-    const normal = normalByHash.get(hash)
-    if (normal) continue
-    tokenItems.push(
-      mapTokenActivityItem(
+  const internalTransfersByHash = new Map<string, IndexedNativeInternalTransfer[]>()
+  for (const transfer of input.internalTransfers ?? []) {
+    const group = internalTransfersByHash.get(transfer.transactionHash) ?? []
+    group.push(transfer)
+    internalTransfersByHash.set(transfer.transactionHash, group)
+  }
+  const supplementalItems: ActivityItem[] = []
+  for (const hash of new Set([...tokenTransfersByHash.keys(), ...internalTransfersByHash.keys()])) {
+    if (normalByHash.has(hash)) continue
+    const internalTransfers = internalTransfersByHash.get(hash) ?? []
+    const transfers = [...(tokenTransfersByHash.get(hash) ?? []), ...internalTransfers]
+    supplementalItems.push(
+      mapSupplementalActivityItem(
         transfers,
         input.request,
         chain.id,
@@ -393,22 +426,32 @@ export function mapEvmIndexedActivity(input: {
         input.sourcePartial ||
           transfers.some(
             transfer => transfer.blockHash === undefined || transfer.nonce === undefined
-          )
+          ),
+        internalTransfers.length > 0
       )
     )
   }
-  const normalItems = input.normalTransactions.map(transaction =>
-    mapNormalActivityItem(
-      transaction,
-      input.request,
-      chain.id,
-      nativeAssetId.id,
-      input.sourcePartial,
-      tokenTransfersByHash.get(transaction.transactionHash) ?? []
-    )
-  )
+  const normalItems = [...normalByHash.values()]
+    .map(transaction => {
+      const tokens = tokenTransfersByHash.get(transaction.transactionHash) ?? []
+      const internals = internalTransfersByHash.get(transaction.transactionHash) ?? []
+      if (!involvesAddress(transaction)) {
+        if (!hasInternalSource) directionFor(wallet, transaction.from, transaction.to)
+        if (tokens.length === 0 && internals.length === 0) return undefined
+      }
+      return mapNormalActivityItem(
+        transaction,
+        input.request,
+        chain.id,
+        nativeAssetId.id,
+        input.sourcePartial,
+        tokens,
+        internals
+      )
+    })
+    .filter((item): item is ActivityItem => item !== undefined)
   return Object.freeze(
-    [...normalItems, ...tokenItems]
+    [...normalItems, ...supplementalItems]
       .sort(
         (left, right) =>
           right.updatedAt - left.updatedAt ||

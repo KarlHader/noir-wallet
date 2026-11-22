@@ -2,6 +2,7 @@ import type { ActivityItem, ActivityScope } from '@/core/activity'
 import { EvmRpcError } from './evm-rpc-client'
 import { isZeroValueEvmTokenActivity } from './evm-indexed-activity'
 import {
+  baseHistoryItemKey,
   indexedDbEvmHistoryCache,
   type EvmHistoryCacheRecord,
   type EvmHistoryCacheRepository
@@ -11,10 +12,11 @@ import type {
   FindEvmConfirmedReplacementInput,
   ReadEvmAddressActivityInput
 } from './evm-indexed-activity'
-import type {
-  EvmAnkrHistoryClient,
-  EvmAnkrHistoryResult,
-  EvmAnkrHistoryTarget
+import {
+  EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID,
+  type EvmAnkrHistoryClient,
+  type EvmAnkrHistoryResult,
+  type EvmAnkrHistoryTarget
 } from './evm-ankr-history-client'
 
 const DEFAULT_SUCCESS_TTL_MS = 5 * 60_000
@@ -36,6 +38,7 @@ interface EvmCachedHistorySourceOptions {
   readonly chainId: string
   readonly source: EvmActivityHistorySource
   readonly trackedAssetKey?: string
+  readonly usesInternalHistory?: boolean
   readonly cache?: EvmHistoryCacheRepository
   readonly now?: () => number
   readonly successTtlMs?: number
@@ -139,11 +142,16 @@ function trackedAssetsChanged(record: EvmHistoryCacheRecord, trackedAssetKey?: s
 
 function incrementalStartBlock(
   record: EvmHistoryCacheRecord | null,
-  trackedAssetKey?: string
+  trackedAssetKey?: string,
+  usesInternalHistory = false
 ): number | undefined {
   if (!record || record.successfulSyncAt === null) return undefined
   if (trackedAssetsChanged(record, trackedAssetKey)) return undefined
   if (record.items.some(isLegacyInferredEvmActivity)) return undefined
+  if (usesInternalHistory) {
+    const height = record.internalHistory?.indexedThroughBlock
+    return height == null ? undefined : Math.max(0, height - REORG_OVERLAP_BLOCKS)
+  }
   if (record.items.some(item => item.completeness === 'partial')) return undefined
   const heights = record.items.flatMap(item => {
     const height = itemBlockHeight(item)
@@ -189,6 +197,34 @@ function mergeItems(
   return normalizeItems([...byId.values()], scope)
 }
 
+function mergeBaseItems(
+  previous: EvmHistoryCacheRecord | null,
+  fresh: readonly ActivityItem[],
+  scope: ActivityScope,
+  sourceIncomplete: boolean
+): readonly ActivityItem[] {
+  const byHash = new Map((previous?.items ?? []).map(item => [baseHistoryItemKey(item), item]))
+  for (const item of fresh) {
+    const key = baseHistoryItemKey(item)
+    const cached = byHash.get(key)
+    const previousEvidence = cached?.segments.find(segment => segment.role === 'origin')?.evidence
+    const freshEvidence = item.segments.find(segment => segment.role === 'origin')?.evidence
+    if (
+      sourceIncomplete &&
+      previous?.internalHistory &&
+      previousEvidence?.assetEffects &&
+      item.status === 'final' &&
+      previousEvidence.blockHeight === freshEvidence?.blockHeight &&
+      (!previousEvidence.blockHash ||
+        !freshEvidence?.blockHash ||
+        previousEvidence.blockHash === freshEvidence.blockHash)
+    )
+      continue
+    byHash.set(key, item)
+  }
+  return normalizeItems([...byHash.values()], scope)
+}
+
 function hasPendingItems(items: readonly ActivityItem[]): boolean {
   return items.some(item => item.status !== 'final' && item.status !== 'failed')
 }
@@ -196,11 +232,13 @@ function hasPendingItems(items: readonly ActivityItem[]): boolean {
 function cacheRetryAfter(
   record: EvmHistoryCacheRecord,
   pendingTtlMs: number,
-  trackedAssetKey?: string
+  trackedAssetKey?: string,
+  usesInternalHistory = false
 ): number {
   if (
     record.successfulSyncAt === record.lastAttemptAt &&
-    trackedAssetsChanged(record, trackedAssetKey)
+    (trackedAssetsChanged(record, trackedAssetKey) ||
+      (usesInternalHistory && !record.internalHistory))
   )
     return record.lastAttemptAt
   return record.successfulSyncAt === record.lastAttemptAt && hasPendingItems(record.items)
@@ -208,7 +246,18 @@ function cacheRetryAfter(
     : record.retryAfter
 }
 
-function successfulRecord(input: {
+function refreshPageCount(
+  requested: number | undefined,
+  record: EvmHistoryCacheRecord | null,
+  usesInternalHistory: boolean
+): number {
+  return Math.max(
+    requested ?? 1,
+    usesInternalHistory && !record?.internalHistory ? (record?.historyPageCount ?? 1) : 1
+  )
+}
+
+function refreshedRecord(input: {
   readonly chainId: string
   readonly address: string
   readonly scope: ActivityScope
@@ -222,8 +271,30 @@ function successfulRecord(input: {
   readonly successTtlMs: number
   readonly pendingTtlMs: number
   readonly trackedAssetKey?: string
+  readonly usesInternalHistory?: boolean
+  readonly sourceIncomplete?: boolean
+  readonly windowTruncated?: boolean
+  readonly failureBackoffMs: number
 }): EvmHistoryCacheRecord {
-  const items = mergeItems(input.previous?.items ?? [], input.fresh, input.scope)
+  const items = input.usesInternalHistory
+    ? mergeBaseItems(input.previous, input.fresh, input.scope, input.sourceIncomplete === true)
+    : mergeItems(input.previous?.items ?? [], input.fresh, input.scope)
+  if (input.sourceIncomplete) {
+    return Object.freeze({ ...failedRecord(input), hasMore: true, items })
+  }
+  let internalHistory = input.previous?.internalHistory
+  if (input.usesInternalHistory) {
+    const heights = input.fresh.flatMap(item => itemBlockHeight(item) ?? [])
+    const previousHeight = input.fullScan ? null : internalHistory?.indexedThroughBlock
+    const height = Math.max(previousHeight ?? -1, ...heights)
+    internalHistory = Object.freeze({
+      indexedThroughBlock: input.windowTruncated
+        ? (previousHeight ?? null)
+        : height < 0
+          ? null
+          : height
+    })
+  }
   return Object.freeze({
     schemaVersion: 1,
     chainId: input.chainId,
@@ -233,21 +304,26 @@ function successfulRecord(input: {
     successfulSyncAt: input.attemptedAt,
     retryAfter:
       input.attemptedAt +
-      (input.partial || hasPendingItems(items) ? input.pendingTtlMs : input.successTtlMs),
+      (input.partial || input.windowTruncated || hasPendingItems(items)
+        ? input.pendingTtlMs
+        : input.successTtlMs),
     hasMore:
       (input.historyPageCount ?? 1) > 1
         ? (input.hasMore ?? false)
-        : (input.previous?.historyPageCount ?? 1) > 1
-          ? (input.previous?.hasMore ?? false)
-          : input.fullScan
-            ? (input.hasMore ?? false)
-            : (input.previous?.hasMore ?? false) || (input.hasMore ?? false),
+        : input.usesInternalHistory && input.windowTruncated
+          ? (input.hasMore ?? false)
+          : (input.previous?.historyPageCount ?? 1) > 1
+            ? (input.previous?.hasMore ?? false)
+            : input.fullScan
+              ? (input.hasMore ?? false)
+              : (input.previous?.hasMore ?? false) || (input.hasMore ?? false),
     historyPageCount: Math.max(input.historyPageCount ?? 1, input.previous?.historyPageCount ?? 1),
     historySyncAt:
       (input.historyPageCount ?? 1) > 1 || (input.previous?.historyPageCount ?? 1) <= 1
         ? input.attemptedAt
         : (input.previous?.historySyncAt ?? input.previous?.successfulSyncAt ?? null),
     trackedAssetKey: input.trackedAssetKey ?? input.previous?.trackedAssetKey,
+    internalHistory,
     items
   })
 }
@@ -272,6 +348,7 @@ function failedRecord(input: {
     historyPageCount: input.previous?.historyPageCount ?? 1,
     historySyncAt: input.previous?.historySyncAt ?? input.previous?.successfulSyncAt ?? null,
     trackedAssetKey: input.previous?.trackedAssetKey,
+    internalHistory: input.previous?.internalHistory,
     items: normalizeItems(input.previous?.items ?? [], input.scope)
   })
 }
@@ -330,20 +407,30 @@ export function createCachedEvmActivityHistorySource(
         ? await cache.read(options.chainId, address, input.scope).catch(() => previous)
         : previous
       const attemptedAt = now()
+      const usesInternalHistory = options.usesInternalHistory === true
+      const historyPageCount = refreshPageCount(
+        input.historyPageCount,
+        latestPrevious,
+        usesInternalHistory
+      )
+      let record: EvmHistoryCacheRecord
+      let sourceIncomplete = false
       try {
         const sourceInput = {
           ...input,
           address,
+          historyPageCount: historyPageCount > 1 ? historyPageCount : input.historyPageCount,
           fromBlock:
-            (input.historyPageCount ?? 1) > 1
+            historyPageCount > 1
               ? undefined
-              : incrementalStartBlock(latestPrevious, options.trackedAssetKey)
+              : incrementalStartBlock(latestPrevious, options.trackedAssetKey, usesInternalHistory)
         }
         const result = options.source.readAddressActivityWithMetadata
           ? await options.source.readAddressActivityWithMetadata(sourceInput)
           : { items: await options.source.readAddressActivity(sourceInput), hasMore: false }
         const fresh = result.items
-        const record = successfulRecord({
+        sourceIncomplete = result.sourceIncomplete === true
+        record = refreshedRecord({
           chainId: options.chainId,
           address,
           scope: input.scope,
@@ -353,14 +440,15 @@ export function createCachedEvmActivityHistorySource(
           partial: fresh.some(item => item.completeness === 'partial'),
           hasMore: result.hasMore,
           fullScan: sourceInput.fromBlock === undefined,
-          historyPageCount: input.historyPageCount,
+          historyPageCount,
           successTtlMs,
           pendingTtlMs,
-          trackedAssetKey: options.trackedAssetKey
+          failureBackoffMs,
+          trackedAssetKey: options.trackedAssetKey,
+          usesInternalHistory,
+          sourceIncomplete,
+          windowTruncated: result.windowTruncated
         })
-        await persist(record)
-        logInfo(`[EVM History] refreshed chain=${options.chainId} items=${record.items.length}`)
-        return record.items
       } catch (error) {
         if (!(error instanceof EvmRpcError && error.code === 'cancelled')) {
           await persist(
@@ -376,6 +464,12 @@ export function createCachedEvmActivityHistorySource(
         }
         throw error
       }
+      await persist(record)
+      if (sourceIncomplete && (input.historyPageCount ?? 1) > 1) {
+        throw new EvmRpcError('network-unavailable', 'EVM history page is unavailable')
+      }
+      logInfo(`[EVM History] refreshed chain=${options.chainId} items=${record.items.length}`)
+      return record.items
     })().finally(() => {
       if (pending.get(key) === work) pending.delete(key)
     })
@@ -412,7 +506,12 @@ export function createCachedEvmActivityHistorySource(
         ) {
           await persist({ ...cached, scope: input.scope, items })
         }
-        const retryAfter = cacheRetryAfter(cached, pendingTtlMs, options.trackedAssetKey)
+        const retryAfter = cacheRetryAfter(
+          cached,
+          pendingTtlMs,
+          options.trackedAssetKey,
+          options.usesInternalHistory
+        )
         logInfo(
           `[EVM History] cache hit chain=${options.chainId} items=${items.length} successful=${cached.successfulSyncAt !== null}`
         )
@@ -523,7 +622,7 @@ export function createCachedEvmAnkrHistoryBatchSource(options: {
         scope.keyDomainId,
         scope.accountId,
         address,
-        targets.map(target => target.chainId).sort()
+        targets.map(target => [target.chainId, target.historyPageCount ?? 1]).sort()
       ])
       const existing = signal ? undefined : pending.get(key)
       if (existing) return existing
@@ -545,35 +644,55 @@ export function createCachedEvmAnkrHistoryBatchSource(options: {
         const due = targets.flatMap((target, index) => {
           const record = cached[index]
           const trackedAssetKey = options.trackedAssetKeys?.get(target.chainId)
+          const usesInternalHistory = target.chainId === EVM_NATIVE_INTERNAL_HISTORY_CHAIN_ID
           if (
             record &&
             !record.items.some(isLegacyInferredEvmActivity) &&
-            attemptedAt < cacheRetryAfter(record, DEFAULT_PENDING_TTL_MS, trackedAssetKey)
+            (target.historyPageCount ?? 1) === 1 &&
+            attemptedAt <
+              cacheRetryAfter(record, DEFAULT_PENDING_TTL_MS, trackedAssetKey, usesInternalHistory)
           ) {
             output.set(target.chainId, normalizeItems(record?.items ?? [], scope))
             return []
           }
+          const historyPageCount = refreshPageCount(
+            target.historyPageCount,
+            record,
+            usesInternalHistory
+          )
           return [
             {
               ...target,
               address,
-              fromBlock: incrementalStartBlock(record, trackedAssetKey),
+              fromBlock:
+                historyPageCount > 1
+                  ? undefined
+                  : incrementalStartBlock(record, trackedAssetKey, usesInternalHistory),
+              historyPageCount,
+              usesInternalHistory,
               previous: record
             }
           ]
         })
         if (due.length === 0) return output
 
-        let fresh: ReadonlyMap<string, EvmAnkrHistoryResult>
-        try {
-          fresh = await options.source.readAddressActivities(due, signal)
-        } catch (error) {
-          fresh = new Map(due.map(target => [target.chainId, { error }]))
-        }
-        const resolved = new Map(fresh)
+        const sharedTargets = due.filter(target => target.historyPageCount === 1)
+        const deepTargets = due.filter(target => target.historyPageCount > 1)
+        const resolved = new Map<string, EvmAnkrHistoryResult>()
+        await Promise.all(
+          [sharedTargets, ...deepTargets.map(target => [target])].map(async group => {
+            if (group.length === 0) return
+            try {
+              const result = await options.source.readAddressActivities(group, signal)
+              for (const [chainId, outcome] of result) resolved.set(chainId, outcome)
+            } catch (error) {
+              for (const target of group) resolved.set(target.chainId, { error })
+            }
+          })
+        )
         const retrySingleChain =
-          due.length > 1
-            ? due.filter(target => {
+          sharedTargets.length > 1
+            ? sharedTargets.filter(target => {
                 const result = resolved.get(target.chainId)
                 return (
                   result !== undefined &&
@@ -645,7 +764,7 @@ export function createCachedEvmAnkrHistoryBatchSource(options: {
               }
               return
             }
-            const record = successfulRecord({
+            const record = refreshedRecord({
               chainId: target.chainId,
               address,
               scope,
@@ -655,10 +774,14 @@ export function createCachedEvmAnkrHistoryBatchSource(options: {
               partial: result.partial,
               hasMore: result.hasMore,
               fullScan: target.fromBlock === undefined,
-              historyPageCount: 1,
+              historyPageCount: target.historyPageCount,
               successTtlMs: DEFAULT_SUCCESS_TTL_MS,
               pendingTtlMs: DEFAULT_PENDING_TTL_MS,
-              trackedAssetKey: options.trackedAssetKeys?.get(target.chainId)
+              failureBackoffMs: DEFAULT_FAILURE_BACKOFF_MS,
+              trackedAssetKey: options.trackedAssetKeys?.get(target.chainId),
+              usesInternalHistory: target.usesInternalHistory,
+              sourceIncomplete: result.sourceIncomplete,
+              windowTruncated: result.windowTruncated
             })
             output.set(target.chainId, record.items)
             await persist(record)

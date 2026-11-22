@@ -237,14 +237,15 @@ After deployment, check `GET https://www.zknoir.com/api/frost-signups` for HTTP 
 
 ## History Proxy Deployment
 
-The existing Worker source is `packages/evm-history-worker/`; its production hostname is `https://history-proxy.zknoir.com`. It serves the bounded Ankr methods used by the extension. Bitcoin, Solana, NEAR, and Blockscout providers remain direct client requests.
+The Worker source is `packages/evm-history-worker/` and its production hostname is `https://history-proxy.zknoir.com`. It serves the extension's bounded Ankr methods and indexes Base Mainnet native internal transfers through Alchemy. Bitcoin, Solana, NEAR, and Blockscout providers remain direct client requests.
 
 Runtime caching is enabled in the [History proxy configuration](../packages/evm-history-worker/wrangler.json) and [RPC registry configuration](../packages/rpc-registry/wrangler.json), so deployments retain the setting. Public icon and registry responses use their existing cache headers; History and token-discovery responses use `Cache-Control: no-store`.
 
-Configure `ANKR_API_KEYS` as a Worker runtime secret containing one to eight comma-separated keys. Do not commit the keys or pass them into the extension build. Use interactive input:
+Configure `ANKR_API_KEYS` as a Worker runtime secret containing one to eight comma-separated keys and `ALCHEMY_API_KEY` as a Worker runtime secret for an Alchemy app with Base Mainnet enabled. Do not commit the keys or pass them into the extension build. Use interactive input:
 
 ```bash
 pnpm --filter @noir-wallet/evm-history-worker exec wrangler secret put ANKR_API_KEYS
+pnpm --filter @noir-wallet/evm-history-worker exec wrangler secret put ALCHEMY_API_KEY
 pnpm --filter @noir-wallet/evm-history-worker deploy
 ```
 
