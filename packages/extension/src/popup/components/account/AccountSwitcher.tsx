@@ -4,10 +4,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useWalletStore } from '@/store/wallet-store'
 import { getAccountDisplayName, formatSortAddress } from '@/lib/format'
 import { isWalletLockedError } from '@/lib/errors'
-import {
-  accountNetworksClient,
-  type AccountNetworksView
-} from '@/popup/services/account-networks-client'
+import type { AccountNetworksCatalogView } from '@/popup/services/account-networks-client'
 import {
   accountNetworkIconChain,
   accountNetworkLabel,
@@ -25,6 +22,7 @@ import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyT
 import { ChainIcon } from '../common/ChainIcon'
 import evmGroupIcon from '@/images/figma-evm-group.svg'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { Skeleton } from '../ui/skeleton'
 import { cn } from '@/lib/utils'
 import type { ActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { AccountAvatar as AccountAvatarImage } from './AccountAvatar'
@@ -120,7 +118,8 @@ function AccountAddressPopover({
   copyScope,
   onViewAll,
   onOpenZcashSettings,
-  className
+  className,
+  addressesStatus
 }: {
   readonly account: SwitcherAccount
   readonly defaultEvmMode: 'public' | 'private' | null
@@ -131,6 +130,7 @@ function AccountAddressPopover({
   readonly onViewAll: () => void
   readonly onOpenZcashSettings: () => void
   readonly className?: string
+  readonly addressesStatus: 'loading' | 'ready' | 'error'
 }) {
   const [selectedEvmMode, setEvmMode] = useState<'public' | 'private' | null>(null)
   const keyPrefix = `${copyScope}-${account.walletId}-${account.accountId}`
@@ -333,9 +333,23 @@ function AccountAddressPopover({
           </button>
         </div>
       ))}
-      {account.networks.length === 0 && (
-        <p className="py-2 text-center text-xs text-muted">No addresses available</p>
-      )}
+      {account.networks.length === 0 &&
+        (addressesStatus === 'loading' ? (
+          <div role="status" aria-label="Loading addresses" className="flex items-start gap-2 py-2">
+            <Skeleton className="size-[26px] shrink-0 rounded-[5px]" />
+            <div className="min-w-0 flex-1 space-y-2.5 pt-1">
+              <Skeleton className="h-3 w-14 max-w-full" />
+              <div className="flex items-center justify-between gap-2">
+                <Skeleton className="h-2.5 w-14" />
+                <Skeleton className="h-2.5 w-24" />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="py-2 text-center text-xs text-muted" role="status">
+            {addressesStatus === 'error' ? 'Addresses unavailable' : 'No addresses available'}
+          </p>
+        ))}
       <button
         type="button"
         onClick={onViewAll}
@@ -351,11 +365,15 @@ export function AccountSwitcher({
   className,
   accountName,
   accountIdentity,
+  accountCatalog,
+  accountCatalogError,
   defaultEvmMode = 'public'
 }: {
   readonly className?: string
   readonly accountName?: string
   readonly accountIdentity: ActiveAccountIdentity | null
+  readonly accountCatalog: AccountNetworksCatalogView | null
+  readonly accountCatalogError: boolean
   readonly defaultEvmMode?: 'public' | 'private' | null
 }) {
   const { navigate, replace } = useNavigate()
@@ -365,7 +383,8 @@ export function AccountSwitcher({
   const { wallets, accountDisplayNames, currentWalletId, currentAccountId } = useWalletStore()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [addressesOpen, setAddressesOpen] = useState(false)
-  const [catalogAccounts, setCatalogAccounts] = useState<readonly AccountNetworksView[]>([])
+  const catalogAccounts = accountCatalog?.accounts ?? []
+  const addressesStatus = accountCatalog ? 'ready' : accountCatalogError ? 'error' : 'loading'
   const selectedWalletId = accountIdentity?.walletId ?? null
   const selectedAccountId = accountIdentity?.accountId ?? null
   const [switching, setSwitching] = useState<string | null>(null)
@@ -442,19 +461,6 @@ export function AccountSwitcher({
     }
     return cancelPreviewTimer
   }, [drawerOpen, cancelPreviewTimer])
-
-  useEffect(() => {
-    let cancelled = false
-    void accountNetworksClient
-      .getCatalog()
-      .then(catalog => {
-        if (!cancelled) setCatalogAccounts(catalog?.accounts ?? [])
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [drawerOpen, addressesOpen, selectedWalletId, selectedAccountId])
 
   const groups = useMemo(
     () =>
@@ -750,6 +756,7 @@ export function AccountSwitcher({
                     key={`${previewAccount.walletId}:${previewAccount.accountId}`}
                     account={previewAccount}
                     defaultEvmMode={defaultEvmMode}
+                    addressesStatus={addressesStatus}
                     className="max-w-[calc(100vw-114px)]"
                     onCopy={(value, key) => void copyToClipboard(value, key)}
                     onCopyPrivate={(address, key) => {
@@ -830,6 +837,7 @@ export function AccountSwitcher({
               key={`${activeAccount.walletId}:${activeAccount.accountId}`}
               account={activeAccount}
               defaultEvmMode={defaultEvmMode}
+              addressesStatus={addressesStatus}
               onCopy={(value, key) => void copyToClipboard(value, key)}
               onCopyPrivate={(address, key) => {
                 setAddressesOpen(false)

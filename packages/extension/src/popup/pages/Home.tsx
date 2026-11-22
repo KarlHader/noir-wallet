@@ -54,6 +54,8 @@ import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-setting
 import { ZcashSyncProgress } from '../components/zcash/ZcashSyncProgress'
 import { automaticRefreshSession } from '../services/automatic-refresh-session'
 import { useDAppExecutionMode } from '../hooks/useDAppExecutionMode'
+import { DAppExecutionModeClientError } from '../services/dapp-execution-mode-client'
+import { useDialog } from '../hooks/useDialog'
 import { toast } from '@/store/toast-store'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
 import { resolveEffectiveActiveAccountIdentity } from '../lib/effective-active-account'
@@ -81,6 +83,7 @@ const canUseSharedPortfolioTotalCache = __ENABLED_CHAIN_FEATURE_FLAGS__.length >
 
 export function Home() {
   const openResyncZcash = useResyncZcash()
+  const { confirm } = useDialog()
   const navigate = useNavigate()
   const location = useLocation()
   const {
@@ -127,6 +130,7 @@ export function Home() {
   const setBalancesHidden = useSettingsStore(state => state.setBalancesHidden)
   const {
     activeAccount: storageV2Account,
+    catalog: accountCatalog,
     loading: accountNetworksLoading,
     error: accountNetworksError,
     refresh: refreshAccountNetworks
@@ -624,12 +628,49 @@ export function Home() {
       let committed = current.mode
       while (requestedMode.current && requestedMode.current !== committed) {
         const target = requestedMode.current
-        let next
-        try {
-          next = await dappExecutionMode.setMode(target, {
-            confirmPrivateSetup: target === 'private' && !current.privateSetupCompleted,
-            confirmAffectedOperations: true
+        const confirmPrivateSetup = target === 'private' && !current.privateSetupCompleted
+        if (confirmPrivateSetup) {
+          const accepted = await confirm({
+            title: 'Enable Private DApp address?',
+            message: 'Connected sites will use your Private address for this account.',
+            confirmText: 'Enable'
           })
+          if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey)
+            return
+          if (!accepted) break
+        }
+        let next
+        let confirmAffectedOperations = false
+        try {
+          while (true) {
+            try {
+              next = await dappExecutionMode.setMode(target, {
+                confirmPrivateSetup,
+                confirmAffectedOperations
+              })
+              break
+            } catch (error) {
+              if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey)
+                return
+              if (
+                !(error instanceof DAppExecutionModeClientError) ||
+                error.code !== 'affected-operations-confirmation-required' ||
+                confirmAffectedOperations ||
+                !error.impact
+              )
+                throw error
+              const count = error.impact.pendingApprovalCount
+              const accepted = await confirm({
+                title: 'Change DApp address?',
+                message: `${count} pending dApp ${count === 1 ? 'request' : 'requests'} will be cancelled.`,
+                confirmText: 'Change address'
+              })
+              if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey)
+                return
+              if (!accepted) break
+              confirmAffectedOperations = true
+            }
+          }
         } catch (error) {
           if (
             runId === modeChangeRunId.current &&
@@ -641,6 +682,7 @@ export function Home() {
           }
           throw error
         }
+        if (!next) break
         if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey) return
         if (next.mode === committed) {
           if (requestedMode.current === committed) break
@@ -713,6 +755,8 @@ export function Home() {
         <AccountSwitcher
           accountName={accountDisplayName}
           accountIdentity={effectiveAccount}
+          accountCatalog={accountCatalog}
+          accountCatalogError={accountNetworksError}
           defaultEvmMode={assetDomain === 'shield' ? null : walletMode}
           className="min-w-0 flex-1"
         />
@@ -765,7 +809,7 @@ export function Home() {
 
       <div
         data-testid="home-scroll-container"
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
       >
         {/* Total Balance */}
         <div className="px-4 pb-5 pt-6">
@@ -896,7 +940,7 @@ export function Home() {
               if (path !== `${location.pathname}${location.search}`) navigate.replace(path)
             }
           }}
-          className="relative w-full gap-0"
+          className="relative w-full flex-1 gap-0"
         >
           <div className="sticky top-0 z-30 isolate flex h-10 items-center gap-3 border-b border-white/8 bg-background px-5">
             <PageTabsList className="h-full flex-1">
@@ -973,7 +1017,7 @@ export function Home() {
               <HomeDAppList account={effectiveAccount} connections={connectedDApps} />
             </TabsContent>
           )}
-          <TabsContent value="assets" className="mt-0">
+          <TabsContent value="assets" className="mt-0 flex flex-col data-[state=inactive]:hidden">
             <MultichainPortfolioPanel
               domain={assetDomain}
               activeAccount={storageV2Account}
@@ -1002,23 +1046,27 @@ export function Home() {
               onManageTokens={() => navigate.navigate('/manage-tokens')}
             />
             {showV1NetworkGuide && currentWalletId && currentAccountId && (
-              <button
-                type="button"
-                onClick={() =>
-                  navigate.navigate(
-                    `/account-networks?walletId=${encodeURIComponent(currentWalletId)}&accountId=${encodeURIComponent(currentAccountId)}&guide=v1`
-                  )
-                }
-                className="wallet-interactive mx-4 mb-6 mt-5 flex min-h-[73px] w-[calc(100%-2rem)] flex-col justify-center rounded-lg border border-white/10 bg-wallet-surface px-3 text-left hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary"
-              >
-                <span className="flex w-full items-center justify-between gap-2">
-                  <span className="text-base font-medium">Add More Networks</span>
-                  <span className="flex shrink-0 items-center gap-1 text-sm font-medium text-[#00d18a]">
-                    Add now <Icon icon="lucide:chevron-right" width={14} height={14} />
+              <div className="mt-auto pt-5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate.navigate(
+                      `/account-networks?walletId=${encodeURIComponent(currentWalletId)}&accountId=${encodeURIComponent(currentAccountId)}&guide=v1`
+                    )
+                  }
+                  className="wallet-interactive mx-4 mb-6 flex min-h-[73px] w-[calc(100%-2rem)] flex-col justify-center rounded-lg border border-white/10 bg-wallet-surface px-3 text-left hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary"
+                >
+                  <span className="flex w-full items-center justify-between gap-2">
+                    <span className="text-base font-medium">Add More Networks</span>
+                    <span className="flex shrink-0 items-center gap-1 text-sm font-medium text-[#00d18a]">
+                      Add now <Icon icon="lucide:chevron-right" width={14} height={14} />
+                    </span>
                   </span>
-                </span>
-                <span className="mt-1 text-xs text-muted">Ethereum, BNB Chain, Base and more…</span>
-              </button>
+                  <span className="mt-1 text-xs text-muted">
+                    Ethereum, BNB Chain, Base and more…
+                  </span>
+                </button>
+              </div>
             )}
           </TabsContent>
 
