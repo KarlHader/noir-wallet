@@ -1230,7 +1230,6 @@ export class BackgroundZcashWalletRuntime {
     await prepareWalletStoreForUse()
 
     if (this.isInitialized && this.walletCore && !network) {
-      logger.log('Already initialized, skipping')
       return
     }
 
