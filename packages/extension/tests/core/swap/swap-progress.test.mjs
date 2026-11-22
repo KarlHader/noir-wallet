@@ -20,6 +20,7 @@ test('binds a Zcash Swap activity before broadcast and ignores callbacks for a d
   const store = useTransactionResultStore.getState()
   const result = {
     type: 'swap',
+    activityDomain: 'shield',
     depositAddress: 'deposit',
     status: null,
     tokenInSymbol: 'ZEC',

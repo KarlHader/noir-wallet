@@ -22,10 +22,7 @@ import type { ActivityPerspective } from '@/popup/services/activity-action-label
 import type { ActivityItem } from '@/core/activity'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { Network } from '@/types'
-import {
-  getActivityStatusPresentation,
-  isLegacyPrivateShieldWithdrawDestination
-} from '@/popup/services/multichain-activity-presentation'
+import { getActivityStatusPresentation } from '@/popup/services/multichain-activity-presentation'
 import { EvmPendingTransactionActions } from '../evm/EvmPendingTransactionActions'
 
 export interface ConfidentialActivityTarget {
@@ -231,12 +228,6 @@ export function ConfidentialActivityView({
         chainMetadata: catalog.chainMetadata,
         confidentialPlan: scopedPlan,
         perspective: display?.perspective,
-        legacyPrivateShieldWithdrawDestination: isLegacyPrivateShieldWithdrawDestination(
-          scopedActivity,
-          scopedPlan,
-          activeAccount,
-          plan.network
-        ),
         refunded,
         ...(refunded ? { statusLabel: 'Refunded', statusTone: 'neutral' as const } : {}),
         fallback: display

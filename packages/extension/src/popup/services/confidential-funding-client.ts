@@ -93,13 +93,7 @@ export function getConfidentialFundingResult(plan: ConfidentialFundingPlan): Rea
   })
 }
 
-const CONFIDENTIAL_TRANSACTION_PREFIX = 'tx:confidential:'
-
-export function getConfidentialFundingPlanId(transactionId: string): string | null {
-  if (!transactionId.startsWith(CONFIDENTIAL_TRANSACTION_PREFIX)) return null
-  const planId = transactionId.slice(CONFIDENTIAL_TRANSACTION_PREFIX.length)
-  return /^[a-zA-Z0-9:_-]{1,160}$/.test(planId) ? planId : null
-}
+export { getConfidentialFundingPlanId } from '@/core/services/confidential-funding/confidential-funding-graph'
 
 const PHASES = new Set<ConfidentialFundingPhase>([
   'prepared',

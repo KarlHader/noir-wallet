@@ -68,7 +68,7 @@ test('pending ZEC swap Activity projects the quote-time final recipient and dest
   )
 })
 
-test('a settled Shield ZEC swap belongs to its owned Public destination and the Shield source', () => {
+test('a settled Shield ZEC swap belongs to its owned destination and the Shield source', () => {
   const destinationChainId = 'eip155:42161'
   const sourceChainId = getZcashChainId('mainnet')
   const completed = { ...transaction, status: 'success' }
@@ -89,6 +89,25 @@ test('a settled Shield ZEC swap belongs to its owned Public destination and the 
     executionAddressModes
   }
   assert.deepEqual(filterActivityItems({ ...publicActivity, assetId: destinationAsset }), [item])
+  const privateModes = new Map([
+    [`${destinationChainId}:${transaction.quoteBinding.recipient}`, 'Confidential']
+  ])
+  const privateActivity = {
+    ...publicActivity,
+    domain: 'private',
+    executionAddressModes: privateModes
+  }
+  assert.deepEqual(filterActivityItems({ ...privateActivity, assetId: destinationAsset }), [item])
+  assert.deepEqual(filterActivityItems({ ...privateActivity, domain: 'public' }), [])
+  assert.deepEqual(filterActivityItems({ ...privateActivity, selectedChainIds: ['eip155:1'] }), [])
+  assert.deepEqual(
+    filterActivityItems({ ...privateActivity, items: [{ ...item, reconfirming: true }] }),
+    []
+  )
+  const privateRoute = getActivitySwapPresentation(item, new Map(), new Map(), privateModes)
+  assert.equal(privateRoute.destinationAccountMode, 'Confidential')
+  assert.equal(getActivityRouteTitle(item, privateRoute, { viewedDomain: 'private' }), 'Receive')
+  assert.equal(getActivityRouteTitle(item, privateRoute, { viewedDomain: 'shield' }), 'Swap')
   assert.deepEqual(
     filterActivityItems({ ...publicActivity, selectedChainIds: [sourceChainId] }),
     []

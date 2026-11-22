@@ -51,7 +51,6 @@ import {
   getActivitySwapPresentation,
   getClusterSettledDestination,
   buildActivityExecutionAddressModes,
-  isLegacyPrivateShieldWithdrawDestination,
   isActivityRecoveryTransition
 } from '@/popup/services/multichain-activity-presentation'
 import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
@@ -349,19 +348,12 @@ export function MultichainActivityDetail({
     confidentialPlan.accountId === visibleItem.scope.accountId
       ? confidentialPlan
       : null
-  const legacyPrivateShieldWithdrawDestination = isLegacyPrivateShieldWithdrawDestination(
-    visibleItem,
-    activeConfidentialPlan,
-    currentNetwork === network ? activeSwapAccount : null,
-    network
-  )
   const swap = getActivitySwapPresentation(
     visibleItem,
     assetMetadata,
     chainMetadata,
     executionAddressModes,
-    getClusterSettledDestination(visibleItem, activeConfidentialPlan),
-    legacyPrivateShieldWithdrawDestination
+    getClusterSettledDestination(visibleItem, activeConfidentialPlan)
   )
   const swapSourceMethod = getActivitySwapSourceMethodLabel(visibleItem, swap?.source?.symbol)
   const amount = visibleItem.snapshot?.primaryAmount
@@ -568,7 +560,6 @@ export function MultichainActivityDetail({
     executionAddressModes,
     perspective,
     settledDestination: getClusterSettledDestination(visibleItem, activeConfidentialPlan),
-    legacyPrivateShieldWithdrawDestination,
     confidentialPlan: activeConfidentialPlan,
     refunded: activeConfidentialPlan?.phase === 'refunded',
     replacementHash: scopedZcashRecord?.replacedByTxHash,

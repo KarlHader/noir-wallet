@@ -126,6 +126,7 @@ import {
 } from '@/popup/services/shield-transfer'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
+import { homeActivityPath } from '@/popup/services/home-navigation'
 import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
 import {
   balanceTransferDomainLabel as domainLabel,
@@ -1571,6 +1572,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       wallet.currentNetwork !== currentNetwork
     )
       return
+    const activityDomain = fixedSide === 'to' ? to : fixedSide === 'from' ? from : walletMode
     navigate(
       direction === 'main-to-private'
         ? buildAddToPrivateEvmPath({
@@ -1584,7 +1586,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
             mainAddress,
             amount: currentAmount,
             maximum: maxSelected
-          })
+          }),
+      { state: { activityDomain } }
     )
   }
   const symbol = formatSymbol(selected?.asset.metadata.symbol)
@@ -1823,11 +1826,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       const domain = (fixedSide === 'to' ? to : from) === 'private' ? 'private' : 'shield'
       void openConfidentialActivity(
         plan,
-        () => {
-          navigate(
-            `/?domain=${domain}&tab=activity&transactionId=${encodeURIComponent(plan.transactionId)}`
-          )
-        },
+        () => navigate(homeActivityPath(domain, plan.transactionId)),
         selected
           ? {
               operation: 'move',

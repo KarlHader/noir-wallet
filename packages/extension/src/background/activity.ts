@@ -1,5 +1,9 @@
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
-import { projectExternalShieldDepositActivityGraph } from '@/core/services/confidential-funding'
+import {
+  isLegacyShieldWithdrawActivityGraph,
+  projectExternalShieldDepositActivityGraph,
+  projectLegacyShieldWithdrawActivityGraph
+} from '@/core/services/confidential-funding'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
@@ -755,14 +759,22 @@ export function createBackgroundActivityCoordinator(
 
   const filterLocalGraphs = async (
     scope: ActivityScope,
-    graphs: readonly TransactionGraph[]
+    graphs: readonly TransactionGraph[],
+    privateExecutionAddresses: readonly string[]
   ): Promise<readonly TransactionGraph[]> => {
-    const externalRecords = graphs.some(
+    const fundingStore = new ChromeConfidentialFundingStore()
+    const hasExternalRecords = graphs.some(
       graph =>
         graph.root.status === 'failed' && graph.root.id.startsWith('tx:confidential-external:')
     )
-      ? await new ChromeConfidentialFundingStore().listExternalDeposits().catch(() => [])
-      : []
+    const legacyWithdrawIds =
+      privateExecutionAddresses.length === 0
+        ? []
+        : graphs.filter(isLegacyShieldWithdrawActivityGraph).map(graph => graph.root.id)
+    const [externalRecords, legacyWithdrawPlans] = await Promise.all([
+      hasExternalRecords ? fundingStore.listExternalDeposits().catch(() => []) : [],
+      fundingStore.getPlansForTransactions(legacyWithdrawIds).catch(() => new Map())
+    ])
     const externalByTransactionId = new Map(
       externalRecords
         .filter(
@@ -775,7 +787,14 @@ export function createBackgroundActivityCoordinator(
     )
     const projectedGraphs = graphs.map(graph => {
       const record = externalByTransactionId.get(graph.root.id)
-      return record ? projectExternalShieldDepositActivityGraph(graph, record) : graph
+      return record
+        ? projectExternalShieldDepositActivityGraph(graph, record)
+        : projectLegacyShieldWithdrawActivityGraph(
+            graph,
+            legacyWithdrawPlans.get(graph.root.id),
+            DEFAULT_NETWORK,
+            privateExecutionAddresses
+          )
     })
     if (!bitcoinDiscovery) return projectedGraphs
     const context = await loadActiveBitcoinDiscoveryContext(

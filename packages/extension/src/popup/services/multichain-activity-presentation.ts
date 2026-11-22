@@ -16,11 +16,12 @@ import type {
   ActivityAssetMetadata,
   ActivityChainMetadata
 } from '@/popup/services/activity-presentation-catalog'
-import type {
-  AccountNetworkView,
-  AccountNetworksView
-} from '@/popup/services/account-networks-client'
-import type { Network } from '@/types'
+import type { AccountNetworkView } from '@/popup/services/account-networks-client'
+import {
+  activityAddressKey,
+  getActivityAddressMode,
+  resolveOwnedActivitySettlement
+} from '@/popup/services/activity-balance-route'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { formatActivityTokenAmount } from '@/popup/services/portfolio-format'
 import type {
@@ -97,6 +98,7 @@ export interface ActivitySwapPresentation {
   readonly sourceFundingSource?: 'transparent' | 'shielded'
   readonly destinationFundingSource?: 'transparent' | 'shielded'
   readonly destinationAccountMode?: 'Public' | 'Confidential' | 'Shield'
+  readonly settledDestinationDomain?: 'public' | 'private'
 }
 
 export function resolveActivityChainMetadata(
@@ -174,6 +176,8 @@ export function getActivityRouteTitle(
     item.snapshot?.shield ||
     route.sourceFundingSource ||
     route.destinationFundingSource ||
+    (route.settledDestinationDomain &&
+      route.settledDestinationDomain === perspective.viewedDomain) ||
     isDirectAccountMove(item, route) ||
     isAccountModeTransfer(item, route)
   )
@@ -242,10 +246,6 @@ export function hasMatchingActivityTokenIcons(route: ActivitySwapPresentation): 
   return !source.iconUrl || !destination.iconUrl || source.iconUrl === destination.iconUrl
 }
 
-function activityAddressKey(chainId: string, address: string): string {
-  return `${chainId}:${chainId.startsWith('eip155:') ? address.toLowerCase() : address}`
-}
-
 export function buildActivityExecutionAddressModes(
   networks: readonly AccountNetworkView[]
 ): ReadonlyMap<string, 'Public' | 'Confidential'> {
@@ -264,39 +264,6 @@ export function buildActivityExecutionAddressModes(
     }
   }
   return modes
-}
-
-export function isLegacyPrivateShieldWithdrawDestination(
-  item: ActivityItem,
-  plan: ConfidentialFundingPlan | null | undefined,
-  account: AccountNetworksView | null | undefined,
-  network: Network
-): boolean {
-  const recipient = item.snapshot?.recipient
-  return Boolean(
-    item.source === 'wallet-v2' &&
-    item.snapshot?.direction === 'outgoing' &&
-    item.snapshot.shield?.operation === 'withdraw' &&
-    item.snapshot.shield.destinationDomain === 'public' &&
-    recipient?.chainId.startsWith('eip155:') &&
-    plan?.operation === 'withdraw' &&
-    plan.destinationDomain === 'public' &&
-    plan.externalRecipient &&
-    plan.transactionId === item.id &&
-    plan.network === network &&
-    plan.keyDomainId === item.scope.keyDomainId &&
-    plan.accountId === item.scope.accountId &&
-    plan.destination.chainId === recipient.chainId &&
-    plan.destination.address.toLowerCase() === recipient.address.toLowerCase() &&
-    plan.externalRecipient.toLowerCase() === recipient.address.toLowerCase() &&
-    account?.walletId === item.scope.keyDomainId &&
-    account.accountId === item.scope.accountId &&
-    account.networks.some(
-      entry =>
-        entry.chain.id === recipient.chainId &&
-        entry.privateExecutionAddress?.toLowerCase() === recipient.address.toLowerCase()
-    )
-  )
 }
 
 export function getClusterSettledDestination(
@@ -341,8 +308,7 @@ export function getActivitySwapPresentation(
   assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>,
   chainMetadata: ReadonlyMap<string, ActivityChainMetadata>,
   executionAddressModes: ReadonlyMap<string, 'Public' | 'Confidential'> = new Map(),
-  confirmedDestination?: TransactionAssetAmount,
-  legacyPrivateShieldWithdrawDestination = false
+  confirmedDestination?: TransactionAssetAmount
 ): ActivitySwapPresentation | null {
   if (
     item.snapshot?.shield === undefined &&
@@ -416,26 +382,31 @@ export function getActivitySwapPresentation(
   const senderAddress = item.snapshot?.sender?.address
   const shieldDomainLabel = (domain: 'public' | 'private' | 'shield') =>
     domain === 'shield' ? 'Shield' : domain === 'private' ? 'Confidential' : 'Public'
-  const sourceAccountMode = confidentialDestination
-    ? item.assetDomains?.includes('shield')
-      ? 'Shield'
-      : 'Public'
-    : isExternalDeposit
-      ? 'External'
-      : shield
-        ? shieldDomainLabel(shield.sourceDomain)
-        : senderAddress
-          ? executionAddressModes.get(senderAddress.toLowerCase())
-          : undefined
+  const settlement = resolveOwnedActivitySettlement(item, executionAddressModes)
+  const sourceAccountMode =
+    confidentialDestination || (settlement && item.source === 'zcash-v1')
+      ? shieldDomainLabel(item.assetDomains?.includes('shield') ? 'shield' : 'public')
+      : isExternalDeposit
+        ? 'External'
+        : shield
+          ? shieldDomainLabel(shield.sourceDomain)
+          : senderAddress
+            ? executionAddressModes.get(senderAddress.toLowerCase())
+            : undefined
   const destinationAccountMode = confidentialDestination
     ? 'Confidential'
     : shield
-      ? legacyPrivateShieldWithdrawDestination
-        ? 'Confidential'
-        : shieldDomainLabel(shield.destinationDomain)
-      : recipientAddress
-        ? executionAddressModes.get(recipientAddress.toLowerCase())
-        : undefined
+      ? shieldDomainLabel(shield.destinationDomain)
+      : settlement
+        ? shieldDomainLabel(settlement.domain)
+        : (getActivityAddressMode(
+            executionAddressModes,
+            item.snapshot?.recipient?.chainId,
+            recipientAddress
+          ) ??
+          (recipientAddress
+            ? executionAddressModes.get(recipientAddress.toLowerCase())
+            : undefined))
   const protocol = item.snapshot?.protocol
   const hideDestinationCredit =
     !shield &&
@@ -480,6 +451,7 @@ export function getActivitySwapPresentation(
         }
       : {}),
     ...(destinationAccountMode ? { destinationAccountMode } : {}),
+    ...(settlement ? { settledDestinationDomain: settlement.domain } : {}),
     ...(shield?.sourceDomain === 'shield' &&
     shield.destinationDomain === 'public' &&
     (destinationChainId === ZCASH_CHAIN_IDS.mainnet ||

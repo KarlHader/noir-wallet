@@ -32,6 +32,13 @@ export function resolveHomeDefaultTab(search: string): HomeDefaultTab {
   return isHomeSecondaryTab(tab, resolveHomeAssetDomain(search)) ? tab : 'assets'
 }
 
+export function homeActivityPath(domain: HomeAssetDomain, transactionId?: string): string {
+  const params = new URLSearchParams({ tab: 'activity' })
+  if (domain !== 'public') params.set('domain', domain)
+  if (transactionId) params.set('transactionId', transactionId)
+  return `/?${params}`
+}
+
 export function clearHomeTransactionFocus(search: string): string | null {
   const params = new URLSearchParams(search)
   if (!params.has('transactionId')) return null

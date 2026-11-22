@@ -33,6 +33,7 @@ import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { offerSaveRecipient } from '@/popup/services/save-recipient-prompt'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { resolveSwapStatusPollingProvider } from '@/popup/services/swap-page-model'
+import { homeActivityPath } from '@/popup/services/home-navigation'
 import {
   confidentialFundingClient,
   getConfidentialFundingResult
@@ -617,19 +618,10 @@ export function TransactionOutcome() {
   }
 
   const handleViewActivity = () => {
-    const transactionId =
-      data.type === 'swap' ? (data.activityTransactionId ?? data.zcashTransactionId) : undefined
-    const params = new URLSearchParams({ tab: 'activity' })
-    if (
-      data.type === 'swap' &&
-      data.actionName === 'Withdraw' &&
-      sourceExecutionMode === 'private'
-    ) {
-      params.set('domain', 'private')
-    }
-    if (transactionId) params.set('transactionId', transactionId)
+    if (data.type !== 'swap') return
+    const transactionId = data.activityTransactionId ?? data.zcashTransactionId
     leavingResultRef.current = true
-    navigate(`/?${params}`, { replace: true })
+    navigate(homeActivityPath(data.activityDomain, transactionId), { replace: true })
     clear()
   }
 

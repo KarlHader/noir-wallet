@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { selectActivityObservation } from '../../../src/popup/services/activity-observation.ts'
 import { getActivityAction } from '../../../src/popup/services/activity-action-label.ts'
+import { filterActivityItems } from '../../../src/popup/services/activity-list-model.ts'
+import { projectLegacyShieldWithdrawActivityGraph } from '../../../src/core/services/confidential-funding/confidential-funding-graph.ts'
 
 import {
   buildActivityExecutionAddressModes,
@@ -19,8 +21,7 @@ import {
   getClusterSettledDestination,
   getActivitySwapSourceMethodLabel,
   hasMatchingActivityTokenIcons,
-  isAccountModeTransfer,
-  isLegacyPrivateShieldWithdrawDestination
+  isAccountModeTransfer
 } from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 const transactionHash = `0x${'a'.repeat(64)}`
@@ -211,26 +212,26 @@ test.describe('Multichain Activity presentation', () => {
       destination: { chainId, address: privateAddress },
       externalRecipient: privateAddress
     }
-    const account = {
-      walletId: item.scope.keyDomainId,
-      accountId: item.scope.accountId,
-      networks: [
-        { chain: { id: chainId }, privateExecutionAddress: privateAddress },
-        { chain: { id: 'eip155:1' }, privateExecutionAddress: publicAddress }
-      ]
-    }
     const assets = new Map([[assetId, { metadata: { symbol: 'POL', decimals: 18 } }]])
-    const route = (activity, fundingPlan = plan, activeAccount = account, network = 'mainnet') =>
-      getActivitySwapPresentation(
-        activity,
-        assets,
-        new Map(),
-        new Map(),
-        undefined,
-        isLegacyPrivateShieldWithdrawDestination(activity, fundingPlan, activeAccount, network)
-      )
+    const project = (activity, fundingPlan = plan, ownedAddresses = [privateAddress]) => {
+      const graph = { root: { id: activity.id, scope: activity.scope, intent: activity.snapshot } }
+      return {
+        ...activity,
+        snapshot: projectLegacyShieldWithdrawActivityGraph(
+          graph,
+          fundingPlan,
+          'mainnet',
+          ownedAddresses
+        ).root.intent
+      }
+    }
+    const route = (...args) => getActivitySwapPresentation(project(...args), assets, new Map())
 
     expect(route(item)?.destinationAccountMode).toBe('Confidential')
+    const filters = { items: [project(item)], selectedChainIds: [chainId] }
+    expect(filterActivityItems({ ...filters, domain: 'private' })).toEqual(filters.items)
+    expect(filterActivityItems({ ...filters, domain: 'public' })).toEqual([])
+    expect(filterActivityItems({ ...filters, domain: 'shield' })).toEqual(filters.items)
     expect(route(item, { ...plan, externalRecipient: publicAddress })?.destinationAccountMode).toBe(
       'Public'
     )
@@ -240,12 +241,10 @@ test.describe('Multichain Activity presentation', () => {
       route(item, { ...plan, destination: { ...plan.destination, chainId: 'eip155:1' } })
         ?.destinationAccountMode
     ).toBe('Public')
-    expect(
-      route(item, plan, { ...account, accountId: 'account:other' })?.destinationAccountMode
-    ).toBe('Public')
-    expect(
-      route(item, plan, { ...account, networks: account.networks.slice(1) })?.destinationAccountMode
-    ).toBe('Public')
+    expect(route(item, { ...plan, accountId: 'account:other' })?.destinationAccountMode).toBe(
+      'Public'
+    )
+    expect(route(item, plan, [publicAddress])?.destinationAccountMode).toBe('Public')
     expect(
       route({ ...item, snapshot: { ...item.snapshot, direction: 'self' } })?.destinationAccountMode
     ).toBe('Public')

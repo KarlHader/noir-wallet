@@ -18,6 +18,7 @@ type Route = {
   readonly destination?: { readonly assetId: string }
   readonly sourceAccountMode?: 'Public' | 'Confidential' | 'Shield' | 'External'
   readonly destinationAccountMode?: 'Public' | 'Confidential' | 'Shield'
+  readonly settledDestinationDomain?: 'public' | 'private'
   readonly sourceFundingSource?: 'transparent' | 'shielded'
   readonly destinationFundingSource?: 'transparent' | 'shielded'
 }
@@ -69,6 +70,15 @@ export function getActivityAction(
   const direction = item.snapshot?.direction
   const sourceAssetId = route?.source?.assetId ?? item.snapshot?.primaryAmount?.assetId
   const destinationAssetId = route?.destination?.assetId ?? item.snapshot?.counterAmount?.assetId
+
+  if (
+    item.kind === 'swap' &&
+    viewed &&
+    route?.settledDestinationDomain === viewed &&
+    source !== viewed
+  ) {
+    return { label: 'Receive', side: 'destination' }
+  }
 
   if (
     item.kind === 'swap' &&

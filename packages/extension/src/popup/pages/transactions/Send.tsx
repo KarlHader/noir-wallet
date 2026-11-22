@@ -97,6 +97,7 @@ import {
 } from '@/popup/services/evm-send-catalog'
 import { getEnabledSwapChains } from '@/popup/services/swap-catalog-loading'
 import { listShieldTokenPickerNetworks } from '@/popup/services/shield-transfer'
+import { homeActivityPath } from '@/popup/services/home-navigation'
 import {
   resolveEvmFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
@@ -1526,10 +1527,7 @@ function SendAssetFlow() {
         submission={submission.value}
         onDone={outcome => leaveOnchainResult(null, outcome !== 'failed')}
         onViewActivity={transactionId =>
-          leaveOnchainResult(
-            `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
-            true
-          )
+          leaveOnchainResult(homeActivityPath('public', transactionId), true)
         }
       />
     )

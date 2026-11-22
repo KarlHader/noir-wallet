@@ -147,6 +147,7 @@ import {
 import type { FundingSource } from '@/types/wallet'
 import { PageHeader } from '../../components/common/PageHeader'
 import type { BalanceDomain } from '../../components/account/BalanceDomainTabs'
+import { homeActivityPath } from '@/popup/services/home-navigation'
 import { TransactionModeDropdown } from '@/popup/components/transaction/TransactionModeDropdown'
 import {
   balanceTransferLabel,
@@ -674,6 +675,21 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         : (routeSourceMode ?? walletActionMode.mode)
   const sourceMode: QuoteDepositExecutionMode =
     requestedSourceMode === 'private' && !privateExecutionSupported ? 'main' : requestedSourceMode
+  const committedBalanceDomain: BalanceDomain = shieldSwapSelected
+    ? 'shield'
+    : sourceMode === 'private'
+      ? 'private'
+      : 'public'
+  const requestedActivityDomain = (location.state as { activityDomain?: unknown } | null)
+    ?.activityDomain
+  const transferActivityDomain =
+    privateBalanceTransferRequested &&
+    (requestedActivityDomain === 'public' || requestedActivityDomain === 'private')
+      ? requestedActivityDomain
+      : privateTransferRequested && !publicPrivacySendRequested
+        ? 'private'
+        : 'public'
+  const activityDomain = ordinarySwapRequested ? committedBalanceDomain : transferActivityDomain
   const sourceModeReady =
     !walletActionMode.loading ||
     publicPrivacySendRequested ||
@@ -4260,6 +4276,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       setResult(
         {
           type: 'swap',
+          activityDomain,
           depositAddress: swap.depositAddress,
           status: null,
           tokenInSymbol: swap.tokenIn?.symbol || '',
@@ -4315,6 +4332,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       })
     },
     [
+      activityDomain,
       swap,
       quoteResult?.quoteHandle,
       nativeIntentsQuote,
@@ -6155,11 +6173,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   ])
 
   const [balanceDomainPending, startBalanceDomainTransition] = useTransition()
-  const committedBalanceDomain: BalanceDomain = shieldSwapSelected
-    ? 'shield'
-    : sourceMode === 'private'
-      ? 'private'
-      : 'public'
   const lastRequestedBalanceDomain = useRef(committedBalanceDomain)
   useEffect(() => {
     if (!balanceDomainPending) lastRequestedBalanceDomain.current = committedBalanceDomain
@@ -6432,9 +6445,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             void handleContinueAfterApproval()
           }}
           onOpenActivity={() =>
-            navigate(
-              `/?tab=activity&transactionId=${encodeURIComponent(submittedApproval.graph.root.id)}`
-            )
+            navigate(homeActivityPath(activityDomain, submittedApproval.graph.root.id))
           }
         />
       )
