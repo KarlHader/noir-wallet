@@ -1024,20 +1024,24 @@ export function getActivityProgressSteps(
         (segment.status === 'broadcast' ||
           segment.status === 'confirming' ||
           segment.status === 'final')
-      const waitingForIntents =
-        isIntentsRelaySegment(segment, item) &&
+      const intentsRelay = isIntentsRelaySegment(segment, item)
+      const waitingForRelay =
+        segment.role === 'relay' &&
         segment.status === 'created' &&
-        (origin?.status === 'final' || (origin && isSignedOrderOrigin(origin)))
+        item.status !== 'final' &&
+        item.status !== 'failed' &&
+        !item.reconfirming &&
+        ((origin?.status === 'final' && (segment.target.kind === 'relay' || intentsRelay)) ||
+          (intentsRelay && origin && isSignedOrderOrigin(origin)))
       const legacyRelayUnverified =
-        item.source === 'zcash-v1' &&
-        isIntentsRelaySegment(segment, item) &&
-        segment.status === 'confirming'
+        item.source === 'zcash-v1' && intentsRelay && segment.status === 'confirming'
+      const waitingLabel = intentsRelay ? 'Waiting for Intents' : 'Waiting for relay'
       const state =
         segment.status === 'final' || signedOrderSubmitted
           ? 'complete'
           : segment.status === 'failed'
             ? 'failed'
-            : segment.status === 'broadcast' || segment.status === 'confirming' || waitingForIntents
+            : segment.status === 'broadcast' || segment.status === 'confirming' || waitingForRelay
               ? 'active'
               : 'pending'
       return {
@@ -1052,17 +1056,15 @@ export function getActivityProgressSteps(
           ? 'Submitted'
           : segment.status === 'final' && segment.target.kind !== 'onchain'
             ? 'Completed'
-            : waitingForIntents
-              ? 'Waiting for Intents'
-              : legacyRelayUnverified
-                ? 'Waiting for Intents'
-                : isIntentsRelaySegment(segment, item) &&
-                    segment.status === 'created' &&
-                    (origin?.status === 'broadcast' || origin?.status === 'confirming')
-                  ? 'Waiting for deposit'
-                  : isIntentsRelaySegment(segment, item) && segment.status === 'confirming'
-                    ? 'Processing'
-                    : presentation.label
+            : waitingForRelay || legacyRelayUnverified
+              ? waitingLabel
+              : intentsRelay &&
+                  segment.status === 'created' &&
+                  (origin?.status === 'broadcast' || origin?.status === 'confirming')
+                ? 'Waiting for deposit'
+                : intentsRelay && segment.status === 'confirming'
+                  ? 'Processing'
+                  : presentation.label
       }
     })
 }
