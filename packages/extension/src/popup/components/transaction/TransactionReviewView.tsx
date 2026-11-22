@@ -187,7 +187,7 @@ export function TransactionReviewView({
         status="loading"
         title="Transaction Submitting"
         layout={figma ? 'single-asset' : 'default'}
-        onClose={figma ? onCancel : undefined}
+        onClose={figma && showTitle ? onCancel : undefined}
         closeDisabled={cancelDisabled || confirming}
       >
         <div>

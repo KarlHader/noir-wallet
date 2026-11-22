@@ -482,6 +482,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   )
   const [assetPrices, setAssetPrices] = useState<AssetPriceReadModel | null>(null)
   const [domainPicker, setDomainPicker] = useState<'from' | 'to' | null>(null)
+  const [shieldPickerLoading, setShieldPickerLoading] = useState(false)
   const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const [receiveExternal, setReceiveExternal] = useState(
     () => shieldDepositSource(routeFrom) === 'external'
@@ -505,7 +506,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     model: portfolio,
     status: loadState,
     settled: portfolioSettled,
-    refresh: refreshPortfolio
+    refresh: refreshPortfolio,
+    refreshSource: refreshPortfolioSource
   } = usePortfolioSnapshot(effective?.walletId ?? null, effective?.accountId ?? null, {
     refreshConfidential: usesConfidentialBalances
   })
@@ -1650,6 +1652,28 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       : null
   const nearPickerAvailable =
     pickerIsActive && canLoadShield && Boolean(managedAsset) && oppositeDomain !== 'shield'
+  const showShieldPickerBalance = domainPicker !== null && !receiveEntry && nearPickerAvailable
+  useEffect(() => {
+    if (!showShieldPickerBalance || usesConfidentialBalances) {
+      setShieldPickerLoading(false)
+      return
+    }
+    let current = true
+    setShieldPickerLoading(true)
+    void refreshPortfolioSource({ source: 'near-confidential', authorize: false })
+      .catch(() => false)
+      .finally(() => {
+        if (current) setShieldPickerLoading(false)
+      })
+    return () => {
+      current = false
+    }
+  }, [showShieldPickerBalance, usesConfidentialBalances, refreshPortfolioSource])
+  const shieldPickerRaw =
+    currentShieldBalances && managedAsset
+      ? (getConfidentialAvailableForAsset(currentShieldBalances, managedAsset.protocolAssetId) ??
+        '0')
+      : null
   const addressFor = (domain: TransferDomain) => {
     if (domain === 'shield') return ''
     return domain === 'private' ? privateAddress : mainAddress
@@ -2673,7 +2697,12 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   icon={<ShieldProviderLogo provider="near-confidential" size={18} />}
                   selected={pickerIsActive && pickerValue === 'shield'}
                   disabled={!nearPickerAvailable}
-                  balance={nearPickerAvailable ? pickerBalance(refreshedShieldRaw) : null}
+                  balance={
+                    nearPickerAvailable
+                      ? (pickerBalance(shieldPickerRaw) ??
+                        (shieldPickerLoading || loadingShieldBalances ? 'Updating…' : null))
+                      : null
+                  }
                   onSelect={() => {
                     if (nearPickerAvailable && domainPicker) selectDomain('shield', domainPicker)
                   }}

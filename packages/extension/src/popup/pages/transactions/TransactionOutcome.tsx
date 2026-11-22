@@ -619,11 +619,17 @@ export function TransactionOutcome() {
   const handleViewActivity = () => {
     const transactionId =
       data.type === 'swap' ? (data.activityTransactionId ?? data.zcashTransactionId) : undefined
-    const path = transactionId
-      ? `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`
-      : '/?tab=activity'
+    const params = new URLSearchParams({ tab: 'activity' })
+    if (
+      data.type === 'swap' &&
+      data.actionName === 'Withdraw' &&
+      sourceExecutionMode === 'private'
+    ) {
+      params.set('domain', 'private')
+    }
+    if (transactionId) params.set('transactionId', transactionId)
     leavingResultRef.current = true
-    navigate(path, { replace: true })
+    navigate(`/?${params}`, { replace: true })
     clear()
   }
 

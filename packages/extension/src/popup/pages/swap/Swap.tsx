@@ -7525,6 +7525,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             <button
               type="button"
               aria-label="Close"
+              disabled={isSending}
               onClick={
                 publicPrivacySendRequested ? returnFromPublicPrivacySend : handleReturnToInput
               }
