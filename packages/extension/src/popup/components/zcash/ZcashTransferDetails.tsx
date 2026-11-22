@@ -80,7 +80,6 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
       open={review.open}
       title={`Confirm ${action.label}`}
       description="Review the amount, destination, and fee."
-      walletMode="public"
       onOpenChange={review.onOpenChange}
     >
       <TransactionReviewView

@@ -42,6 +42,7 @@ import {
   useCopyToClipboard
 } from '@/popup/components/common/CopyToast'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
+import zecLendingArtwork from '@/images/zec-lending.webp'
 import { AssetDetailBalanceRow } from './AssetDetailBalanceRow'
 import { withConfidentialAssetPrices } from '@/popup/services/portfolio-prices'
 import { PrivateAddressWarningDialog } from '@/popup/components/account/PrivateAddressWarningDialog'
@@ -60,6 +61,7 @@ import {
 } from '@/popup/services/chain-explorer'
 import { useNavigate } from '@/popup/provider/Router'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
+import { useLendingMarketRate } from '@/popup/hooks/useLendingMarketRate'
 import { BalanceSkeleton, ListSkeleton, Skeleton } from '@/popup/components/ui/skeleton'
 import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import { MultichainActivityPanel } from '@/popup/components/transaction/MultichainActivityPanel'
@@ -82,7 +84,7 @@ import type { AssetDomain, ShieldProvider } from '@/popup/services/asset-domains
 const DETAIL_MODES: readonly { value: AssetDomain; label: string }[] = [
   { value: 'all', label: 'Total' },
   { value: 'public', label: 'Public' },
-  { value: 'private', label: 'Private' },
+  { value: 'private', label: 'Incognito' },
   { value: 'shield', label: 'Shield' }
 ]
 
@@ -252,6 +254,14 @@ export function AssetDetail() {
   const chain = asset
     ? (visibleModel?.chains.find(item => item.chain.id === asset.asset.chainId) ?? null)
     : null
+  const lendingRate = useLendingMarketRate(
+    currentNetwork === 'mainnet' &&
+      requestedChainEnabled &&
+      storageV2Account?.walletSource.kind === 'software' &&
+      searchParams.get('view') !== 'info'
+      ? asset?.asset.id
+      : undefined
+  )
   const evmAccountNetwork = storageV2Account?.networks.find(
     network => network.chain.id === chain?.chain.id && network.chain.family === 'evm'
   )
@@ -775,6 +785,7 @@ export function AssetDetail() {
     chain.chain.id
   )
   const isZcashAsset = chain.chain.family === 'zcash'
+  const isTotalDetail = detailMode === 'all'
   const nativeRaw = categories?.raw[detailMode] ?? null
   const displayRaw =
     isZcashAsset && hasConfidentialCapability && (detailMode === 'all' || detailMode === 'shield')
@@ -947,7 +958,6 @@ export function AssetDetail() {
   return (
     <Tabs
       className="page-container gap-0"
-      data-wallet-mode={actionDomain}
       value={detailMode}
       onValueChange={nextMode => {
         const mode = DETAIL_MODES.find(({ value }) => value === nextMode)
@@ -960,7 +970,7 @@ export function AssetDetail() {
         onClose={() => setPrivateCopyAddress(null)}
         onConfirm={() => {
           if (!privateCopyAddress) return
-          void copyToClipboard(privateCopyAddress, 'Private', { toastOnSuccess: true }).then(
+          void copyToClipboard(privateCopyAddress, 'Incognito', { toastOnSuccess: true }).then(
             copied => {
               if (copied) setPrivateCopyAddress(null)
             }
@@ -1099,9 +1109,67 @@ export function AssetDetail() {
                       : handleSwap('public', 'transparent')
                   }
                 />
+                {lendingRate && (
+                  <WalletActionButton
+                    icon={
+                      <Icon
+                        icon="lucide:circle-dollar-sign"
+                        width={20}
+                        height={20}
+                        aria-hidden="true"
+                      />
+                    }
+                    label="Lending"
+                    href={lendingRate.url}
+                  />
+                )}
               </>
             )}
           </div>
+        )}
+
+        {lendingRate && (
+          <a
+            href={lendingRate.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="wallet-interactive mb-2 flex min-h-[74px] items-center justify-between gap-2 rounded-xl bg-wallet-surface px-3.5 py-2.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          >
+            <div className="flex min-w-0 flex-col items-start gap-1">
+              <div className="flex flex-wrap items-center gap-x-1 text-base">
+                <span>Lending APR</span>
+                {lendingRate.apr === undefined ? (
+                  <div role="status" aria-label="Loading APR">
+                    <Skeleton className="h-3.5 w-12" />
+                  </div>
+                ) : (
+                  <span className="font-semibold tabular-nums">{lendingRate.apr ?? '—'}</span>
+                )}
+              </div>
+              <span className="inline-flex min-h-6 items-center gap-1 rounded-full bg-white/[0.06] px-2 text-xs text-wallet-secondary">
+                Earn now
+                <Icon aria-hidden="true" icon="lucide:chevron-right" width={12} height={12} />
+              </span>
+            </div>
+            {isZcashAsset ? (
+              <img
+                src={zecLendingArtwork}
+                alt=""
+                width={64}
+                height={48}
+                className="translate-y-1 shrink-0"
+              />
+            ) : (
+              <span aria-hidden="true" className="shrink-0">
+                <TokenIcon
+                  assetId={asset.asset.id}
+                  symbol={formatSymbol(asset.metadata.symbol)}
+                  icon={asset.metadata.iconUrl}
+                  size={36}
+                />
+              </span>
+            )}
+          </a>
         )}
 
         {detailMode === 'all' && chain.chain.family === 'evm' && (
@@ -1115,7 +1183,7 @@ export function AssetDetail() {
                     key={domain}
                     onSelect={() => selectDetailMode(domain)}
                     label={
-                      domain === 'shield' ? 'Shield' : domain === 'private' ? 'Private' : 'Public'
+                      domain === 'shield' ? 'Shield' : domain === 'private' ? 'Incognito' : 'Public'
                     }
                     subtitle={
                       domain === 'shield'
@@ -1123,7 +1191,7 @@ export function AssetDetail() {
                         : domain === 'private'
                           ? renderBalanceAddress(
                               accountNetwork?.privateExecutionAddress,
-                              'Private',
+                              'Incognito',
                               true
                             )
                           : renderBalanceAddress(publicAddress, 'Public')
@@ -1180,33 +1248,41 @@ export function AssetDetail() {
           </section>
         )}
 
-        {detailMode === 'all' && isZcashAsset && (
+        {isZcashAsset && (isTotalDetail || detailMode === 'shield') && (
           <section className="py-2" aria-label="Zcash balance breakdown">
-            <AssetDetailBalanceRow
-              label="Public"
-              onSelect={() => selectDetailMode('public')}
-              actions={zcashActions('transparent')}
-              subtitle={renderBalanceAddress(publicAddress, 'Transparent')}
-              balance={
-                zcashDisplay ? `${zcashDisplay.transparent} ZEC` : <Skeleton className="h-4 w-20" />
-              }
-              fiat={formatBalanceFiat(categories?.fiat.public)}
-              pending={
-                zcashDisplay?.transparentPending
-                  ? `${zcashDisplay.transparentPending} ZEC pending`
-                  : undefined
-              }
-            />
+            {isTotalDetail && (
+              <AssetDetailBalanceRow
+                label="Public"
+                onSelect={() => selectDetailMode('public')}
+                actions={zcashActions('transparent')}
+                subtitle={renderBalanceAddress(publicAddress, 'Transparent')}
+                balance={
+                  zcashDisplay ? (
+                    `${zcashDisplay.transparent} ZEC`
+                  ) : (
+                    <Skeleton className="h-4 w-20" />
+                  )
+                }
+                fiat={formatBalanceFiat(categories?.fiat.public)}
+                pending={
+                  zcashDisplay?.transparentPending
+                    ? `${zcashDisplay.transparentPending} ZEC pending`
+                    : undefined
+                }
+              />
+            )}
             <AssetDetailBalanceRow
               label="Zcash Shield"
-              onSelect={() => selectDetailMode('shield')}
-              actions={zcashActions('shielded')}
+              onSelect={isTotalDetail ? () => selectDetailMode('shield') : undefined}
+              actions={isTotalDetail ? zcashActions('shielded') : undefined}
               subtitle={renderBalanceAddress(
                 accountNetwork?.addresses.find(address => address.privacy === 'shielded')?.value,
                 'Zcash Shield'
               )}
               balance={
-                zcashDisplay ? `${zcashDisplay.shielded} ZEC` : <Skeleton className="h-4 w-20" />
+                categories?.raw.shield != null && zcashDisplay
+                  ? `${zcashDisplay.shielded} ZEC`
+                  : '—'
               }
               fiat={formatBalanceFiat(categories?.fiat.shield)}
               pending={
@@ -1218,8 +1294,8 @@ export function AssetDetail() {
             {hasConfidentialCapability && (
               <AssetDetailBalanceRow
                 label="NEAR Confidential"
-                onSelect={() => selectDetailMode('shield')}
-                actions={confidentialActions()}
+                onSelect={isTotalDetail ? () => selectDetailMode('shield') : undefined}
+                actions={isTotalDetail ? confidentialActions() : undefined}
                 balance={
                   nearConfidentialZec ? (
                     `${formatDisplayTokenAmount(nearConfidentialZec.availableRaw, asset.metadata.decimals)} ZEC`
@@ -1242,7 +1318,7 @@ export function AssetDetail() {
         )}
 
         {(historyStatus !== 'unsupported' || quote) && (
-          <section className="border-t border-border py-4">
+          <section className="py-4">
             <MarketPriceChart
               points={visibleHistory?.points ?? null}
               range={historyRange}

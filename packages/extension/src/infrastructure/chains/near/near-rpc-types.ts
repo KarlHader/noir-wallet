@@ -119,7 +119,11 @@ export interface NearReadRpc {
     contractId: string,
     methodName: string,
     args: Readonly<Record<string, unknown>>,
-    options?: { readonly finality?: 'final' | 'optimistic'; readonly signal?: AbortSignal }
+    options?: {
+      readonly finality?: 'final' | 'optimistic'
+      readonly signal?: AbortSignal
+      readonly maximumResultBytes?: number
+    }
   ) => Promise<unknown>
   readonly getFungibleTokenBalance: (
     contractId: string,

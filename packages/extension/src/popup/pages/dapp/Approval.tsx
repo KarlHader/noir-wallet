@@ -1,5 +1,5 @@
 import { InlineError } from '@/popup/components/common/InlineError'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Button } from '../../components/ui/button'
 import { Switch } from '../../components/ui/switch'
@@ -249,6 +249,18 @@ export function Approval() {
     data.executionMode === 'private' || data.executionMode === 'main'
       ? data.executionMode
       : undefined
+  const approvalPalette =
+    evmExecutionMode === 'private' || isEvmPrivateTransfer || isEvmGasFunding
+      ? 'incognito'
+      : 'public'
+  useLayoutEffect(() => {
+    // Radix overlays in this window inherit the palette from the document.
+    const root = document.documentElement
+    root.dataset.walletPalette = approvalPalette
+    return () => {
+      delete root.dataset.walletPalette
+    }
+  }, [approvalPalette])
   const privacyTransferEligible =
     isEvmTransaction && evmExecutionMode === 'private' && typeof data.sendPrivately === 'boolean'
   const privacyTransferAvailable = privacyTransferEligible && data.privacyTransferAvailable === true
@@ -761,21 +773,21 @@ export function Approval() {
       >
         <div role="status" aria-label="Loading approval request" className="space-y-8 pt-6">
           <div className="flex flex-col items-center gap-4">
-            <Skeleton className="size-16 rounded-2xl" />
+            <Skeleton className="size-16 rounded-2xl bg-foreground/[0.08]" />
             <div className="flex w-full flex-col items-center gap-2">
-              <Skeleton className="h-5 w-40" />
-              <Skeleton className="h-3 w-52 bg-white/[0.05]" />
+              <Skeleton className="h-5 w-40 bg-foreground/[0.08]" />
+              <Skeleton className="h-3 w-52 bg-foreground/[0.05]" />
             </div>
           </div>
           <div className="space-y-3 rounded-xl border border-border/50 bg-card/50 p-4">
-            <Skeleton className="h-3 w-28" />
-            <Skeleton className="h-3 w-full bg-white/[0.05]" />
-            <Skeleton className="h-3 w-4/5 bg-white/[0.05]" />
+            <Skeleton className="h-3 w-28 bg-foreground/[0.08]" />
+            <Skeleton className="h-3 w-full bg-foreground/[0.05]" />
+            <Skeleton className="h-3 w-4/5 bg-foreground/[0.05]" />
           </div>
           <div className="space-y-3 rounded-xl border border-border/50 bg-muted/10 p-4">
-            <Skeleton className="h-3 w-24" />
-            <Skeleton className="h-3 w-full bg-white/[0.05]" />
-            <Skeleton className="h-3 w-3/4 bg-white/[0.05]" />
+            <Skeleton className="h-3 w-24 bg-foreground/[0.08]" />
+            <Skeleton className="h-3 w-full bg-foreground/[0.05]" />
+            <Skeleton className="h-3 w-3/4 bg-foreground/[0.05]" />
           </div>
         </div>
       </ApprovalWindowLayout>
@@ -1431,7 +1443,7 @@ export function Approval() {
       )}
       {!sendPrivately && !privacyUpdateError && (
         <p className="px-1 text-xs leading-5 text-warning">
-          This transfer is public and links your Private address to the recipient.
+          This transfer is public and links your Incognito address to the recipient.
         </p>
       )}
       {(privacyUpdateError || (sendPrivately && data.privacyError)) && (

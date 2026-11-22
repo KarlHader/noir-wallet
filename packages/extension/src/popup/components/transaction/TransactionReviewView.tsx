@@ -34,7 +34,6 @@ export function TransactionReviewDialog({
   title,
   titleId,
   description,
-  walletMode,
   children
 }: {
   readonly open: boolean
@@ -42,7 +41,6 @@ export function TransactionReviewDialog({
   readonly title: string
   readonly titleId?: string
   readonly description: string
-  readonly walletMode?: 'public' | 'private' | 'shield'
   readonly children: ReactNode
 }) {
   return (
@@ -52,7 +50,6 @@ export function TransactionReviewDialog({
         showCloseButton={false}
         aria-label={titleId ? undefined : title}
         aria-labelledby={titleId}
-        data-wallet-mode={walletMode}
         scroll="body"
         className="gap-0 p-0"
       >
@@ -110,7 +107,6 @@ export function SendReviewDialog({
   review,
   titleId,
   description,
-  walletMode,
   active = true,
   approving,
   onCancel,
@@ -119,7 +115,6 @@ export function SendReviewDialog({
   readonly review: SendReview | null
   readonly titleId: string
   readonly description: string
-  readonly walletMode?: 'public' | 'private' | 'shield'
   readonly active?: boolean
   readonly approving: boolean
   readonly onCancel: () => void
@@ -131,7 +126,6 @@ export function SendReviewDialog({
       title="Confirm Send"
       titleId={titleId}
       description={description}
-      walletMode={walletMode}
       onOpenChange={open => {
         if (!open && !approving) onCancel()
       }}

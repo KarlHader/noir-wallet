@@ -157,7 +157,7 @@ export function getActivityAccountRouteLabel(route: ActivitySwapPresentation): s
     return `NEAR Confidential → ${route.destinationFundingSource === 'shielded' ? 'Zcash Shield' : 'Transparent'}`
   }
   const label = (mode: ActivitySwapPresentation['sourceAccountMode']) =>
-    mode === 'Confidential' ? 'Private' : (mode ?? '')
+    mode === 'Confidential' ? 'Incognito' : (mode ?? '')
   const source =
     route.sourceFundingSource === 'transparent'
       ? 'Transparent'

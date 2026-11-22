@@ -8,7 +8,7 @@ interface AssetDetailBalanceRowProps {
   readonly balance: ReactNode
   readonly fiat: string
   readonly pending?: ReactNode
-  readonly onSelect: () => void
+  readonly onSelect?: () => void
   readonly actions?: readonly {
     readonly action: WalletAction
     readonly label: string
@@ -28,17 +28,21 @@ export function AssetDetailBalanceRow({
 }: AssetDetailBalanceRowProps) {
   return (
     <div className="group/balance relative flex min-h-[62px] items-center justify-between gap-3 py-2.5">
-      <button
-        type="button"
-        aria-label={`View ${label} balance`}
-        onClick={onSelect}
-        className="wallet-interactive absolute inset-0 rounded-md text-left hover:bg-white/[0.04] focus-visible:outline-2 focus-visible:outline-primary"
-      />
+      {onSelect && (
+        <button
+          type="button"
+          aria-label={`View ${label} balance`}
+          onClick={onSelect}
+          className="wallet-interactive absolute inset-0 rounded-md text-left hover:bg-white/[0.04] focus-visible:outline-2 focus-visible:outline-primary"
+        />
+      )}
       <div className="pointer-events-none relative min-w-0 flex-1">
         <p className="text-sm font-medium">{label}</p>
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted">
-          {subtitle && <span className="flex min-w-0 items-center gap-1.5">{subtitle}</span>}
-        </div>
+        {subtitle && (
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted">
+            {subtitle}
+          </div>
+        )}
       </div>
       <div className="pointer-events-none relative min-w-0 max-w-[48%] text-right">
         <div

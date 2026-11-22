@@ -8,41 +8,47 @@ import {
   DropdownMenuTrigger
 } from '@/popup/components/ui/dropdown-menu'
 
-const modes = {
-  public: { label: 'Public', icon: 'lucide:wallet', color: 'text-wallet-secondary' },
-  private: { label: 'Private', icon: 'noir:private-assets', color: 'text-private' },
-  shield: { label: 'Shield', icon: 'noir:shield-assets', color: 'text-success' }
-} satisfies Record<BalanceDomain, { label: string; icon: string; color: string }>
+const modeLabels = {
+  public: 'Public',
+  private: 'Incognito',
+  shield: 'Shield'
+} satisfies Record<BalanceDomain, string>
 
 export function TransactionModeDropdown({
+  action,
   value,
   options,
   onChange,
   disabled
 }: {
+  readonly action: 'Send' | 'Swap'
   readonly value: BalanceDomain
   readonly options: readonly BalanceDomain[]
   readonly onChange: (mode: BalanceDomain) => void
   readonly disabled?: boolean
 }) {
-  const selected = modes[value]
+  const title = `${modeLabels[value]} ${action}`
+
+  if (options.length < 2) return <span className="block truncate">{title}</span>
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Mode: ${selected.label}`}
-          disabled={disabled || options.length < 2}
-          className="wallet-interactive inline-flex h-8 min-w-[96px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-wallet-surface px-2 text-xs font-medium enabled:hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-70"
+          disabled={disabled}
+          className="wallet-interactive group inline-flex h-9 max-w-full items-center gap-1.5 rounded-lg px-2 enabled:hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-70"
         >
-          <Icon icon={selected.icon} width={14} className={selected.color} aria-hidden="true" />
-          <span className="flex-1 text-left">{selected.label}</span>
-          {options.length > 1 && (
-            <Icon icon="lucide:chevron-down" width={13} className="text-muted" aria-hidden="true" />
-          )}
+          <span className="truncate">{title}</span>
+          <Icon
+            icon="lucide:chevron-down"
+            width={13}
+            className="shrink-0 text-muted group-data-[state=open]:rotate-180"
+            aria-hidden="true"
+          />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" aria-label="Transaction mode">
+      <DropdownMenuContent align="center" className="min-w-44" aria-label={`${action} mode`}>
         <DropdownMenuRadioGroup
           value={value}
           onValueChange={next => {
@@ -51,9 +57,8 @@ export function TransactionModeDropdown({
           }}
         >
           {options.map(mode => (
-            <DropdownMenuRadioItem key={mode} value={mode}>
-              <Icon icon={modes[mode].icon} className={modes[mode].color} aria-hidden="true" />
-              {modes[mode].label}
+            <DropdownMenuRadioItem key={mode} value={mode} className="min-h-10 justify-center px-8">
+              {modeLabels[mode]} {action}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

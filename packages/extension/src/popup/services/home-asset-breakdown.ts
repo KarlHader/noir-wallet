@@ -5,6 +5,12 @@ import { buildAccountKey } from '@/core/wallet/account-scope'
 import type { AccountPortfolioValueSnapshot } from '@/core/wallet/account-portfolio-value'
 import { isPortfolioModelForScope } from './portfolio-cache'
 import { getAssetDomainRaw, summarizeAssetDomainsUsd, type AssetDomain } from './asset-domains'
+import Big from '@/lib/big'
+
+export function getHomeWalletTotal(publicUsd: string | null, incognitoUsd: string | null) {
+  if (publicUsd === null && incognitoUsd === null) return null
+  return new Big(publicUsd ?? 0).plus(incognitoUsd ?? 0).toFixed()
+}
 
 export type HomePortfolioTotalStatus = 'loading' | 'ready' | 'partial' | 'unavailable'
 

@@ -50,7 +50,7 @@ function PrivateAddressRisk() {
     <Tooltip content={PRIVATE_ADDRESS_WARNING} side="bottom">
       <button
         type="button"
-        aria-label="Private address privacy risk"
+        aria-label="Incognito address privacy risk"
         className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
       >
         <Icon icon="lucide:info" width={15} height={15} />
@@ -246,14 +246,14 @@ function AddressNetworkGroup({
     return (
       <section
         className="flex min-h-[72px] min-w-0 items-center gap-[13px] border-b border-border/40 py-2"
-        aria-label={`${displayName} private execution address`}
+        aria-label={`${displayName} Incognito address`}
       >
         {icon}
         <div className="min-w-0 flex-1">
           <h2 className="flex items-center gap-1.5 text-base font-medium leading-[21px] text-foreground">
             <span className="truncate">{displayName}</span>
             <span className="shrink-0 rounded bg-private/15 px-1.5 py-0.5 text-xs text-private">
-              Private
+              Incognito
             </span>
             <PrivateAddressRisk />
           </h2>
@@ -265,8 +265,8 @@ function AddressNetworkGroup({
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            title="Copy private execution address"
-            aria-label={`Copy ${displayName} private execution address`}
+            title="Copy Incognito address"
+            aria-label={`Copy ${displayName} Incognito address`}
             className="wallet-interactive flex size-[26px] items-center justify-center rounded-md text-muted hover:bg-white/10 hover:text-foreground active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
             onClick={() => onCopyPrivateExecution(privateExecutionAddress)}
           >
@@ -275,7 +275,7 @@ function AddressNetworkGroup({
           <button
             type="button"
             title="Show QR code"
-            aria-label={`Show ${displayName} private execution address QR code`}
+            aria-label={`Show ${displayName} Incognito address QR code`}
             className="wallet-interactive flex size-[26px] items-center justify-center rounded-md text-muted hover:bg-white/10 hover:text-foreground active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
             onClick={() =>
               onShowQr({
@@ -640,7 +640,7 @@ export function AddressesList({ receive = false }: { readonly receive?: boolean 
                         mode === 'private' ? 'bg-wallet-mode text-white' : 'text-muted'
                       )}
                     >
-                      Private
+                      Incognito
                     </button>
                   </div>
                   {mode === 'private' && <PrivateAddressRisk />}
@@ -761,10 +761,10 @@ export function AddressesList({ receive = false }: { readonly receive?: boolean 
           {qrTarget && (
             <>
               <DialogTitle className="sr-only">
-                {qrTarget.confidential ? 'Private Address' : 'Receiving Address'}
+                {qrTarget.confidential ? 'Incognito Address' : 'Receiving Address'}
               </DialogTitle>
               <ReceivingAddressLayout
-                title={qrTarget.confidential ? 'Private Address' : 'Receiving Address'}
+                title={qrTarget.confidential ? 'Incognito Address' : 'Receiving Address'}
                 onClose={() => setQrTarget(null)}
                 qrValue={qrTarget.address.value}
                 qrLabel={`${qrTarget.displayName ?? qrTarget.network.chain.displayName} address QR code`}
@@ -812,7 +812,7 @@ export function AddressesList({ receive = false }: { readonly receive?: boolean 
                 <h2 className="mt-5 text-center text-xl font-medium leading-7">
                   {qrTarget.displayName ?? accountNetworkLabel(qrTarget.network)}{' '}
                   {qrTarget.confidential
-                    ? 'private execution'
+                    ? 'Incognito'
                     : accountNetworkAddressLabel(qrTarget.network, qrTarget.address)}{' '}
                   address
                 </h2>

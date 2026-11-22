@@ -43,14 +43,14 @@ export function DAppConnectPrompt({
   return (
     <div
       data-testid="dapp-connect-prompt"
-      className="shrink-0 border-t border-border bg-card/80 backdrop-blur-md px-4 py-3 flex items-center gap-3"
+      className="dapp-connection-bar relative z-10 flex h-[66px] shrink-0 items-center gap-[9px] px-4"
     >
       <div className="relative shrink-0">
         <img
           src={favicon}
           alt={host}
           crossOrigin="anonymous"
-          className="w-8 h-8 rounded-full bg-muted/20"
+          className="size-9 rounded-lg bg-muted/20"
           onError={e => {
             ;(e.target as HTMLImageElement).src = 'icons/icon128.png'
           }}
@@ -58,7 +58,7 @@ export function DAppConnectPrompt({
         <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-muted-foreground/60 border-2 border-card" />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">{host}</div>
+        <div className="truncate text-base leading-5 font-medium">{host}</div>
         <div className="text-xs text-muted truncate">
           {formatAccountName(accountName, 14)} ·{' '}
           {canConnect ? 'Not connected' : 'Reconnect from site'}

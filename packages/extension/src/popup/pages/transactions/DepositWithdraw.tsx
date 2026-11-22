@@ -1379,7 +1379,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           amount: currentAmount,
           decimals: selected.asset.metadata.decimals,
           availableRaw: shieldAvailable.amountRaw,
-          sourceLabel: from === 'public' ? 'Public' : from === 'private' ? 'Private' : 'Shield'
+          sourceLabel: domainLabel(from)
         })
       : null
   const amountError = fundingRoute ? shieldAmountState?.error : amountState?.error
@@ -2241,7 +2241,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     })}`
 
   return (
-    <div className="page-container" data-wallet-mode={receiveEntry ? 'public' : walletMode}>
+    <div className="page-container">
       {(!nativeReceive || !nativeReceiveState.reviewing) && (
         <PageHeader
           title={receiveEntry ? 'Receive' : actionLabel}
@@ -2508,7 +2508,6 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         open={assetPickerOpen}
         onOpenChange={setAssetPickerOpen}
         title="Select asset"
-        walletMode={walletMode}
       >
         <TokenPicker<TransferPickerRow>
           filter={{
@@ -2619,11 +2618,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           if (!open) setDomainPicker(null)
         }}
       >
-        <DialogContent
-          position="bottom"
-          data-wallet-mode={walletMode}
-          className="bg-wallet-surface p-4"
-        >
+        <DialogContent position="bottom" className="bg-wallet-surface p-4">
           <DialogHeader className="text-left">
             <DialogTitle className="text-sm font-medium leading-[18px]">
               {domainPicker === 'from' ? 'From' : 'To'} · {walletDisplayName} · {pickerAccountName}

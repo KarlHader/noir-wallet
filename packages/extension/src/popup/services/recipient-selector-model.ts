@@ -37,14 +37,14 @@ export function getMyAccountRecipientUnavailableReason(
   recipientExecutionMode?: 'main' | 'private'
 ): string | null {
   if (disablePrivateExecutionAddresses && address.executionMode === 'private') {
-    return 'Private execution addresses cannot be selected for Send.'
+    return 'Incognito addresses cannot be selected for Send.'
   }
   if (
     recipientExecutionMode &&
     address.executionMode &&
     address.executionMode !== recipientExecutionMode
   ) {
-    return `Only ${recipientExecutionMode === 'main' ? 'Public' : 'Private'} accounts can be selected for this Send.`
+    return `Only ${recipientExecutionMode === 'main' ? 'Public' : 'Incognito'} accounts can be selected for this Send.`
   }
   if (sendingAddress && address.value.toLowerCase() === sendingAddress.toLowerCase()) {
     return 'This is the sending address.'

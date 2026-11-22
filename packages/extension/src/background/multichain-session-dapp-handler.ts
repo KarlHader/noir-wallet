@@ -639,6 +639,7 @@ export class BackgroundMultichainSessionDAppHandler {
       origin,
       'multichainConnect',
       {
+        ...(evmProposal && snapshot ? { executionMode: snapshot.executionMode } : {}),
         scopes: approvalScopes.map(proposal => ({
           chainId: proposal.chainId,
           chainName: proposal.chainName,

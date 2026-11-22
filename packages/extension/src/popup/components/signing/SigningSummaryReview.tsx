@@ -82,10 +82,7 @@ function ReviewValue({
         row.value
       )}
       {showPrivateAccount && (
-        <span
-          aria-label="Confidential execution account"
-          className="mt-1.5 flex justify-end leading-none"
-        >
+        <span aria-label="Incognito account" className="mt-1.5 flex justify-end leading-none">
           <ExecutionAccountBadge mode="private" />
         </span>
       )}
@@ -523,7 +520,7 @@ export function SigningSummaryReview({
           !isDAppTransaction &&
           !isDAppTokenAuthorization && (
             <section
-              aria-label="Confidential execution account"
+              aria-label="Incognito account"
               className="flex min-w-0 items-center gap-2 rounded-xl bg-primary/6 px-3 py-2"
             >
               <ExecutionAccountBadge mode="private" />

@@ -52,7 +52,6 @@ export function EvmSendAdapter(props: EvmSendAdapterProps) {
         review: getEvmSendReview(state),
         titleId: 'evm-send-review-title',
         description: 'Review the asset, recipient, and maximum network fee before sending.',
-        walletMode: state.walletMode,
         onCancel: () => void state.handleCloseReview(),
         onConfirm: state.handleApprove
       }}

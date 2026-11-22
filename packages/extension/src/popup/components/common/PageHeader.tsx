@@ -1,7 +1,8 @@
+import type { ReactElement } from 'react'
 import { useNavigate } from '../../provider/Router'
 
 interface PageHeaderProps {
-  title?: string
+  title?: string | ReactElement
   onBack?: () => void
   showBack?: boolean
   backDisabled?: boolean
@@ -25,7 +26,7 @@ export function PageHeader({
 }: PageHeaderProps) {
   const { goBack } = useNavigate()
   const handleBack = onBack || goBack
-  const visibleTitle = title.trim()
+  const visibleTitle = typeof title === 'string' ? title.trim() : title
 
   if (!visibleTitle && !showBack && !rightContent && !action) return null
 
@@ -59,7 +60,13 @@ export function PageHeader({
         </button>
       )}
       {visibleTitle && (
-        <h1 className="text-lg font-medium leading-[23px] text-white">{visibleTitle}</h1>
+        <h1
+          className={`text-lg font-medium leading-[23px] text-white${
+            typeof visibleTitle === 'string' ? '' : ' min-w-0 max-w-[calc(100%_-_4rem)]'
+          }`}
+        >
+          {visibleTitle}
+        </h1>
       )}
 
       {(rightContent || action) && (

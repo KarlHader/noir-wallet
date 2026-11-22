@@ -24,13 +24,11 @@ export function TokenSelectorDialog({
   open,
   onOpenChange,
   title = 'Select Token',
-  walletMode,
   children
 }: {
   readonly open: boolean
   readonly onOpenChange: (open: boolean) => void
   readonly title?: string
-  readonly walletMode?: 'private' | 'public'
   readonly children: ReactNode
 }) {
   return (
@@ -40,7 +38,6 @@ export function TokenSelectorDialog({
         scroll="body"
         fixedHeight
         showCloseButton={false}
-        data-wallet-mode={walletMode}
         className="gap-0 p-0"
       >
         <DialogDescription className="sr-only">Choose an asset</DialogDescription>

@@ -677,7 +677,7 @@ export function MultichainActivityPanel({
                 <button
                   type="button"
                   aria-label={`Filter activity by status: ${activityStatusLabels[statusFilter]}`}
-                  className="wallet-interactive flex h-8 items-center justify-between gap-3 rounded-full bg-accent px-3.5 text-[13px] text-muted hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                  className="wallet-interactive flex h-8 items-center justify-between gap-3 rounded-full bg-accent px-3.5 text-[13px] text-muted hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                 >
                   {activityStatusLabels[statusFilter]}
                   <Icon icon="lucide:chevron-down" width={13} height={13} aria-hidden="true" />
@@ -741,7 +741,7 @@ export function MultichainActivityPanel({
     </div>
   ) : null
 
-  const sectionClassName = cn('min-h-0', heading && 'border-t border-white/[0.08] pt-4')
+  const sectionClassName = cn('min-h-0', heading && 'border-t border-border pt-4')
   const sectionHeading = heading ? <h2 className="px-4 text-sm font-semibold">{heading}</h2> : null
 
   if (status === 'loading') {

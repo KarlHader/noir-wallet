@@ -413,9 +413,9 @@ test('Shield merges only same-chain ZEC providers in token and network views', (
     display.visibleConfidential,
     display.confidentialZec
   )
-  expect(zcashSection.primaryAssets).toHaveLength(1)
+  expect(zcashSection.assets).toHaveLength(1)
   expect(zcashSection.separateHoldings).toHaveLength(0)
-  expect(zcashSection.primaryAssets[0].balance.totalRaw).toBe('200000000')
+  expect(zcashSection.assets[0].balance.totalRaw).toBe('200000000')
 
   const confidentialOnly = {
     ...model,

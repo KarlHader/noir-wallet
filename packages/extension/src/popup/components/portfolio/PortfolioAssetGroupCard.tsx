@@ -40,7 +40,7 @@ import { ZcashFundingBadge } from '@/popup/components/zcash/ZcashFundingBadge'
 import { Tooltip } from '@/popup/components/ui/tooltip'
 
 export const portfolioAssetRowClassName =
-  'flex min-h-[72px] w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left'
+  'flex min-h-[72px] w-full min-w-0 items-center gap-[9px] px-4 py-2.5 text-left'
 
 export function PortfolioAssetRowContent({
   icon,
@@ -370,7 +370,7 @@ export function PortfolioAssetGroupCard({
         }
         className={cn(
           portfolioAssetRowClassName,
-          'wallet-interactive hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
+          'wallet-interactive hover:bg-foreground/[0.03] active:bg-foreground/[0.06] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
           !balancesHidden && pendingAmount.gt(0) && 'pb-0'
         )}
       >
@@ -385,7 +385,7 @@ export function PortfolioAssetGroupCard({
                     icon: group.iconUrl,
                     blockchain: chainBadge
                   })}
-              size={36}
+              size={32}
               className="shrink-0"
             />
           }
@@ -416,7 +416,7 @@ export function PortfolioAssetGroupCard({
               {!balancesHidden && fiat === null && pricesLoading ? (
                 <Skeleton className="ml-auto h-4 w-16" />
               ) : (
-                <p className="break-all text-base font-medium">
+                <p className="break-all text-base font-medium [[data-wallet-palette=public]_&]:font-semibold">
                   {balancesHidden
                     ? '••••'
                     : fiat === null

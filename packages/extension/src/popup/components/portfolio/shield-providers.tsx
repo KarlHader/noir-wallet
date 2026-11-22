@@ -23,7 +23,7 @@ export const SHIELD_PROVIDERS: Readonly<
     tint: '#0c6e57'
   },
   'zcash-shield': {
-    name: 'Zcash shield',
+    name: 'Zcash Shield',
     detailName: 'Zcash Shield',
     description: 'Receive ZEC directly to your shielded address on Zcash.',
     logo: zcashLogo,

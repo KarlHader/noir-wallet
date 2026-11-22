@@ -48,8 +48,8 @@ export function getEvmSendRecipientError(
 ): string | null {
   if (sourceMode !== 'main' || recipientRole !== 'confidential' || sendPrivately) return null
   return canMove
-    ? 'This is your Private address.'
-    : 'Turn on Send privately to send to this Private address.'
+    ? 'This is your Incognito address.'
+    : 'Turn on Send privately to send to this Incognito address.'
 }
 
 export function getEvmSendPrivacyWarning(

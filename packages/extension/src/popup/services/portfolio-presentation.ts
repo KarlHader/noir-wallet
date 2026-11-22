@@ -255,28 +255,6 @@ export function sortPortfolioAssets(
   })
 }
 
-export function partitionPortfolioAssets(
-  assets: readonly PortfolioAssetView[],
-  prices: AssetPriceReadModel | null,
-  lowValueUsdThreshold: Big
-): Readonly<{
-  primaryAssets: readonly PortfolioAssetView[]
-  lowValueAssets: readonly PortfolioAssetView[]
-}> {
-  const lowValueAssets = assets.filter(asset => {
-    const fiat = getPortfolioAssetUsdValue(asset, prices)
-    return (
-      asset.asset.kind === 'token' &&
-      (BigInt(asset.balance.totalRaw) === 0n ||
-        (fiat !== null && new Big(fiat).lt(lowValueUsdThreshold)))
-    )
-  })
-  return Object.freeze({
-    primaryAssets: Object.freeze(assets.filter(asset => !lowValueAssets.includes(asset))),
-    lowValueAssets: Object.freeze(lowValueAssets)
-  })
-}
-
 function getCompletePortfolioAssetGroupUsdValue(
   group: PortfolioAssetGroup,
   prices: AssetPriceReadModel | null
@@ -492,11 +470,7 @@ export function getPortfolioChainSection(
     chainFiat: sumNearConfidentialChainFiat(getPortfolioChainUsdValue(chain, prices), holdings),
     hasNativeBalance: chain.assets.some(asset => asset !== confidentialZec?.displayAsset),
     separateHoldings: holdings.filter(item => item !== confidentialZec?.mergedHolding),
-    ...partitionPortfolioAssets(
-      sortPortfolioAssets(chain.assets, prices),
-      prices,
-      LOW_VALUE_USD_THRESHOLD
-    )
+    assets: sortPortfolioAssets(chain.assets, prices)
   }
 }
 

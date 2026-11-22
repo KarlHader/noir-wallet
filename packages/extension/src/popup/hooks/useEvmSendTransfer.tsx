@@ -110,7 +110,6 @@ interface PrivateSendPreview {
 
 export function useEvmSendTransfer({
   active,
-  walletMode,
   onSelectAsset,
   onSelectShield,
   destinationNetworks,
@@ -1162,7 +1161,6 @@ export function useEvmSendTransfer({
 
   return {
     active,
-    walletMode,
     destinationNetworks,
     priceUsd,
     sourceMode,

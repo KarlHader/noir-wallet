@@ -2028,11 +2028,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 : executionSourceMode === 'private' &&
                     !swap.isZecSource &&
                     !sourcePrivateExecutionAddress
-                  ? 'Private source account unavailable'
+                  ? 'Incognito source account unavailable'
                   : destinationMode === 'private' &&
                       !isZecDestination &&
                       !destinationPrivateExecutionAddress
-                    ? 'Private receive account unavailable'
+                    ? 'Incognito receive account unavailable'
                     : isZecDestination &&
                         getFundingSourceUnavailableReason(
                           currentWallet?.keySource,
@@ -6801,7 +6801,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 ? 'Shield'
                 : 'Transparent'
               : executionSourceMode === 'private'
-                ? 'Private'
+                ? 'Incognito'
                 : 'Public'
           }}
           destinationAccount={{
@@ -6819,7 +6819,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                   ? 'Shield'
                   : 'Transparent'
                 : destinationMode === 'private'
-                  ? 'Private'
+                  ? 'Incognito'
                   : 'Public'
           }}
           rate={swap.rate}
@@ -7244,7 +7244,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                       destinationMode === 'private' &&
                       swap.tokenOut &&
                       supportsPrivateDestination(swap.tokenOut, 'main')
-                      ? 'Private account unavailable for this destination.'
+                      ? 'Incognito account unavailable for this destination.'
                       : 'Select a supported destination asset.'
                     : crossChainSendRequested &&
                         swap.tokenOut &&
@@ -7347,12 +7347,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         }
         sourceBadge={
           privateSwapRequested
-            ? 'Private'
+            ? 'Incognito'
             : isPrivateFunding
               ? 'Public'
               : !swap.isZecSource
                 ? executionSourceMode === 'private'
-                  ? 'Private'
+                  ? 'Incognito'
                   : 'Public'
                 : fundingSource === 'transparent'
                   ? 'Transparent'
@@ -7407,10 +7407,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           shieldNativeZecSwap && swap.isZecSource
             ? 'Confidential'
             : isPrivateFunding
-              ? 'Private'
+              ? 'Incognito'
               : !requiresRecipientAddress && walletDestinationTarget?.kind === 'evm'
                 ? destinationMode === 'private'
-                  ? 'Private'
+                  ? 'Incognito'
                   : 'Public'
                 : isZecDestination && !requiresRecipientAddress
                   ? zecDestinationType === 'shielded'
@@ -7499,21 +7499,13 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         getFundingSourceOptions(storeBalance, currentAccount?.addresses ?? {}, zcashKeySource).some(
           source => source.type === 'shielded' && !source.disabledReason
         )))
+  const ordinarySwapInput = ordinarySwapRequested && viewStep === 'input' && !resumingApprovalReview
+  const swapControlsDisabled = balanceDomainPending || shieldBusy || isPreparingReview || isSending
 
   return (
     <div
       className={
         sharedSendLayout && crossChainSendMode === 'public' ? 'contents' : 'page-container'
-      }
-      data-wallet-mode={
-        crossChainSendRequested
-          ? crossChainSendMode
-          : !shieldSwapSelected &&
-              ((ordinarySwapRequested && sourceMode === 'private') ||
-                privateSwapRequested ||
-                executionSourceMode === 'private')
-            ? 'private'
-            : undefined
       }
     >
       {!shieldReviewing &&
@@ -7550,22 +7542,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         viewStep !== 'review' &&
         !(resumingApprovalReview && viewStep === 'input') && (
           <PageHeader
-            compactTitle={!crossChainSendRequested}
             title={
-              viewStep === 'approval-pending'
-                ? 'Token approval'
-                : publicPrivacySendRequested
-                  ? 'Send'
-                  : lockedAssetFlowRequested
-                    ? 'Transfer'
-                    : crossChainSendRequested
-                      ? 'Send'
-                      : 'Swap'
-            }
-            {...(viewStep === 'approval-pending' ? {} : getHeaderProps())}
-            rightContent={
               crossChainSendRequested && viewStep === 'input' ? (
                 <TransactionModeDropdown
+                  action="Send"
                   value={crossChainSendMode}
                   options={
                     crossChainSendMode === 'public' && crossChainSendShieldAvailable
@@ -7577,23 +7557,31 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                   }}
                   disabled={crossChainDraftPending || isPreparingReview || isSending}
                 />
-              ) : ordinarySwapRequested && viewStep === 'input' && !resumingApprovalReview ? (
-                <div className="flex items-center gap-1">
-                  {showSwapSettings && (
-                    <SwapSettingsButton
-                      disabled={
-                        balanceDomainPending || shieldBusy || isPreparingReview || isSending
-                      }
-                      onClick={() => void handleOpenSlippageSetting()}
-                    />
-                  )}
-                  <TransactionModeDropdown
-                    value={committedBalanceDomain}
-                    options={availableBalanceDomains}
-                    onChange={handleBalanceDomainChange}
-                    disabled={balanceDomainPending || shieldBusy || isPreparingReview || isSending}
-                  />
-                </div>
+              ) : ordinarySwapInput ? (
+                <TransactionModeDropdown
+                  action="Swap"
+                  value={committedBalanceDomain}
+                  options={availableBalanceDomains}
+                  onChange={handleBalanceDomainChange}
+                  disabled={swapControlsDisabled}
+                />
+              ) : viewStep === 'approval-pending' ? (
+                'Token approval'
+              ) : publicPrivacySendRequested || crossChainSendRequested ? (
+                'Send'
+              ) : lockedAssetFlowRequested ? (
+                'Transfer'
+              ) : (
+                'Swap'
+              )
+            }
+            {...(viewStep === 'approval-pending' ? {} : getHeaderProps())}
+            rightContent={
+              ordinarySwapInput && showSwapSettings ? (
+                <SwapSettingsButton
+                  disabled={swapControlsDisabled}
+                  onClick={() => void handleOpenSlippageSetting()}
+                />
               ) : undefined
             }
           />

@@ -546,12 +546,10 @@ function ZcashSendForm({
     <>
       {standalone && (
         <PageHeader
-          title="Send"
-          showBack
-          onBack={transfer.available ? transfer.leaveSend : undefined}
-          rightContent={
-            transfer.available && (
+          title={
+            transfer.available ? (
               <TransactionModeDropdown
+                action="Send"
                 value={funding.source === 'shielded' ? 'shield' : 'public'}
                 options={(['public', 'shield'] as const).filter(domain =>
                   funding.options.some(
@@ -565,8 +563,12 @@ function ZcashSendForm({
                 }
                 disabled={funding.disabled}
               />
+            ) : (
+              'Send'
             )
           }
+          showBack
+          onBack={transfer.available ? transfer.leaveSend : undefined}
         />
       )}
       {transfer.available ? (
@@ -1660,10 +1662,22 @@ function SendAssetFlow() {
     )
   }
   return (
-    <div className="contents" data-wallet-mode={walletMode}>
+    <>
       {!(nearActive && shieldReviewing) && !(zcashActive && zcashReviewing) && (
         <PageHeader
-          title={sourcePicker || showPublicAssetPicker ? 'Select Token' : 'Send'}
+          title={
+            sourcePicker || showPublicAssetPicker ? (
+              'Select Token'
+            ) : (
+              <TransactionModeDropdown
+                action="Send"
+                value={shieldActive ? 'shield' : 'public'}
+                options={availableShieldProviders.length > 0 ? ['public', 'shield'] : ['public']}
+                onChange={switchMode}
+                disabled={shieldBusy || shieldReviewing || zcashBusy || zcashReviewing}
+              />
+            )
+          }
           showBack
           backDisabled={shieldBusy || zcashBusy}
           onBack={
@@ -1682,16 +1696,6 @@ function SendAssetFlow() {
                   : selection
                     ? returnToEntry
                     : goBack
-          }
-          rightContent={
-            !sourcePicker ? (
-              <TransactionModeDropdown
-                value={shieldActive ? 'shield' : 'public'}
-                options={availableShieldProviders.length > 0 ? ['public', 'shield'] : ['public']}
-                onChange={switchMode}
-                disabled={shieldBusy || shieldReviewing || zcashBusy || zcashReviewing}
-              />
-            ) : undefined
           }
         />
       )}
@@ -1963,6 +1967,6 @@ function SendAssetFlow() {
           <ListSkeleton label="Loading asset" />
         </div>
       )}
-    </div>
+    </>
   )
 }

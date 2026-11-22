@@ -249,7 +249,7 @@ function AccountAddressPopover({
                       : 'text-muted hover:bg-white/6 hover:text-foreground'
                   )}
                 >
-                  Private
+                  Incognito
                 </button>
               </div>
             )}
@@ -274,7 +274,7 @@ function AccountAddressPopover({
             {evmAddress && (
               <button
                 type="button"
-                aria-label={`Copy EVM ${evmMode === 'private' ? 'Private' : 'Public'} address`}
+                aria-label={`Copy EVM ${evmMode === 'private' ? 'Incognito' : 'Public'} address`}
                 title="Copy address"
                 onClick={() =>
                   (evmMode === 'private' ? onCopyPrivate : onCopy)(
@@ -611,9 +611,13 @@ export function AccountSwitcher({
             type="button"
             aria-label="Choose wallet"
             title="Choose wallet"
-            className="group wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-full hover:brightness-110 active:brightness-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="group wallet-interactive flex size-8 shrink-0 items-center justify-center rounded-full hover:brightness-110 active:brightness-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
-            <AccountAvatar name={activeName} walletId={accountIdentity?.walletId ?? null} />
+            <AccountAvatar
+              name={activeName}
+              walletId={accountIdentity?.walletId ?? null}
+              size={28}
+            />
           </button>
         </DialogPrimitive.Trigger>
         <DialogPrimitive.Portal>
@@ -809,15 +813,9 @@ export function AccountSwitcher({
               setAddressesOpen(false)
               setDrawerOpen(true)
             }}
-            className="wallet-interactive flex min-w-0 max-w-[150px] items-center gap-1 rounded-sm text-sm font-semibold leading-[18px] hover:text-primary active:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="wallet-interactive flex min-w-0 max-w-[150px] items-center rounded-sm text-sm font-semibold leading-[18px] text-[#e6e8ea] hover:text-primary active:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             <span className="min-w-0 truncate">{activeName}</span>
-            <Icon
-              icon="lucide:chevron-down"
-              width={10}
-              height={10}
-              className="shrink-0 text-wallet-secondary"
-            />
           </button>
         </PopoverTrigger>
         <PopoverContent
@@ -855,31 +853,6 @@ export function AccountSwitcher({
           )}
         </PopoverContent>
       </Popover>
-      <button
-        type="button"
-        aria-label="Show account addresses"
-        title="Show account addresses"
-        onPointerEnter={event => {
-          if (event.pointerType === 'mouse') {
-            cancelAddressesClose()
-            if (!addressesOpen) {
-              addressesOpenedByHover.current = true
-              setAddressesOpen(true)
-            }
-          }
-        }}
-        onPointerLeave={event => {
-          if (event.pointerType === 'mouse') scheduleAddressesClose()
-        }}
-        onClick={() => {
-          cancelAddressesClose()
-          addressesOpenedByHover.current = false
-          setAddressesOpen(true)
-        }}
-        className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-sm text-wallet-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-      >
-        <Icon icon="lucide:copy" width={14} height={14} />
-      </button>
     </div>
   )
 }

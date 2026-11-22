@@ -292,7 +292,7 @@ export function createNearRpcClient(
       options?.finality ?? 'final',
       options?.signal
     )
-    return parseNearFunctionCallResult(result).value
+    return parseNearFunctionCallResult(result, options?.maximumResultBytes).value
   }
 
   return Object.freeze({

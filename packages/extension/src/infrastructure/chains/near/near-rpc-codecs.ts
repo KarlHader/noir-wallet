@@ -14,7 +14,8 @@ import {
 const MAXIMUM_U64 = 18_446_744_073_709_551_615n
 const MAXIMUM_U128 = 340_282_366_920_938_463_463_374_607_431_768_211_455n
 const MAXIMUM_METHOD_NAMES = 128
-const MAXIMUM_VIEW_RESULT_BYTES = 1_024
+const DEFAULT_VIEW_RESULT_BYTES = 1_024
+const MAXIMUM_VIEW_RESULT_BYTES = 256 * 1_024
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
@@ -271,8 +272,14 @@ export function parseNearNativeTransferCostConfig(
   })
 }
 
-function decodeViewResult(value: unknown): string {
-  if (!Array.isArray(value) || value.length > MAXIMUM_VIEW_RESULT_BYTES) {
+function decodeViewResult(value: unknown, maximumBytes: number): string {
+  if (
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes <= 0 ||
+    maximumBytes > MAXIMUM_VIEW_RESULT_BYTES ||
+    !Array.isArray(value) ||
+    value.length > maximumBytes
+  ) {
     throw invalid('NEAR contract view result')
   }
   const bytes = new Uint8Array(value.length)
@@ -290,7 +297,10 @@ function decodeViewResult(value: unknown): string {
   }
 }
 
-export function parseNearFunctionCallResult(value: unknown): {
+export function parseNearFunctionCallResult(
+  value: unknown,
+  maximumResultBytes = DEFAULT_VIEW_RESULT_BYTES
+): {
   value: unknown
   blockHash: string
   blockHeight: number
@@ -301,7 +311,7 @@ export function parseNearFunctionCallResult(value: unknown): {
   readLogs(value.logs, 'NEAR contract view logs')
   const blockHash = readNearHash(value.block_hash, 'NEAR contract view block hash')
   const blockHeight = readSafeUnsignedInteger(value.block_height, 'NEAR contract view block height')
-  const decoded = decodeViewResult(value.result)
+  const decoded = decodeViewResult(value.result, maximumResultBytes)
   try {
     return { value: JSON.parse(decoded), blockHash, blockHeight }
   } catch {

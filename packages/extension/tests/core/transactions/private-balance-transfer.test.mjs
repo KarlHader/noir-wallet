@@ -148,9 +148,9 @@ test('validates a bidirectional transfer amount against the selected source bala
       amount: '3',
       decimals: 6,
       availableRaw: '2500000',
-      sourceLabel: 'Confidential'
+      sourceLabel: 'Incognito'
     })
-  ).toEqual({ amountRaw: null, error: 'Amount exceeds the Confidential balance' })
+  ).toEqual({ amountRaw: null, error: 'Amount exceeds the Incognito balance' })
 })
 
 test('keeps empty and incomplete amounts non-submittable without an error', () => {

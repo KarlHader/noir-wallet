@@ -315,7 +315,7 @@ export function SwapAssetCard({
               {!accountAction &&
                 accountBadge &&
                 (accountBadge === 'Confidential' ||
-                accountBadge === 'Private' ||
+                accountBadge === 'Incognito' ||
                 accountBadge === 'Public' ? (
                   <ExecutionAccountBadge
                     mode={accountBadge === 'Public' ? 'main' : 'private'}
@@ -734,7 +734,7 @@ export function SwapInputView({
                         : 'Wallet'}
                   </span>
                   {destinationBadge &&
-                    (destinationBadge === 'Public' || destinationBadge === 'Private' ? (
+                    (destinationBadge === 'Public' || destinationBadge === 'Incognito' ? (
                       <ExecutionAccountBadge
                         mode={destinationBadge === 'Public' ? 'main' : 'private'}
                         className="h-[17px] px-1.5"

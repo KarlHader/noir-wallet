@@ -1104,12 +1104,25 @@ async function handleEvmDAppNetworkRequest(
           authorizationRevision,
           validateRequest
         ),
-      requestApproval: (approvalOrigin, approvalAction, data) =>
-        dappHandler.requestExternalApproval(approvalOrigin, approvalAction, {
-          ...(typeof data === 'object' && data !== null && !Array.isArray(data) ? data : {}),
+      requestApproval: async (approvalOrigin, approvalAction, data) => {
+        const executionMode =
+          account.currentWalletId && account.currentAccountId
+            ? (
+                await dappExecutionModeCoordinator.read({
+                  network: DEFAULT_NETWORK,
+                  keyDomainId: account.currentWalletId,
+                  accountId: account.currentAccountId
+                })
+              ).mode
+            : 'main'
+        await validateRequest()
+        return dappHandler.requestExternalApproval(approvalOrigin, approvalAction, {
+          ...data,
+          executionMode,
           ...(tabInfo.favIconUrl === undefined ? {} : { favicon: tabInfo.favIconUrl }),
           ...(tabInfo.pageUrl === undefined ? {} : { faviconPageUrl: tabInfo.pageUrl })
         })
+      }
     }
   )
 }
@@ -4716,7 +4729,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   !message.nearIntentsBinding &&
                   !message.rheaSwapBinding
                 ) {
-                  throw new Error('Use Move for transfers from your Private account.')
+                  throw new Error('Use Withdraw to transfer from your Incognito account.')
                 }
                 if (
                   message.executionMode !== 'private' &&
@@ -4733,7 +4746,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                       catalog.accounts
                     ) === 'confidential'
                   ) {
-                    throw new Error('Use Move to transfer to your Private account.')
+                    throw new Error('Use Deposit to transfer to your Incognito account.')
                   }
                 }
                 return evmTransferRouter.prepare(

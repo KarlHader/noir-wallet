@@ -91,12 +91,12 @@ function LoadingPanel() {
           key={index}
           className="flex min-h-[68px] animate-pulse items-center gap-3 rounded-xl bg-card px-3 py-2.5"
         >
-          <div className="size-9 shrink-0 rounded-full bg-white/10" />
+          <div className="size-9 shrink-0 rounded-full bg-foreground/10" />
           <div className="flex-1 space-y-2">
-            <div className="h-3 w-20 rounded bg-white/10" />
-            <div className="h-2.5 w-24 rounded bg-white/5" />
+            <div className="h-3 w-20 rounded bg-foreground/10" />
+            <div className="h-2.5 w-24 rounded bg-foreground/5" />
           </div>
-          <div className="h-3 w-16 rounded bg-white/10" />
+          <div className="h-3 w-16 rounded bg-foreground/10" />
         </div>
       ))}
       <span className="sr-only">Loading balances from enabled networks.</span>
@@ -214,7 +214,7 @@ function PortfolioViewIcon({
       aria-hidden="true"
       className={cn(
         'flex size-5 items-center justify-center text-[var(--color-wallet-secondary)] opacity-50 transition-colors',
-        active && 'text-white opacity-100'
+        active && 'text-foreground opacity-100'
       )}
     >
       <span
@@ -285,9 +285,6 @@ export function PortfolioShell({
   const [expandedChainIds, setExpandedChainIds] = useState<ReadonlySet<string>>(() => new Set())
   const swapCatalog = useSwapTokenCatalog() ?? undefined
   const [lowValueExpanded, setLowValueExpanded] = useState(false)
-  const [expandedLowValueChainIds, setExpandedLowValueChainIds] = useState<ReadonlySet<string>>(
-    () => new Set()
-  )
 
   const displayedChains = chainListExpanded ? sortedChains : sortedChains.slice(0, 3)
   const showContent = model.status === 'ready' || model.status === 'partial'
@@ -335,15 +332,16 @@ export function PortfolioShell({
       className="flex min-h-0 flex-1 flex-col"
     >
       <h2 className="sr-only">Portfolio</h2>
-      <div className="flex h-[46px] shrink-0 items-center justify-between px-4 pb-1 pt-2.5">
+      <div className="flex h-[45px] shrink-0 items-center justify-between gap-2 pt-[9px] pr-2 pb-1 pl-4">
         <NetworkFilter
           ariaLabelPrefix="Filter portfolio by network"
+          className="min-w-[107px] gap-1.5 rounded-lg bg-[var(--home-toolbar-surface,var(--color-wallet-surface))] px-2.5 hover:bg-accent active:bg-accent"
           options={networkOptions}
           selectedIds={selectedChainIds}
           onSelectionChange={onSelectedChainIdsChange}
         />
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1">
           {refreshing && (
             <span role="status" aria-label="Portfolio data is syncing" className="sr-only">
               Syncing portfolio
@@ -352,7 +350,7 @@ export function PortfolioShell({
           <div
             role="group"
             aria-label="Portfolio view"
-            className="flex h-8 items-center rounded-xl bg-[var(--color-wallet-surface)] p-1"
+            className="flex h-8 items-center gap-0.5 rounded-lg bg-[var(--home-toolbar-surface,var(--color-wallet-surface))] p-1"
           >
             <Tooltip content="View by token" side="bottom">
               <button
@@ -360,7 +358,7 @@ export function PortfolioShell({
                 aria-label="Show token view"
                 aria-pressed={view === 'assets'}
                 onClick={() => onViewChange('assets')}
-                className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
+                className="wallet-interactive flex size-6 items-center justify-center rounded-md hover:bg-wallet-selected active:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-wallet-selected"
               >
                 <PortfolioViewIcon view="assets" active={view === 'assets'} />
               </button>
@@ -371,7 +369,7 @@ export function PortfolioShell({
                 aria-label="Show chain view"
                 aria-pressed={view === 'chains'}
                 onClick={() => onViewChange('chains')}
-                className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
+                className="wallet-interactive flex size-6 items-center justify-center rounded-md hover:bg-wallet-selected active:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-wallet-selected"
               >
                 <PortfolioViewIcon view="chains" active={view === 'chains'} />
               </button>
@@ -383,9 +381,9 @@ export function PortfolioShell({
                 <button
                   type="button"
                   aria-label="Portfolio options"
-                  className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-[var(--color-wallet-secondary)] hover:bg-white/5 hover:text-foreground active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                  className="wallet-interactive flex h-8 w-6 items-center justify-center rounded-lg text-wallet-secondary hover:bg-foreground/5 hover:text-foreground active:bg-foreground/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                 >
-                  <Icon icon="lucide:ellipsis" width={21} height={21} />
+                  <Icon icon="lucide:ellipsis" width={16} height={16} className="rotate-90" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="bg-[var(--color-wallet-surface)]">
@@ -489,18 +487,11 @@ export function PortfolioShell({
             )}
           </div>
         ) : (
-          <div className="divide-y divide-white/[0.08] pb-2">
+          <div className="divide-y divide-border pb-2">
             {displayedChains.map(chain => {
               const expanded = expandedChainIds.has(chain.chain.id)
-              const {
-                balanceStatus,
-                chainFiat,
-                hasNativeBalance,
-                separateHoldings,
-                primaryAssets,
-                lowValueAssets
-              } = getPortfolioChainSection(chain, prices, visibleConfidential, confidentialZec)
-              const chainLowValueExpanded = expandedLowValueChainIds.has(chain.chain.id)
+              const { balanceStatus, chainFiat, hasNativeBalance, separateHoldings, assets } =
+                getPortfolioChainSection(chain, prices, visibleConfidential, confidentialZec)
               return (
                 <section
                   key={chain.chain.id}
@@ -519,7 +510,7 @@ export function PortfolioShell({
                         return next
                       })
                     }
-                    className="wallet-interactive flex min-h-[66px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                    className="wallet-interactive flex min-h-[66px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-foreground/5 active:bg-foreground/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                   >
                     <ChainIcon
                       chain={resolveChainIconAlias(
@@ -585,7 +576,7 @@ export function PortfolioShell({
                       aria-label={`${chain.chain.displayName} token balances`}
                       className="divide-y divide-border/70 border-t border-border/70"
                     >
-                      {primaryAssets.map(asset => (
+                      {assets.map(asset => (
                         <PortfolioChainAssetRow
                           key={asset.asset.id}
                           entry={{ asset, chain }}
@@ -609,49 +600,6 @@ export function PortfolioShell({
                           onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
                         />
                       ))}
-                      {lowValueAssets.length > 0 && (
-                        <>
-                          <button
-                            type="button"
-                            aria-expanded={chainLowValueExpanded}
-                            onClick={() =>
-                              setExpandedLowValueChainIds(current => {
-                                const next = new Set(current)
-                                if (next.has(chain.chain.id)) next.delete(chain.chain.id)
-                                else next.add(chain.chain.id)
-                                return next
-                              })
-                            }
-                            className="wallet-interactive flex min-h-10 w-full items-center gap-2 px-3 text-left text-xs text-muted hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-                          >
-                            <Icon icon="lucide:archive" width={14} height={14} />
-                            <span className="flex-1">Low value ({lowValueAssets.length})</span>
-                            <Icon
-                              icon="lucide:chevron-down"
-                              width={12}
-                              height={12}
-                              className={cn(
-                                'transition-transform',
-                                chainLowValueExpanded && 'rotate-180'
-                              )}
-                            />
-                          </button>
-                          {chainLowValueExpanded &&
-                            lowValueAssets.map(asset => (
-                              <PortfolioChainAssetRow
-                                key={asset.asset.id}
-                                entry={{ asset, chain }}
-                                domain={domain}
-                                prices={prices}
-                                confidentialZec={confidentialZec}
-                                balancesHidden={balancesHidden}
-                                pricesLoading={pricesLoading}
-                                onSelectAsset={selectAsset}
-                                swapCatalog={swapCatalog}
-                              />
-                            ))}
-                        </>
-                      )}
                     </div>
                   )}
                 </section>

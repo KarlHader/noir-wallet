@@ -5,7 +5,7 @@ export type BalanceDomain = 'public' | 'private' | 'shield'
 
 const LABELS: Record<BalanceDomain, string> = {
   public: 'Public',
-  private: 'Private',
+  private: 'Incognito',
   shield: 'Shield'
 }
 

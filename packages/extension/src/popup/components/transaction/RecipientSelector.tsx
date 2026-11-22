@@ -302,7 +302,7 @@ export function RecipientSelector({
                                           className="text-muted"
                                         />
                                       )}
-                                      {address.executionMode === 'private' ? 'Private' : 'Public'}
+                                      {address.executionMode === 'private' ? 'Incognito' : 'Public'}
                                     </span>
                                   )}
                                   <p

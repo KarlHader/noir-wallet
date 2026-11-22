@@ -523,7 +523,7 @@ export function ShieldReceiveAddress({
                         <span className="truncate">{refundAccount.accountDisplayName}</span>
                         <span className="shrink-0 text-xs text-muted">
                           {refundIsPrivate
-                            ? 'Private'
+                            ? 'Incognito'
                             : refundNetwork?.chain.family === 'zcash'
                               ? 'Transparent'
                               : 'Public'}
