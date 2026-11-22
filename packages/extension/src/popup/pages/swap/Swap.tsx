@@ -4301,7 +4301,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         resultReturnPath
       )
       navigate('/transaction-result', {
-        replace: ordinarySwapRequested || crossChainSendRequested || publicPrivacySendRequested
+        replace:
+          ordinarySwapRequested ||
+          crossChainSendRequested ||
+          publicPrivacySendRequested ||
+          (privateBalanceTransferRequested && !privateFundingRequestId)
       })
     },
     [
@@ -4317,6 +4321,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       ordinarySwapRequested,
       crossChainSendRequested,
       publicPrivacySendRequested,
+      privateBalanceTransferRequested,
       privateFundingRequestId,
       resultReturnPath,
       executionSourceMode
@@ -7427,6 +7432,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     transferPreparationError ??
     (swap.catalogError ? 'Could not load transfer assets.' : null) ??
     (lockedAssetFlowRequested &&
+    swap.selectionReady &&
     !swap.areTokensLoading &&
     !swap.destinationTokensLoading &&
     !walletSourcesLoading &&
@@ -7437,9 +7443,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     (hasInsufficientFunds && swap.tokenIn && !walletSourcesLoading && lockedAssetFlowReady
       ? `Insufficient ${swap.tokenIn.symbol} balance`
       : null) ??
-    (isPrivateFunding && !swap.destinationTokensLoading && !privateFundingDestinationToken
-      ? 'This asset is not available for Confidential transfers.'
-      : swap.quoteError)
+    swap.quoteError
   const preparingSimplifiedTransfer =
     lockedAssetFlowRequested && autoReviewRequested && viewStep === 'input'
   const publicPrivacySendInitializing =

@@ -99,6 +99,7 @@ export function BalanceTransferAccountCard({
   external?: boolean
 }) {
   const AccountControl = onAccountClick ? 'button' : 'div'
+  const NetworkControl = onNetworkClick ? 'button' : 'div'
   const accountLabel = external
     ? 'External transfer'
     : domain === 'shield' && provider
@@ -172,13 +173,19 @@ export function BalanceTransferAccountCard({
           <Icon icon="lucide:chevron-down" width={15} height={15} className="shrink-0 text-muted" />
         )}
       </AccountControl>
-      {showNetwork && domain !== 'shield' && network && onNetworkClick && (
-        <button
-          type="button"
-          onClick={onNetworkClick}
-          disabled={disabled}
-          aria-label={`Select ${label.toLowerCase()} network`}
-          className="wallet-interactive mt-4 flex w-full items-center gap-3 rounded text-left focus-visible:outline-2 focus-visible:outline-primary"
+      {showNetwork && domain !== 'shield' && network && (networkName || onNetworkClick) && (
+        <NetworkControl
+          {...(onNetworkClick && {
+            type: 'button',
+            onClick: onNetworkClick,
+            disabled,
+            'aria-label': `Select ${label.toLowerCase()} network`
+          })}
+          className={cn(
+            'mt-4 flex w-full items-center gap-3 rounded text-left',
+            onNetworkClick &&
+              'wallet-interactive focus-visible:outline-2 focus-visible:outline-primary'
+          )}
         >
           <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-muted">
             <Icon icon="lucide:globe" width={19} height={19} />
@@ -198,8 +205,15 @@ export function BalanceTransferAccountCard({
               <span className="truncate">{networkName || 'Select network'}</span>
             </span>
           </span>
-          <Icon icon="lucide:chevron-down" width={15} height={15} className="shrink-0 text-muted" />
-        </button>
+          {onNetworkClick && (
+            <Icon
+              icon="lucide:chevron-down"
+              width={15}
+              height={15}
+              className="shrink-0 text-muted"
+            />
+          )}
+        </NetworkControl>
       )}
     </div>
   )

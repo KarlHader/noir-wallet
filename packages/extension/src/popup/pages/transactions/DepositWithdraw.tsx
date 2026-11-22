@@ -95,6 +95,7 @@ import {
 } from '@/popup/services/balance-transfer-asset-picker'
 import {
   confidentialFundingClient,
+  estimateNativeClusterMaximum,
   previewClusterNetworkFeeTiers,
   previewReviewedConfidentialDepositFeeTiers
 } from '@/popup/services/confidential-funding-client'
@@ -263,7 +264,7 @@ function MethodCard({
   recommended: boolean
   selected: boolean
   estimate: BalanceTransferEstimate | null
-  fee: { value: string; detail: string | null }
+  fee: ReturnType<typeof formatBalanceTransferFee>
   loading?: boolean
   disabled?: boolean
   onClick: () => void
@@ -311,17 +312,14 @@ function MethodCard({
         </span>
       </span>
       <span className="mt-2 flex justify-between gap-2">
-        <span className="shrink-0 text-muted">Fee</span>
+        <span className="text-muted">Quote difference</span>
         <span className="min-w-0 break-words text-right">
-          {loading ? (
-            <Skeleton className="ml-auto h-4 w-full max-w-24" />
-          ) : (
-            <>
-              <span className="block">{fee.value}</span>
-              {fee.detail && <span className="block text-muted">{fee.detail}</span>}
-            </>
-          )}
+          {loading ? <Skeleton className="ml-auto h-4 w-full max-w-24" /> : fee.routeDifference}
         </span>
+      </span>
+      <span className="mt-2 flex justify-between gap-2">
+        <span className="text-muted">Network fee cap</span>
+        <span className="min-w-0 break-words text-right">{fee.networkFeeCap}</span>
       </span>
     </button>
   )
@@ -1257,6 +1255,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     currentShieldBalances
   ])
   const targetAsset = from === 'shield' ? destination : selected
+  const canSelectTargetNetwork = from !== 'public' || to !== 'private'
   const targetNetwork = activeAccount?.networks.find(
     item => item.chain.id === targetAsset?.chain.chain.id
   )
@@ -1320,10 +1319,44 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           maximumRaw: null
         })
       : null
+  const buildClusterPreviewRequest = (amountRaw: string) =>
+    buildShieldTransferRequest({
+      network: currentNetwork,
+      keyDomainId: effective!.walletId,
+      accountId: effective!.accountId,
+      from,
+      to,
+      method: 'cluster',
+      amountRaw,
+      asset: selected!.asset,
+      chain: selected!.chain,
+      managed: managedAsset!
+    })
+  const exactClusterMaximum = clusterSelected && selected?.asset.asset.kind === 'native'
+  const clusterMax = useBalanceTransferEstimate({
+    enabled: Boolean(
+      maxSelected && exactClusterMaximum && shieldAvailable && managedAsset && effective && eligible
+    ),
+    requestKey: `${routeKey}:${shieldAvailable?.amountRaw ?? ''}:${JSON.stringify(evmMoveFee)}:${retry}`,
+    estimate: signal =>
+      estimateNativeClusterMaximum({
+        availableRaw: shieldAvailable!.amountRaw,
+        probeRaw: maximumRaw,
+        estimateNetworkFee: amountRaw =>
+          confidentialFundingClient.previewClusterNetworkFee({
+            ...buildClusterPreviewRequest(amountRaw),
+            feeSelection: evmMoveFee
+          }),
+        signal
+      })
+  })
+  const resolvedMaxRaw = exactClusterMaximum ? clusterMax.value : maximumRaw
   const maxAmount =
-    selected && maximumRaw !== null
-      ? formatBaseUnitDecimalAmount(maximumRaw, selected.asset.metadata.decimals)
-      : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
+    selected && resolvedMaxRaw !== null
+      ? formatBaseUnitDecimalAmount(resolvedMaxRaw, selected.asset.metadata.decimals)
+      : exactClusterMaximum
+        ? ''
+        : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
   const currentAmount = maxSelected ? maxAmount : amount
   useEffect(() => {
     if (maxSelected) setAmount(maxAmount)
@@ -1386,24 +1419,13 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       })
   })
   const clusterEstimateKey = `${methodEstimateKey}:${managedAsset?.protocolAssetId ?? ''}`
-  const buildClusterPreviewRequest = (amountRaw = estimateAmountRaw!) =>
-    buildShieldTransferRequest({
-      network: currentNetwork,
-      keyDomainId: effective!.walletId,
-      accountId: effective!.accountId,
-      from,
-      to,
-      method: 'cluster',
-      amountRaw,
-      asset: selected!.asset,
-      chain: selected!.chain,
-      managed: managedAsset!
-    })
   const clusterEstimate = useBalanceTransferEstimate({
     enabled: canEstimateMethods && Boolean(managedAsset && effective),
     requestKey: clusterEstimateKey,
     estimate: async signal => {
-      const preview = await confidentialFundingClient.preview(buildClusterPreviewRequest())
+      const preview = await confidentialFundingClient.preview(
+        buildClusterPreviewRequest(estimateAmountRaw!)
+      )
       signal.throwIfAborted()
       return clusterTransferEstimate(estimateAmountRaw!, preview)
     }
@@ -1414,7 +1436,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     requestKey: `${clusterEstimateKey}:${JSON.stringify(evmMoveFee)}`,
     estimate: () =>
       confidentialFundingClient.previewClusterNetworkFee({
-        ...buildClusterPreviewRequest(),
+        ...buildClusterPreviewRequest(estimateAmountRaw!),
         feeSelection: evmMoveFee
       })
   }).value
@@ -1446,6 +1468,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     !clusterEstimate.loading &&
     !directEstimate.loading
   const transferError =
+    clusterMax.errorMessage ??
     amountError ??
     quoteMinimumError ??
     confidentialRouteError ??
@@ -1644,8 +1667,9 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       !available ||
       BigInt(available.amountRaw) === 0n
   const handleMax = () => {
-    if (!selected || maxDisabled || maximumRaw === '0') return
+    if (!selected || maxDisabled || resolvedMaxRaw === '0' || clusterMax.loading) return
     setSelectedAssetId(selected.asset.asset.id)
+    if (clusterMax.error) setRetry(current => current + 1)
     setMaxSelected(true)
     setAmount(maxAmount)
   }
@@ -2253,7 +2277,10 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   }
                 }
               }}
-              max={{ onClick: handleMax, disabled: !selected || maxDisabled || maximumRaw === '0' }}
+              max={{
+                onClick: handleMax,
+                disabled: !selected || maxDisabled || resolvedMaxRaw === '0' || clusterMax.loading
+              }}
             />
             {receiveEntry ? (
               receiveAccounts
@@ -2298,7 +2325,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                     accountName={accountName}
                     domain={to}
                     address={to === 'shield' ? '' : targetAddress}
-                    networkName={targetAsset?.chain.chain.displayName ?? 'Select network'}
+                    networkName={targetAsset?.chain.chain.displayName}
                     network={
                       targetAsset
                         ? resolveChainIconAlias(
@@ -2308,9 +2335,9 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                           )
                         : networkIcon
                     }
-                    onNetworkClick={() => {
-                      setNetworkPickerOpen(true)
-                    }}
+                    onNetworkClick={
+                      canSelectTargetNetwork ? () => setNetworkPickerOpen(true) : undefined
+                    }
                     showNetwork={to !== 'shield'}
                     onAccountClick={fixedSide === 'to' ? undefined : () => openDomainPicker('to')}
                     disabled={!selected}
@@ -2390,7 +2417,9 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                     symbol={formatSymbol(clusterNetworkFee.symbol)}
                     loadTierPreviews={() =>
                       scopeStillCurrent()
-                        ? previewClusterNetworkFeeTiers(buildClusterPreviewRequest())
+                        ? previewClusterNetworkFeeTiers(
+                            buildClusterPreviewRequest(estimateAmountRaw!)
+                          )
                         : Promise.resolve({})
                     }
                     onTierChange={tier => {
@@ -2541,7 +2570,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         />
       </TokenSelectorDialog>
       <ChainSelector
-        open={networkPickerOpen}
+        open={canSelectTargetNetwork && networkPickerOpen}
         onOpenChange={setNetworkPickerOpen}
         options={destinationNetworkOptions}
         selectedId={targetAsset?.chain.chain.id ?? null}

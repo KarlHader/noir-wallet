@@ -474,6 +474,30 @@ export const externalShieldDepositClient = createExternalShieldDepositClient()
 
 export const confidentialFundingClient = createConfidentialFundingClient()
 
+export async function estimateNativeClusterMaximum(input: {
+  readonly availableRaw: string
+  readonly probeRaw: string | null
+  readonly estimateNetworkFee: (amountRaw: string) => Promise<{ readonly raw: string } | null>
+  readonly signal: AbortSignal
+}): Promise<string> {
+  const available = BigInt(input.availableRaw)
+  const probe = BigInt(input.probeRaw ?? '0')
+  let amount = probe > 0n && probe < available ? probe : available / 2n
+  let reserved = 0n
+  for (let attempt = 0; attempt < 4 && amount > 0n; attempt += 1) {
+    input.signal.throwIfAborted()
+    const fee = await input.estimateNetworkFee(amount.toString())
+    input.signal.throwIfAborted()
+    if (!fee) break
+    const feeCap = BigInt(fee.raw)
+    reserved = feeCap > reserved ? feeCap : reserved
+    const maximum = available - reserved
+    if (maximum === amount) return maximum.toString()
+    amount = maximum
+  }
+  throw new Error('Unable to estimate Max. Try again or enter an amount.')
+}
+
 export function previewReviewedConfidentialDepositFeeTiers(
   review: ConfidentialFundingReview,
   assetId: string,

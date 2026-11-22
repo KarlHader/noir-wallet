@@ -474,6 +474,34 @@ export function listShieldSendDestinations(
   return options.filter(option => isShieldSendDestination(source, option, network))
 }
 
+export function createShieldSendRoutes(options: readonly ShieldFundingAsset[], network: Network) {
+  const destinationsByChain = new Map<string, ShieldFundingAsset[]>()
+  for (const option of options) {
+    if (!isShieldSendDestination(option, option, network)) continue
+    const chainId = option.chain.chain.id
+    const destinations = destinationsByChain.get(chainId)
+    if (destinations) destinations.push(option)
+    else destinationsByChain.set(chainId, [option])
+  }
+
+  const getDestination = (source: ShieldFundingAsset | null, chainId: string | null) => {
+    if (!source || !chainId) return null
+    const candidates = destinationsByChain.get(chainId)
+    if (!candidates) return null
+    return selectShieldWithdrawDestinationForNetwork(
+      listShieldSendDestinations(source, candidates, network),
+      source,
+      chainId
+    )
+  }
+
+  return {
+    networks: Array.from(destinationsByChain.values(), ([first]) => first!.chain.chain),
+    getDestination,
+    getSources: (chainId: string) => options.filter(source => getDestination(source, chainId))
+  }
+}
+
 export function estimateShieldSendRouteFee(
   source: ShieldFundingAsset,
   destination: ShieldFundingAsset,
