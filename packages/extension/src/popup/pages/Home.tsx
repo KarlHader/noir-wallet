@@ -759,7 +759,7 @@ export function Home() {
           accountCatalog={accountCatalog}
           publicAccountCatalog={publicAccountCatalog}
           accountCatalogError={accountNetworksError}
-          defaultEvmMode={assetDomain === 'shield' ? null : walletMode}
+          defaultEvmMode={walletMode}
           className="min-w-0 flex-1"
         />
         <div data-testid="home-header-actions" className="flex shrink-0 items-center gap-3">

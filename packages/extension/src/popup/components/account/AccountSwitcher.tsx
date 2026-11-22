@@ -122,7 +122,7 @@ function AccountAddressPopover({
   addressesStatus
 }: {
   readonly account: SwitcherAccount
-  readonly defaultEvmMode: 'public' | 'private' | null
+  readonly defaultEvmMode: 'public' | 'private'
   readonly onCopy: (value: string, key: string) => void
   readonly onCopyPrivate: (value: string, key: string) => void
   readonly isCopied: (key: string) => boolean
@@ -137,9 +137,7 @@ function AccountAddressPopover({
   const zcash = account.networks.find(network => network.chain.family === 'zcash')
   const evm = account.networks.filter(network => network.chain.family === 'evm')
   const evmAddresses = evmExecutionAddresses(evm)
-  const evmMode =
-    selectedEvmMode ??
-    (defaultEvmMode === null ? null : evmAddresses.privateAddress ? defaultEvmMode : 'public')
+  const evmMode = evmAddresses.privateAddress ? (selectedEvmMode ?? defaultEvmMode) : 'public'
   const otherAddresses = account.networks.flatMap(network => {
     if (network.chain.family === 'zcash' || network.chain.family === 'evm') return []
     const address =
@@ -149,12 +147,7 @@ function AccountAddressPopover({
   const zcashAddresses = [...(zcash?.addresses ?? [])].sort(
     (left, right) => Number(left.privacy === 'shielded') - Number(right.privacy === 'shielded')
   )
-  const evmAddress =
-    evmMode === 'private'
-      ? evmAddresses.privateAddress
-      : evmMode === 'public'
-        ? evmAddresses.mainAddress
-        : null
+  const evmAddress = evmMode === 'private' ? evmAddresses.privateAddress : evmAddresses.mainAddress
 
   return (
     <div
@@ -376,7 +369,7 @@ export function AccountSwitcher({
   readonly accountCatalog: AccountNetworksCatalogView | null
   readonly publicAccountCatalog: AccountNetworksCatalogView | null
   readonly accountCatalogError: boolean
-  readonly defaultEvmMode?: 'public' | 'private' | null
+  readonly defaultEvmMode?: 'public' | 'private'
 }) {
   const { navigate, replace } = useNavigate()
   const { confirm, alert } = useDialog()
