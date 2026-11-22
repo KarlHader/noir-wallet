@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useWalletStore } from '@/store/wallet-store'
-import type { ConnectedDApp } from '@/core/dapp/dapp-manager'
+import type { ConnectedDApp, SiteDisconnectedDApp } from '@/core/dapp/dapp-manager'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 
 export type { ConnectedDApp } from '@/core/dapp/dapp-manager'
 
 export function useDAppConnection() {
-  const [currentDApp, setCurrentDApp] = useState<ConnectedDApp | null>(null)
+  const [currentDApp, setCurrentDApp] = useState<ConnectedDApp | SiteDisconnectedDApp | null>(null)
   const [currentAccountAuthorized, setCurrentAccountAuthorized] = useState(true)
   const [canConnectCurrentAccount, setCanConnectCurrentAccount] = useState(false)
   const [connectedDApps, setConnectedDApps] = useState<ConnectedDApp[]>([])
@@ -65,13 +65,7 @@ export function useDAppConnection() {
       })
       if (response?.error) throw new Error(response.error)
 
-      await loadConnectedDApps()
-
-      if (currentDApp?.origin === origin) {
-        setCurrentDApp(null)
-        setCurrentAccountAuthorized(true)
-        setCanConnectCurrentAccount(false)
-      }
+      await Promise.all([loadCurrentTabDApp(), loadConnectedDApps()])
     } catch (error) {
       console.error('Failed to disconnect dApp:', error)
       throw error

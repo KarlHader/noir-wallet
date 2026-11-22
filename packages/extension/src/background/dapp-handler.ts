@@ -2553,8 +2553,11 @@ export class DAppHandler {
     this.trackDisconnected()
   }
 
-  async revokeAllPermissions(origin: string): Promise<void> {
-    await dappManager.removeConnection(origin)
+  async revokeAllPermissions(
+    origin: string,
+    initiatedBy: 'wallet' | 'site' = 'wallet'
+  ): Promise<void> {
+    await dappManager.removeConnection(origin, initiatedBy)
     this.permissions.delete(origin)
     pendingRequestsManager.cancelOrigin(origin)
     await Promise.allSettled([

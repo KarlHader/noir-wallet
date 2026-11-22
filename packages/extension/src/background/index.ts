@@ -686,7 +686,7 @@ let currentDAppEvmRuntimeGeneration = crypto.randomUUID()
 let multichainRuntimeReady: Promise<void> = runtimeNetworkReady.then(() => undefined)
 
 const walletDAppConnection = new WalletDAppConnectionCoordinator({
-  getCurrentTabDApp: () => dappManager.getCurrentTabDApp(),
+  getCurrentTabDApp: () => dappManager.getCurrentTabDAppForWallet(),
   getConnection: origin => dappManager.getConnection(origin),
   loadActiveAccount: () => accountNetworksCoordinator.readActiveAccount(),
   getEvmChainId: async dapp => (await evmDAppOrigins.get(dapp.origin)).getCaip2ChainId(),

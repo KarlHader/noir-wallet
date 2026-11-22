@@ -400,7 +400,7 @@ export class BackgroundMultichainSessionDAppHandler {
         return this.handleTokenAccess(origin, request.method === 'wallet_openTokenManager')
       case 'wallet_revokeSession':
         parseCaip25NoParams(request.params)
-        await this.options.zcash.revokeAllPermissions(origin)
+        await this.options.zcash.revokeAllPermissions(origin, 'site')
         await this.notifySessionChanged(origin)
         return null
       case 'wallet_invokeMethod':

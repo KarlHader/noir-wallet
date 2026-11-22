@@ -212,6 +212,14 @@ export function Home() {
     effectiveAccountId,
     currentNetwork
   )
+  const siteDisconnected = currentDApp && 'disconnectedBySite' in currentDApp ? currentDApp : null
+  const connectedDApp = currentDApp && !('disconnectedBySite' in currentDApp) ? currentDApp : null
+  const currentDAppUsesEvm = siteDisconnected
+    ? siteDisconnected.disconnectedBySite === 'evm'
+    : Boolean(
+        connectedDApp?.evmAuthorization ||
+        connectedDApp?.chainAuthorizations?.some(grant => grant.chainId.startsWith('eip155:'))
+      )
   const [modeSwitchPending, setModeSwitchPending] = useState(false)
   const requestedMode = useRef<DAppExecutionMode | null>(null)
   const modeChangeRunning = useRef(false)
@@ -1127,9 +1135,9 @@ export function Home() {
         </div>
       </div>
 
-      {!isShieldView && currentDApp && currentAccountAuthorized && (
+      {!isShieldView && connectedDApp && currentAccountAuthorized && (
         <ConnectedDAppBar
-          dapp={currentDApp}
+          dapp={connectedDApp}
           account={effectiveAccount}
           executionMode={hardwareWallet ? 'main' : (dappExecutionMode.state?.mode ?? null)}
           modeControl={
@@ -1151,6 +1159,12 @@ export function Home() {
           favicon={currentDApp.favicon}
           accountName={accountDisplayName}
           canConnect={canConnectCurrentAccount}
+          disconnectedBySite={siteDisconnected !== null}
+          executionMode={
+            hardwareWallet || !currentDAppUsesEvm || !supportsEvmDAppExecutionMode
+              ? 'main'
+              : (dappExecutionMode.state?.mode ?? null)
+          }
           onConnect={() => connectCurrentAccount(currentDApp.origin)}
           onReturnToSite={() => void returnToDAppSite(currentDApp.origin)}
         />

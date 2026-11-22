@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { DAppExecutionMode, DAppExecutionModeState } from '@/core/dapp/dapp-execution-mode'
+import {
+  DAPP_EXECUTION_MODE_STORAGE_KEY,
+  type DAppExecutionMode,
+  type DAppExecutionModeState
+} from '@/core/dapp/dapp-execution-mode'
 import { dappExecutionModeClient } from '@/popup/services/dapp-execution-mode-client'
 import type { Network } from '@/types'
 import { waitForDelayOrAbort, withTimeout } from '@/lib/async-utils'
@@ -24,6 +28,7 @@ export function useDAppExecutionMode(
   const [updating, setUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requestVersion = useRef(0)
+  const pendingModeWrite = useRef<Promise<DAppExecutionModeState> | null>(null)
   const state =
     scopedState.scopeKey === scopeKey
       ? scopedState.state
@@ -85,11 +90,24 @@ export function useDAppExecutionMode(
       }
     }
     void readMode()
+    const onStorageChanged = async (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string
+    ) => {
+      if (!scopeKey || area !== 'local' || !(DAPP_EXECUTION_MODE_STORAGE_KEY in changes)) return
+      // Let this window apply its write response before re-reading the saved mode.
+      while (!controller.signal.aborted && pendingModeWrite.current) {
+        await pendingModeWrite.current.catch(() => {})
+      }
+      if (!controller.signal.aborted) await refresh().catch(() => {})
+    }
+    chrome.storage.onChanged.addListener(onStorageChanged)
     return () => {
       controller.abort()
       requestVersion.current += 1
+      chrome.storage.onChanged.removeListener(onStorageChanged)
     }
-  }, [refresh])
+  }, [refresh, scopeKey])
 
   const setMode = useCallback(
     async (
@@ -103,8 +121,10 @@ export function useDAppExecutionMode(
       const version = ++requestVersion.current
       setUpdating(true)
       setError(null)
+      const write = dappExecutionModeClient.set(mode, options)
+      pendingModeWrite.current = write
       try {
-        const next = await dappExecutionModeClient.set(mode, options)
+        const next = await write
         if (version === requestVersion.current && latestScopeKey.current === scopeKey) {
           confirmedModes.set(scopeKey, next)
           setScopedState({ scopeKey, state: next })
@@ -116,8 +136,10 @@ export function useDAppExecutionMode(
         }
         throw caught
       } finally {
-        if (version === requestVersion.current && latestScopeKey.current === scopeKey)
+        if (pendingModeWrite.current === write) {
+          pendingModeWrite.current = null
           setUpdating(false)
+        }
       }
     },
     [scopeKey]
