@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastructure/activity/zcash-v1-activity-source.ts'
+import { filterActivityItems } from '../../../../src/popup/services/activity-list-model.ts'
+import { getZcashChainId } from '../../../../src/core/chains/registry/index.ts'
 import {
   getActivityProgressSteps,
   getActivitySwapPresentation,
@@ -63,6 +65,49 @@ test('pending ZEC swap Activity projects the quote-time final recipient and dest
   assert.equal(
     getActivityProgressSteps(item, id => chainMetadata.get(id)?.displayName ?? id).length,
     3
+  )
+})
+
+test('a settled Shield ZEC swap belongs to its owned Public destination and the Shield source', () => {
+  const destinationChainId = 'eip155:42161'
+  const sourceChainId = getZcashChainId('mainnet')
+  const completed = { ...transaction, status: 'success' }
+  const item = mapZcashV1TransactionToActivityItem(
+    {
+      ...completed,
+      chainHashes: [{ hash: `0x${'cd'.repeat(32)}`, chain: 'Arbitrum' }]
+    },
+    scope
+  )
+  const executionAddressModes = new Map([
+    [`${destinationChainId}:${transaction.quoteBinding.recipient}`, 'Public']
+  ])
+  const publicActivity = {
+    items: [item],
+    selectedChainIds: [destinationChainId],
+    domain: 'public',
+    executionAddressModes
+  }
+  assert.deepEqual(filterActivityItems({ ...publicActivity, assetId: destinationAsset }), [item])
+  assert.deepEqual(
+    filterActivityItems({ ...publicActivity, selectedChainIds: [sourceChainId] }),
+    []
+  )
+  assert.deepEqual(filterActivityItems({ ...publicActivity, executionAddressModes: new Map() }), [])
+  assert.deepEqual(
+    filterActivityItems({
+      ...publicActivity,
+      items: [mapZcashV1TransactionToActivityItem(completed, scope)]
+    }),
+    []
+  )
+  assert.deepEqual(
+    filterActivityItems({
+      ...publicActivity,
+      domain: 'shield',
+      selectedChainIds: [sourceChainId]
+    }),
+    [item]
   )
 })
 

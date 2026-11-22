@@ -4,6 +4,7 @@ import { resolveActivityChainId } from '@/core/activity/activity-chain'
 import { isRheaIntentsRoute } from '@/core/transactions/domain'
 
 const ZCASH_CHAIN_IDS = new Set([getZcashChainId('mainnet'), getZcashChainId('testnet')])
+const EVM_TRANSACTION_HASH = /^0x[0-9a-f]{64}$/i
 
 export const activityStatusLabels = {
   all: 'All status',
@@ -62,6 +63,42 @@ export function resolveAvailableActivityChainSelection(
   return availableSelection.length === 1 ? availableSelection : availableChainIds
 }
 
+function getOwnedPublicZcashSwapDestination(
+  item: ActivityItem,
+  executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
+): string | undefined {
+  const recipient = item.snapshot?.recipient
+  if (
+    item.source !== 'zcash-v1' ||
+    item.kind !== 'swap' ||
+    item.status !== 'final' ||
+    item.reconfirming ||
+    !item.assetDomains?.includes('shield') ||
+    !recipient?.chainId.startsWith('eip155:') ||
+    executionAddressModes?.get(`${recipient.chainId}:${recipient.address.toLowerCase()}`) !==
+      'Public'
+  ) {
+    return undefined
+  }
+  const settled = item.segments.some(segment => {
+    const hash = segment.evidence?.transactionHash?.toLowerCase()
+    return (
+      segment.role === 'destination' &&
+      segment.status === 'final' &&
+      !segment.reconfirming &&
+      segment.target.kind === 'onchain' &&
+      segment.target.chainId === recipient.chainId &&
+      hash !== undefined &&
+      EVM_TRANSACTION_HASH.test(hash) &&
+      !item.segments.some(
+        origin =>
+          origin.role === 'origin' && origin.evidence?.transactionHash?.toLowerCase() === hash
+      )
+    )
+  })
+  return settled ? recipient.chainId : undefined
+}
+
 export function filterActivityItems(input: {
   readonly items: readonly ActivityItem[]
   readonly selectedChainIds: readonly string[]
@@ -88,11 +125,18 @@ export function filterActivityItems(input: {
     }
     const primaryAssetId = item.snapshot?.primaryAmount?.assetId
     const counterAssetId = item.snapshot?.counterAmount?.assetId
+    const ownedPublicZcashSwapDestination =
+      input.domain === 'public'
+        ? getOwnedPublicZcashSwapDestination(item, input.executionAddressModes)
+        : undefined
     const assetMatches =
       !input.assetId ||
-      primaryAssetId === input.assetId ||
-      counterAssetId === input.assetId ||
-      getActivityAssetEffects(item)?.changes.some(change => change.assetId === input.assetId)
+      (ownedPublicZcashSwapDestination
+        ? requestedAssetChainId === ownedPublicZcashSwapDestination &&
+          counterAssetId === input.assetId
+        : primaryAssetId === input.assetId ||
+          counterAssetId === input.assetId ||
+          getActivityAssetEffects(item)?.changes.some(change => change.assetId === input.assetId))
     const shield = item.snapshot?.shield
     const protocol = item.snapshot?.protocol
     const ownedPrivateDeposit =
@@ -137,10 +181,11 @@ export function filterActivityItems(input: {
       shield.sourceDomain === 'shield' &&
       shield.destinationDomain === 'public'
     const chainId =
-      requestedAssetChainId && assetMatches
+      ownedPublicZcashSwapDestination ??
+      (requestedAssetChainId && assetMatches
         ? requestedAssetChainId
         : ((ownedPublicWithdrawal ? item.snapshot?.recipient?.chainId : undefined) ??
-          resolveActivityChainId(item))
+          resolveActivityChainId(item)))
     const senderMode = item.snapshot?.sender?.address
       ? input.executionAddressModes?.get(item.snapshot.sender.address.toLowerCase())
       : undefined
@@ -200,7 +245,9 @@ export function filterActivityItems(input: {
           : shield
             ? shield.sourceDomain === input.domain || shield.destinationDomain === input.domain
             : item.source === 'zcash-v1'
-              ? input.domain === 'public' && item.assetDomains?.includes('public') === true
+              ? input.domain === 'public' &&
+                (ownedPublicZcashSwapDestination !== undefined ||
+                  item.assetDomains?.includes('public') === true)
               : input.domain === 'private'
                 ? item.accountMode === 'private' || ownedPrivateDeposit
                 : item.accountMode !== 'private')) &&
