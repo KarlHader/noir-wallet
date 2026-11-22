@@ -16,6 +16,7 @@ export function CrossChainSendReviewView({
   review,
   routeCost,
   sourceNetworkFee,
+  combinedNetworkFee,
   sourceFeeControl,
   executionTarget,
   approval,
@@ -40,6 +41,7 @@ export function CrossChainSendReviewView({
   readonly review: Pick<RheaSwapReviewView, 'amountIn' | 'estimatedOut' | 'recipient' | 'router'>
   readonly routeCost: string | null
   readonly sourceNetworkFee: { readonly amount: string; readonly symbol: string } | null
+  readonly combinedNetworkFee?: { readonly amount: string; readonly symbol: string }
   readonly sourceFeeControl?: ReactNode
   readonly executionTarget: { readonly label: string; readonly address: string } | null
   readonly approval?: { readonly amountRaw: string; readonly spender: string }
@@ -58,7 +60,11 @@ export function CrossChainSendReviewView({
   readonly onConfirm: () => void
 }) {
   const primaryAction = quoteReviewPrimaryAction({
-    confirmLabel: approval ? 'Approve Token' : 'Confirm Send',
+    confirmLabel: combinedNetworkFee
+      ? 'Approve & Send'
+      : approval
+        ? 'Approve Token'
+        : 'Confirm Send',
     onConfirm,
     confirmDisabled: !reviewedQuoteReady || Boolean(transferPreparationError) || insufficientFunds,
     refresh: transferPreparationError
@@ -125,10 +131,24 @@ export function CrossChainSendReviewView({
             <AmountDisplay value={routeCost} symbol={formatSymbol(source.symbol)} profile="fee" />
           )
         },
+        ...(combinedNetworkFee
+          ? [
+              {
+                label: 'Max network fee',
+                content: (
+                  <AmountDisplay
+                    value={combinedNetworkFee.amount}
+                    symbol={combinedNetworkFee.symbol}
+                    profile="fee"
+                  />
+                )
+              }
+            ]
+          : []),
         ...(sourceNetworkFee
           ? [
               {
-                label: 'Source network fee',
+                label: combinedNetworkFee ? 'Approval fee' : 'Source network fee',
                 content: sourceFeeControl ?? (
                   <AmountDisplay
                     value={sourceNetworkFee.amount}

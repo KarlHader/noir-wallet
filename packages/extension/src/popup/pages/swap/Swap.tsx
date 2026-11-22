@@ -3806,7 +3806,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               )
               const approvalSummary = approvalReview.review.summary
               const combinedFeeLimit =
-                ordinarySwapRequested &&
+                (ordinarySwapRequested || crossChainSendRequested) &&
                 executionSourceMode === 'main' &&
                 !isHardwareWallet &&
                 approvalSummary.schema === 'evm.transaction.v1'
@@ -6727,7 +6727,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               estimatedOutRaw: rheaReview.estimatedOut
             })
           : null
-        const sourceNetworkFee = getPreparedSwapNetworkFee(preparedQuoteTransfer)
         const executionTarget = resolveSwapSourceExecutionTarget({
           review: rheaReview,
           prepared: preparedQuoteTransfer,
@@ -6743,6 +6742,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             review={rheaReview}
             routeCost={routeCost}
             sourceNetworkFee={sourceNetworkFee}
+            combinedNetworkFee={combinedNetworkFee}
             sourceFeeControl={sourceFeeControl}
             executionTarget={executionTarget}
             approval={pendingRheaEvmAfterApproval?.approval}
@@ -7485,7 +7485,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         (viewStep === 'review' || (resumingApprovalReview && viewStep === 'input')) && (
           <div className="flex h-14 shrink-0 items-center justify-between bg-background px-5">
             <h1 className="min-w-0 truncate text-lg font-medium leading-[23px]">
-              {crossChainSendRequested && viewStep === 'review' && pendingRheaEvmAfterApproval
+              {crossChainSendRequested &&
+              viewStep === 'review' &&
+              pendingRheaEvmAfterApproval &&
+              !pendingRheaEvmAfterApproval.combined
                 ? 'Token approval'
                 : publicPrivacySendRequested || crossChainSendRequested
                   ? 'Confirm Send'
