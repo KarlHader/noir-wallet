@@ -19,7 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@/popup/components/ui/dropdown-menu'
-import { NetworkFilter } from '@/popup/components/common/NetworkFilter'
+import { NetworkFilter, NetworkFilterToolbar } from '@/popup/components/common/NetworkFilter'
 import type { AssetDomain } from '@/popup/services/asset-domains'
 import {
   PortfolioAssetGroupCard,
@@ -332,10 +332,9 @@ export function PortfolioShell({
       className="flex min-h-0 flex-1 flex-col"
     >
       <h2 className="sr-only">Portfolio</h2>
-      <div className="flex h-[45px] shrink-0 items-center justify-between gap-2 pt-[9px] pr-2 pb-1 pl-4">
+      <NetworkFilterToolbar>
         <NetworkFilter
           ariaLabelPrefix="Filter portfolio by network"
-          className="min-w-[107px] gap-1.5 rounded-lg bg-[var(--home-toolbar-surface,var(--color-wallet-surface))] px-2.5 hover:bg-accent active:bg-accent"
           options={networkOptions}
           selectedIds={selectedChainIds}
           onSelectionChange={onSelectedChainIdsChange}
@@ -399,7 +398,7 @@ export function PortfolioShell({
             </DropdownMenu>
           )}
         </div>
-      </div>
+      </NetworkFilterToolbar>
 
       <div className="min-h-0 flex-1 pb-4">
         {model.status === 'loading' && visibleConfidential.length === 0 ? (

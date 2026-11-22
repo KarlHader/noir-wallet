@@ -20,7 +20,7 @@ import {
   resolveChainExplorerTarget
 } from '@/popup/services/chain-explorer'
 import { ListSkeleton } from '../ui/skeleton'
-import { NetworkFilter } from '../common/NetworkFilter'
+import { NetworkFilter, NetworkFilterToolbar } from '../common/NetworkFilter'
 import { InlineError } from '../common/InlineError'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
 import { MultichainActivityRow } from './MultichainActivityRow'
@@ -654,55 +654,54 @@ export function MultichainActivityPanel({
       </div>
     ) : null
 
-  const toolbar =
-    showToolbar || showStatusFilter ? (
-      <div className="shrink-0 px-4 pb-3 pt-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {showToolbar && (
-            <NetworkFilter
-              ariaLabelPrefix="Filter activity by network"
-              options={selectableAccountNetworks.map(entry => entry.chain)}
-              selectedIds={selectedChainIds}
-              onSelectionChange={chainIds =>
-                setPortfolioChainSelection(
-                  scopeKey,
-                  chainIds.length === availableChainIds.length ? null : chainIds
-                )
-              }
-            />
-          )}
-          {showStatusFilter && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={`Filter activity by status: ${activityStatusLabels[statusFilter]}`}
-                  className="wallet-interactive flex h-8 items-center justify-between gap-3 rounded-full bg-accent px-3.5 text-[13px] text-muted hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-                >
-                  {activityStatusLabels[statusFilter]}
-                  <Icon icon="lucide:chevron-down" width={13} height={13} aria-hidden="true" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuRadioGroup
-                  value={statusFilter}
-                  onValueChange={value => {
-                    if (Object.prototype.hasOwnProperty.call(activityStatusLabels, value))
-                      setStatusFilter(value as ActivityStatusFilter)
-                  }}
-                >
-                  {Object.entries(activityStatusLabels).map(([value, label]) => (
-                    <DropdownMenuRadioItem key={value} value={value}>
-                      {label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-      </div>
-    ) : null
+  const statusControl = showStatusFilter ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Filter activity by status: ${activityStatusLabels[statusFilter]}`}
+          className="wallet-interactive flex h-8 items-center justify-between gap-3 rounded-full bg-accent px-3.5 text-[13px] text-muted hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+        >
+          {activityStatusLabels[statusFilter]}
+          <Icon icon="lucide:chevron-down" width={13} height={13} aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuRadioGroup
+          value={statusFilter}
+          onValueChange={value => {
+            if (Object.prototype.hasOwnProperty.call(activityStatusLabels, value))
+              setStatusFilter(value as ActivityStatusFilter)
+          }}
+        >
+          {Object.entries(activityStatusLabels).map(([value, label]) => (
+            <DropdownMenuRadioItem key={value} value={value}>
+              {label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : null
+
+  const toolbar = showToolbar ? (
+    <NetworkFilterToolbar>
+      <NetworkFilter
+        ariaLabelPrefix="Filter activity by network"
+        options={selectableAccountNetworks.map(entry => entry.chain)}
+        selectedIds={selectedChainIds}
+        onSelectionChange={chainIds =>
+          setPortfolioChainSelection(
+            scopeKey,
+            chainIds.length === availableChainIds.length ? null : chainIds
+          )
+        }
+      />
+      {statusControl}
+    </NetworkFilterToolbar>
+  ) : statusControl ? (
+    <div className="shrink-0 px-4 py-3">{statusControl}</div>
+  ) : null
 
   const fullHistoryLink =
     historyFooter !== undefined ? (
