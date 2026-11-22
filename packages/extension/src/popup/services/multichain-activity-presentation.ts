@@ -564,12 +564,13 @@ export function resolveActivityDisplayAmount(
   if (!amount) return undefined
   const metadata = assetMetadata.get(amount.assetId)?.metadata ?? amount.metadata
   if (!metadata) return undefined
+  const iconUrl = metadata.iconUrl ?? amount.metadata?.iconUrl
   return Object.freeze({
     assetId: amount.assetId,
     symbol: formatSymbol(metadata.symbol),
     formatted: formatActivityTokenAmount(amount.amountRaw, metadata.decimals),
     exact: formatBaseUnitDecimalAmount(amount.amountRaw, metadata.decimals),
-    ...(metadata.iconUrl ? { iconUrl: metadata.iconUrl } : {})
+    ...(iconUrl ? { iconUrl } : {})
   })
 }
 

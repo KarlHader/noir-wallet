@@ -8,11 +8,14 @@ import {
   getBundledInitialProductAssetDefinitions
 } from '@/core/chains/registry'
 import type { MarketAssetId } from '@/core/prices'
+import { MARKET_ASSETS } from '@/config/asset-market-assets'
 import type { Network } from '@/types'
 
 const PRODUCT_NETWORKS = Object.freeze(['mainnet', 'testnet'] as const satisfies readonly Network[])
 const bundledAssetIds = new Set<string>()
-const bundledMarketAssetIds = new Map<string, MarketAssetId>()
+const bundledMarketAssetIds = new Map<string, MarketAssetId>([
+  ['eip155:143/erc20:0x754704bc059f8c67012fed69bc8a327a5aafb603', MARKET_ASSETS.usdc]
+])
 const protocolMarketAssetIds = new Map<string, MarketAssetId>()
 
 for (const network of PRODUCT_NETWORKS) {

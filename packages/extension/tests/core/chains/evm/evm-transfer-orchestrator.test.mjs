@@ -899,7 +899,7 @@ test('completed RHEA destination rechecks the EVM origin and blocks replacement 
       async retireReportedSubmission() {}
     },
     {
-      recheckEvmOrigin: async () => {
+      recheckEvmTransactions: async () => {
         rechecks += 1
       },
       notifyStatus: () => {}

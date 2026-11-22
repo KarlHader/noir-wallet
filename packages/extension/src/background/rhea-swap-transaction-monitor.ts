@@ -59,7 +59,7 @@ export interface RheaSwapTransactionMonitorOptions {
   readonly refreshPortfolio?: (request: RheaSwapPortfolioRefreshRequest) => Promise<void>
   readonly revealDestinationAsset?: (assetId: string) => Promise<void>
   readonly prepareZcashDestinationCatchUp?: (scope: TransactionAccountScope) => Promise<void>
-  readonly recheckEvmOrigin?: () => Promise<void>
+  readonly recheckEvmTransactions?: () => Promise<void>
   readonly notifyStatus?: (quoteHandle: string, status: SwapStatus) => void
   readonly loadZcashAccountScopes?: () => readonly AccountScope[]
   readonly loadZcashTransactions?: (accountKey: string) => Promise<readonly Transaction[]>
@@ -687,16 +687,33 @@ export class RheaSwapTransactionMonitor {
       quoteHandle: binding.quoteHandle,
       status
     })
-    if (orderStatus.destinationHash) {
-      const destination = graph.segments.find(segment => segment.role === 'destination')
-      if (destination && !destination.evidence?.transactionHash) {
-        await this.applyGraphSegment(
-          graph.root.scope,
-          graph.root.id,
-          'destination',
-          destination.status === 'confirming' ? 'confirming' : 'broadcast',
-          { transactionHash: orderStatus.destinationHash }
-        )
+    const destination = graph.segments.find(segment => segment.role === 'destination')
+    const requiresDestinationReceipt =
+      binding.isCrossChain &&
+      destination?.target.kind === 'onchain' &&
+      binding.destination.chainId.startsWith('eip155:') &&
+      binding.origin.chainId === binding.destination.chainId &&
+      isRheaIntentsRoute(binding.router)
+    const isIndependentDestinationHash = (hash: string | null | undefined) =>
+      !!hash &&
+      /^0x[0-9a-f]{64}$/i.test(hash) &&
+      !sourceHashes.some(source => source.toLowerCase() === hash.toLowerCase())
+    const destinationHash = orderStatus.destinationHash
+    if (
+      destinationHash &&
+      destination &&
+      !destination.evidence?.transactionHash &&
+      (!requiresDestinationReceipt || isIndependentDestinationHash(destinationHash))
+    ) {
+      const applied = await this.applyGraphSegment(
+        graph.root.scope,
+        graph.root.id,
+        'destination',
+        destination.status === 'confirming' ? 'confirming' : 'broadcast',
+        { transactionHash: destinationHash }
+      )
+      if (applied && requiresDestinationReceipt) {
+        void Promise.resolve(this.options.recheckEvmTransactions?.()).catch(() => {})
       }
     }
     if (status === 'pending' || status === 'unknown') return false
@@ -708,6 +725,13 @@ export class RheaSwapTransactionMonitor {
       return false
     }
     if (status === 'completed') {
+      if (
+        requiresDestinationReceipt &&
+        (destination.status !== 'final' ||
+          !isIndependentDestinationHash(destination.evidence?.transactionHash))
+      ) {
+        return false
+      }
       if (
         !binding.isCrossChain &&
         !orderStatus.destinationHash &&
@@ -726,16 +750,12 @@ export class RheaSwapTransactionMonitor {
       await this.applyGraphSegment(graph.root.scope, graph.root.id, 'relay', 'final', {
         externalReference: binding.quoteHandle
       })
-      const destinationApplied = await this.applyGraphSegment(
-        graph.root.scope,
-        graph.root.id,
-        'destination',
-        'final',
-        {
+      const destinationApplied =
+        !requiresDestinationReceipt &&
+        (await this.applyGraphSegment(graph.root.scope, graph.root.id, 'destination', 'final', {
           externalReference: binding.executionId,
-          ...(orderStatus.destinationHash ? { transactionHash: orderStatus.destinationHash } : {})
-        }
-      )
+          ...(destinationHash ? { transactionHash: destinationHash } : {})
+        }))
       if (
         destinationApplied &&
         origins.some(
@@ -745,7 +765,7 @@ export class RheaSwapTransactionMonitor {
             (origin.status === 'broadcast' || origin.status === 'confirming')
         )
       ) {
-        void Promise.resolve(this.options.recheckEvmOrigin?.()).catch(() => {})
+        void Promise.resolve(this.options.recheckEvmTransactions?.()).catch(() => {})
       }
       if (binding.userAction !== 'transfer')
         await this.revealDestinationAsset(binding.destination.assetId)

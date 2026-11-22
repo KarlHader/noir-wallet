@@ -4373,7 +4373,15 @@ export class ConfidentialFundingCoordinator {
       const status = normalizeStatus(row.status)
       if (status === 'SUCCESS' || status === 'COMPLETED') {
         await this.applyGraphStatus(plan, `withdraw:${row.sequence}`, 'final', {
-          ...(row.transactionHash ? { transactionHash: row.transactionHash } : {})
+          ...(row.transactionHash ? { transactionHash: row.transactionHash } : {}),
+          ...(plan.operation === 'withdraw' && row.transactionHash && row.settledOutputRaw
+            ? {
+                settledAmount: {
+                  assetId: parseAssetId(plan.destination.assetId).id,
+                  amountRaw: row.settledOutputRaw
+                }
+              }
+            : {})
         })
       } else if (['FAILED', 'REFUNDED', 'EXPIRED', 'CANCELLED'].includes(status)) {
         await this.applyGraphStatus(

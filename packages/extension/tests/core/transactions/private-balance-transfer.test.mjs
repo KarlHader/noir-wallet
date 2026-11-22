@@ -13,6 +13,7 @@ import { resolveManagedIntentsAssets } from '../../../src/core/services/intents-
 import {
   buildExternalShieldWithdrawRequest,
   buildShieldTransferRequest,
+  createShieldSendRoutes,
   listShieldFundingAssets,
   listShieldMoveDestinations,
   listShieldSendDestinations,
@@ -466,6 +467,19 @@ test('uses independently held Shield tokens without adding them to Public assets
     shieldPortfolioBalances(withZcash)
   ).find(item => item.asset.asset.id === zcashAssetId)
   expect(zcashSource?.asset.balance.confidentialRaw).toBe('140000')
+  const sendRoutes = createShieldSendRoutes(withZcashOptions, 'mainnet')
+  expect(sendRoutes.networks.map(chain => chain.id)).toContain(ZCASH_CHAIN_IDS.mainnet)
+  expect(sendRoutes.getDestination(sources[0], ZCASH_CHAIN_IDS.mainnet)).toBeNull()
+  expect(sendRoutes.getDestination(zcashSource, 'eip155:8453')).toBeNull()
+  expect(
+    selectDefaultShieldWithdrawSource(
+      sendRoutes.getSources(ZCASH_CHAIN_IDS.mainnet),
+      balances,
+      model,
+      null,
+      'mainnet'
+    )
+  ).toBe(zcashSource)
   const zcashRecipient = 't1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F'
   const nativeZecSwap = buildShieldSwapRequest({
     network: 'mainnet',
@@ -811,6 +825,10 @@ test('lists official cross-network USDC destinations from the managed catalog', 
     'mainnet'
   )
   const sendSource = sendOptions.find(item => item.asset.asset.id === sourceAssetId)
+  const sendRoutes = createShieldSendRoutes(sendOptions, 'mainnet')
+  expect(sendRoutes.getDestination(sendSource, 'eip155:8453')?.asset.asset.id).toBe(
+    destinationAssetId
+  )
   expect(
     listShieldSendDestinations(sendSource, sendOptions, 'mainnet').map(item => item.asset.asset.id)
   ).toEqual([

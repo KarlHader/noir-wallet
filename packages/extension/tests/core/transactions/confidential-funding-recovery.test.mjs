@@ -389,6 +389,7 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     identityAccount: scope.accountId,
     quoteCalls: [],
     quoteOverride: undefined,
+    settlementStatus: undefined,
     lastQuoteAmountRaw: undefined,
     lastQuoteDeadline: undefined,
     session: {
@@ -466,7 +467,7 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     }
   }
   const api = {
-    getStatus: async () => ({ status: 'PROCESSING' }),
+    getStatus: async () => state.settlementStatus ?? { status: 'PROCESSING' },
     getBalances: async () => balances,
     quote: async input => {
       state.lastQuoteRequest = input
@@ -736,12 +737,21 @@ test.describe('confidential funding persisted recovery', () => {
     h.state.allowSigning = true
     h.state.formalQuoteAppFees = [{ recipient: 'platform.near', fee: 50 }]
     await h.coordinator.confirm(review.planId, review.payloadFingerprint)
+    h.state.settlementStatus = {
+      status: 'SUCCESS',
+      transactionHash: '1'.repeat(64),
+      settledAmountOutRaw: '11000'
+    }
+    await h.coordinator.continuePlan(review.planId)
     const graph = await h.repository.get(scope, review.transactionId)
     expect(graph.root.intent).toMatchObject({
       direction: 'self',
       shield: { operation: 'withdraw', sourceDomain: 'shield', destinationDomain: 'public' },
       recipient: { address: transparent },
       primaryAmount: { assetId: h.zcashAssetId, amountRaw: '10000' }
+    })
+    expect(graph.segments.find(segment => segment.role === 'destination').evidence).toMatchObject({
+      settledAmount: { assetId: h.zcashAssetId, amountRaw: '11000' }
     })
   })
 

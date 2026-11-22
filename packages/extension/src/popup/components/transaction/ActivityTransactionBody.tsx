@@ -762,7 +762,13 @@ export function ActivityTransactionProgress({ view }: { readonly view: ActivityT
   if (!view.isCrossChain) return null
   const referenceByStepId = new Map<string, ReactNode>()
   for (const segment of view.item.segments) {
-    const reference = view.references.find(candidate => candidate.id === segment.id)
+    const hash = segment.evidence?.transactionHash
+    const reference =
+      segment.target.kind === 'onchain' &&
+      hash &&
+      isActivityTransactionHash(hash, segment.target.chainId)
+        ? { hash, chainId: segment.target.chainId }
+        : view.references.find(candidate => candidate.id === segment.id)
     const replacement = view.replacementReferences.find(candidate => candidate.id === segment.id)
     if (!reference && !replacement) continue
     referenceByStepId.set(

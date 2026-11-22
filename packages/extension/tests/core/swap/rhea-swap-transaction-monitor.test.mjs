@@ -15,6 +15,8 @@ import { assertPersistableTransactionGraph } from '../../../src/infrastructure/p
 import { getZcashChainId } from '../../../src/core/chains/registry/index.ts'
 import { mapTransactionGraphToActivityItem } from '../../../src/core/activity/activity-read-model.ts'
 import { prepareRheaSwapZcashDestinationCatchUp } from '../../../src/background/rhea-swap-zcash-sync.ts'
+import { EvmTransactionMonitor } from '../../../src/infrastructure/chains/evm/evm-transaction-monitor.ts'
+import { getRheaSwapProgressStatus } from '../../../src/lib/swap-progress.ts'
 
 const scope = { keyDomainId: 'wallet:near', accountId: 'account:near' }
 const sourceHashes = ['1'.repeat(32), `${'1'.repeat(31)}2`]
@@ -238,6 +240,89 @@ test('keeps a same-chain Intents transfer open until its separate destination tr
     completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
     destinationHash
   )
+})
+
+test('waits for the independent EVM settlement of a same-chain Intents deposit', async () => {
+  for (const receiptStatus of ['success', 'failed']) {
+    const { repository, graph, origin } = await prepareConfirmedSameChainSource({
+      ...sameChainBinding(),
+      isCrossChain: true,
+      router: 'preswap-nearintents',
+      userAction: 'transfer'
+    })
+    let observedHash = null
+    let receipt = null
+    const notifications = []
+    const retired = []
+    const service = {
+      async recordTransactionSubmission() {},
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return { status: 'completed', destinationHash: observedHash }
+      },
+      async retireReportedSubmission(handle) {
+        retired.push(handle)
+      }
+    }
+    const createMonitor = () => {
+      const monitor = new RheaSwapTransactionMonitor(service, {
+        notifyStatus: (_handle, value) => notifications.push(value.status)
+      })
+      monitor.repository = repository
+      return monitor
+    }
+    const evmMonitor = new EvmTransactionMonitor({
+      repository,
+      chainId: 'eip155:1',
+      rpc: {
+        getTransactionReceipt: async () => receipt,
+        getTransactionLocation: async () => ({ status: 'pending' }),
+        getFinalizedBlockNumber: async () => '101'
+      }
+    })
+    const readGraph = () => repository.get(scope, graph.root.id)
+    const readDestination = async () =>
+      (await readGraph()).segments.find(segment => segment.role === 'destination')
+    const monitor = createMonitor()
+
+    for (const invalidHash of [null, origin.evidence.transactionHash, '1'.repeat(64)]) {
+      observedHash = invalidHash
+      assert.equal(await monitor.checkGraph(graph), false)
+      assert.equal((await readDestination()).evidence?.transactionHash, undefined)
+    }
+    observedHash = destinationHash
+    assert.equal(await monitor.checkGraph(graph), false)
+    assert.equal((await readDestination()).status, 'broadcast')
+    assert.equal((await readDestination()).evidence.transactionHash, destinationHash)
+    await evmMonitor.poll([scope])
+    assert.equal((await readGraph()).root.status, 'confirming')
+    assert.deepEqual(notifications, [])
+    assert.deepEqual(retired, [])
+
+    receipt = {
+      status: receiptStatus,
+      transactionHash: destinationHash,
+      blockHash: `0x${'ef'.repeat(32)}`,
+      blockNumber: '100'
+    }
+    await evmMonitor.poll([scope])
+    observedHash = null
+    assert.equal(await createMonitor().checkGraph(graph), true)
+    const settled = await readGraph()
+    if (receiptStatus === 'success') {
+      assert.equal(settled.root.status, 'final')
+      assert.equal((await readDestination()).evidence.blockHash, receipt.blockHash)
+      assert.deepEqual(notifications, ['SUCCESS'])
+      assert.deepEqual(retired, [sameChainBinding().quoteHandle])
+    } else {
+      assert.equal(settled.root.status, 'failed')
+      assert.equal(
+        getRheaSwapProgressStatus(settled.segments, { status: 'PROCESSING' }).status,
+        'FAILED'
+      )
+      assert.deepEqual(notifications, [])
+    }
+  }
 })
 
 test('tracks a Polygon to BNB Chain swap from confirmed origin to reported destination', async () => {
