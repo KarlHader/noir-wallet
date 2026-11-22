@@ -166,6 +166,7 @@ import {
 import { createBackgroundEvmPortfolioCoordinator } from './evm-portfolio'
 import { createBackgroundPortfolioCoordinator } from './portfolio'
 import { createBackgroundActivityCoordinator } from './activity'
+import { refreshZcashReceiveConfirmations } from './zcash-receive-confirmations'
 import {
   observeActivityReceipts,
   observePortfolioBalances,
@@ -2419,6 +2420,7 @@ async function requestPeriodicBalanceSync(): Promise<'scheduled' | 'skipped' | '
 }
 
 async function handlePeriodicBalanceSyncAlarm(): Promise<void> {
+  refreshActiveZcashReceiveConfirmations()
   let probeFailed = false
   let syncScheduled = false
   try {
@@ -2432,6 +2434,15 @@ async function handlePeriodicBalanceSyncAlarm(): Promise<void> {
     await scheduleNextBalanceSyncAlarm(probeFailed, syncScheduled).catch(error => {
       console.warn('[Background] Failed to schedule next balance sync probe:', error)
     })
+  }
+}
+
+function refreshActiveZcashReceiveConfirmations(): void {
+  const { currentWalletId, currentAccountId } = useWalletStore.getState()
+  if (currentWalletId && currentAccountId) {
+    void refreshZcashReceiveConfirmations(DEFAULT_NETWORK, currentWalletId, currentAccountId).catch(
+      () => {}
+    )
   }
 }
 
@@ -2537,6 +2548,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
       }
       if (alarm.name === SYNC_KEEPALIVE_ALARM) {
         if (syncScheduler.isRunning()) {
+          refreshActiveZcashReceiveConfirmations()
           checkOffscreenHealth().catch(err => {
             console.warn('[Background] Offscreen health check failed:', err)
           })

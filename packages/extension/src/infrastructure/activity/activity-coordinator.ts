@@ -14,7 +14,10 @@ type ActivityStorageRepository = Pick<StorageV2ReadRepository, 'getActivePointer
 export interface ActivityCoordinatorOptions {
   readonly storageRepository: ActivityStorageRepository
   readonly transactionRepository: TransactionRepository
-  readonly loadZcashTransactions: (scope: ActivityScope) => Promise<readonly Transaction[]>
+  readonly loadZcashTransactions: (
+    scope: ActivityScope,
+    options: ActivityReadOptions
+  ) => Promise<readonly Transaction[]>
   readonly loadSupplementalItems?: (
     scope: ActivityScope,
     accountMode: 'main' | 'private' | 'all',
@@ -71,7 +74,9 @@ export class ActivityCoordinator {
         limit: options.protocolProvider ? 10_000 : 200,
         ...(options.protocolProvider ? { protocolProvider: options.protocolProvider } : {})
       }),
-      options.protocolProvider ? Promise.resolve([]) : this.options.loadZcashTransactions(scope),
+      options.protocolProvider
+        ? Promise.resolve([])
+        : this.options.loadZcashTransactions(scope, options),
       options.protocolProvider
         ? Promise.resolve([])
         : this.loadSupplementalItems(scope, accountMode, options)

@@ -10,6 +10,7 @@ import {
 } from '@/core/activity'
 import type { TransactionGraph } from '@/core/transactions/domain'
 import { buildAccountKey } from '@/core/wallet/account-scope'
+import { getZcashChainId } from '@/core/chains/registry/product-chain-definitions'
 import {
   ActivityCoordinator,
   createConfiguredActivityHistorySources
@@ -38,6 +39,7 @@ import { getBitcoinAccountPreferences } from './bitcoin-account-preferences'
 import type { BitcoinSupportedAddressType } from '@/core/chains/bitcoin'
 import { credentialSession } from './credential-session'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
+import { refreshZcashReceiveConfirmations } from './zcash-receive-confirmations'
 
 const ACTIVITY_REFRESH_TTL_MS = 5 * 60_000
 const PENDING_ACTIVITY_REFRESH_TTL_MS = 30_000
@@ -817,8 +819,20 @@ export function createBackgroundActivityCoordinator(
   return new ActivityCoordinator({
     storageRepository,
     transactionRepository: new IndexedDbTransactionRepository(),
-    loadZcashTransactions: scope =>
-      loadTransactions(buildAccountKey(DEFAULT_NETWORK, scope.keyDomainId, scope.accountId)),
+    loadZcashTransactions: (scope, options) => {
+      const network = DEFAULT_NETWORK
+      const readCached = () =>
+        loadTransactions(buildAccountKey(network, scope.keyDomainId, scope.accountId))
+      if (
+        options.includeSupplemental !== false &&
+        (!options.chainIds || options.chainIds.includes(getZcashChainId(network)))
+      ) {
+        return refreshZcashReceiveConfirmations(network, scope.keyDomainId, scope.accountId).catch(
+          readCached
+        )
+      }
+      return readCached()
+    },
     loadSupplementalItems,
     loadCachedSupplementalItems,
     loadSupplementalHasMore,

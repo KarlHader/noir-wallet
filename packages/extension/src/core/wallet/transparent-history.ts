@@ -5,6 +5,7 @@ import { isTransparentZcashAddress } from '../../lib/zcash-memo.ts'
 import {
   getAddressTxids,
   getVerboseTransaction,
+  lookupTransaction,
   mapWithConcurrency,
   type VerboseTransaction,
   type VerboseTxOutput
@@ -31,6 +32,66 @@ const MAX_RECENT_TXS = 100
 const FETCH_CONCURRENCY = 5
 const HISTORY_CACHE_TTL_MS = 30_000
 const ZATOSHIS_PER_ZEC = 10n ** BigInt(ZEC_DECIMALS)
+
+function externalReceivesAwaitingConfirmation(transactions: Transaction[]): Transaction[] {
+  const localHashes = localTxHashSet(transactions.filter(tx => tx.type !== 'receive'))
+  const required = getRequiredConfirmations('receive')
+  return transactions.filter(tx => {
+    const hash = normalizeTxHash(tx.txHash)
+    return (
+      isTransparentReceive(tx) &&
+      (tx.id.startsWith('rpc_treceive_') || tx.id.startsWith('wasm_')) &&
+      (tx.status === 'confirming' || tx.status === 'pending') &&
+      (tx.requiredConfirmations == null || tx.requiredConfirmations === required) &&
+      /^[0-9a-f]{64}$/.test(hash) &&
+      !localHashes.has(hash)
+    )
+  })
+}
+
+export async function readExternalReceiveConfirmations(
+  transactions: Transaction[],
+  baseUrl: string,
+  signal?: AbortSignal
+): Promise<ReadonlyMap<string, number>> {
+  const hashes = Array.from(
+    new Set(
+      externalReceivesAwaitingConfirmation(transactions).map(tx => normalizeTxHash(tx.txHash))
+    )
+  ).slice(0, MAX_RECENT_TXS)
+  const observed = new Map<string, number>()
+  await mapWithConcurrency(hashes, FETCH_CONCURRENCY, async hash => {
+    if (signal?.aborted) return
+    const lookup = await lookupTransaction(baseUrl, hash, signal)
+    if (lookup.status === 'confirmed') observed.set(hash, lookup.confirmations)
+  })
+  return observed
+}
+
+export function applyExternalReceiveConfirmations(
+  transactions: Transaction[],
+  observed: ReadonlyMap<string, number>
+): Transaction[] {
+  const eligible = new Set(externalReceivesAwaitingConfirmation(transactions))
+  const requiredConfirmations = getRequiredConfirmations('receive')
+  let changed = false
+  const updated = transactions.map(transaction => {
+    if (!eligible.has(transaction)) return transaction
+    const confirmations = observed.get(normalizeTxHash(transaction.txHash))
+    if (confirmations == null || confirmations <= (transaction.confirmations ?? 0)) {
+      return transaction
+    }
+    changed = true
+    return {
+      ...transaction,
+      status:
+        confirmations >= requiredConfirmations ? ('success' as const) : ('confirming' as const),
+      confirmations,
+      requiredConfirmations
+    }
+  })
+  return changed ? updated : transactions
+}
 
 const transparentHistoryInFlight = new Map<string, Promise<Transaction[]>>()
 const transparentHistoryCache = new Map<
@@ -434,7 +495,16 @@ export function mergeTransactionsWithWasmHistory(
           {
             ...transaction,
             timestamp: transaction.timestamp > 0 ? transaction.timestamp : current.timestamp,
-            to: transaction.to || (current.type === transaction.type ? current.to : '')
+            to: transaction.to || (current.type === transaction.type ? current.to : ''),
+            // A delayed scan does not supersede an already confirmed transparent receipt.
+            ...(isTransparentReceive(current) &&
+            current.status === 'success' &&
+            transaction.status !== 'success'
+              ? {
+                  confirmations: current.confirmations,
+                  requiredConfirmations: current.requiredConfirmations
+                }
+              : {})
           },
           confirmation
         )
