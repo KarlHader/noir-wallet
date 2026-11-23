@@ -2187,9 +2187,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                     externalAsset.chain.displayName,
                     externalAsset.chain.id
                   )
-                : from !== 'shield'
-                  ? networkIcon
-                  : undefined
+                : networkIcon
           }
           size={26}
         />

@@ -3,14 +3,39 @@ import type {
   ConfidentialFundingProgress
 } from '@/core/services/confidential-funding'
 import type { TransactionResultCopy, TransactionResultStatus } from '@/lib/transaction-status-copy'
-import { getEvmNetworkConfigs } from '@/config/networks'
-import { parseAssetId, parseChainId } from '@/core/chains/registry'
+import {
+  getEvmNetworkConfigs,
+  getNearNetworkConfig,
+  getSolanaNetworkConfig
+} from '@/config/networks'
+import {
+  getBitcoinChainId,
+  getZcashChainId,
+  parseAssetId,
+  parseChainId
+} from '@/core/chains/registry'
 import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
 import { formatChainName, formatExplorerUrl, getChainFromAssetId } from '@/lib/format'
 import type { Network } from '@/types'
 
 export type ConfidentialFundingStatusView = ConfidentialFundingProgress &
   Readonly<{ phase: ConfidentialFundingPhase }>
+
+function getNativeExplorerChainId(alias: string, network: Network): string | undefined {
+  switch (alias) {
+    case 'zec':
+    case 'zcash':
+      return getZcashChainId(network)
+    case 'btc':
+    case 'bitcoin':
+      return getBitcoinChainId(network)
+    case 'sol':
+    case 'solana':
+      return getSolanaNetworkConfig(network === 'mainnet' ? 'mainnet' : 'devnet').chainId
+    case 'near':
+      return getNearNetworkConfig(network).chainId
+  }
+}
 
 export function getSwapTransactionReference(
   assetId: string | undefined,
@@ -30,31 +55,30 @@ export function getSwapTransactionReference(
       }
     }
   }
-  const inferredChain = getChainFromAssetId(assetId ?? '')
+  const inferredChain = getChainFromAssetId(assetId ?? '').toLowerCase()
+  const normalizedHint = fallbackChain?.trim().toLowerCase()
   const legacyChain =
-    assetId?.startsWith('nep141:') && inferredChain === 'near' && fallbackChain
-      ? fallbackChain
-      : inferredChain || fallbackChain || ''
-  const configuredChain = getEvmNetworkConfigs(network).find(
-    chain => chain.chainId === chainId || (!chainId && chain.iconChain === legacyChain)
+    assetId?.startsWith('nep141:') && inferredChain === 'near' && normalizedHint
+      ? normalizedHint
+      : inferredChain || normalizedHint || ''
+  const rheaHint =
+    network === 'mainnet' && chainId?.startsWith('rhea:') ? normalizedHint : undefined
+  const configuredChain = getEvmNetworkConfigs(network).find(chain =>
+    chainId && !rheaHint ? chain.chainId === chainId : chain.iconChain === (rheaHint ?? legacyChain)
   )
-  const resolvedChainId = chainId ?? configuredChain?.chainId
+  const nativeChainId =
+    !chainId || rheaHint ? getNativeExplorerChainId(rheaHint ?? legacyChain, network) : undefined
+  const resolvedChainId = configuredChain?.chainId ?? nativeChainId ?? chainId
   const chainUrl = resolvedChainId
     ? formatChainTransactionExplorerUrl(resolvedChainId, hash, network)
     : ''
-  const legacyUrl = !chainId && network === 'mainnet' ? formatExplorerUrl(legacyChain, hash) : ''
-  const fallbackUrl = fallbackChain ? formatExplorerUrl(fallbackChain, hash) : ''
-  const useFallback =
-    network === 'mainnet' &&
-    chainId?.startsWith('rhea:') &&
-    !chainUrl &&
-    !legacyUrl &&
-    Boolean(fallbackUrl)
+  const legacyUrl =
+    !resolvedChainId && network === 'mainnet' ? formatExplorerUrl(legacyChain, hash) : ''
   return {
-    label: useFallback
-      ? formatChainName(fallbackChain ?? legacyChain)
-      : (configuredChain?.displayName ?? formatChainName(legacyChain)),
-    url: chainUrl || legacyUrl || (useFallback ? fallbackUrl : '')
+    label:
+      configuredChain?.displayName ??
+      formatChainName(rheaHint && chainUrl ? rheaHint : legacyChain),
+    url: chainUrl || legacyUrl
   }
 }
 

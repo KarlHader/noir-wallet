@@ -1064,7 +1064,7 @@ export function Home() {
                     const assetId = resolveConfidentialDetailAssetId(multichainPortfolio, tokenId)
                     navigate.navigate(
                       assetId
-                        ? `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=shield`
+                        ? `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=shield&mode=${walletMode}`
                         : `/shield-provider?provider=near-confidential&assetId=${encodeURIComponent(tokenId)}`
                     )
                   }}
