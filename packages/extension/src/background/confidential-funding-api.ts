@@ -1203,12 +1203,14 @@ export class ConfidentialFundingApi {
     if (!this.rheaAccessToken) {
       throw new Error('RHEA Swap is unavailable')
     }
-    // router=nearintents rejects an attached chain id. The argument stays local.
+    // EVM order-status keeps its numeric chain id. NEAR references and the RHEA
+    // catalog id 900001 are not sent on router=nearintents.
     if (chainId.length > 128) throw new Error('Confidential status chain is invalid')
     const query = new URLSearchParams({
       orderId: depositAddress,
       router: 'nearintents'
     })
+    if (/^[1-9][0-9]*$/.test(chainId) && chainId !== '900001') query.set('chainId', chainId)
     const value = await requestJson(
       `${this.config.rheaSwapApiUrl}/api/swap/order-status?${query.toString()}`,
       {},

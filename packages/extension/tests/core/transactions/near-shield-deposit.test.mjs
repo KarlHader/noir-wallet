@@ -138,7 +138,10 @@ test('NEAR Shield quotes lowercase a confidential EVM recipient and omit order c
       const query = new URL(href).searchParams
       expect(query.get('router')).toBe('nearintents')
       expect(query.get('orderId')).toBe(nearAccount)
-      expect(query.has('chainId')).toBe(false)
+    }
+    expect(new URL(statusUrls[0]).searchParams.get('chainId')).toBe('1')
+    for (const href of statusUrls.slice(1)) {
+      expect(new URL(href).searchParams.has('chainId')).toBe(false)
       expect(href).not.toContain('chainId')
     }
   } finally {
