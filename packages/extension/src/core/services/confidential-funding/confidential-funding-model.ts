@@ -28,8 +28,20 @@ export type ConfidentialErc191SignedPayload = Readonly<{
   signature: string
 }>
 
+export type ConfidentialNep413SignedPayload = Readonly<{
+  standard: 'nep413'
+  payload: Readonly<{
+    recipient: string
+    nonce: string
+    message: string
+  }>
+  public_key: string
+  signature: string
+}>
+
 type ConfidentialSignedPayloadByStandard = {
   readonly erc191: ConfidentialErc191SignedPayload
+  readonly nep413: ConfidentialNep413SignedPayload
 }
 
 // Discriminant is `standard`. Add a member here to extend the signed payload union.
@@ -121,11 +133,20 @@ export function normalizeConfidentialWithdrawRequest(
           destination_chain: row.destination_chain,
           execution_type: row.execution_type,
           sequence: row.sequence,
-          signed_payload: Object.freeze({
-            standard: row.signed_payload.standard,
-            payload: row.signed_payload.payload,
-            signature: row.signed_payload.signature
-          }),
+          signed_payload: Object.freeze(
+            row.signed_payload.standard === 'nep413'
+              ? {
+                  standard: row.signed_payload.standard,
+                  payload: row.signed_payload.payload,
+                  public_key: row.signed_payload.public_key,
+                  signature: row.signed_payload.signature
+                }
+              : {
+                  standard: row.signed_payload.standard,
+                  payload: row.signed_payload.payload,
+                  signature: row.signed_payload.signature
+                }
+          ),
           token: row.token
         })
       )
@@ -548,6 +569,191 @@ export function assertFlexibleExternalDepositQuoteBinding(
   }
 }
 
+type ConfidentialIntentBinding = Readonly<{
+  standard: 'erc191' | 'nep413'
+  payload: string
+  deadline: number
+}>
+
+function readNep413Envelope(
+  intent: unknown,
+  label: 'Confidential intent' | 'Shield withdraw intent'
+): Readonly<{ message: string; payload: string }> | null {
+  if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return null
+  const record = intent as Record<string, unknown>
+  if (record.standard !== 'nep413') return null
+  let envelope: unknown = record.payload
+  if (typeof envelope === 'string') {
+    try {
+      envelope = JSON.parse(envelope)
+    } catch {
+      return null
+    }
+  }
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) return null
+  const fields = envelope as Record<string, unknown>
+  // A nep413 standard with an ERC-191 string is rejected by the ERC-191 checker.
+  if (typeof fields.message !== 'string') return null
+  const recipient =
+    fields.recipient === 'intents.near' || fields.recipient === 'intents.far'
+      ? fields.recipient
+      : null
+  if (!recipient) throw new Error(`${label} payload recipient is invalid`)
+  const nonce = nep413EnvelopeNonce(fields.nonce)
+  if (!nonce) throw new Error(`${label} payload nonce is invalid`)
+  return Object.freeze({
+    message: fields.message,
+    payload: JSON.stringify({ message: fields.message, recipient, nonce })
+  })
+}
+
+function nep413EnvelopeNonce(value: unknown): string | null {
+  if (typeof value === 'string' && value.length > 0) return value
+  if (!Array.isArray(value) || value.length !== 32) return null
+  const bytes = new Uint8Array(32)
+  for (let index = 0; index < value.length; index += 1) {
+    const byte = value[index]
+    if (typeof byte !== 'number' || !Number.isInteger(byte) || byte < 0 || byte > 255) return null
+    bytes[index] = byte
+  }
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
+function bindNep413ConfidentialIntent(input: {
+  readonly intent: unknown
+  readonly quote: ConfidentialQuote
+  readonly signerId: string
+  readonly sourceAsset: string
+  readonly sourceAmountRaw: string
+  readonly destinationAsset: string
+  readonly destinationAddress: string
+  readonly now?: number
+}): ConfidentialIntentBinding {
+  const signing = readNep413Envelope(input.intent, 'Confidential intent')
+  if (!signing) throw new Error('Confidential intent must use ERC-191')
+  let payload: unknown
+  try {
+    payload = JSON.parse(signing.message)
+  } catch {
+    throw new Error('Confidential intent payload is invalid')
+  }
+  const scalars: string[] = []
+  collectScalarStrings(payload, scalars)
+  const lower = new Set(scalars.map(value => value.toLowerCase()))
+  for (const value of [input.signerId, input.quote.quote.depositAddress]) {
+    if (!lower.has(value.toLowerCase())) {
+      throw new Error('Confidential intent does not match the approved signer or quote')
+    }
+  }
+  const requestScalars: string[] = []
+  collectScalarStrings(input.quote.quoteRequest, requestScalars)
+  const quoteValues = new Set(requestScalars.map(value => value.toLowerCase()))
+  for (const value of [
+    input.sourceAsset,
+    input.sourceAmountRaw,
+    input.destinationAsset,
+    input.destinationAddress
+  ]) {
+    if (!quoteValues.has(value.toLowerCase())) {
+      throw new Error('Confidential quote does not match the approved funding plan')
+    }
+  }
+  const payloadRecord = payload as Record<string, unknown>
+  const deadline = Date.parse(String(payloadRecord.deadline ?? ''))
+  const quoteDeadline = Date.parse(input.quote.quote.deadline)
+  if (
+    !Number.isSafeInteger(deadline) ||
+    !Number.isSafeInteger(quoteDeadline) ||
+    deadline !== quoteDeadline ||
+    deadline <= (input.now ?? Date.now())
+  ) {
+    throw new Error('Confidential intent deadline is invalid or expired')
+  }
+  return Object.freeze({ standard: 'nep413' as const, payload: signing.payload, deadline })
+}
+
+function bindNep413WithdrawIntent(input: {
+  readonly intent: unknown
+  readonly quote: ConfidentialQuote
+  readonly signerId: string
+  readonly sourceAsset: string
+  readonly sourceAmountRaw: string
+  readonly destinationAsset: string
+  readonly destinationAddress: string
+  readonly now?: number
+}): ConfidentialIntentBinding {
+  const signing = readNep413Envelope(input.intent, 'Shield withdraw intent')
+  if (!signing) throw new Error('Shield withdraw intent signing standard is invalid')
+  const envelope = JSON.parse(signing.payload) as { recipient?: unknown; nonce?: unknown }
+  if (envelope.recipient !== 'intents.far') {
+    throw new Error('Shield withdraw intent verifying_contract is invalid')
+  }
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(signing.message)
+  } catch {
+    throw new Error('Shield withdraw intent payload is invalid')
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    throw new Error('Shield withdraw intent payload is invalid')
+  }
+  const payload = decoded as Record<string, unknown>
+  const allowedKeys = new Set(['deadline', 'intents', 'nonce', 'signer_id', 'verifying_contract'])
+  if (
+    Object.keys(payload).some(key => !allowedKeys.has(key)) ||
+    !equalAddress(payload.signer_id, input.signerId) ||
+    (payload.verifying_contract !== undefined && payload.verifying_contract !== 'intents.far') ||
+    !Array.isArray(payload.intents) ||
+    payload.intents.length !== 1
+  ) {
+    throw new Error('Shield withdraw intent does not match the approved quote')
+  }
+  const intentDeadline = Date.parse(String(payload.deadline ?? ''))
+  const quoteDeadline = Date.parse(input.quote.quote.deadline)
+  if (
+    !Number.isSafeInteger(intentDeadline) ||
+    !Number.isSafeInteger(quoteDeadline) ||
+    intentDeadline !== quoteDeadline ||
+    intentDeadline <= (input.now ?? Date.now())
+  ) {
+    throw new Error('Shield withdraw intent deadline is invalid or expired')
+  }
+  const action = payload.intents[0]
+  if (
+    !action ||
+    typeof action !== 'object' ||
+    Array.isArray(action) ||
+    Object.keys(action).sort().join(',') !== 'intent,receiver_id,tokens'
+  ) {
+    throw new Error('Shield withdraw intent action is invalid')
+  }
+  const transfer = action as Record<string, unknown>
+  const tokens = transfer.tokens
+  const tokenId = confidentialPrivateTokenId(input.sourceAsset)
+  if (
+    transfer.intent !== 'transfer' ||
+    !equalAddress(transfer.receiver_id, input.quote.quote.depositAddress) ||
+    !tokens ||
+    typeof tokens !== 'object' ||
+    Array.isArray(tokens) ||
+    Object.keys(tokens).length !== 1 ||
+    (tokens as Record<string, unknown>)[tokenId] !== input.sourceAmountRaw ||
+    input.quote.quote.amountIn !== input.sourceAmountRaw ||
+    input.quote.quoteRequest.originAsset !== input.sourceAsset ||
+    input.quote.quoteRequest.destinationAsset !== input.destinationAsset ||
+    !equalAddress(input.quote.quoteRequest.recipient, input.destinationAddress)
+  ) {
+    throw new Error('Shield withdraw intent transfer does not match the approved quote')
+  }
+  return Object.freeze({
+    standard: 'nep413' as const,
+    payload: signing.payload,
+    deadline: quoteDeadline
+  })
+}
+
 export function assertConfidentialIntentBinding(input: {
   readonly intent: unknown
   readonly quote: ConfidentialQuote
@@ -557,7 +763,10 @@ export function assertConfidentialIntentBinding(input: {
   readonly destinationAsset: string
   readonly destinationAddress: string
   readonly now?: number
-}): Readonly<{ standard: 'erc191'; payload: string; deadline: number }> {
+}): ConfidentialIntentBinding {
+  if (readNep413Envelope(input.intent, 'Confidential intent')) {
+    return bindNep413ConfidentialIntent(input)
+  }
   if (!input.intent || typeof input.intent !== 'object' || Array.isArray(input.intent)) {
     throw new Error('Confidential intent is invalid')
   }
@@ -616,7 +825,10 @@ export function assertDirectConfidentialWithdrawIntentBinding(input: {
   readonly destinationAsset: string
   readonly destinationAddress: string
   readonly now?: number
-}): Readonly<{ standard: 'erc191'; payload: string; deadline: number }> {
+}): ConfidentialIntentBinding {
+  if (readNep413Envelope(input.intent, 'Shield withdraw intent')) {
+    return bindNep413WithdrawIntent(input)
+  }
   if (!input.intent || typeof input.intent !== 'object' || Array.isArray(input.intent)) {
     throw new Error('Shield withdraw intent is invalid')
   }

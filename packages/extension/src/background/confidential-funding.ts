@@ -344,7 +344,24 @@ export function createBackgroundConfidentialFundingCoordinator(
     signer: new ConfidentialFundingSigner(
       signerClient,
       chainId => loadActiveEvmPortfolioContext(storage, chainId),
-      operation => accountContextTransition.runActiveOperation(operation)
+      operation => accountContextTransition.runActiveOperation(operation),
+      {
+        client: new NearMultichainSigningClient({ credentials: credentialSession }),
+        rpc: createConfiguredNearRpcClient({ chainId: near.chainId, rpcUrl: near.rpcUrl }),
+        chainId: parseChainId(near.chainId).id,
+        loadContext: async chainId => {
+          const context = await loadActiveNearTransferContext(storage, chainId)
+          const pointer = await storage.getActivePointer()
+          if (!context || !pointer) return null
+          return Object.freeze({
+            generationId: pointer.generationId,
+            chainAccount: context.chainAccount,
+            keyDomainSource: context.keyDomainSource,
+            accountIndex: context.accountIndex,
+            publicKey: context.publicKey
+          })
+        }
+      }
     ),
     repository: new IndexedDbTransactionRepository(),
     assets,

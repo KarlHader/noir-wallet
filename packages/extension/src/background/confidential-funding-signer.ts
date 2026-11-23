@@ -1,7 +1,21 @@
 import type { ChainId } from '@/core/chains/domain'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import {
+  parseNearAccountId,
+  supportsNearPrivateExecution,
+  type NearPrivateExecutionWalletSource
+} from '@/core/chains/near'
+import { parseChainId } from '@/core/chains/registry'
+import type { KeyDomainSource } from '@/core/keyring/domain'
 import type { ConfidentialSignedPayload } from '@/core/services/confidential-funding'
+import { base64ToBytes } from '@/lib/bytes'
+import { encodeNearFunctionArgs } from '@/infrastructure/chains/near/near-rpc-codecs'
 import { parseEvmAccountBinding, type ActiveEvmPortfolioContext } from '@/infrastructure/chains/evm'
+import type { NearMultichainSigningClient } from '@/infrastructure/keyring/multichain/near-signing-client'
+import type {
+  NearCommitBroadcastRpc,
+  NearReadRpc
+} from '@/infrastructure/chains/near/near-rpc-types'
 import {
   assertEvmSigningSummaryMatchesPrepared,
   assertSignedEvmTransactionMatchesPrepared,
@@ -13,6 +27,26 @@ import { parseSigningCommandId } from '@/core/keyring/ports'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+const INTENTS_CONTRACT = 'intents.near'
+const ADD_PUBLIC_KEY_GAS = '30000000000000'
+
+export interface ConfidentialNearSigningContext extends ActiveEvmPortfolioContext {
+  readonly accountIndex: number
+  readonly publicKey: string
+}
+
+export interface ConfidentialNearChain {
+  readonly client: Pick<
+    NearMultichainSigningClient,
+    'deriveNearPea' | 'prepare' | 'confirm' | 'cancel'
+  >
+  readonly rpc: Pick<
+    NearReadRpc & NearCommitBroadcastRpc,
+    'viewFunction' | 'getAccessKey' | 'broadcastSignedTransactionAndWait'
+  >
+  readonly chainId: ChainId
+  loadContext(chainId: ChainId): Promise<ConfidentialNearSigningContext | null>
+}
 
 function encodeBase58(bytes: Uint8Array): string {
   if (bytes.length === 0) return ''
@@ -47,7 +81,7 @@ function normalizeSignature(value: string): string {
   return `secp256k1:${encodeBase58(bytes)}`
 }
 
-export type ConfidentialAuthIdentityKind = 'evm'
+export type ConfidentialAuthIdentityKind = 'evm' | 'near'
 
 export interface ConfidentialSigningIdentity {
   readonly kind: ConfidentialAuthIdentityKind
@@ -188,7 +222,8 @@ export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
     loadContext: (chainId: ChainId) => Promise<ActiveEvmPortfolioContext | null>,
     private readonly runActiveOperation: <T>(
       operation: () => Promise<T>
-    ) => Promise<T> = operation => operation()
+    ) => Promise<T> = operation => operation(),
+    private readonly nearChain: ConfidentialNearChain | null = null
   ) {
     this.evmAuth = new EvmConfidentialAuthSigner(signer, loadContext, runActiveOperation)
   }
@@ -200,16 +235,218 @@ export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
     await assertCurrentEvmIdentity(chainId => this.resolveIdentity(chainId), identity, chainId)
   }
 
-  resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
+  async resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
+    if (parseChainId(chainId).namespace === 'near') return this.resolveNearIdentity(chainId)
     return this.evmAuth.resolveIdentity(chainId)
   }
 
-  signMessage(input: {
+  async signMessage(input: {
     readonly identity: ConfidentialSigningIdentity
     readonly chainId: ChainId
     readonly payload: string
   }): Promise<ConfidentialSignedPayload> {
+    if (parseChainId(input.chainId).namespace === 'near') return this.signNearMessage(input)
     return this.evmAuth.signMessage(input)
+  }
+
+  private async resolveNearIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
+    const near = this.nearChain
+    if (!near || near.chainId !== chainId) {
+      throw new Error('Confidential NEAR signing chain is unavailable')
+    }
+    const context = await near.loadContext(chainId)
+    if (!context || context.chainAccount.identity.kind !== 'account-identifier') {
+      throw new Error('Confidential funding requires an active NEAR Account')
+    }
+    const address = parseNearAccountId(context.chainAccount.identity.value)
+    const accountIndex = context.accountIndex
+    if (!Number.isSafeInteger(accountIndex) || accountIndex < 0) {
+      throw new Error('Confidential funding requires an active NEAR Account')
+    }
+    if (
+      !supportsNearPrivateExecution(
+        nearPrivateExecutionSource(context.keyDomainSource, accountIndex)
+      )
+    ) {
+      throw new Error('NEAR private execution is unavailable')
+    }
+    const pea = await near.client.deriveNearPea(
+      context.chainAccount.scope.keyDomainId,
+      accountIndex
+    )
+    if (pea.address === address) {
+      throw new Error('Confidential address must differ from the NEAR account')
+    }
+    return Object.freeze({
+      kind: 'near' as const,
+      context,
+      address,
+      addressIndex: accountIndex,
+      peaAddress: pea.address
+    })
+  }
+
+  private async signNearMessage(input: {
+    readonly identity: ConfidentialSigningIdentity
+    readonly chainId: ChainId
+    readonly payload: string
+  }): Promise<ConfidentialSignedPayload> {
+    const near = this.nearChain
+    if (!near) throw new Error('Confidential NEAR signing chain is unavailable')
+    return this.runActiveOperation(async () => {
+      const current = await this.resolveIdentity(input.chainId)
+      if (
+        current.kind !== 'near' ||
+        current.context.chainAccount.scope.keyDomainId !==
+          input.identity.context.chainAccount.scope.keyDomainId ||
+        current.context.chainAccount.scope.accountId !==
+          input.identity.context.chainAccount.scope.accountId ||
+        !sameConfidentialAddress(current.address, input.identity.address) ||
+        !sameConfidentialAddress(current.peaAddress, input.identity.peaAddress) ||
+        current.addressIndex !== input.identity.addressIndex
+      ) {
+        throw new Error('Active Wallet Account changed before confidential signing')
+      }
+      const envelope = parseNep413SigningPayload(input.payload)
+      const nonce = [...base64ToBytes(envelope.nonce)]
+      if (nonce.length !== 32) throw new Error('NEAR confidential message nonce is invalid')
+      const prepared = await near.client.prepare(
+        input.identity.context.chainAccount.scope.keyDomainId,
+        {
+          kind: 'near-nep413-message',
+          chainId: input.chainId,
+          accountIndex: input.identity.addressIndex,
+          request: Object.freeze({
+            chainId: input.chainId,
+            accountIndex: input.identity.addressIndex,
+            accountId: input.identity.address,
+            message: envelope.message,
+            recipient: envelope.recipient,
+            nonce,
+            callbackUrl: null,
+            state: null
+          })
+        }
+      )
+      let consumed = false
+      try {
+        if (prepared.operation !== 'message' || prepared.expiresAt <= Date.now()) {
+          throw new Error('Confidential signing request cannot be approved')
+        }
+        const result = await near.client.confirm(
+          input.identity.context.chainAccount.scope.keyDomainId,
+          prepared.commandId
+        )
+        consumed = true
+        if (
+          result.kind !== 'signature' ||
+          result.signature.encoding !== 'base64' ||
+          result.address !== input.identity.address ||
+          !result.publicKey
+        ) {
+          throw new Error('NEAR confidential signature payload is not a NEP-413 signature')
+        }
+        const signatureBytes = base64ToBytes(result.signature.value)
+        if (signatureBytes.length !== 64) {
+          throw new Error('NEAR confidential signature payload is not a NEP-413 signature')
+        }
+        const publicKey = result.publicKey.startsWith('ed25519:')
+          ? result.publicKey
+          : `ed25519:${result.publicKey}`
+        await this.ensureNearIntentsPublicKey(input.identity, publicKey)
+        return Object.freeze({
+          standard: 'nep413' as const,
+          payload: Object.freeze({
+            recipient: envelope.recipient,
+            nonce: envelope.nonce,
+            message: envelope.message
+          }),
+          public_key: publicKey,
+          signature: `ed25519:${encodeBase58(signatureBytes)}`
+        })
+      } finally {
+        if (!consumed) {
+          await near.client
+            .cancel(input.identity.context.chainAccount.scope.keyDomainId, prepared.commandId)
+            .catch(() => {})
+        }
+      }
+    })
+  }
+
+  private async ensureNearIntentsPublicKey(
+    identity: ConfidentialSigningIdentity,
+    publicKey: string
+  ): Promise<void> {
+    // An implicit account's public key is the account id. Named accounts register once.
+    if (/^[0-9a-f]{64}$/i.test(identity.address)) return
+    const near = this.nearChain
+    const context = identity.context
+    if (!near || !('publicKey' in context) || typeof context.publicKey !== 'string') {
+      throw new Error('Confidential NEAR signing chain is unavailable')
+    }
+    if (await this.nearHasPublicKey(identity.address, publicKey)) return
+    const accessKey = await near.rpc.getAccessKey(identity.address, context.publicKey)
+    if (!accessKey) {
+      throw new Error('The derived NEAR access key is not registered on the sender account')
+    }
+    const nonce = BigInt(accessKey.nonce) + 1n
+    const prepared = await near.client.prepare(identity.context.chainAccount.scope.keyDomainId, {
+      kind: 'near-transaction',
+      chainId: near.chainId,
+      accountIndex: identity.addressIndex,
+      transaction: {
+        chainId: near.chainId,
+        accountIndex: identity.addressIndex,
+        signerId: identity.address,
+        receiverId: INTENTS_CONTRACT,
+        nonce: nonce.toString(),
+        blockHash: accessKey.blockHash,
+        actions: [
+          {
+            type: 'functionCall',
+            methodName: 'add_public_key',
+            args: encodeNearFunctionArgs({ public_key: publicKey }),
+            gas: ADD_PUBLIC_KEY_GAS,
+            depositYocto: '1'
+          }
+        ]
+      }
+    })
+    let consumed = false
+    try {
+      const signed = await near.client.confirm(
+        identity.context.chainAccount.scope.keyDomainId,
+        prepared.commandId
+      )
+      consumed = true
+      if (signed.kind !== 'signed-payload' || signed.payload.encoding !== 'base64') {
+        throw new Error('NEAR add_public_key signature is invalid')
+      }
+      await near.rpc.broadcastSignedTransactionAndWait(signed.payload.value)
+    } finally {
+      if (!consumed) {
+        await near.client
+          .cancel(identity.context.chainAccount.scope.keyDomainId, prepared.commandId)
+          .catch(() => {})
+      }
+    }
+    if (!(await this.nearHasPublicKey(identity.address, publicKey))) {
+      throw new Error('NEAR Intents public key was not registered')
+    }
+  }
+
+  private async nearHasPublicKey(accountId: string, publicKey: string): Promise<boolean> {
+    const near = this.nearChain
+    if (!near) throw new Error('Confidential NEAR signing chain is unavailable')
+    const value = await near.rpc.viewFunction(INTENTS_CONTRACT, 'has_public_key', {
+      account_id: accountId,
+      public_key: publicKey
+    })
+    if (typeof value !== 'boolean') {
+      throw new Error('NEAR Intents public key query is invalid')
+    }
+    return value
   }
 
   async prepareTransaction(input: {
@@ -325,4 +562,50 @@ export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
       )
     })
   }
+}
+
+function nearPrivateExecutionSource(
+  source: KeyDomainSource,
+  accountIndex: number
+): NearPrivateExecutionWalletSource {
+  if (source.kind === 'private-key') {
+    return Object.freeze({
+      kind: 'private-key',
+      chainFamily: source.chainFamily,
+      accountIndex
+    })
+  }
+  if (source.kind === 'hardware') return Object.freeze({ kind: 'hardware' })
+  return Object.freeze({ kind: 'software' })
+}
+
+function sameConfidentialAddress(left: string, right: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(left) && /^0x[0-9a-fA-F]{40}$/.test(right)
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right
+}
+
+function parseNep413SigningPayload(payload: string): {
+  message: string
+  recipient: 'intents.near' | 'intents.far'
+  nonce: string
+} {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(payload)
+  } catch {
+    parsed = null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('NEAR confidential message payload must include message, recipient, and nonce')
+  }
+  const record = parsed as Record<string, unknown>
+  const recipient =
+    record.recipient === 'intents.near' || record.recipient === 'intents.far'
+      ? record.recipient
+      : null
+  if (typeof record.message !== 'string' || !recipient || typeof record.nonce !== 'string') {
+    throw new Error('NEAR confidential message payload must include message, recipient, and nonce')
+  }
+  return { message: record.message, recipient, nonce: record.nonce }
 }

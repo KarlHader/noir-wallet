@@ -1,4 +1,3 @@
-import { isAddress } from 'viem'
 import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
 import type { Network } from '@/types'
 import {
@@ -292,8 +291,8 @@ export interface NearIncognitoClusterPlan {
   readonly ok: true
   readonly method: 'cluster'
   readonly fundingTransfers: readonly []
-  readonly signerChainFamily: 'evm'
-  readonly intentStandard: 'erc191'
+  readonly signerChainFamily: 'near'
+  readonly intentStandard: 'nep413'
   readonly signerId: string
   readonly refundTo: string
   readonly withdrawRecipient: string
@@ -321,16 +320,15 @@ export interface NearIncognitoClusterPlan {
 }
 
 /**
- * 1Click deposit plus withdraw intents. The intents signer stays the EVM
- * confidential account. A missing on-chain implicit account does not add a
- * public transfer from Main to the PEA.
+ * 1Click deposit plus withdraw intents. The intents signer is the NEAR account,
+ * named or implicit. A missing on-chain implicit account does not add a public
+ * transfer from Main to the PEA.
  */
 export function planNearIncognitoCluster(input: {
   readonly network: Network
   readonly enabledFlags: readonly string[]
   readonly from: NearIncognitoMoveDomain
   readonly to: NearIncognitoMoveDomain
-  readonly evmSignerId: string
   readonly mainAccountId: string
   readonly peaAccountId: string | null
   readonly accountIndex: number
@@ -345,15 +343,7 @@ export function planNearIncognitoCluster(input: {
   void input.implicitAccountOnChain
   const resolved = resolveNearIncognitoMove({ ...input, method: 'cluster' })
   if (!resolved.ok) return resolved
-  const signerId = isAddress(input.evmSignerId) ? input.evmSignerId.toLowerCase() : null
-  if (!signerId) {
-    return Object.freeze({
-      ok: false,
-      method: 'cluster',
-      error: NEAR_MOVE_UNAVAILABLE,
-      fundingTransfers: NO_FUNDING_TRANSFERS
-    })
-  }
+  const signerId = resolved.mainAccountId
   const deposit = Object.freeze({
     originAsset: input.originAsset,
     destinationAsset: input.originAsset,
@@ -370,8 +360,8 @@ export function planNearIncognitoCluster(input: {
     ok: true,
     method: 'cluster',
     fundingTransfers: NO_FUNDING_TRANSFERS,
-    signerChainFamily: 'evm',
-    intentStandard: 'erc191',
+    signerChainFamily: 'near',
+    intentStandard: 'nep413',
     signerId,
     refundTo: resolved.sender,
     withdrawRecipient: resolved.recipient,

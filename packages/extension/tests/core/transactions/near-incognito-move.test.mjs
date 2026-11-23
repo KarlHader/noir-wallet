@@ -1,6 +1,5 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { getAddress } from 'viem'
 
 import { nearPeaRequestJson } from '../../../src/infrastructure/keyring/multichain/raw-wallet-engine.ts'
 import { assertNearPrivateQuoteRoute } from '../../../src/core/services/rhea-swap/rhea-swap-near-private-route.ts'
@@ -19,7 +18,6 @@ import {
 
 const MAIN = 'alice.near'
 const PEA = 'ab'.repeat(32)
-const EVM = getAddress(`0x${'ab'.repeat(20)}`)
 
 function account(pea = PEA) {
   return {
@@ -41,7 +39,6 @@ function clusterInput(overrides = {}) {
     enabledFlags: ['chain.near'],
     from: 'public',
     to: 'private',
-    evmSignerId: EVM,
     mainAccountId: MAIN,
     peaAccountId: PEA,
     accountIndex: 0,
@@ -62,16 +59,16 @@ test('mainnet cluster does not build a Main-to-PEA transfer', () => {
   expect(plan.method).toBe('cluster')
   expect(plan.fundingTransfers).toEqual([])
   expect(plan.implicitAccountOnChain).toBeUndefined()
-  expect(plan.signerChainFamily).toBe('evm')
-  expect(plan.intentStandard).toBe('erc191')
-  expect(plan.signerId).toBe(EVM.toLowerCase())
-  expect(plan.deposit.signerId).toBe(EVM.toLowerCase())
-  expect(plan.deposit.recipient).toBe(EVM.toLowerCase())
+  expect(plan.signerChainFamily).toBe('near')
+  expect(plan.intentStandard).toBe('nep413')
+  expect(plan.signerId).toBe(MAIN)
+  expect(plan.deposit.signerId).toBe(MAIN)
+  expect(plan.deposit.recipient).toBe(MAIN)
   expect(plan.deposit.refundTo).toBe(MAIN)
   expect(plan.deposit.recipientType).toBe('CONFIDENTIAL_INTENTS')
   expect(plan.withdraw.recipient).toBe(PEA)
-  expect(plan.withdraw.signerId).toBe(EVM.toLowerCase())
-  expect(JSON.stringify(plan)).not.toMatch(/receiverId|storage_deposit|signer_chain_family|nep413/)
+  expect(plan.withdraw.signerId).toBe(MAIN)
+  expect(JSON.stringify(plan)).not.toMatch(/receiverId|storage_deposit|signer_chain_family/)
   expect(plan.deposit.recipient).not.toBe(PEA)
 })
 
