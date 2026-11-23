@@ -182,14 +182,15 @@ export class ChainEndpointSettingsCoordinator {
       nearNetwork.chainId,
       ...catalog.map(network => network.chainId)
     ])
-    const unsupportedOverride = [...settings.overrides, ...(settings.savedRpcEndpoints ?? [])].find(
-      override => !supportedChainIds.has(override.chainId)
+    const unsupportedChainIds = new Set(
+      [...settings.overrides, ...(settings.savedRpcEndpoints ?? [])]
+        .map(endpoint => endpoint.chainId)
+        .filter(chainId => !supportedChainIds.has(chainId))
     )
-    if (unsupportedOverride) {
-      throw new Error('This chain does not have an active endpoint adapter in this build')
-    }
+    assertDisabledChainEndpointsUnchanged(currentSettings, settings, [...unsupportedChainIds])
     if (
       settings.activeEvmChainId !== undefined &&
+      settings.activeEvmChainId !== currentSettings.activeEvmChainId &&
       !catalog.some(network => network.chainId === settings.activeEvmChainId)
     ) {
       throw new Error('The selected EVM network is not configured')
@@ -234,6 +235,7 @@ export class ChainEndpointSettingsCoordinator {
         )
     )
     for (const override of [...settings.overrides, ...newSavedEndpoints]) {
+      if (!supportedChainIds.has(override.chainId)) continue
       const rpc = override.rpc
       if (!rpc) continue
       const currentOverride = findChainEndpointOverride(currentSettings, override.chainId)

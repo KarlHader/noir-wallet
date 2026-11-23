@@ -46,18 +46,7 @@ export const RPC_DEFAULT_ENDPOINTS = {
       },
       'eip155:42161': { id: 'drpc', label: 'dRPC', url: 'https://arbitrum.drpc.org' },
       'eip155:8453': { id: 'official', label: 'Base', url: 'https://mainnet.base.org' },
-      'eip155:10': { id: 'official', label: 'Optimism', url: 'https://mainnet.optimism.io' },
-      'eip155:137': { id: 'drpc', label: 'dRPC', url: 'https://polygon.drpc.org' },
-      'eip155:43114': {
-        id: 'official',
-        label: 'Avalanche',
-        url: 'https://api.avax.network/ext/bc/C/rpc'
-      },
-      'eip155:143': { id: 'official', label: 'Monad', url: 'https://rpc.monad.xyz' },
-      'eip155:100': { id: 'official', label: 'Gnosis', url: 'https://rpc.gnosischain.com' },
-      'eip155:9745': { id: 'official', label: 'Plasma', url: 'https://rpc.plasma.to' },
-      'eip155:196': { id: 'official', label: 'X Layer', url: 'https://rpc.xlayer.tech' },
-      'eip155:80094': { id: 'official', label: 'Berachain', url: 'https://rpc.berachain.com' }
+      'eip155:137': { id: 'drpc', label: 'dRPC', url: 'https://polygon.drpc.org' }
     },
     testnet: {
       'eip155:11155111': {
@@ -76,17 +65,7 @@ export const RPC_DEFAULT_ENDPOINTS = {
         url: 'https://sepolia-rollup.arbitrum.io/rpc'
       },
       'eip155:84532': { id: 'official', label: 'Base', url: 'https://sepolia.base.org' },
-      'eip155:11155420': {
-        id: 'official',
-        label: 'Optimism',
-        url: 'https://sepolia.optimism.io'
-      },
-      'eip155:80002': { id: 'drpc', label: 'dRPC', url: 'https://polygon-amoy.drpc.org' },
-      'eip155:43113': {
-        id: 'official',
-        label: 'Avalanche',
-        url: 'https://api.avax-test.network/ext/bc/C/rpc'
-      }
+      'eip155:80002': { id: 'drpc', label: 'dRPC', url: 'https://polygon-amoy.drpc.org' }
     }
   },
   bitcoin: {

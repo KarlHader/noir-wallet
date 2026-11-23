@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { getEvmNetworkConfigs } from '../../../src/config/networks.ts'
+import { getEvmNetworkConfigs, getKnownEvmNetworkIdentities } from '../../../src/config/networks.ts'
 import { resolveManagedIntentsAssets } from '../../../src/core/services/intents-managed-assets.ts'
 import {
   resolveIntentsEvmAssets,
@@ -93,7 +93,7 @@ test('prefers the current BSC representation when a deprecated row shares its co
           symbol: 'USDC'
         }
       ],
-      getEvmNetworkConfigs('mainnet')
+      getKnownEvmNetworkIdentities('mainnet')
     )
   ).toHaveLength(1)
   const assets = resolveIntentsEvmAssets([legacy, current], getEvmNetworkConfigs('mainnet'))

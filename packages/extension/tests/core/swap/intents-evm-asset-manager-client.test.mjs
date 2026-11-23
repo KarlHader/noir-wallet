@@ -53,6 +53,18 @@ const NEAR_USDT = Object.freeze({
 })
 
 const networks = resolveEvmNetworkCatalog('mainnet', DEFAULT_CHAIN_ENDPOINT_SETTINGS)
+const networksWithGnosis = resolveEvmNetworkCatalog('mainnet', {
+  ...DEFAULT_CHAIN_ENDPOINT_SETTINGS,
+  customEvmNetworks: [
+    {
+      chainId: 'eip155:100',
+      numericChainId: 100,
+      displayName: 'Gnosis',
+      nativeCurrency: { name: 'xDAI', symbol: 'xDAI', decimals: 18 },
+      rpc: { protocol: 'evm-json-rpc', label: 'Gnosis RPC', url: 'https://rpc.example' }
+    }
+  ]
+})
 const RNEAR_MANAGED_ASSET = Object.freeze({
   protocolAssetId: 'nep141:lst.rhealab.near',
   assetId: 'near:mainnet/nep141:lst.rhealab.near',
@@ -74,6 +86,9 @@ function rheaToken(token, rheaChainId, tokenListChainId) {
 test('maps every supported Intents EVM Token into the Manage Tokens catalog', () => {
   const tokens = [rheaToken(GNOSIS_USDC, '100', 100), rheaToken(POLYGON_USDT, '137', 137)]
   expect([...resolveSwapTokenAssetIds(tokens, 'mainnet', networks)]).toEqual([
+    `eip155:137/erc20:${POLYGON_USDT.contractAddress}`
+  ])
+  expect([...resolveSwapTokenAssetIds(tokens, 'mainnet', networksWithGnosis)]).toEqual([
     `eip155:100/erc20:${GNOSIS_USDC.contractAddress}`,
     `eip155:137/erc20:${POLYGON_USDT.contractAddress}`
   ])
@@ -87,11 +102,11 @@ test('maps every supported Intents EVM Token into the Manage Tokens catalog', ()
         { ...tokens[0], rheaAddress: POLYGON_USDT.contractAddress }
       ],
       'mainnet',
-      networks
+      networksWithGnosis
     ).size
   ).toBe(0)
   expect(
-    resolveManagedIntentsAssets([GNOSIS_USDC, POLYGON_USDT], 'mainnet', networks)
+    resolveManagedIntentsAssets([GNOSIS_USDC, POLYGON_USDT], 'mainnet', networksWithGnosis)
   ).toMatchObject([
     {
       protocolAssetId: GNOSIS_USDC.assetId,
@@ -140,7 +155,7 @@ test('resolves the exact Swap destination without symbol or chain ambiguity', ()
   const catalog = [GNOSIS_USDC, POLYGON_USDT, SOLANA_USDC]
 
   expect(
-    resolveManagedIntentsAsset(catalog, GNOSIS_USDC.assetId, 'mainnet', networks)
+    resolveManagedIntentsAsset(catalog, GNOSIS_USDC.assetId, 'mainnet', networksWithGnosis)
   ).toMatchObject({
     protocolAssetId: GNOSIS_USDC.assetId,
     chainId: 'eip155:100',
