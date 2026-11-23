@@ -23,6 +23,7 @@ export {
   parseNearPublicKey
 } from './identifiers'
 export {
+  buildNearConfidentialFungibleDepositActions,
   buildNearIntentsDepositActions,
   nearIntentsDepositMaximumYocto,
   nearIntentsDepositStorageFeeYocto,
@@ -32,7 +33,9 @@ export {
   NEAR_STORAGE_DEPOSIT_YOCTO,
   NEAR_WRAP_DEPOSIT_GAS,
   WRAP_NEAR_CONTRACT_ID,
+  type BuildNearConfidentialFungibleDepositActionsInput,
   type BuildNearIntentsDepositActionsInput,
+  type NearConfidentialFungibleDepositPlan,
   type NearIntentsDepositAction,
   type NearIntentsDepositPlan
 } from './near-intents-deposit-actions'

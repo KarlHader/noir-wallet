@@ -295,9 +295,20 @@ describe('NEAR send and receive page decisions', () => {
       ),
       'utf8'
     )
+    const accountSwitcher = readFileSync(
+      fileURLToPath(
+        new URL(
+          '../../../../src/popup/components/account/AccountSwitcher.tsx',
+          import.meta.url
+        )
+      ),
+      'utf8'
+    )
     assert.equal(networkForm.includes('guardNearPublicPrepare'), true)
     assert.equal(networkForm.includes('prependRheaSwapNearWrap'), false)
     assert.equal(addresses.includes('selectNearReceiveAddress'), true)
+    assert.equal(accountSwitcher.includes('selectNearReceiveAddress'), true)
+    assert.equal(accountSwitcher.includes('nearIncognitoReceiveUnavailableMessage'), true)
   })
 
   it('keeps a public send to this account PEA stopped while the route cannot fund it', () => {

@@ -131,7 +131,7 @@ import {
 } from './confidential-near-quote'
 import { parseNearAccountId } from '@/core/chains/near/identifiers'
 import {
-  parsePreparedNearIntentsDeposit,
+  parsePreparedNearConfidentialDeposit,
   type NearTransactionStatus
 } from '@/infrastructure/chains/near'
 import {
@@ -521,17 +521,17 @@ function validQuoteTimeEstimateSeconds(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
+function isNearConfidentialDeposit(transfer: unknown): boolean {
+  if (!transfer || typeof transfer !== 'object') return false
+  const kind = (transfer as { kind?: unknown }).kind
+  return kind === 'intents-deposit' || kind === 'confidential-ft-deposit'
+}
+
 function reviewNearPreparedDeposit(plan: ConfidentialFundingPlan) {
   const transfer = plan.preparedDeposit?.preparedTransfer
-  if (
-    !transfer ||
-    typeof transfer !== 'object' ||
-    (transfer as { kind?: unknown }).kind !== 'intents-deposit'
-  ) {
-    return null
-  }
+  if (!isNearConfidentialDeposit(transfer)) return null
   try {
-    return parsePreparedNearIntentsDeposit(transfer)
+    return parsePreparedNearConfidentialDeposit(transfer)
   } catch {
     return null
   }
@@ -543,10 +543,7 @@ function reviewFromPlan(
 ): ConfidentialFundingReview {
   const nearKind =
     reviewNearPreparedDeposit(plan) !== null ||
-    (plan.preparedDeposit?.preparedTransfer !== undefined &&
-      typeof plan.preparedDeposit.preparedTransfer === 'object' &&
-      plan.preparedDeposit.preparedTransfer !== null &&
-      (plan.preparedDeposit.preparedTransfer as { kind?: unknown }).kind === 'intents-deposit')
+    isNearConfidentialDeposit(plan.preparedDeposit?.preparedTransfer)
   const nearPrepared = nearKind ? reviewNearPreparedDeposit(plan) : null
   const prepared =
     nearKind || !plan.preparedDeposit
@@ -2904,19 +2901,27 @@ export class ConfidentialFundingCoordinator {
       })
     })
     await this.ensureGraph(plan)
-    try {
-      await broadcastSignedEvmTransaction({
-        rawTransaction: signed.rawTransaction,
-        expectedTransactionHash: signed.transactionHash,
-        rpc: this.requireRpc(plan.source.chainId)
-      })
-      plan = await this.updatePlan(plan, { phase: 'deposit-confirming' })
-      await this.applyGraphStatus(plan, 'origin', 'broadcast', {
-        transactionHash: signed.transactionHash
-      })
-    } catch {
-      await this.scheduleMonitoring()
-      throw new Error('Confidential funding deposit is signed and will retry broadcasting')
+    if (parseChainId(plan.source.chainId).namespace === 'near') {
+      const broadcast = await this.broadcastNearDeposit(plan)
+      if (broadcast.phase !== 'deposit-confirming') {
+        throw new Error('Confidential funding deposit is signed and will retry broadcasting')
+      }
+      plan = broadcast
+    } else {
+      try {
+        await broadcastSignedEvmTransaction({
+          rawTransaction: signed.rawTransaction,
+          expectedTransactionHash: signed.transactionHash,
+          rpc: this.requireRpc(plan.source.chainId)
+        })
+        plan = await this.updatePlan(plan, { phase: 'deposit-confirming' })
+        await this.applyGraphStatus(plan, 'origin', 'broadcast', {
+          transactionHash: signed.transactionHash
+        })
+      } catch {
+        await this.scheduleMonitoring()
+        throw new Error('Confidential funding deposit is signed and will retry broadcasting')
+      }
     }
     await this.scheduleMonitoring()
     void this.continuePlan(plan.planId)
@@ -3790,11 +3795,21 @@ export class ConfidentialFundingCoordinator {
       value.operation !== undefined &&
       value.operation !== 'cluster' &&
       (sourceIsNear || destinationIsNear)
+    // Cluster stays off nearRoute so deposit, withdraw, and swap rules do not change.
+    const clusterEvm =
+      value.operation === 'cluster' &&
+      sourceChain.namespace === 'eip155' &&
+      destinationChain.namespace === 'eip155'
+    const clusterNear = value.operation === 'cluster' && sourceIsNear && destinationIsNear
     const sourceAllowed =
-      sourceIsEvm || (nearRoute && sourceIsNear) || (shieldSpend && sourceChain.id === zcashChainId)
+      sourceIsEvm ||
+      (nearRoute && sourceIsNear) ||
+      clusterNear ||
+      (shieldSpend && sourceChain.id === zcashChainId)
     const destinationAllowed =
       destinationIsEvm ||
       (nearRoute && destinationIsNear) ||
+      clusterNear ||
       (shieldSpend &&
         value.operation === 'withdraw' &&
         value.destinationDomain === 'public' &&
@@ -3808,6 +3823,7 @@ export class ConfidentialFundingCoordinator {
       (!sourceIsEvm &&
         !destinationIsEvm &&
         !nearRoute &&
+        !clusterNear &&
         !(shieldSpend && destinationChain.id === zcashChainId))
     ) {
       throw new Error('Confidential funding requires an EVM signing chain')
@@ -3841,8 +3857,7 @@ export class ConfidentialFundingCoordinator {
         (value.confidentialRecipient !== undefined &&
           value.operation !== 'confidential-transfer') ||
         (value.operation === 'cluster' &&
-          (sourceChain.namespace !== 'eip155' ||
-            destinationChain.namespace !== 'eip155' ||
+          (!(clusterEvm || clusterNear) ||
             !['public', 'private', 'shield'].includes(value.sourceDomain ?? '') ||
             !['public', 'private'].includes(value.destinationDomain ?? '') ||
             value.sourceDomain === value.destinationDomain ||
@@ -4701,6 +4716,10 @@ export class ConfidentialFundingCoordinator {
           return plan
         }
       }
+      // An attempted NEAR batch is recovered from deposit-address status, not resubmitted.
+      if (plan.phase === 'submitting') {
+        plan = await this.updatePlan(plan, { phase: 'processing' })
+      }
       await this.scheduleMonitoring()
       return plan
     }
@@ -4916,7 +4935,14 @@ export class ConfidentialFundingCoordinator {
   ): Promise<ConfidentialFundingPlan> {
     const previousPhase = plan.phase
     const previousRows = plan.withdraws
-    if (plan.operation === 'cluster' && plan.orderId) {
+    // Wallet history challenges accept only an EVM address. NEAR settlement uses order-status.
+    const observesClusterHistory =
+      plan.operation === 'cluster' &&
+      Boolean(plan.orderId) &&
+      confidentialSignerFamily(
+        confidentialSigningChainId(plan.source.chainId, plan.destination.chainId, plan.network)
+      ) === 'evm'
+    if (observesClusterHistory && plan.orderId) {
       const stored = observationOnly
         ? await this.options.store.getHistorySession(plan.network, plan.keyDomainId, plan.accountId)
         : null
@@ -5320,15 +5346,9 @@ export class ConfidentialFundingCoordinator {
 
   private nearPreparedDeposit(plan: ConfidentialFundingPlan) {
     const transfer = plan.preparedDeposit?.preparedTransfer
-    if (
-      !transfer ||
-      typeof transfer !== 'object' ||
-      (transfer as { kind?: unknown }).kind !== 'intents-deposit'
-    ) {
-      return null
-    }
+    if (!isNearConfidentialDeposit(transfer)) return null
     try {
-      return parsePreparedNearIntentsDeposit(transfer)
+      return parsePreparedNearConfidentialDeposit(transfer)
     } catch {
       return null
     }

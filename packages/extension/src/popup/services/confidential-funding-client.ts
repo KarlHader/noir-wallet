@@ -14,6 +14,7 @@ import { NETWORK_FEE_TIERS, type NetworkFeeTier } from '@/core/transactions/doma
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { Network } from '@/types'
 import { parseZcashAddress } from '@/core/address-book/address-book'
+import { parseNearAccountId } from '@/core/chains/near/identifiers'
 import { formatBaseUnitAmount } from '@/lib/number-format'
 import { formatShieldSymbol } from '@/lib/format'
 import { evmWalletClient } from './evm-wallet-client'
@@ -206,6 +207,17 @@ function matchesExternalRecipient(
   }
 }
 
+// Cluster reviews on NEAR use account ids, including 64-hex implicit accounts.
+function isConfidentialRouteAddress(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  if (/^0x[0-9a-fA-F]{40}$/.test(value)) return !/^0x0{40}$/i.test(value)
+  try {
+    return parseNearAccountId(value) === value
+  } catch {
+    return false
+  }
+}
+
 function parseReview(value: unknown): ConfidentialFundingReview {
   if (!isRecord(value)) throw new Error('Confidential funding review is invalid')
   const review = value as unknown as ConfidentialFundingReview
@@ -219,9 +231,9 @@ function parseReview(value: unknown): ConfidentialFundingReview {
     !/^\d+$/.test(review.sourceAmountRaw) ||
     !/^\d+$/.test(review.expectedOutputRaw) ||
     !/^\d+$/.test(review.minimumOutputRaw) ||
-    !/^0x[0-9a-fA-F]{40}$/.test(review.sourceAddress) ||
+    !isConfidentialRouteAddress(review.sourceAddress) ||
     (review.externalRecipient === undefined &&
-      !/^0x[0-9a-fA-F]{40}$/.test(review.destinationAddress)) ||
+      !isConfidentialRouteAddress(review.destinationAddress)) ||
     (review.externalRecipient !== undefined &&
       (review.operation !== 'withdraw' ||
         review.destinationDomain !== 'public' ||

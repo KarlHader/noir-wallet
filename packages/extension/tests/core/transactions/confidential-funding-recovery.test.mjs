@@ -38,32 +38,52 @@ async function harness(
   phase = 'submitting',
   direct = false,
   cluster = false,
-  depositBacked = false
+  depositBacked = false,
+  near = false
 ) {
   const depositTransactionHash = `0x${'ab'.repeat(32)}`
+  const accountId = near ? 'ab'.repeat(32) : signerId
+  const destinationAccount = near ? 'cd'.repeat(32) : peaAddress
+  const chainId = near ? 'near:mainnet' : 'eip155:1'
+  const chainName = near ? 'near' : 'eth'
+  const assetId = near ? 'near:mainnet/slip44:397' : 'eip155:1/slip44:60'
+  const protocolAssetId = near ? 'nep141:wrap.near' : 'nep141:eth.omft.near'
+  const signedPayload = sequence =>
+    near
+      ? {
+          standard: 'nep413',
+          payload: {
+            message: `frozen-${sequence}`,
+            recipient: 'intents.near',
+            nonce: String(sequence).padStart(32, '0')
+          },
+          public_key: `ed25519:${'1'.repeat(32)}`,
+          signature: 'signature'
+        }
+      : { standard: 'erc191', payload: `frozen-${sequence}`, signature: 'signature' }
   const withdraws = (direct ? [0] : [0, 1, 2]).map(sequence => ({
     sequence,
     sourceAmountRaw: '1000',
     amountRaw: '990',
     depositAddress: `deposit-${sequence}.near`,
-    destinationAddress: peaAddress,
-    destinationChain: 'eth',
-    token: 'nep141:eth.omft.near',
+    destinationAddress: destinationAccount,
+    destinationChain: chainName,
+    token: protocolAssetId,
     deadline: 60_000,
     status: phase === 'processing' ? 'PROCESSING' : 'SIGNED',
-    signedPayload: { standard: 'erc191', payload: `frozen-${sequence}`, signature: 'signature' }
+    signedPayload: signedPayload(sequence)
   }))
   const frozenRequest = {
     from_amount: direct ? '1000' : '3000',
-    from_chain: 'eth',
-    from_token: 'nep141:eth.omft.near',
+    from_chain: chainName,
+    from_token: protocolAssetId,
     mode: 'TRANSFER',
-    signer_id: signerId,
+    signer_id: accountId,
     withdraws: withdraws.map(row => ({
       amount: row.amountRaw,
       deposit_address: row.depositAddress,
-      destination_address: peaAddress,
-      destination_chain: 'eth',
+      destination_address: destinationAccount,
+      destination_chain: chainName,
       execution_type: 'CONFIDENTIAL_1CLICK',
       sequence: row.sequence,
       signed_payload: row.signedPayload,
@@ -92,21 +112,21 @@ async function harness(
     ...scope,
     phase,
     source: {
-      chainId: 'eip155:1',
-      chainName: 'eth',
-      assetId: 'eip155:1/slip44:60',
-      protocolAssetId: 'nep141:eth.omft.near',
+      chainId,
+      chainName,
+      assetId,
+      protocolAssetId,
       amountRaw: direct ? '1000' : '3000',
-      address: signerId
+      address: accountId
     },
     destination: {
-      chainId: 'eip155:1',
-      chainName: 'eth',
-      assetId: 'eip155:1/slip44:60',
-      protocolAssetId: 'nep141:eth.omft.near',
-      address: peaAddress
+      chainId,
+      chainName,
+      assetId,
+      protocolAssetId,
+      address: destinationAccount
     },
-    signerId,
+    signerId: accountId,
     addressIndex: 0,
     slippageBps: 100,
     requiresDeposit: depositBacked,
@@ -176,6 +196,8 @@ async function harness(
     batchSubmissions: 0,
     acceptedOrder: null,
     historySignatures: 0,
+    historyChallenges: 0,
+    orderDetailReads: 0,
     historyAuthError: null,
     depositSignatures: 0,
     cancelledDeposits: 0,
@@ -230,9 +252,11 @@ async function harness(
       return { orders: state.acceptedOrder ? [state.acceptedOrder] : [], hasNextPage: false }
     },
     async getPrivateOrderDetails() {
+      state.orderDetailReads += 1
       return state.acceptedOrder ? [state.acceptedOrder] : []
     },
     async createOrderAuthChallenge() {
+      state.historyChallenges += 1
       if (state.historyAuthError) throw state.historyAuthError
       return { message: 'history-challenge' }
     },
@@ -285,12 +309,12 @@ async function harness(
   const signer = {
     async resolveIdentity() {
       return {
-        address: signerId,
-        peaAddress,
+        address: accountId,
+        peaAddress: destinationAccount,
         addressIndex: 0,
         context: {
           chainAccount: {
-            scope: { ...scope, accountId: state.identityAccount, chainId: 'eip155:1' }
+            scope: { ...scope, accountId: state.identityAccount, chainId }
           }
         }
       }
@@ -3093,5 +3117,122 @@ test.describe('confidential funding persisted recovery', () => {
     expect(h.state.batchSubmissions).toBe(0)
     expect(plan.withdraws[0].status).toBe('EXPIRED')
     expect(plan.phase).toBe('processing')
+  })
+
+  test('accepts NEAR account ids on a confidential funding review', async () => {
+    const sourceAddress = 'ab'.repeat(32)
+    const destinationAddress = 'cd'.repeat(32)
+    const reviewFor = (source, destination) => ({
+      planId: 'dd02dab8-9911-45b5-866c-cdaabb98e28a',
+      operation: 'cluster',
+      sourceDomain: 'public',
+      destinationDomain: 'private',
+      network: 'mainnet',
+      keyDomainId: scope.keyDomainId,
+      accountId: scope.accountId,
+      transactionId: 'tx:confidential:dd02dab8-9911-45b5-866c-cdaabb98e28a',
+      phase: 'prepared',
+      payloadFingerprint: 'f1'.repeat(32),
+      expiresAt: 1_795_441_272_619,
+      requiresDeposit: true,
+      sourceAmountRaw: '1000000000000000000000000',
+      expectedOutputRaw: '994999999999999999999999',
+      minimumOutputRaw: '985049999999999999999998',
+      sourceAddress: source,
+      destinationAddress: destination,
+      withdrawCount: 3,
+      sourceNetworkFee: {
+        raw: '130000000000000000000000',
+        symbol: 'NEAR',
+        decimals: 24
+      }
+    })
+    const prepare = review =>
+      createConfidentialFundingClient(async () => ({ success: true, result: review })).prepare({
+        network: 'mainnet',
+        keyDomainId: scope.keyDomainId,
+        accountId: scope.accountId,
+        operation: 'cluster',
+        sourceDomain: 'public',
+        destinationDomain: 'private',
+        source: {
+          chainId: 'near:mainnet',
+          chainName: 'near',
+          assetId: 'near:mainnet/slip44:397',
+          protocolAssetId: 'nep141:wrap.near',
+          amountRaw: '1000000000000000000000000'
+        },
+        destination: {
+          chainId: 'near:mainnet',
+          chainName: 'near',
+          assetId: 'near:mainnet/slip44:397',
+          protocolAssetId: 'nep141:wrap.near'
+        },
+        slippageBps: 50
+      })
+    await expect(prepare(reviewFor(sourceAddress, destinationAddress))).resolves.toMatchObject({
+      operation: 'cluster',
+      sourceAddress,
+      destinationAddress,
+      sourceNetworkFee: { symbol: 'NEAR', decimals: 24 }
+    })
+    await expect(prepare(reviewFor('alice.near', destinationAddress))).resolves.toMatchObject({
+      sourceAddress: 'alice.near',
+      destinationAddress
+    })
+    await expect(prepare(reviewFor(signerId, peaAddress))).resolves.toMatchObject({
+      sourceAddress: signerId,
+      destinationAddress: peaAddress
+    })
+    for (const source of ['NOT-AN-ADDRESS', sourceAddress.toUpperCase(), `0x${'0'.repeat(40)}`]) {
+      await expect(prepare(reviewFor(source, destinationAddress))).rejects.toThrow(
+        'Confidential funding review is invalid'
+      )
+    }
+  })
+
+  test('settles a NEAR cluster from order status without an EVM history challenge', async () => {
+    const h = await harness('processing', false, true, false, true)
+    h.state.statuses = ['SUCCESS', 'SUCCESS', 'SUCCESS']
+    h.state.historyAuthError = new Error('Wallet history identity is invalid')
+    const plan = await h.restart().continuePlan(h.initial.planId)
+    expect(plan.phase).toBe('ready')
+    expect(plan.withdraws.map(row => row.status)).toEqual(['SUCCESS', 'SUCCESS', 'SUCCESS'])
+    expect(h.state.statusRequests).toEqual([
+      'deposit-0.near',
+      'deposit-1.near',
+      'deposit-2.near'
+    ])
+    expect(h.state.historyChallenges).toBe(0)
+    expect(h.state.orderDetailReads).toBe(0)
+    expect(h.state.historySignatures).toBe(0)
+    expect(h.state.batchSubmissions).toBe(0)
+    const graph = await h.repository.get(scope, h.initial.transactionId)
+    expect(graph.segments.find(row => row.role === 'relay').status).toBe('final')
+    expect(
+      graph.segments.filter(row => row.role === 'destination').every(row => row.status === 'final')
+    ).toBe(true)
+  })
+
+  test('polls order status for an attempted NEAR cluster without submitting it again', async () => {
+    const h = await harness('submitting', false, true, false, true)
+    await h.store.putPlan({ ...h.initial, batchSubmissionAttemptedAt: now })
+    h.state.statuses = ['SUCCESS', 'SUCCESS', 'SUCCESS']
+    h.state.historyAuthError = new Error('Wallet history identity is invalid')
+    const plan = await h.restart().continuePlan(h.initial.planId)
+    expect(plan.phase).toBe('ready')
+    expect(plan.orderId).toBeUndefined()
+    expect(h.state.batchSubmissions).toBe(0)
+    expect(h.state.statusRequests).toEqual([
+      'deposit-0.near',
+      'deposit-1.near',
+      'deposit-2.near'
+    ])
+    expect(h.state.historyChallenges).toBe(0)
+    expect(h.state.orderDetailReads).toBe(0)
+    const graph = await h.repository.get(scope, h.initial.transactionId)
+    expect(
+      graph.segments.filter(row => row.role === 'destination').every(row => row.status === 'final')
+    ).toBe(true)
   })
 })
