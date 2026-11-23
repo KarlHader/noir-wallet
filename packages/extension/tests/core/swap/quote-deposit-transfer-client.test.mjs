@@ -17,6 +17,7 @@ import { resolvePublicPrivateSendQuotePair } from '../../../src/popup/services/p
 import {
   isPreparedSwapFeeUnaffordable,
   isPrivateSwapDestinationSupported,
+  filterConfidentialFundingSourceTokens,
   resolveConfidentialFundingDestinationToken,
   resolveLockedWalletSwapSourceToken,
   resolveSwapReviewAction
@@ -304,6 +305,69 @@ test.describe('quote deposit transfer client', () => {
     expect(resolveConfidentialFundingDestinationToken({ ...input, tokens: [legacyEth] })).toBe(
       legacyEth
     )
+  })
+
+  test('matches a NEAR Incognito deposit without treating it as an EVM funding asset', () => {
+    const model = portfolio()
+    const fungibleAssetId = `${NEAR_CHAIN_ID}/nep141:token.near`
+    model.assets.push({
+      asset: {
+        id: fungibleAssetId,
+        chainId: NEAR_CHAIN_ID,
+        namespace: 'nep141',
+        reference: 'token.near',
+        kind: 'token'
+      },
+      metadata: { symbol: 'TOK', decimals: 18 }
+    })
+    const near = {
+      ...token('nep141:wrap.near', 'near', 24),
+      tokenListChainId: 900001,
+      rheaChainId: 'near',
+      rheaAddress: 'wrap.near',
+      contractAddress: null,
+      isNative: true,
+      symbol: 'NEAR'
+    }
+    const fungible = {
+      ...token('nep141:token.near', 'near', 18),
+      tokenListChainId: 900001,
+      rheaChainId: 'near',
+      rheaAddress: 'token.near',
+      contractAddress: 'token.near',
+      isNative: false,
+      symbol: 'TOK'
+    }
+    const eth = {
+      ...token('nep141:eth.omft.near', 'eth', 18),
+      tokenListChainId: 1,
+      rheaChainId: '1',
+      isNative: true
+    }
+    const input = {
+      tokens: [eth, near, fungible],
+      destinationChain: 'near',
+      destinationAsset: NEAR_ASSET_ID,
+      portfolio: model,
+      receiveTargets
+    }
+    expect(resolveConfidentialFundingDestinationToken(input)).toBe(near)
+    expect(
+      resolveConfidentialFundingDestinationToken({ ...input, destinationAsset: fungibleAssetId })
+    ).toBe(fungible)
+    expect(resolveConfidentialFundingDestinationToken({ ...input, destinationAsset: null })).toBe(
+      near
+    )
+    expect(
+      resolveConfidentialFundingDestinationToken({ ...input, destinationChain: '1' })
+    ).toBeNull()
+    expect(
+      filterConfidentialFundingSourceTokens([eth, near], model, receiveTargets, 'near')
+    ).toEqual([near])
+    expect(filterConfidentialFundingSourceTokens([eth, near], model, receiveTargets, '1')).toEqual([
+      eth
+    ])
+    expect(filterConfidentialFundingSourceTokens([eth, near], model, receiveTargets)).toEqual([eth])
   })
 
   test('never falls back from a locked BNB transfer to a different wallet asset', () => {

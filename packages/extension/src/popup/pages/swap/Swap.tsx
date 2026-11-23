@@ -46,6 +46,7 @@ import {
   createInitialProductChainRegistry,
   getInitialProductChainDefinitions
 } from '@/core/chains/registry'
+import { NEAR_MAINNET_CHAIN_ID } from '@/core/chains/near/near-portfolio-assets'
 import {
   resolveEvmFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
@@ -471,7 +472,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const privateFundingSuggestedOutputRaw = searchParams.get('suggestedOutputRaw')
   const privateFundingAmount = searchParams.get('amount') ?? ''
   const isPrivateFunding = Boolean(
-    privateDestinationRequested && /^\d+$/.test(privateFundingDestinationChain ?? '')
+    privateDestinationRequested &&
+    (privateFundingDestinationChain === 'near' ||
+      /^\d+$/.test(privateFundingDestinationChain ?? ''))
   )
   const ordinarySwapRequested =
     !crossChainSendRequested && !privateTransferRequested && !isPrivateFunding
@@ -841,7 +844,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       savedDestinationAssetId: activeSharedPair?.tokenOutId,
       defaultSourceChainId:
         isPrivateFunding && privateFundingDestinationChain
-          ? `eip155:${privateFundingDestinationChain}`
+          ? privateFundingDestinationChain === 'near'
+            ? NEAR_MAINNET_CHAIN_ID
+            : `eip155:${privateFundingDestinationChain}`
           : shieldNativeZecSwap
             ? storageV2Account?.networks.find(network => network.chain.family === 'zcash')?.chain.id
             : !crossChainSendRequested &&
@@ -1709,7 +1714,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       includeZcash: hasManagedZcashDestination
     })
     const available = isPrivateFunding
-      ? filterConfidentialFundingSourceTokens(tokens, portfolio, receiveTargets)
+      ? filterConfidentialFundingSourceTokens(
+          tokens,
+          portfolio,
+          receiveTargets,
+          privateFundingDestinationChain
+        )
       : tokens
     logDebugTiming(
       walletSourcesTraceId,
@@ -1719,6 +1729,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     return available
   }, [
     isPrivateFunding,
+    privateFundingDestinationChain,
     swap.sourceTokens,
     portfolio,
     receiveTargets,
@@ -2034,8 +2045,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         supportsPrivateDestination(swap.tokenOut, 'private')
         ? destinationPrivateExecutionAddress
         : undefined
-      : (isPrivateFunding || destinationMode === 'private') &&
-          walletDestinationTarget?.kind === 'evm'
+      : (isPrivateFunding &&
+            (walletDestinationTarget?.kind === 'evm' ||
+              walletDestinationTarget?.kind === 'near')) ||
+          (destinationMode === 'private' && walletDestinationTarget?.kind === 'evm')
         ? destinationPrivateExecutionAddress
         : walletDestinationTarget?.address
   const requiresRecipientAddress =
