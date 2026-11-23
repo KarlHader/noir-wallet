@@ -31,10 +31,12 @@ export {
   createConfidentialFundingGraph,
   getConfidentialFundingPlanId,
   isLegacyShieldWithdrawActivityGraph,
-  projectLegacyShieldWithdrawActivityGraph
+  projectLegacyShieldWithdrawActivityGraph,
+  projectShieldDepositSettlement
 } from './confidential-funding-graph'
 export {
   createExternalShieldDepositGraph,
+  isExternalShieldDepositAutoHidden,
   projectExternalShieldDepositActivityGraph
 } from './confidential-external-deposit'
 export type {

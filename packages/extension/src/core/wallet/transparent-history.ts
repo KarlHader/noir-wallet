@@ -466,18 +466,22 @@ export function mergeTransactionsWithWasmHistory(
       walletHistory.status === 'success' && walletHistory.confirmations != null
         ? { txHash: walletHistory.txHash, confirmations: walletHistory.confirmations }
         : undefined
+    const shieldedOutput = transaction.type === 'shield' && walletHistory.type === 'shield'
+    const transparentOutput = transaction.type === 'unshield' && isTransparentReceive(walletHistory)
     return mergeTransactionUpdate(
       transaction,
       {
         status: walletHistory.status,
         confirmations: walletHistory.confirmations,
         requiredConfirmations: walletHistory.requiredConfirmations,
-        amount:
-          transaction.type === 'shield' && walletHistory.type === 'shield'
-            ? safeBig(walletHistory.amount)
-                .plus(walletHistory.fee ?? 0)
-                .toFixed()
-            : transaction.amount
+        amount: shieldedOutput
+          ? safeBig(walletHistory.amount)
+              .plus(walletHistory.fee ?? 0)
+              .toFixed()
+          : transaction.amount,
+        ...(walletHistory.status === 'success' && (shieldedOutput || transparentOutput)
+          ? { settledSelfTransferAmount: walletHistory.amount }
+          : {})
       },
       confirmation
     )

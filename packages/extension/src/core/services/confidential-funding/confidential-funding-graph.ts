@@ -64,6 +64,63 @@ export function projectLegacyShieldWithdrawActivityGraph(
   }
 }
 
+export function projectShieldDepositSettlement(
+  graph: TransactionGraph,
+  plan: ConfidentialFundingPlan | undefined,
+  network: Network
+): TransactionGraph {
+  const { root, segments } = graph
+  const intent = root.intent
+  const relay = segments.find(segment => segment.role === 'relay' && segment.status === 'final')
+  if (
+    root.status !== 'final' ||
+    root.reconfirming ||
+    !relay ||
+    segments.some(segment => segment.role === 'destination') ||
+    intent?.shield?.operation !== 'deposit' ||
+    intent.direction !== 'self' ||
+    plan?.operation !== 'deposit' ||
+    plan.phase !== 'ready' ||
+    plan.network !== network ||
+    plan.transactionId !== root.id ||
+    plan.keyDomainId !== root.scope.keyDomainId ||
+    plan.accountId !== root.scope.accountId ||
+    plan.destination.assetId !== intent.counterAmount?.assetId ||
+    plan.destination.chainId !== intent.recipient?.chainId ||
+    plan.destination.address !== intent.recipient.address ||
+    !plan.settledOutputRaw ||
+    !/^[1-9]\d*$/.test(plan.settledOutputRaw)
+  )
+    return graph
+
+  const id = parseTransactionSegmentId(`segment:confidential:${plan.planId}:deposit-credit`)
+  return parseTransactionGraph({
+    root: { ...root, segmentIds: [...root.segmentIds, id] },
+    segments: [
+      ...segments,
+      {
+        id,
+        transactionId: root.id,
+        role: 'destination',
+        target: {
+          kind: 'protocol',
+          provider: 'Confidential Intents',
+          account: plan.destination.address
+        },
+        status: 'final',
+        requiredForFinality: false,
+        dependsOn: [relay.id],
+        evidence: {
+          settledAmount: { assetId: plan.destination.assetId, amountRaw: plan.settledOutputRaw }
+        },
+        createdAt: root.createdAt,
+        updatedAt: root.updatedAt,
+        revision: 0
+      }
+    ]
+  })
+}
+
 export function createConfidentialFundingGraph(input: {
   readonly planId: string
   readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'

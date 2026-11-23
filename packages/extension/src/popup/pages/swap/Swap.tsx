@@ -3419,6 +3419,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         refundAddress: resolvedRefundAddress,
         slippageBps,
         recipientType: 'CONFIDENTIAL_INTENTS' as const,
+        userAction: 'swap' as const,
         fundingSource
       } as const
       return {

@@ -1998,6 +1998,54 @@ test.describe('Runtime message security', () => {
     ).toThrow(/invalid/i)
   })
 
+  test('admits a cross-chain Withdraw quote through the extension-page runtime gate', () => {
+    const message = {
+      type: 'QUOTE_RHEA_SWAP',
+      purpose: 'private-cross-chain-withdraw',
+      request: {
+        fromChain: '8453',
+        toChain: '1',
+        tokenIn: {
+          chain: '8453',
+          address: 'nep141:base.omft.near',
+          symbol: 'ETH',
+          decimals: 18,
+          isNative: true
+        },
+        tokenOut: {
+          chain: '1',
+          address: `0x${'0'.repeat(40)}`,
+          symbol: 'ETH',
+          decimals: 18,
+          isNative: true
+        },
+        amountIn: '10000000000000',
+        slippageBps: 100,
+        sender: `0x${'1'.repeat(40)}`,
+        recipient: `0x${'2'.repeat(40)}`,
+        confidentiality: 'basic'
+      }
+    }
+    expect(parseTrustedExtensionRuntimeMessage(message)).toEqual(message)
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({ ...message, purpose: `${message.purpose}-other` })
+    ).toThrow(/schema/i)
+    expect(
+      isTrustedRuntimeMessageSender(
+        message.type,
+        { id: extensionId, url: `chrome-extension://${extensionId}/index.html` },
+        extensionId
+      )
+    ).toBe(true)
+    expect(
+      isTrustedRuntimeMessageSender(
+        message.type,
+        { id: extensionId, url: 'https://example.test', tab: { id: 1 } },
+        extensionId
+      )
+    ).toBe(false)
+  })
+
   test('accepts only bounded extension-page RHEA Swap requests', () => {
     expect(
       parseTrustedExtensionRuntimeMessage({

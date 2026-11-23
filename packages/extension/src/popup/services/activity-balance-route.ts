@@ -1,7 +1,9 @@
-import type { ActivityItem } from '@/core/activity'
+import { getActivityAssetEffects, type ActivityItem } from '@/core/activity'
 import { parseAssetId } from '@/core/chains/registry'
+import type { TransactionAssetAmount } from '@/core/transactions/domain'
 
 export type ActivityExecutionAddressModes = ReadonlyMap<string, 'Public' | 'Confidential'>
+export type ActivityBalanceDomain = 'public' | 'private' | 'shield'
 
 export function activityAddressKey(chainId: string, address: string): string {
   return `${chainId}:${chainId.startsWith('eip155:') ? address.toLowerCase() : address}`
@@ -13,6 +15,32 @@ export function getActivityAddressMode(
   address: string | undefined
 ) {
   return chainId && address ? modes?.get(activityAddressKey(chainId, address)) : undefined
+}
+
+export function isExternalShieldDepositActivity(item: ActivityItem): boolean {
+  const snapshot = item.snapshot
+  return (
+    item.source === 'wallet-v2' &&
+    item.id.startsWith('tx:confidential-external:') &&
+    snapshot?.direction === 'incoming' &&
+    snapshot.shield?.operation === 'deposit' &&
+    snapshot.shield.destinationDomain === 'shield'
+  )
+}
+
+export function getActivityBalanceDomains(item: ActivityItem): readonly ActivityBalanceDomain[] {
+  if (isExternalShieldDepositActivity(item)) return ['shield']
+  if (item.snapshot?.shield) return [item.snapshot.shield.sourceDomain]
+  if (item.assetDomains?.length) return item.assetDomains
+  if (item.source === 'zcash-v1') return []
+  if (
+    item.segments.some(
+      segment =>
+        segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents'
+    )
+  )
+    return ['shield']
+  return [item.accountMode === 'private' ? 'private' : 'public']
 }
 
 export function resolveOwnedActivitySettlement(
@@ -66,4 +94,148 @@ export function resolveOwnedActivitySettlement(
     assetId,
     domain: mode === 'Public' ? ('public' as const) : ('private' as const)
   }
+}
+
+function receiptIdentity(
+  item: ActivityItem,
+  domain: ActivityBalanceDomain,
+  assetId: string,
+  hash: string
+): string {
+  const chainId = parseAssetId(assetId).chainId
+  return JSON.stringify([
+    item.scope.keyDomainId,
+    item.scope.accountId,
+    domain,
+    assetId,
+    chainId.startsWith('eip155:') ? hash.toLowerCase() : hash
+  ])
+}
+
+export function projectActivityReceipts(
+  items: readonly ActivityItem[],
+  domain: ActivityBalanceDomain,
+  modes?: ActivityExecutionAddressModes
+): readonly ActivityItem[] {
+  const receipts = new Set<string>()
+  for (const item of items) {
+    if (
+      item.status !== 'final' ||
+      item.reconfirming ||
+      !getActivityBalanceDomains(item).includes(domain)
+    )
+      continue
+    const hash = item.segments.find(
+      segment =>
+        segment.role === 'origin' && segment.target.kind === 'onchain' && segment.status === 'final'
+    )?.evidence?.transactionHash
+    if (!hash) continue
+    const primary =
+      item.snapshot?.direction === 'incoming' ? item.snapshot.primaryAmount : undefined
+    if (primary) receipts.add(receiptIdentity(item, domain, primary.assetId, hash))
+    for (const change of getActivityAssetEffects(item)?.changes ?? []) {
+      if (change.direction === 'incoming')
+        receipts.add(receiptIdentity(item, domain, change.assetId, hash))
+    }
+  }
+
+  const projected: ActivityItem[] = []
+  for (const item of items) {
+    const snapshot = item.snapshot
+    const recipient = snapshot?.recipient
+    if (
+      item.status !== 'final' ||
+      item.reconfirming ||
+      !snapshot ||
+      !recipient ||
+      getActivityBalanceDomains(item).includes(domain)
+    )
+      continue
+    const shield = snapshot.shield
+    const settlement = shield ? undefined : resolveOwnedActivitySettlement(item, modes)
+    const ownedMode = getActivityAddressMode(modes, recipient.chainId, recipient.address)
+    const recipientIsOwned =
+      snapshot.direction === 'self' ||
+      (domain === 'public' && ownedMode === 'Public') ||
+      (domain === 'private' && ownedMode === 'Confidential')
+    if (
+      shield
+        ? shield.destinationDomain !== domain || !recipientIsOwned
+        : settlement?.domain !== domain
+    )
+      continue
+    const assetId = settlement?.assetId ?? snapshot.counterAmount?.assetId
+    if (!assetId) continue
+
+    for (const segment of item.segments) {
+      const evidence = segment.evidence
+      const hash = evidence?.transactionHash
+      const shieldCredit =
+        domain === 'shield' &&
+        segment.target.kind === 'protocol' &&
+        segment.target.provider === 'Confidential Intents' &&
+        segment.target.account === recipient.address
+      const onchainCredit =
+        segment.target.kind === 'onchain' && segment.target.chainId === recipient.chainId && hash
+      const amount: TransactionAssetAmount | undefined =
+        evidence?.settledAmount ??
+        evidence?.assetEffects?.changes.find(
+          change => change.assetId === assetId && change.direction === 'incoming'
+        )
+      if (
+        segment.role !== 'destination' ||
+        segment.status !== 'final' ||
+        segment.reconfirming ||
+        evidence?.replacementTransactionHash ||
+        (!shieldCredit && !onchainCredit) ||
+        !amount ||
+        amount.assetId !== assetId ||
+        !/^[1-9]\d*$/.test(amount.amountRaw)
+      )
+        continue
+      if (onchainCredit) {
+        const key = receiptIdentity(item, domain, assetId, onchainCredit)
+        if (receipts.has(key)) continue
+        receipts.add(key)
+      }
+      projected.push({
+        id: `receive:${segment.id}`,
+        source: item.source,
+        scope: item.scope,
+        kind: 'receive',
+        ...(domain === 'private' ? { accountMode: 'private' as const } : {}),
+        ...(domain === 'shield' && !shieldCredit ? { assetDomains: ['shield'] as const } : {}),
+        status: 'final',
+        completeness: 'complete',
+        snapshot: {
+          schemaVersion: 1,
+          direction: 'incoming',
+          primaryAmount: { assetId: amount.assetId, amountRaw: amount.amountRaw },
+          recipient
+        },
+        segments: [
+          {
+            id: segment.id,
+            role: 'origin',
+            status: 'final',
+            target: segment.target,
+            ...(onchainCredit
+              ? {
+                  evidence: {
+                    transactionHash: onchainCredit,
+                    ...(evidence?.blockHeight !== undefined
+                      ? { blockHeight: evidence.blockHeight }
+                      : {}),
+                    ...(evidence?.blockHash !== undefined ? { blockHash: evidence.blockHash } : {})
+                  }
+                }
+              : {})
+          }
+        ],
+        createdAt: item.updatedAt,
+        updatedAt: item.updatedAt
+      })
+    }
+  }
+  return projected
 }

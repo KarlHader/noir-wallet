@@ -50,7 +50,7 @@ export interface BackgroundEvmTransferControllerOptions {
     executionMode: EvmTransferExecutionMode | undefined,
     binding: RheaSwapTransactionBinding,
     executionAccount?: PeaEvmExecutionAccount
-  ) => Promise<void>
+  ) => Promise<RheaSwapTransactionBinding | undefined>
 }
 
 export type EvmTransferExecutionMode = 'main' | 'private'
@@ -266,13 +266,14 @@ export class BackgroundEvmTransferController {
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     return accountContextTransition.runActiveOperation(async () => {
-      if (rheaSwapBinding)
-        await this.validateRheaSwapQuote?.(
-          rheaSwapBinding.quoteHandle,
-          executionModeValue,
-          rheaSwapBinding,
-          executionAccount
-        )
+      const scopedRheaSwapBinding = rheaSwapBinding
+        ? ((await this.validateRheaSwapQuote?.(
+            rheaSwapBinding.quoteHandle,
+            executionModeValue,
+            rheaSwapBinding,
+            executionAccount
+          )) ?? rheaSwapBinding)
+        : undefined
       const context = await measure('evm-load-active-context', () => this.requireActiveContext())
       if (!intent.assetId.startsWith(`${context.chainAccount.scope.chainId}/`)) {
         throw new Error('EVM transfer asset does not match the active network')
@@ -303,7 +304,9 @@ export class BackgroundEvmTransferController {
                 }
               : { signingMode: 'internal' as const }),
             ...(nearIntentsBinding === undefined ? {} : { nearIntentsBinding }),
-            ...(rheaSwapBinding === undefined ? {} : { rheaSwapBinding })
+            ...(scopedRheaSwapBinding === undefined
+              ? {}
+              : { rheaSwapBinding: scopedRheaSwapBinding })
           })
         )
       )
@@ -408,13 +411,14 @@ export class BackgroundEvmTransferController {
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     return accountContextTransition.runActiveOperation(async () => {
-      if (rheaSwapBinding)
-        await this.validateRheaSwapQuote?.(
-          rheaSwapBinding.quoteHandle,
-          executionModeValue,
-          rheaSwapBinding,
-          executionAccount
-        )
+      const scopedRheaSwapBinding = rheaSwapBinding
+        ? ((await this.validateRheaSwapQuote?.(
+            rheaSwapBinding.quoteHandle,
+            executionModeValue,
+            rheaSwapBinding,
+            executionAccount
+          )) ?? rheaSwapBinding)
+        : undefined
       const context = await measure('evm-load-active-context', () => this.requireActiveContext())
       if (intent.chainId !== context.chainAccount.scope.chainId) {
         throw new Error('EVM contract call does not match the active network')
@@ -432,7 +436,9 @@ export class BackgroundEvmTransferController {
             chainAccount: context.chainAccount,
             intent,
             feeSelection,
-            ...(rheaSwapBinding === undefined ? {} : { rheaSwapBinding }),
+            ...(scopedRheaSwapBinding === undefined
+              ? {}
+              : { rheaSwapBinding: scopedRheaSwapBinding }),
             ...(selectedExecutionAccount === undefined
               ? {}
               : { executionAccount: selectedExecutionAccount }),

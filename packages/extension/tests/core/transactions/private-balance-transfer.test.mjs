@@ -2,7 +2,10 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import {
+  buildCrossChainPrivateWithdrawReviewPath,
+  buildPrivateDepositReviewPath,
   normalizePrivateBalanceTransferInput,
+  resolveCrossChainPrivateWithdrawRoute,
   resolvePrivateBalanceTransferAmount,
   selectDefaultTransferAssetId
 } from '../../../src/popup/services/private-balance-transfer.ts'
@@ -28,7 +31,8 @@ import {
   matchesShieldSwapReview
 } from '../../../src/popup/services/shield-swap-form.ts'
 import { initialBalanceTransferDraft } from '../../../src/popup/services/balance-transfer-draft.ts'
-import { listTransferSameChainDestinationAssets } from '../../../src/popup/services/balance-transfer-asset-picker.ts'
+import { estimateDirectTransfer } from '../../../src/popup/services/balance-transfer-estimate.ts'
+import { listPrivateTransferDestinationAssets } from '../../../src/popup/services/balance-transfer-asset-picker.ts'
 import {
   readShieldTransferPreference,
   selectShieldTransferAssetId,
@@ -179,8 +183,8 @@ test('rejects excess precision, exponent notation, and oversized input', () => {
   expect(normalizePrivateBalanceTransferInput('1'.repeat(129))).toBeNull()
 })
 
-test('lists only supported same-chain Move network choices for the selected asset', () => {
-  const option = (chainId, symbol = 'ETH', status = 'available') => ({
+function nativeDepositAsset(chainId, status = 'available') {
+  return {
     chain: {
       chain: {
         id: chainId,
@@ -196,37 +200,234 @@ test('lists only supported same-chain Move network choices for the selected asse
         reference: '60',
         kind: 'native'
       },
-      metadata: { symbol, decimals: 18 },
+      metadata: { symbol: 'ETH', decimals: 18 },
       balance: { totalRaw: '0', mainRaw: '0', privateRaw: '0' }
     }
-  })
-  const ethereum = option('eip155:1')
-  const arbitrum = option('eip155:42161')
-  const unavailable = option('eip155:8453', 'ETH', 'unavailable')
-  const unrecognized = option('eip155:999999')
-  const choices = listTransferSameChainDestinationAssets({
+  }
+}
+
+test('binds a cross-chain Deposit to the selected source and eligible destination assets', () => {
+  const ethereum = nativeDepositAsset('eip155:1')
+  const arbitrum = nativeDepositAsset('eip155:42161')
+  const unavailable = nativeDepositAsset('eip155:8453', 'unavailable')
+  const unrecognized = nativeDepositAsset('eip155:999999')
+  const choices = listPrivateTransferDestinationAssets({
     source: ethereum,
     assets: [ethereum, arbitrum, unavailable, unrecognized],
-    from: 'public',
-    eligibleChainIds: ['eip155:1', 'eip155:42161', 'eip155:8453', 'eip155:999999'],
-    destinationChainIds: ['eip155:1', 'eip155:42161', 'eip155:8453', 'eip155:999999'],
-    managedAssets: [],
-    catalogTokens: [],
-    network: 'mainnet'
+    eligibleChainIds: ['eip155:1', 'eip155:42161', 'eip155:8453', 'eip155:999999']
   })
   expect(choices.map(item => item.chain.chain.id)).toEqual(['eip155:1', 'eip155:42161'])
   expect(
-    listTransferSameChainDestinationAssets({
+    listPrivateTransferDestinationAssets({
       source: ethereum,
       assets: [ethereum, arbitrum],
-      from: 'public',
-      eligibleChainIds: ['eip155:1', 'eip155:42161'],
-      destinationChainIds: ['eip155:1'],
-      managedAssets: [],
-      catalogTokens: [],
-      network: 'mainnet'
+      eligibleChainIds: ['eip155:1']
     }).map(item => item.chain.chain.id)
   ).toEqual(['eip155:1'])
+  const reviewPath = buildPrivateDepositReviewPath({
+    sourceAssetId: ethereum.asset.asset.id,
+    destinationAssetId: choices[1].asset.asset.id,
+    amount: '0.01',
+    maximum: true
+  })
+  const reviewRoute = new URL(reviewPath, 'https://wallet.test')
+  expect(reviewRoute.pathname).toBe('/swap')
+  expect(Object.fromEntries(reviewRoute.searchParams)).toEqual({
+    source: ethereum.asset.asset.id,
+    destinationAsset: arbitrum.asset.asset.id,
+    destinationChain: '42161',
+    privateDestination: '1',
+    balanceTransfer: '1',
+    amount: '0.01',
+    review: '1',
+    maximum: '1'
+  })
+})
+
+test('offers an unfunded registered USDC destination without trusting matching token symbols', () => {
+  const usdc = (chainId, reference, decimals) => {
+    const row = nativeDepositAsset(chainId)
+    return {
+      ...row,
+      asset: {
+        ...row.asset,
+        asset: {
+          id: `${chainId}/erc20:${reference}`,
+          chainId,
+          namespace: 'erc20',
+          reference,
+          kind: 'token'
+        },
+        metadata: { symbol: 'USDC', decimals }
+      }
+    }
+  }
+  const bnb = usdc('eip155:56', '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', 18)
+  const base = usdc('eip155:8453', '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', 6)
+  const unrecognized = usdc('eip155:56', `0x${'1'.repeat(40)}`, 18)
+  const eligibleChainIds = ['eip155:56', 'eip155:8453']
+  expect(
+    listPrivateTransferDestinationAssets({ source: bnb, assets: [bnb, base], eligibleChainIds })
+  ).toEqual([bnb, base])
+  expect(
+    listPrivateTransferDestinationAssets({
+      source: base,
+      assets: [base, unrecognized],
+      catalogAssets: [bnb],
+      eligibleChainIds
+    })
+  ).toEqual([base, bnb])
+})
+
+test('resolves a cross-chain Withdraw draft to the destination chain Public address of its account', () => {
+  const ethereum = nativeDepositAsset('eip155:1')
+  const arbitrum = nativeDepositAsset('eip155:42161')
+  const publicDestination = `0x${'3'.repeat(40)}`
+  const account = {
+    walletId: 'wallet-1',
+    accountId: 'account-1',
+    walletSource: { kind: 'software' },
+    networks: [
+      { chain: ethereum.chain.chain, privateExecutionAddress: `0x${'1'.repeat(40)}` },
+      {
+        chain: arbitrum.chain.chain,
+        privateExecutionAddress: `0x${'2'.repeat(40)}`,
+        addresses: [{ value: publicDestination, preferredForReceive: true }]
+      }
+    ]
+  }
+  const path = buildCrossChainPrivateWithdrawReviewPath({
+    walletId: account.walletId,
+    accountId: account.accountId,
+    sourceAssetId: ethereum.asset.asset.id,
+    destinationAssetId: arbitrum.asset.asset.id,
+    amount: '0.01',
+    maximum: true
+  })
+  const route = new URL(path, 'https://wallet.test').searchParams
+  expect(route.get('maximum')).toBe('1')
+  expect(resolveCrossChainPrivateWithdrawRoute(route, account, true)).toEqual({
+    destinationApiChainId: '42161',
+    destinationAssetId: arbitrum.asset.asset.id,
+    recipient: publicDestination
+  })
+  expect(
+    resolveCrossChainPrivateWithdrawRoute(route, { ...account, accountId: 'account-2' }, true)
+  ).toBeNull()
+  expect(resolveCrossChainPrivateWithdrawRoute(route, account, false)).toBeNull()
+  route.set('recipient', `0x${'4'.repeat(40)}`)
+  expect(resolveCrossChainPrivateWithdrawRoute(route, account, true)).toBeNull()
+})
+
+test('quotes both cross-chain transfer directions and rejects a same-chain build', async () => {
+  const ethereum = nativeDepositAsset('eip155:1')
+  const arbitrum = nativeDepositAsset('eip155:42161')
+  const sender = '0x' + '1'.repeat(40)
+  const recipient = '0x' + '2'.repeat(40)
+  const amountIn = '10000000000000000'
+  const quoteHandle = 'cross-chain-deposit-quote'
+  const approval = {
+    quoteHandle,
+    recipient,
+    estimatedOut: '9900000000000000',
+    minAmountOut: '9800000000000000',
+    router: 'nearintents',
+    receivedAt: 1,
+    expiresAt: null
+  }
+  let request
+  let purpose = 'confidential-funding'
+  let isCrossChain = true
+  let transactionChain = 1
+  const discarded = []
+  const originalChrome = globalThis.chrome
+  globalThis.chrome = {
+    runtime: {
+      sendMessage: async message => {
+        switch (message.type) {
+          case 'GET_RHEA_SWAP_TOKENS':
+            return { result: { tokens: [], failedChainIds: [] } }
+          case 'QUOTE_RHEA_SWAP':
+            expect(message.purpose).toBe(purpose)
+            request = message.request
+            return { result: approval }
+          case 'PREPARE_RHEA_SWAP':
+            return {
+              result: {
+                ...approval,
+                executionId: 'cross-chain-deposit-execution',
+                isCrossChain,
+                fromChain: '1',
+                toChain: '42161',
+                tokenIn: request.tokenIn,
+                tokenOut: request.tokenOut,
+                amountIn,
+                execution: {
+                  kind: 'evm-transaction',
+                  chain: '1',
+                  approvalRequired: false,
+                  target: null,
+                  amountRaw: amountIn
+                }
+              }
+            }
+          case 'DISCARD_RHEA_SWAP':
+            discarded.push(message.quoteHandle)
+            return { success: true }
+          case 'GET_RHEA_SWAP_EVM_PLAN':
+            return {
+              result: {
+                quoteHandle,
+                executionId: 'cross-chain-deposit-execution',
+                transaction: {
+                  chainId: transactionChain,
+                  from: sender,
+                  to: recipient,
+                  value: amountIn,
+                  data: '0x1234'
+                },
+                approval: null
+              }
+            }
+          default:
+            throw new Error(`Unexpected runtime message ${message.type}`)
+        }
+      }
+    }
+  }
+  try {
+    const input = {
+      ...ethereum,
+      destinationAsset: arbitrum.asset,
+      nativeFeeAsset: null,
+      amountRaw: amountIn,
+      sender,
+      recipient,
+      executionMode: 'main',
+      signal: new AbortController().signal
+    }
+    await expect(estimateDirectTransfer(input)).resolves.toMatchObject({ routeFeeRaw: null })
+    expect(request).toMatchObject({
+      fromChain: '1',
+      toChain: '42161',
+      tokenIn: { chain: '1', isNative: true },
+      tokenOut: { chain: '42161', isNative: true },
+      amountIn,
+      sender,
+      recipient,
+      confidentiality: 'basic'
+    })
+    purpose = 'private-cross-chain-withdraw'
+    const withdraw = { ...input, executionMode: 'private' }
+    await expect(estimateDirectTransfer(withdraw)).resolves.toMatchObject({ routeFeeRaw: null })
+    transactionChain = 42161
+    await expect(estimateDirectTransfer(withdraw)).rejects.toThrow('Cross-chain transfer execution')
+    isCrossChain = false
+    await expect(estimateDirectTransfer(withdraw)).rejects.toThrow('Cross-chain transfer execution')
+    expect(discarded).toEqual([quoteHandle, quoteHandle, quoteHandle, quoteHandle])
+  } finally {
+    globalThis.chrome = originalChrome
+  }
 })
 
 test('keeps the selected Shield withdrawal token when choosing its network', () => {

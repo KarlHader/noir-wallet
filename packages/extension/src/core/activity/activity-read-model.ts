@@ -168,12 +168,14 @@ export function mapTransactionGraphToActivityItem(
   const graph = parseTransactionGraph(value)
   const senderAddress = graph.root.intent?.sender?.address.toLowerCase()
   const recipientAddress = graph.root.intent?.recipient?.address.toLowerCase()
+  const protocol = graph.root.intent?.protocol
   // Wallet-originated activity belongs to the signer, even when the recipient is another owned account.
   const privateExecution =
-    graph.root.intent?.direction !== 'incoming' && senderAddress !== undefined
+    (protocol?.provider === 'rhea-cross-chain-dex' && protocol.balanceTransfer === 'withdraw') ||
+    (graph.root.intent?.direction !== 'incoming' && senderAddress !== undefined
       ? privateExecutionAddresses.has(senderAddress)
       : (senderAddress !== undefined && privateExecutionAddresses.has(senderAddress)) ||
-        (recipientAddress !== undefined && privateExecutionAddresses.has(recipientAddress))
+        (recipientAddress !== undefined && privateExecutionAddresses.has(recipientAddress)))
   return Object.freeze({
     id: graph.root.id,
     source: 'wallet-v2',
@@ -246,11 +248,18 @@ function itemIdentityKeys(item: ActivityItem): readonly string[] {
     if (item.segments.length > 1 && segment.role !== 'origin') {
       continue
     }
+    const namespace = segment.target.chainId.split(':', 1)[0]
+    const mode =
+      namespace === 'eip155'
+        ? `:${item.accountMode ?? 'main'}`
+        : item.source === 'zcash-v1' && item.assetDomains?.[0] === 'shield'
+          ? ':shield'
+          : ''
     keys.push(
       `hash:${segment.target.chainId}:${normalizeHexHash(
         segment.target.chainId,
         segment.evidence.transactionHash
-      )}`
+      )}${mode}`
     )
   }
   return Object.freeze(keys)

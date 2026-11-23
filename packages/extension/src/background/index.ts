@@ -182,11 +182,13 @@ import {
   hydrateBackgroundRheaSwapCatalog,
   prewarmBackgroundRheaSwapCatalog,
   getCachedBackgroundRheaSwapTokens,
-  readRheaZcashTransferDeadline
+  readRheaZcashTransferDeadline,
+  recoverRheaWithdrawActivity
 } from './rhea-swap'
 import { getSafeRheaSwapRuntimeErrorMessage } from '@/core/services/rhea-swap/rhea-swap-error'
 import {
   assertPrivateQuoteRoute,
+  getPrivateWithdrawAsset,
   RHEA_SWAP_CHAIN_CATALOG,
   parseRheaSwapQuoteRequest,
   toRheaSwapProtocolRequest,
@@ -516,6 +518,7 @@ const rheaSwapService = DEFAULT_NETWORK === 'mainnet' ? createBackgroundRheaSwap
 const rheaSwapTransactionMonitor = rheaSwapService
   ? new RheaSwapTransactionMonitor(rheaSwapService, {
       loadZcashAccountScopes: getZcashAccountScopes,
+      recoverWithdrawActivity: recoverRheaWithdrawActivity,
       recheckEvmTransactions: async () => {
         await evmTransactionMonitor?.init()
       },
@@ -567,7 +570,7 @@ async function requireCurrentPrivateSwapQuote(
   executionMode?: 'main' | 'private',
   binding?: RheaSwapTransactionBinding,
   executionAccount?: PeaEvmExecutionAccount
-): Promise<void> {
+): Promise<RheaSwapTransactionBinding | undefined> {
   if (!rheaSwapService) throw new Error('RHEA Swap is unavailable')
   const quote = await rheaSwapService.readQuoteSecurityContext(quoteHandle)
   const catalog = await accountNetworksCoordinator.readCatalog()
@@ -604,12 +607,23 @@ async function requireCurrentPrivateSwapQuote(
     throw new Error('Private quote execution mode changed. Get a new quote.')
   }
   if (binding) {
+    const isWithdraw = quote.scope.purpose === 'private-cross-chain-withdraw'
     if (
       binding.quoteHandle !== quoteHandle ||
       binding.sender.toLowerCase() !== quote.request.sender.toLowerCase() ||
       binding.destination.recipient.toLowerCase() !== quote.request.recipient?.toLowerCase() ||
+      (binding.balanceTransfer !== undefined && !isWithdraw) ||
+      (isWithdraw &&
+        (!binding.isCrossChain ||
+          binding.origin.protocolChainId !== quote.request.fromChain ||
+          binding.destination.protocolChainId !== quote.request.toChain ||
+          binding.origin.assetId !==
+            getPrivateWithdrawAsset(quote.request.fromChain, quote.request.tokenIn)?.id ||
+          binding.destination.assetId !==
+            getPrivateWithdrawAsset(quote.request.toChain, quote.request.tokenOut)?.id)) ||
       ((quote.scope.purpose === 'private-transfer' ||
         quote.scope.purpose === 'private-cross-chain-send' ||
+        quote.scope.purpose === 'private-cross-chain-withdraw' ||
         quote.scope.purpose === 'private-dapp-transfer' ||
         quote.scope.purpose === 'public-private-send' ||
         quote.scope.purpose === 'public-cross-chain-send') &&
@@ -617,6 +631,7 @@ async function requireCurrentPrivateSwapQuote(
     ) {
       throw new Error('Private quote execution does not match its reviewed route.')
     }
+    return isWithdraw ? Object.freeze({ ...binding, balanceTransfer: 'withdraw' }) : binding
   }
 }
 const bitcoinAddressBalancesCoordinator = createBackgroundBitcoinAddressBalancesCoordinator()

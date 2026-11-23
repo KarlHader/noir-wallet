@@ -144,6 +144,8 @@ function parseQuoteBinding(value: unknown): QuoteBinding | undefined {
         'expectedAmountOut',
         'minAmountOut',
         'recipient',
+        'recipientType',
+        'fundingSource',
         'refundTo',
         'deadline'
       ]
@@ -162,15 +164,28 @@ function parseQuoteBinding(value: unknown): QuoteBinding | undefined {
   ) {
     throw new Error('Invalid hardware quote provider')
   }
-  if (value.userAction !== undefined && value.userAction !== 'transfer') {
+  if (
+    value.userAction !== undefined &&
+    value.userAction !== 'transfer' &&
+    !(value.userAction === 'swap' && value.recipientType === 'CONFIDENTIAL_INTENTS')
+  ) {
     throw new Error('Invalid hardware quote action')
+  }
+  if (
+    (value.recipientType !== undefined &&
+      (value.provider !== 'near-intents' || value.recipientType !== 'CONFIDENTIAL_INTENTS')) ||
+    (value.recipientType === 'CONFIDENTIAL_INTENTS'
+      ? value.fundingSource !== 'shielded' && value.fundingSource !== 'transparent'
+      : value.fundingSource !== undefined)
+  ) {
+    throw new Error('Invalid hardware Confidential quote route')
   }
   if (value.isCrossChain !== undefined && typeof value.isCrossChain !== 'boolean') {
     throw new Error('Invalid hardware quote route kind')
   }
   return {
     ...(value.provider === undefined ? {} : { provider: value.provider }),
-    ...(value.userAction === undefined ? {} : { userAction: 'transfer' as const }),
+    ...(value.userAction === undefined ? {} : { userAction: value.userAction }),
     ...(value.quoteHandle === undefined
       ? {}
       : { quoteHandle: parseString(value.quoteHandle, 'hardware quote handle', 160) }),
@@ -214,6 +229,12 @@ function parseQuoteBinding(value: unknown): QuoteBinding | undefined {
     ...(value.recipient === undefined
       ? {}
       : { recipient: parseString(value.recipient, 'hardware recipient', 1_024) }),
+    ...(value.recipientType === 'CONFIDENTIAL_INTENTS'
+      ? {
+          recipientType: value.recipientType,
+          fundingSource: value.fundingSource === 'shielded' ? 'shielded' : 'transparent'
+        }
+      : {}),
     ...(value.refundTo === undefined
       ? {}
       : { refundTo: parseString(value.refundTo, 'hardware refund address', 1_024) }),

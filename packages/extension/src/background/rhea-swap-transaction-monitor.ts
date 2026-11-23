@@ -56,6 +56,7 @@ export interface RheaSwapPortfolioRefreshRequest {
 }
 
 export interface RheaSwapTransactionMonitorOptions {
+  readonly recoverWithdrawActivity?: (graph: TransactionGraph) => Promise<TransactionGraph>
   readonly refreshPortfolio?: (request: RheaSwapPortfolioRefreshRequest) => Promise<void>
   readonly revealDestinationAsset?: (assetId: string) => Promise<void>
   readonly prepareZcashDestinationCatchUp?: (scope: TransactionAccountScope) => Promise<void>
@@ -646,6 +647,7 @@ export class RheaSwapTransactionMonitor {
     if (!sourceHash && !orderReference) return false
     if (sourceHash) {
       await this.service.recordTransactionSubmission(binding.quoteHandle, sourceHash)
+      graph = (await this.options.recoverWithdrawActivity?.(graph)) ?? graph
     }
     try {
       await this.service.reportSubmission(binding.quoteHandle)

@@ -357,7 +357,8 @@ test.describe('Transparent history transaction cache', () => {
       ...staleShield,
       status: 'success',
       confirmations: 3,
-      amount: '0.00328475'
+      amount: '0.00328475',
+      settledSelfTransferAmount: '0.00308475'
     })
   })
 

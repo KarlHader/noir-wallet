@@ -401,15 +401,15 @@ test.describe('Activity read model', () => {
       filterActivityItems({ ...selection, accountMode: 'main', executionAddressModes })
         .map(item => item.id)
         .sort()
-    ).toEqual([mainContractCall.root.id, mainToPrivate.root.id, privateToMain.root.id].sort())
+    ).toEqual([mainContractCall.root.id, mainToPrivate.root.id].sort())
     expect(
       filterActivityItems({ ...selection, accountMode: 'private', executionAddressModes })
         .map(item => item.id)
         .sort()
-    ).toEqual([incomingPrivate.root.id, mainToPrivate.root.id, privateToMain.root.id].sort())
+    ).toEqual([incomingPrivate.root.id, privateToMain.root.id].sort())
   })
 
-  test('keeps Shield withdrawals visible across execution modes while preserving explicit filters', () => {
+  test('keeps a Shield withdrawal in Shield until the recipient has observable credit', () => {
     const withdrawal = graph({ id: 'transaction:shield-withdrawal' })
     withdrawal.root.intent.shield = {
       schemaVersion: 1,
@@ -440,7 +440,7 @@ test.describe('Activity read model', () => {
         filterActivityItems({ ...selection, accountMode })
           .map(item => item.id)
           .sort()
-      ).toEqual([withdrawal.root.id, ordinaryId].sort())
+      ).toEqual([ordinaryId])
     }
     expect(
       filterActivityItems({ ...selection, accountMode: 'private', domain: 'private' }).map(
@@ -454,7 +454,7 @@ test.describe('Activity read model', () => {
       filterActivityItems({ ...selection, domain: 'public' })
         .map(item => item.id)
         .sort()
-    ).toEqual([ordinaryPublic.root.id, withdrawal.root.id].sort())
+    ).toEqual([ordinaryPublic.root.id])
     expect(filterActivityItems({ ...selection, assetId: 'invalid-asset' })).toEqual([])
     expect(
       filterActivityItems({
@@ -467,7 +467,7 @@ test.describe('Activity read model', () => {
     expect(filterActivityItems({ ...selection, selectedChainIds: [arbitrumChainId] })).toEqual([])
   })
 
-  test('Shield provider Activity keeps NEAR Confidential and Zcash records separate', () => {
+  test('All Networks and NEAR Confidential show Shield sends on unavailable chains', () => {
     const zcashChainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
     const zcash = {
       id: 'zcash-shield',
@@ -492,8 +492,18 @@ test.describe('Activity read model', () => {
       id: 'older-near-confidential',
       snapshot: { primaryAmount: { assetId: 'eip155:1/slip44:60', amountRaw: '1' } }
     }
+    const send = {
+      ...near,
+      id: 'confidential-send',
+      kind: 'withdraw',
+      snapshot: {
+        direction: 'outgoing',
+        primaryAmount: { assetId: 'eip155:137/slip44:966', amountRaw: '1' },
+        shield: { operation: 'withdraw', sourceDomain: 'shield', destinationDomain: 'public' }
+      }
+    }
     const selection = {
-      items: [zcash, near, olderNear],
+      items: [zcash, near, olderNear, send],
       selectedChainIds: ['eip155:1'],
       domain: 'shield'
     }
@@ -506,7 +516,17 @@ test.describe('Activity read model', () => {
         shieldProvider: 'near-confidential',
         confidentialIntentsOnly: true
       }).map(item => item.id)
-    ).toEqual(['near-confidential', 'older-near-confidential'])
+    ).toEqual(['near-confidential', 'older-near-confidential', 'confidential-send'])
+    expect(filterActivityItems(selection).map(item => item.id)).toEqual([
+      'near-confidential',
+      'older-near-confidential'
+    ])
+    expect(
+      filterActivityItems({ ...selection, includeAllConfidentialChains: true }).map(item => item.id)
+    ).toEqual(['near-confidential', 'older-near-confidential', 'confidential-send'])
+    expect(
+      filterActivityItems({ ...selection, domain: 'public', includeAllConfidentialChains: true })
+    ).toEqual([])
   })
 
   test('preserves a persisted pre-finality reorg through the strict Activity boundary', () => {
@@ -548,14 +568,17 @@ test.describe('Activity read model', () => {
       hash: 'ABCDEF',
       updatedAt: 1_300
     })
-    const zcashV1 = supplemental({
-      id: 'zcash-v1:ABCDEF',
-      source: 'zcash-v1',
-      chainId: zcashChainId,
-      assetId: zecAssetId,
-      hash: 'abcdef',
-      updatedAt: 1_100
-    })
+    const zcashV1 = {
+      ...supplemental({
+        id: 'zcash-v1:ABCDEF',
+        source: 'zcash-v1',
+        chainId: zcashChainId,
+        assetId: zecAssetId,
+        hash: 'abcdef',
+        updatedAt: 1_100
+      }),
+      assetDomains: ['public']
+    }
     const remoteDuplicate = supplemental({
       id: 'rpc:zcash:ABCDEF',
       source: 'rpc',
@@ -581,14 +604,32 @@ test.describe('Activity read model', () => {
 
     expect(model.items.map(item => item.id)).toEqual(['rpc:evm:external', 'zcash-v1:ABCDEF'])
     expect(model.items.find(item => item.id === 'zcash-v1:ABCDEF')?.source).toBe('zcash-v1')
-    for (const accountMode of ['main', 'private']) {
-      expect(
-        filterActivityItems({
-          items: model.items,
-          selectedChainIds: [zcashChainId],
-          accountMode
-        }).map(item => item.id)
-      ).toEqual(['zcash-v1:ABCDEF'])
+    const selection = { items: model.items, selectedChainIds: [zcashChainId] }
+    expect(filterActivityItems({ ...selection, accountMode: 'main' }).map(item => item.id)).toEqual(
+      ['zcash-v1:ABCDEF']
+    )
+    expect(filterActivityItems({ ...selection, accountMode: 'private' })).toEqual([])
+  })
+
+  test('preserves both EVM balance modes for the same hash and restores the recipient without local history', () => {
+    const sender = graph()
+    const observed = supplemental({
+      id: 'rpc:evm:private-credit',
+      source: 'rpc',
+      chainId: evmChainId,
+      assetId: ethAssetId,
+      hash: evmHash.toLowerCase(),
+      updatedAt: 1_500
+    })
+    const receive = { ...observed, kind: 'receive', accountMode: 'private' }
+    for (const localGraphs of [[sender], []]) {
+      const model = buildActivityReadModel({ scope, localGraphs, supplementalItems: [receive] })
+      const selection = { items: model.items, selectedChainIds: [evmChainId] }
+      expect(filterActivityItems({ ...selection, domain: 'public' }).map(item => item.id)).toEqual(
+        localGraphs.map(item => item.root.id)
+      )
+      expect(filterActivityItems({ ...selection, domain: 'private' })).toEqual([receive])
+      expect(parseActivityReadModel(model).items).toHaveLength(localGraphs.length + 1)
     }
   })
 

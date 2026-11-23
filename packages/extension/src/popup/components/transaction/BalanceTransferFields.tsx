@@ -83,7 +83,8 @@ export function BalanceTransferAccountCard({
   showNetwork = false,
   disabled,
   provider = 'near-confidential',
-  external = false
+  external = false,
+  transparent = false
 }: {
   label: 'From' | 'To'
   accountName: string
@@ -97,6 +98,7 @@ export function BalanceTransferAccountCard({
   disabled?: boolean
   provider?: ShieldProvider | null
   external?: boolean
+  transparent?: boolean
 }) {
   const AccountControl = onAccountClick ? 'button' : 'div'
   const NetworkControl = onNetworkClick ? 'button' : 'div'
@@ -104,7 +106,9 @@ export function BalanceTransferAccountCard({
     ? 'External transfer'
     : domain === 'shield' && provider
       ? SHIELD_PROVIDERS[provider].detailName
-      : balanceTransferDomainLabel(domain)
+      : transparent && domain === 'public'
+        ? 'Transparent'
+        : balanceTransferDomainLabel(domain)
   return (
     <div className="w-full rounded-xl border border-white/5 bg-wallet-surface px-4 py-4">
       <AccountControl
@@ -160,7 +164,7 @@ export function BalanceTransferAccountCard({
                     domain === 'private' ? 'bg-private/10 text-private' : 'bg-white/10 text-muted'
                   )}
                 >
-                  {balanceTransferDomainLabel(domain)}
+                  {accountLabel}
                 </span>
               </span>
               <span className="mt-1 block truncate text-base font-medium" title={address}>

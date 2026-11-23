@@ -2,7 +2,7 @@ import type { ActivityItem, ActivityScope } from '@/core/activity'
 import { parseAssetId, parseChainId } from '@/core/chains/registry'
 import type { TransactionAssetEffects } from '@/core/transactions/domain'
 import { EvmRpcError } from './evm-rpc-client'
-import { isErc20ApproveCalldata } from './evm-contract-call-classification'
+import { decodeErc20CalldataRequest } from './evm-contract-call-classification'
 
 export const EVM_HISTORY_LIMIT = 200
 export const EVM_ACTIVITY_ITEM_LIMIT = 2_000
@@ -92,13 +92,19 @@ export function isUntrackedEvmTokenActivity(
   item: ActivityItem,
   trackedAssetIds: ReadonlySet<string>
 ): boolean {
-  if (item.source !== 'rpc' || !item.id.startsWith('rpc:evm:') || !item.id.endsWith(':token')) {
+  if (item.source !== 'rpc' || !item.id.startsWith('rpc:evm:')) {
     return false
   }
   const amount = item.snapshot?.primaryAmount
+  const tokenOnly = item.id.endsWith(':token')
   if (amount) {
-    return amount.assetId.includes('/erc20:') && !trackedAssetIds.has(amount.assetId)
+    return (
+      (tokenOnly || item.kind === 'transfer') &&
+      amount.assetId.includes('/erc20:') &&
+      !trackedAssetIds.has(amount.assetId)
+    )
   }
+  if (!tokenOnly) return false
   return !item.segments.some(segment =>
     segment.evidence?.assetEffects?.changes.some(change => trackedAssetIds.has(change.assetId))
   )
@@ -134,7 +140,7 @@ function directionFor(address: string, from: string, to: string | undefined) {
   if (from === address && to === address) return 'self' as const
   if (from === address) return 'outgoing' as const
   if (to === address) return 'incoming' as const
-  throw new EvmRpcError('invalid-response', 'EVM history item does not involve the address')
+  return undefined
 }
 
 function transactionEvidence(
@@ -223,25 +229,55 @@ function mapNormalActivityItem(
   transfers: readonly IndexedTokenTransfer[]
 ): ActivityItem {
   const address = input.address.toLowerCase()
-  const direction = directionFor(address, transaction.from, transaction.to)
-  const isApproval = transaction.valueRaw === '0' && isErc20ApproveCalldata(transaction.input)
-  const calldata = transaction.input?.toLowerCase() ?? ''
+  const sender = transaction.from.toLowerCase()
+  const recipient = transaction.to?.toLowerCase()
+  const direction = directionFor(address, sender, recipient)
+  if (
+    !direction &&
+    !transfers.some(
+      transfer => transfer.from.toLowerCase() === address || transfer.to.toLowerCase() === address
+    )
+  ) {
+    throw new EvmRpcError('invalid-response', 'EVM history item does not involve the address')
+  }
+
+  const calldata = decodeErc20CalldataRequest(transaction.input)
+  const isApproval = transaction.valueRaw === '0' && calldata?.kind === 'approve'
   const incompatible = hasConflictingInclusion(transaction, transfers)
+  const singleTransfer = transfers.length === 1 ? transfers[0] : undefined
+  const tokenDirection = singleTransfer
+    ? directionFor(address, singleTransfer.from.toLowerCase(), singleTransfer.to.toLowerCase())
+    : undefined
   const directTokenTransfer =
+    singleTransfer &&
+    calldata?.kind === 'transfer' &&
+    recipient === parseAssetId(singleTransfer.assetId).reference.toLowerCase() &&
+    sender === singleTransfer.from.toLowerCase() &&
+    calldata.recipient === singleTransfer.to.toLowerCase() &&
+    calldata.amountRaw === singleTransfer.amountRaw
+  const passiveTokenCredit = !partial && sender !== address && tokenDirection === 'incoming'
+  const tokenTransfer =
     !incompatible &&
     transaction.valueRaw === '0' &&
-    transfers.length === 1 &&
-    transaction.to?.toLowerCase() === parseAssetId(transfers[0].assetId).reference.toLowerCase() &&
-    /^0xa9059cbb[0-9a-f]{128}$/.test(calldata) &&
-    calldata.slice(10, 34) === '0'.repeat(24) &&
-    `0x${calldata.slice(34, 74)}` === transfers[0].to.toLowerCase() &&
-    BigInt(`0x${calldata.slice(74)}`) === BigInt(transfers[0].amountRaw) &&
-    transfers[0].from.toLowerCase() === address
-  const isTransfer =
-    (transaction.valueRaw !== '0' &&
-      (!transaction.input || transaction.input === '0x') &&
-      transfers.length === 0) ||
-    directTokenTransfer
+    tokenDirection &&
+    (tokenDirection !== 'incoming' || !transaction.failed) &&
+    (directTokenTransfer || passiveTokenCredit)
+      ? singleTransfer
+      : undefined
+  const nativeTransfer =
+    direction &&
+    recipient !== undefined &&
+    transaction.valueRaw !== '0' &&
+    (!transaction.input || transaction.input === '0x') &&
+    transfers.length === 0 &&
+    (direction !== 'incoming' || !transaction.failed)
+  const transferDirection = tokenTransfer ? tokenDirection : nativeTransfer ? direction : undefined
+  const primaryAmount = tokenTransfer
+    ? { assetId: tokenTransfer.assetId, amountRaw: tokenTransfer.amountRaw }
+    : direction && transaction.valueRaw !== '0' && (direction !== 'incoming' || !transaction.failed)
+      ? { assetId: nativeAssetId, amountRaw: transaction.valueRaw }
+      : undefined
+  const snapshotRecipient = tokenTransfer?.to ?? transaction.to
   const effects =
     transaction.failed || incompatible
       ? undefined
@@ -250,8 +286,7 @@ function mapNormalActivityItem(
           nativeAssetId,
           normal: transaction,
           transfers,
-          partial:
-            partial || !isTransfer || transfers.some(transfer => transfer.blockHash === undefined)
+          partial: partial || transferDirection === undefined
         })
   const incomplete = partial || incompatible || (!transaction.failed && effects === undefined)
   const status = transaction.failed ? ('failed' as const) : ('final' as const)
@@ -260,7 +295,7 @@ function mapNormalActivityItem(
     id,
     source: 'rpc' as const,
     scope: input.scope,
-    kind: isTransfer
+    kind: transferDirection
       ? ('transfer' as const)
       : isApproval
         ? ('approve' as const)
@@ -268,24 +303,12 @@ function mapNormalActivityItem(
     status,
     snapshot: Object.freeze({
       schemaVersion: 1 as const,
-      direction: isTransfer ? direction : ('contract' as const),
-      ...(transaction.valueRaw !== '0' || directTokenTransfer
-        ? {
-            primaryAmount: Object.freeze({
-              assetId: directTokenTransfer ? transfers[0].assetId : nativeAssetId,
-              amountRaw: directTokenTransfer ? transfers[0].amountRaw : transaction.valueRaw
-            })
-          }
-        : {}),
-      sender: Object.freeze({ chainId, address: transaction.from }),
-      ...(transaction.to === undefined
+      direction: transferDirection ?? ('contract' as const),
+      ...(primaryAmount === undefined ? {} : { primaryAmount: Object.freeze(primaryAmount) }),
+      sender: Object.freeze({ chainId, address: tokenTransfer?.from ?? transaction.from }),
+      ...(snapshotRecipient === undefined
         ? {}
-        : {
-            recipient: Object.freeze({
-              chainId,
-              address: directTokenTransfer ? transfers[0].to : transaction.to
-            })
-          })
+        : { recipient: Object.freeze({ chainId, address: snapshotRecipient }) })
     }),
     segments: Object.freeze([
       Object.freeze({
@@ -314,12 +337,22 @@ function mapTokenActivityItem(
   const transfer = transfers[0]
   const address = input.address.toLowerCase()
   const single = transfers.length === 1
-  const direction = single ? directionFor(address, transfer.from, transfer.to) : 'contract'
+  const direction = single
+    ? directionFor(address, transfer.from.toLowerCase(), transfer.to.toLowerCase())
+    : 'contract'
+  if (direction === undefined) {
+    throw new EvmRpcError('invalid-response', 'EVM history item does not involve the address')
+  }
   const id = `rpc:evm:${chainId}:${transfer.transactionHash}:token`
   const status = 'final' as const
   const effects = hasConflictingInclusion(undefined, transfers)
     ? undefined
-    : observedEffects({ address, nativeAssetId, transfers, partial: true })
+    : observedEffects({
+        address,
+        nativeAssetId,
+        transfers,
+        partial: partial || direction !== 'incoming'
+      })
   return Object.freeze({
     id,
     source: 'rpc' as const,
@@ -390,10 +423,7 @@ export function mapEvmIndexedActivity(input: {
         input.request,
         chain.id,
         nativeAssetId.id,
-        input.sourcePartial ||
-          transfers.some(
-            transfer => transfer.blockHash === undefined || transfer.nonce === undefined
-          )
+        input.sourcePartial
       )
     )
   }

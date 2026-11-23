@@ -7,7 +7,10 @@ import {
 import type { TransactionGraph } from '@/core/transactions/domain'
 import type { Transaction } from '@/types'
 import type { StorageV2ReadRepository, TransactionRepository } from '@/ports/repositories'
-import { mapZcashV1TransactionToActivityItem } from './zcash-v1-activity-source'
+import {
+  mapZcashSelfTransferReceipt,
+  mapZcashV1TransactionToActivityItem
+} from './zcash-v1-activity-source'
 
 type ActivityStorageRepository = Pick<StorageV2ReadRepository, 'getActivePointer' | 'getSnapshot'>
 
@@ -104,7 +107,7 @@ export class ActivityCoordinator {
       scope,
       localGraphs: options.protocolProvider ? localGraphs.slice(0, confidentialLimit) : localGraphs,
       supplementalItems: Object.freeze([
-        ...zcashTransactions.map(transaction => {
+        ...zcashTransactions.flatMap(transaction => {
           const matchingReceipts = destinationReceipts
             .get(transaction.destinationTxHash?.toLowerCase() ?? '')
             ?.filter(
@@ -114,11 +117,13 @@ export class ActivityCoordinator {
                 receipt.to === transaction.quoteBinding?.recipient &&
                 (receipt.confirmations ?? 0) > 0
             )
-          return mapZcashV1TransactionToActivityItem(
+          const item = mapZcashV1TransactionToActivityItem(
             transaction,
             scope,
             matchingReceipts?.length === 1 ? matchingReceipts[0] : undefined
           )
+          const receipt = mapZcashSelfTransferReceipt(transaction, item)
+          return receipt ? [item, receipt] : [item]
         }),
         ...supplementalItems
       ]),

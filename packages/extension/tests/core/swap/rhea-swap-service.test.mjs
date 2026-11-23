@@ -89,10 +89,58 @@ test('quote request parser forwards only supported confidential routing', () => 
 })
 
 test('trusted quote messages retain the reviewed wallet route purpose', () => {
-  for (const purpose of ['wallet-swap', 'public-cross-chain-send', 'confidential-funding']) {
+  for (const purpose of [
+    'wallet-swap',
+    'public-cross-chain-send',
+    'confidential-funding',
+    'private-cross-chain-withdraw'
+  ]) {
     const message = { type: 'QUOTE_RHEA_SWAP', request: quoteRequest, purpose }
     expect(parseTrustedExtensionRuntimeMessage(message)).toEqual(message)
   }
+})
+
+test('cross-chain Withdraw authorizes the same-account Public destination and canonical asset', () => {
+  const source = {
+    chainId: 'eip155:1',
+    privateExecutionAddress: `0x${'1'.repeat(40)}`,
+    addresses: [{ value: `0x${'2'.repeat(40)}` }]
+  }
+  const destination = {
+    chainId: 'eip155:42161',
+    privateExecutionAddress: `0x${'3'.repeat(40)}`,
+    addresses: [{ value: `0x${'4'.repeat(40)}` }]
+  }
+  const account = { walletId: 'wallet-1', accountId: 'account-1', networks: [source, destination] }
+  const route = {
+    fromChain: '1',
+    toChain: '42161',
+    tokenIn: { chain: '1', address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' },
+    tokenOut: { chain: '42161', address: '0xaf88d065e77c8cc2239327c5edb3a432268e5831' },
+    sender: source.privateExecutionAddress,
+    recipient: destination.addresses[0].value,
+    confidentiality: 'basic'
+  }
+  const authorize = (request, scope = account) =>
+    assertPrivateQuoteRoute(request, account, 'private-cross-chain-withdraw', scope)
+  expect(() => authorize(route)).not.toThrow()
+  for (const changed of [
+    { sender: source.addresses[0].value },
+    { recipient: source.addresses[0].value },
+    { recipient: destination.privateExecutionAddress },
+    { toChain: route.fromChain, tokenOut: route.tokenIn, recipient: source.addresses[0].value },
+    { tokenOut: { ...route.tokenOut, address: `0x${'5'.repeat(40)}`, symbol: 'USDC' } },
+    {
+      tokenIn: { ...route.tokenIn, isNative: true },
+      tokenOut: { ...route.tokenOut, isNative: true }
+    },
+    { confidentiality: undefined }
+  ])
+    expect(() => authorize({ ...route, ...changed })).toThrow()
+  expect(() => authorize(route, { ...account, accountId: 'account-2' })).toThrow(/account changed/)
+  expect(() => assertPrivateQuoteRoute(route, account, 'private-transfer', account)).toThrow(
+    /asset/
+  )
 })
 
 test('alternative routes bind a fresh quote to the same account and selected build', async () => {
@@ -1012,6 +1060,82 @@ test('prepared BNB swaps accept native address aliases while binding the custom 
     }
   })
   await expect(service.readPreparedBuild(quoteHandle)).rejects.toThrow(/does not match its quote/)
+})
+
+test('cross-chain Withdraw rejects a non-cross-chain build when reading the signing plan', async () => {
+  const native = '0x0000000000000000000000000000000000000000'
+  const request = {
+    fromChain: '1',
+    toChain: '42161',
+    tokenIn: { chain: '1', address: native, decimals: 18, isNative: true },
+    tokenOut: { chain: '42161', address: native, decimals: 18, isNative: true },
+    amountIn: '100000000000000',
+    slippageBps: 50,
+    sender: `0x${'1'.repeat(40)}`,
+    recipient: `0x${'2'.repeat(40)}`,
+    confidentiality: 'basic'
+  }
+  const quoteRaw = {
+    isCrossChain: true,
+    chainType: 'evm',
+    bestQuote: {
+      router: 'nearintents',
+      amountOut: '99000000000000',
+      minAmountOut: '98000000000000'
+    }
+  }
+  const quote = normalizeQuote(request, quoteRaw, 1_000)
+  const rawBuild = {
+    isCrossChain: true,
+    chainType: 'evm',
+    router: 'nearintents',
+    fromChain: request.fromChain,
+    toChain: request.toChain,
+    tokenIn: { address: native, symbol: 'ETH', decimals: 18 },
+    tokenOut: { address: native, symbol: 'ETH', decimals: 18 },
+    amountIn: quote.amountIn,
+    estimatedOut: quote.estimatedOut,
+    minAmountOut: quote.minAmountOut,
+    tx: {
+      chainId: 1,
+      from: request.sender,
+      to: `0x${'3'.repeat(40)}`,
+      data: '0x1234',
+      value: quote.amountIn
+    },
+    approve: null
+  }
+  const record = {
+    schemaVersion: 1,
+    quoteHandle: 'rhea-quote:withdraw-plan',
+    request,
+    privateSwapScope: {
+      walletId: 'wallet-1',
+      accountId: 'account-1',
+      purpose: 'private-cross-chain-withdraw'
+    },
+    quoteRaw,
+    receivedAt: 1_000,
+    expiresAt: 31_000,
+    build: {
+      executionId: 'withdraw-execution',
+      request: createSwapBuildRequest(quote),
+      raw: rawBuild
+    }
+  }
+  const sessions = new MemoryRheaSwapQuoteSessionStore()
+  const service = new RheaSwapService({}, sessions, { now: () => 2_000 })
+  await sessions.put(record)
+  await expect(service.readEvmTransactionPlan(record.quoteHandle)).resolves.toMatchObject({
+    transaction: { chainId: 1, from: request.sender }
+  })
+  await sessions.put({
+    ...record,
+    build: { ...record.build, raw: { ...rawBuild, isCrossChain: false } }
+  })
+  await expect(service.readEvmTransactionPlan(record.quoteHandle)).rejects.toThrow(
+    /chain does not match/
+  )
 })
 
 test('quote and build remain bound across a session-store reload', async () => {

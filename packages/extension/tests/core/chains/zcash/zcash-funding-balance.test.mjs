@@ -13,6 +13,7 @@ import {
   resolveZcashTransferAvailability
 } from '../../../../src/popup/services/transfer-availability.ts'
 import { resolveZcashSelfTransfer } from '../../../../src/popup/services/zcash-self-transfer.ts'
+import { resolveZcashTransparentShieldMaximum } from '../../../../src/popup/services/zcash-send-validation.ts'
 
 const balance = {
   shielded: '2',
@@ -50,6 +51,16 @@ test('ZEC Move binds each source to the current account opposite native address'
 })
 
 describe('Zcash funding amount validation', () => {
+  test('uses the quoted native Shield Max only when its amount and fee fit shieldable funds', () => {
+    const cappedBalance = { ...balance, shieldable: '2' }
+    assert.equal(
+      resolveZcashTransparentShieldMaximum(cappedBalance, '1.99985', '0.00015'),
+      '1.99985'
+    )
+    assert.equal(resolveZcashTransparentShieldMaximum(cappedBalance, '1.99985001', '0.00015'), null)
+    assert.equal(resolveZcashTransparentShieldMaximum(cappedBalance, '1.99985', null), null)
+  })
+
   test('offers confirmed balances for both sources while keeping Keystone transparent funding disabled', () => {
     const addresses = { shielded: 'u1test', transparent: 't1test' }
     const options = getFundingSourceOptions(balance, addresses, 'software')

@@ -14,10 +14,29 @@ import nearLogo from '@/images/figma-near-confidential.svg'
 import zcashShieldLogo from '@/images/figma-zcash-shield.svg'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
 import { ZEC_DECIMALS } from '@/config/wallet'
+import { Icon } from '@iconify/react'
+import { SlippageSettingContent } from '@/popup/components/swap/SlippageSetting'
+import { openModal } from '@/popup/provider/ModalManager'
 
 import type { ZcashTransferState } from '@/popup/hooks/useZcashTransfer'
 
 export function ZcashTransferRoute({ route }: { readonly route: ZcashTransferState['route'] }) {
+  const { slippage } = route
+  const openSlippageSettings = () => {
+    if (!slippage) return
+    void openModal<number>({
+      title: 'Slippage',
+      body: resolve => (
+        <SlippageSettingContent
+          currentSlippage={slippage.value}
+          onSave={value => {
+            slippage.onChange(value)
+            resolve(value)
+          }}
+        />
+      )
+    })
+  }
   return (
     <>
       <div className="order-5">
@@ -44,6 +63,22 @@ export function ZcashTransferRoute({ route }: { readonly route: ZcashTransferSta
               <AmountDisplay value={route.routeCost} symbol="ZEC" />
             ) : (
               '—'
+            )
+          }
+          extra={
+            slippage && (
+              <div className="flex min-h-5 items-center justify-between gap-3">
+                <span className="text-muted">Slippage</span>
+                <button
+                  type="button"
+                  aria-label={`Slippage settings, currently ${slippage.value}%`}
+                  onClick={openSlippageSettings}
+                  className="wallet-interactive inline-flex items-center gap-2 rounded text-foreground hover:text-primary"
+                >
+                  {slippage.value}%
+                  <Icon icon="lucide:settings-2" width={15} height={15} />
+                </button>
+              </div>
             )
           }
           time={route.time}
@@ -132,6 +167,10 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
                       symbol="ZEC"
                     />
                   )
+                },
+                {
+                  label: 'Refund address',
+                  content: <TransactionReviewParty address={quote.refundAddress} chain={chain} />
                 }
               ]
             : []),

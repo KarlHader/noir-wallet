@@ -147,9 +147,31 @@ test('Ankr history batches chains by address with the earliest incremental block
     descOrder: true,
     fromBlock: 50
   })
-  expect(result.get('eip155:1').items[0].snapshot.primaryAmount.amountRaw).toBe('1')
-  expect(result.get('eip155:8453').items[0].snapshot.primaryAmount.amountRaw).toBe('5000000')
-  expect(result.get('eip155:8453').items[0].completeness).toBe('partial')
+  for (const [chainId, assetId, amountRaw] of [
+    ['eip155:1', chains[0].nativeAssetId, '1'],
+    ['eip155:8453', chains[1].trackedErc20Assets[0].assetId, '5000000']
+  ]) {
+    expect(result.get(chainId).items[0]).toMatchObject({
+      kind: 'transfer',
+      completeness: 'complete',
+      snapshot: {
+        direction: 'incoming',
+        primaryAmount: { assetId, amountRaw },
+        sender: { chainId, address: OTHER },
+        recipient: { chainId, address: ADDRESS }
+      },
+      segments: [
+        {
+          evidence: {
+            assetEffects: {
+              completeness: 'complete',
+              changes: [{ assetId, amountRaw, direction: 'incoming' }]
+            }
+          }
+        }
+      ]
+    })
+  }
 })
 
 test('Ankr excludes untracked ERC-20 movements from activity', async () => {

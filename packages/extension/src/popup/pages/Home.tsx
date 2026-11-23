@@ -730,8 +730,9 @@ export function Home() {
       })
   }
 
-  const showInlineSyncProgress = supportsZcash && isSyncing
-  const syncIssue = supportsZcash && !isSyncing ? getHomeZcashSyncIssue(syncReason) : null
+  const showZcashSyncStatus = supportsZcash && walletMode === 'public'
+  const showInlineSyncProgress = showZcashSyncStatus && isSyncing
+  const syncIssue = showZcashSyncStatus && !isSyncing ? getHomeZcashSyncIssue(syncReason) : null
 
   const retryZcashSync = async () => {
     if (syncActionPending) return

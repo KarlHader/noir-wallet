@@ -1,8 +1,10 @@
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
+  isExternalShieldDepositAutoHidden,
   isLegacyShieldWithdrawActivityGraph,
   projectExternalShieldDepositActivityGraph,
-  projectLegacyShieldWithdrawActivityGraph
+  projectLegacyShieldWithdrawActivityGraph,
+  projectShieldDepositSettlement
 } from '@/core/services/confidential-funding'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
@@ -44,6 +46,7 @@ import type { BitcoinSupportedAddressType } from '@/core/chains/bitcoin'
 import { credentialSession } from './credential-session'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
 import { refreshZcashReceiveConfirmations } from './zcash-receive-confirmations'
+import { recoverRheaWithdrawActivity } from './rhea-swap'
 
 const ACTIVITY_REFRESH_TTL_MS = 5 * 60_000
 const PENDING_ACTIVITY_REFRESH_TTL_MS = 30_000
@@ -196,6 +199,21 @@ function isEvmActivityItem(item: ActivityItem): boolean {
   return item.segments.some(
     segment => segment.target.kind === 'onchain' && segment.target.chainId.startsWith('eip155:')
   )
+}
+
+function scopeEvmActivityMode(item: ActivityItem, accountMode: 'main' | 'private'): ActivityItem {
+  if (
+    accountMode === 'main' ||
+    item.id.endsWith(':private') ||
+    /:private:(native|token)$/.test(item.id)
+  )
+    return item
+  const scopedId = item.id.replace(/:(native|token)$/, ':private:$1')
+  return Object.freeze({
+    ...item,
+    id: scopedId === item.id ? `${item.id}:private` : scopedId,
+    accountMode: 'private'
+  })
 }
 
 function filterItemsForChain(
@@ -381,11 +399,7 @@ export function createBackgroundActivityCoordinator(
           result.status === 'fulfilled' ? result.value.results?.get(entry.chainId) : undefined
         if (fresh) {
           for (const item of fresh) {
-            items.push(
-              selected.accountMode === 'private'
-                ? Object.freeze({ ...item, accountMode: 'private' as const })
-                : item
-            )
+            items.push(scopeEvmActivityMode(item, selected.accountMode))
           }
         } else {
           items.push(
@@ -431,11 +445,7 @@ export function createBackgroundActivityCoordinator(
         const r = results[j]
         if (r.status === 'fulfilled') {
           for (const item of r.value) {
-            items.push(
-              batch[j].accountMode === 'private'
-                ? Object.freeze({ ...item, accountMode: 'private' as const })
-                : item
-            )
+            items.push(scopeEvmActivityMode(item, batch[j].accountMode))
           }
         } else {
           if (historyPageCount > 1) throw r.reason
@@ -510,9 +520,7 @@ export function createBackgroundActivityCoordinator(
       for (const item of record.items) {
         const supported = filterTrackedEvmTokenActivity(item, trackedEvmTokenAssetIds)
         if (!supported) continue
-        items.push(
-          mode === 'private' ? Object.freeze({ ...supported, accountMode: 'private' }) : supported
-        )
+        items.push(scopeEvmActivityMode(supported, mode))
       }
     }
     return Object.freeze({
@@ -765,15 +773,20 @@ export function createBackgroundActivityCoordinator(
     const fundingStore = new ChromeConfidentialFundingStore()
     const hasExternalRecords = graphs.some(
       graph =>
-        graph.root.status === 'failed' && graph.root.id.startsWith('tx:confidential-external:')
+        (graph.root.status === 'created' || graph.root.status === 'failed') &&
+        graph.root.id.startsWith('tx:confidential-external:')
     )
-    const legacyWithdrawIds =
-      privateExecutionAddresses.length === 0
-        ? []
-        : graphs.filter(isLegacyShieldWithdrawActivityGraph).map(graph => graph.root.id)
-    const [externalRecords, legacyWithdrawPlans] = await Promise.all([
+    const fundingIds = graphs
+      .filter(
+        graph =>
+          (graph.root.status === 'final' && graph.root.intent?.shield?.operation === 'deposit') ||
+          (privateExecutionAddresses.length > 0 && isLegacyShieldWithdrawActivityGraph(graph))
+      )
+      .map(graph => graph.root.id)
+    const [externalRecords, fundingPlans, recoveredGraphs] = await Promise.all([
       hasExternalRecords ? fundingStore.listExternalDeposits().catch(() => []) : [],
-      fundingStore.getPlansForTransactions(legacyWithdrawIds).catch(() => new Map())
+      fundingStore.getPlansForTransactions(fundingIds).catch(() => new Map()),
+      Promise.all(graphs.map(graph => recoverRheaWithdrawActivity(graph).catch(() => graph)))
     ])
     const externalByTransactionId = new Map(
       externalRecords
@@ -785,17 +798,28 @@ export function createBackgroundActivityCoordinator(
         )
         .map(record => [record.transactionId, record] as const)
     )
-    const projectedGraphs = graphs.map(graph => {
+    const now = Date.now()
+    const projectedGraphs: TransactionGraph[] = []
+    for (const graph of recoveredGraphs) {
       const record = externalByTransactionId.get(graph.root.id)
-      return record
-        ? projectExternalShieldDepositActivityGraph(graph, record)
-        : projectLegacyShieldWithdrawActivityGraph(
-            graph,
-            legacyWithdrawPlans.get(graph.root.id),
-            DEFAULT_NETWORK,
-            privateExecutionAddresses
-          )
-    })
+      if (record) {
+        if (graph.root.status === 'created' && isExternalShieldDepositAutoHidden(record, now))
+          continue
+        projectedGraphs.push(projectExternalShieldDepositActivityGraph(graph, record))
+        continue
+      }
+      const plan = fundingPlans.get(graph.root.id)
+      projectedGraphs.push(
+        graph.root.intent?.shield?.operation === 'deposit'
+          ? projectShieldDepositSettlement(graph, plan, DEFAULT_NETWORK)
+          : projectLegacyShieldWithdrawActivityGraph(
+              graph,
+              plan,
+              DEFAULT_NETWORK,
+              privateExecutionAddresses
+            )
+      )
+    }
     if (!bitcoinDiscovery) return projectedGraphs
     const context = await loadActiveBitcoinDiscoveryContext(
       storageRepository,

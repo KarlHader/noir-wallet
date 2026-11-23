@@ -1,6 +1,6 @@
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
-import { preferWalletEvmQuoteToken } from './token-address-discovery'
+import { preferWalletEvmQuoteToken, toWalletEvmQuoteToken } from './token-address-discovery'
 import type { ConfidentialFundingPreview } from '@/core/services/confidential-funding'
 import {
   formatBaseUnitDecimalAmount,
@@ -64,6 +64,7 @@ export function clusterTransferEstimate(
 export async function estimateDirectTransfer(input: {
   readonly asset: PortfolioAssetView
   readonly chain: PortfolioChainView
+  readonly destinationAsset?: PortfolioAssetView
   readonly nativeFeeAsset: PortfolioAssetView | null
   readonly amountRaw: string
   readonly sender: string
@@ -72,7 +73,9 @@ export async function estimateDirectTransfer(input: {
   readonly signal: AbortSignal
 }): Promise<BalanceTransferEstimate> {
   const match = /^eip155:([1-9][0-9]*)$/.exec(input.chain.chain.id)
-  if (!match) throw new Error('This network does not support the transfer')
+  if (!match || input.asset.asset.chainId !== input.chain.chain.id) {
+    throw new Error('This network does not support the transfer')
+  }
   const catalog = await rheaSwapClient
     .listTokens({ direction: 'from', tokenListChainIds: [Number(match[1])] })
     .catch(() => null)
@@ -83,29 +86,71 @@ export async function estimateDirectTransfer(input: {
   )
   const token = preferWalletEvmQuoteToken(input.asset, catalogToken)
   if (!token) throw new Error('This asset is unavailable for the transfer')
-  const asset = {
-    chain: token.rheaChainId,
-    address: token.rheaAddress,
-    symbol: token.symbol,
-    decimals: token.decimals,
-    isNative: token.isNative
+  const destination = input.destinationAsset ? toWalletEvmQuoteToken(input.destinationAsset) : token
+  if (!destination || (input.destinationAsset && destination.rheaChainId === token.rheaChainId)) {
+    throw new Error('This destination is unavailable for the transfer')
   }
+  const asset = (item: typeof token) => ({
+    chain: item.rheaChainId,
+    address: item.rheaAddress,
+    symbol: item.symbol,
+    decimals: item.decimals,
+    isNative: item.isNative
+  })
   const quote = await rheaSwapClient.quote(
     {
       fromChain: token.rheaChainId,
-      toChain: token.rheaChainId,
-      tokenIn: asset,
-      tokenOut: asset,
+      toChain: destination.rheaChainId,
+      tokenIn: asset(token),
+      tokenOut: asset(destination),
       amountIn: input.amountRaw,
       sender: input.sender,
       recipient: input.recipient,
       slippageBps: 100,
       confidentiality: 'basic'
     },
-    input.executionMode === 'private' ? 'private-transfer' : 'confidential-funding'
+    input.executionMode === 'private'
+      ? input.destinationAsset
+        ? 'private-cross-chain-withdraw'
+        : 'private-transfer'
+      : 'confidential-funding'
   )
   try {
     input.signal.throwIfAborted()
+    if (input.destinationAsset) {
+      const review = await rheaSwapClient.prepare(quote.quoteHandle)
+      input.signal.throwIfAborted()
+      if (
+        !review.isCrossChain ||
+        review.quoteHandle !== quote.quoteHandle ||
+        review.recipient.toLowerCase() !== input.recipient.toLowerCase() ||
+        review.fromChain !== token.rheaChainId ||
+        review.toChain !== destination.rheaChainId ||
+        review.execution.chain !== token.rheaChainId ||
+        (review.execution.kind !== 'evm-transaction' && review.execution.kind !== 'evm-signature')
+      ) {
+        throw new Error('Cross-chain transfer execution is unavailable')
+      }
+      if (input.executionMode === 'private') {
+        if (review.execution.kind !== 'evm-transaction')
+          throw new Error('Cross-chain transfer execution is unavailable')
+        const plan = await rheaSwapClient.getEvmTransactionPlan(quote.quoteHandle)
+        input.signal.throwIfAborted()
+        if (
+          plan.quoteHandle !== review.quoteHandle ||
+          plan.executionId !== review.executionId ||
+          String(plan.transaction.chainId) !== token.rheaChainId ||
+          (plan.transaction.from !== null &&
+            plan.transaction.from.toLowerCase() !== input.sender.toLowerCase())
+        )
+          throw new Error('Cross-chain transfer execution is unavailable')
+      }
+      return {
+        expiresAt: Math.min(quote.expiresAt ?? Infinity, Date.now() + 30_000),
+        routeFeeRaw: null,
+        time: formatTransferTime(review.timeEstimateSeconds, DIRECT_MAXIMUM_MINUTES)
+      }
+    }
     let result: BalanceTransferEstimate = {
       expiresAt: Math.min(quote.expiresAt ?? Infinity, Date.now() + 30_000),
       routeFeeRaw: routeFee(input.amountRaw, quote.estimatedOut),
