@@ -1,7 +1,7 @@
 import { Icon } from '@iconify/react'
 import { useEffect, useRef, type ComponentProps } from 'react'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatPortfolioNetworkName } from '@/popup/services/portfolio-format'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
@@ -41,7 +41,7 @@ export function EvmSendAdapter(props: EvmSendAdapterProps) {
         inline: !state.active,
         adapter: fields,
         footer: <SendFormActions {...actions} />,
-        children: <EvmSendRouteDetails state={state} />
+        children: <EvmSendRouteDetails state={state} showNotice={!fields.recipient.invalid} />
       }}
       review={{
         active: state.active,
@@ -116,21 +116,16 @@ function getEvmSendFields(state: EvmSendTransferState): SendFormAdapter {
       },
       onSelectRecipient: () => void state.handleSelectRecipient(),
       feedback: recipientInvalid && (
-        <div className="flex items-start justify-between gap-3 px-1 text-xs text-danger">
-          <p className="min-w-0 flex-1">
-            {state.recipientPolicyError ?? 'Enter a valid non-zero EVM address.'}
-          </p>
-          {state.canMoveRecipient && state.recipientPolicyError && (
-            <button
-              type="button"
-              onClick={() => void state.handleMoveRecipient()}
-              className="inline-flex shrink-0 items-center gap-1 font-medium text-primary"
-            >
-              <Icon icon="lucide:arrow-right-left" width={13} height={13} aria-hidden="true" />
-              Deposit
-            </button>
-          )}
-        </div>
+        <TransactionNotice
+          tone={state.canMoveRecipient && state.recipientPolicyError ? 'warning' : 'error'}
+          message={state.recipientPolicyError ?? 'Enter a valid non-zero EVM address.'}
+          onRetry={
+            state.canMoveRecipient && state.recipientPolicyError
+              ? () => void state.handleMoveRecipient()
+              : undefined
+          }
+          retryLabel="Deposit"
+        />
       )
     }
   }
@@ -197,18 +192,21 @@ function getEvmSendReview(state: EvmSendTransferState): SendReview | null {
     network: formatPortfolioNetworkName(chain),
     notice:
       review.privacyWarning || (summary.review.level === 'caution' && !bundledAsset) ? (
-        <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning/25 bg-warning-surface px-3 py-2.5 text-xs leading-5 text-warning">
-          <Icon icon="lucide:triangle-alert" width={15} height={15} className="mt-0.5 shrink-0" />
-          <span>
-            {review.privacyWarning}
-            {summary.review.level === 'caution' && !bundledAsset && (
-              <>
-                {review.privacyWarning ? ' ' : ''}This transfer calls a custom Token contract you
-                added. Verify the network, Token, and recipient.
-              </>
-            )}
-          </span>
-        </div>
+        <TransactionNotice
+          className="mb-3"
+          tone="warning"
+          message={
+            <>
+              {review.privacyWarning}
+              {summary.review.level === 'caution' && !bundledAsset && (
+                <>
+                  {review.privacyWarning ? ' ' : ''}This transfer calls a custom Token contract you
+                  added. Verify the network, Token, and recipient.
+                </>
+              )}
+            </>
+          }
+        />
       ) : undefined,
     rows: [
       {
@@ -319,11 +317,17 @@ function getEvmSendReview(state: EvmSendTransferState): SendReview | null {
     confirmLabel: review.privacyWarning ? 'Send anyway' : 'Confirm',
     preparing: updatingFee,
     confirmDisabled: review.intentKey !== intentKey,
-    error: error ? <InlineError message={error} className="mt-3" /> : undefined
+    error: error ? <TransactionNotice message={error} className="mt-3" /> : undefined
   }
 }
 
-function EvmSendRouteDetails({ state }: { readonly state: EvmSendTransferState }) {
+function EvmSendRouteDetails({
+  state,
+  showNotice
+}: {
+  readonly state: EvmSendTransferState
+  readonly showNotice: boolean
+}) {
   const {
     sendPrivately,
     privatePreviewLoading,
@@ -349,6 +353,7 @@ function EvmSendRouteDetails({ state }: { readonly state: EvmSendTransferState }
     support
   } = state
   const privatePreviewNotice = getSwapQuoteNotice(privatePreviewError)
+  const insufficient = amountRaw !== null && BigInt(amountRaw) > BigInt(availableRaw)
   return (
     <>
       {sendPrivately && (
@@ -391,15 +396,6 @@ function EvmSendRouteDetails({ state }: { readonly state: EvmSendTransferState }
           }
         />
       )}
-      {sendPrivately && !privatePreviewLoading && privatePreviewError && (
-        <InlineError
-          message={privatePreviewNotice ?? privatePreviewError}
-          tone={privatePreviewNotice ? 'muted' : 'error'}
-          onRetry={retryPrivatePreview}
-          className="px-1"
-        />
-      )}
-
       {route === 'onchain' && (
         <SendRouteInfoCard
           fee={
@@ -431,34 +427,39 @@ function EvmSendRouteDetails({ state }: { readonly state: EvmSendTransferState }
         />
       )}
 
-      {amountRaw !== null && BigInt(amountRaw) > BigInt(availableRaw) && (
-        <p role="alert" className="mt-3 text-xs text-danger">
-          Insufficient {asset.metadata.symbol} balance.
-        </p>
-      )}
-      {displayedError && (
-        <InlineError
+      {!showNotice ? null : displayedError ? (
+        <TransactionNotice
           message={displayedError}
           onRetry={maximumError ? handleMaximum : undefined}
-          className="mt-3 px-1"
+          className="mt-3"
         />
-      )}
-      {route === 'pending' &&
-        (support.loading ? (
+      ) : insufficient ? (
+        <TransactionNotice
+          message={`Insufficient ${asset.metadata.symbol} balance.`}
+          tone="warning"
+        />
+      ) : sendPrivately && !privatePreviewLoading && privatePreviewError ? (
+        <TransactionNotice
+          message={privatePreviewNotice ?? privatePreviewError}
+          tone={privatePreviewNotice ? 'muted' : 'warning'}
+          onRetry={retryPrivatePreview}
+        />
+      ) : route === 'pending' ? (
+        support.loading ? (
           <p role="status" className="px-1 text-xs text-muted">
             Checking Confidential availability…
           </p>
         ) : (
-          <InlineError
+          <TransactionNotice
             message={
               support.support === 'unsupported'
                 ? 'Confidential transfers are unavailable for this asset.'
                 : 'Unable to check Confidential availability.'
             }
             onRetry={support.retry}
-            className="px-1"
           />
-        ))}
+        )
+      ) : null}
     </>
   )
 }

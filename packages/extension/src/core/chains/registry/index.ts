@@ -51,6 +51,7 @@ export type {
 export {
   createEvmBitcoinChainRegistry,
   createInitialProductChainRegistry,
+  selectAdditionalEvmNetworks,
   getBitcoinChainId,
   getBundledBitcoinAssetDefinitions,
   getBundledInitialProductAssetDefinitions,

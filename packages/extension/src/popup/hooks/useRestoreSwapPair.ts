@@ -6,7 +6,8 @@ import type { SavedSwapTokenSelection } from '@/store/swap-store'
 import { isSwapAssetOnEnabledChain } from '@/popup/services/swap-catalog-loading'
 import {
   resolveSavedWalletSwapToken,
-  resolveSwapTokenSelection
+  resolveSwapTokenSelection,
+  isSameSwapAsset
 } from '@/popup/services/swap-token-selection'
 import { useManagedTokenCatalog } from './useManagedTokenCatalog'
 import type { useSwapState } from './useSwapState'
@@ -29,7 +30,6 @@ export function useRestoreSwapPair({
     selectionReady,
     tokenIn: currentSource,
     tokenOut: currentDestination,
-    selectedSourceAssetId,
     destinationTokensLoading,
     setProvisionalTokenIn,
     setTokenPair,
@@ -54,7 +54,6 @@ export function useRestoreSwapPair({
     | 'selectionReady'
     | 'tokenIn'
     | 'tokenOut'
-    | 'selectedSourceAssetId'
     | 'destinationTokensLoading'
     | 'setProvisionalTokenIn'
     | 'setTokenPair'
@@ -83,7 +82,6 @@ export function useRestoreSwapPair({
       sameChainDestinationTokens: sameChainDestinations,
       crossChainDestinationTokens: crossChainDestinations,
       savedSelection,
-      selectedSourceAssetId,
       allowUnownedDefaultSource: true,
       preferStableDestination: privateSwap,
       preserveSavedSelection: true,
@@ -110,14 +108,22 @@ export function useRestoreSwapPair({
     }
 
     const { tokenIn, tokenOut: candidate } = resolved
-    const tokenOut = candidate && isDestinationEligible(candidate, tokenIn) ? candidate : null
+    const tokenOut =
+      candidate &&
+      (!savedSelection?.tokenOutId ||
+        isSameSwapAsset(candidate.assetId, savedSelection.tokenOutId)) &&
+      isDestinationEligible(candidate, tokenIn)
+        ? candidate
+        : null
     if (destinationTokensLoading && (!savedSelection?.tokenOutId || !candidate)) {
       if (currentSource?.assetId !== tokenIn.assetId) setProvisionalTokenIn(tokenIn)
       return
     }
     if (
       currentSource?.assetId !== tokenIn.assetId ||
+      currentSource?.isDisplaySeed !== tokenIn.isDisplaySeed ||
       currentDestination?.assetId !== tokenOut?.assetId ||
+      currentDestination?.isDisplaySeed !== tokenOut?.isDisplaySeed ||
       currentDestination?.rheaAddress !== tokenOut?.rheaAddress
     ) {
       setTokenPair(tokenIn, tokenOut)
@@ -134,7 +140,6 @@ export function useRestoreSwapPair({
     walletSourceTokens,
     sameChainDestinations,
     crossChainDestinations,
-    selectedSourceAssetId,
     privateSwap,
     enabledChains,
     isSelectablePrivateSource,

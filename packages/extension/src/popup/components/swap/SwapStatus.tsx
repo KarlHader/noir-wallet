@@ -7,7 +7,7 @@ import {
   type TransactionStatus
 } from '../transaction/TransactionResult'
 import { AmountDisplay } from '../common/AmountDisplay'
-import { InlineError } from '../common/InlineError'
+import { TransactionNotice } from '../transaction/TransactionNotice'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { formatChainName } from '@/lib/format'
 import { isZcashDestination } from '@/lib/cross-chain-transaction'
@@ -303,7 +303,7 @@ export function SwapStatusDisplay({
       footer={
         beforeSubmission ? (
           <div className="w-full space-y-2">
-            {beforeSubmission.error && <InlineError message={beforeSubmission.error} />}
+            {beforeSubmission.error && <TransactionNotice message={beforeSubmission.error} />}
             {beforeSubmission.onContinue && (
               <Button
                 className="h-[45px] w-full"

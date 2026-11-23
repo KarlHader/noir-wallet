@@ -29,6 +29,13 @@ import {
   SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID
 } from '../../../src/popup/services/shield-swap-zec-sources.ts'
 import {
+  buildShieldDestinationPickerRows,
+  buildShieldSwapPreviewRequest,
+  buildShieldSwapRequest,
+  matchesShieldSwapReview,
+  sortShieldSwapPickerRows
+} from '../../../src/popup/services/shield-swap-form.ts'
+import {
   getRheaSwapErrorMessage,
   getRheaSwapQuoteFailure,
   RheaSwapClientError
@@ -481,10 +488,6 @@ it('keeps minimum amounts while removing nested provider metadata without changi
     message: 'no route',
     retryable: true
   })
-  assert.deepEqual(getRheaSwapQuoteFailure(new RheaSwapClientError('fetch failed')), {
-    message: 'Network error. Please check your internet connection.',
-    retryable: true
-  })
   assert.equal(getSwapQuoteFailureMessage(new Error('Shield balance is insufficient')), null)
   assert.equal(getSwapQuoteFailureMessage(new Error('Confidential quote has expired')), null)
   assert.equal(
@@ -603,6 +606,19 @@ it('distinguishes an exhausted route from retryable aggregate quote failures', a
       return true
     })
   }
+})
+
+it('keeps a quote connection failure retryable with no route as the result', () => {
+  assert.deepEqual(getRheaSwapQuoteFailure(new RheaSwapClientError('fetch failed')), {
+    message: 'no route',
+    retryable: true
+  })
+  const error = new RheaSwapClientError('gRPC transport error: UNAVAILABLE')
+  assert.deepEqual(getRheaSwapQuoteFailure(error), { message: 'no route', retryable: true })
+  assert.equal(
+    getRheaSwapErrorMessage(error),
+    'Network connection failed. Please check your internet and try again.'
+  )
 })
 
 it('uses the native RHEA paths and retries quote reads without replaying writes', async () => {
@@ -899,5 +915,155 @@ it('lists Intents and native Shield ZEC as separate selectable sources with dist
     assert.equal(pendingOnly[1].availableRaw, '0')
   } finally {
     globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+  }
+})
+
+it('ranks Shield Swap destinations by wallet balance value and distinguishes EVM networks', () => {
+  const ethDestination = (chainId, displayName, protocolAssetId) => {
+    const assetId = `${chainId}/slip44:60`
+    return {
+      asset: {
+        asset: { id: assetId, chainId, kind: 'native', reference: '60' },
+        metadata: { symbol: 'ETH', decimals: 18, name: 'Ether' }
+      },
+      chain: { chain: { id: chainId, family: 'evm', displayName } },
+      managed: { chainId, assetId, protocolAssetId }
+    }
+  }
+  const ethereum = ethDestination('eip155:1', 'Ethereum', 'nep141:eth.omft.near')
+  const base = ethDestination('eip155:8453', 'Base', 'nep141:base-eth.omft.near')
+  const rows = buildShieldDestinationPickerRows({
+    network: 'mainnet',
+    options: [ethereum, base],
+    tokens: [
+      { assetId: 'nep141:zec.omft.near', price: 100 },
+      { assetId: ethereum.managed.protocolAssetId, price: 2000 },
+      { assetId: base.managed.protocolAssetId, price: 2000 }
+    ],
+    balances: [
+      { tokenId: ethereum.managed.protocolAssetId, available: '60000000000000000' },
+      { tokenId: base.managed.protocolAssetId, available: '25000000000000000' }
+    ],
+    nativeZecDestinations: [
+      { fundingSource: 'transparent', address: 'transparent-address', availableRaw: '0' },
+      { fundingSource: 'shielded', address: 'shielded-address', availableRaw: '100000000' }
+    ]
+  })
+  assert.deepEqual(
+    sortShieldSwapPickerRows(rows).map(row => [row.key, row.chainName, row.badgeBlockchain]),
+    [
+      [ethereum.managed.assetId, 'Ethereum', 'eth'],
+      ['native-zec-destination:shielded', 'Zcash', 'zec'],
+      [base.managed.assetId, 'Base', 'base'],
+      ['native-zec-destination:transparent', 'Zcash', 'zec']
+    ]
+  )
+})
+
+it('only routes same-asset Confidential ZEC to the account Unified Address and binds its review', () => {
+  const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const assetId = `${chainId}/slip44:133`
+  const protocolAssetId = 'nep141:zec.omft.near'
+  const transparent = 't1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F'
+  const unified =
+    'u1nvgt6yr35mhc9wdf4wckvl38476vqy96dx3cwkfdwy4jet9300l5v8l2yg27ql7w9qwm0lf8kncnj9nus4mgete06j3cu3mhrqvstg6swvdya6xgzwhh6a9xxdhxkavvvmztqeuaurjtqfk3dzetuzgnu0zjvmdpe8ehvj53sy6yhzxj'
+  const zec = {
+    asset: {
+      asset: { id: assetId, chainId, kind: 'native', reference: '133' },
+      metadata: { symbol: 'ZEC', decimals: 8, name: 'Zcash' }
+    },
+    chain: {
+      chain: {
+        id: chainId,
+        family: 'zcash',
+        displayName: 'Zcash',
+        capabilities: { transaction: { status: 'available' } }
+      }
+    },
+    managed: { chainId, assetId, protocolAssetId, blockchain: 'zec' }
+  }
+  const balances = [{ tokenId: protocolAssetId, available: '1000000' }]
+  const picker = {
+    network: 'mainnet',
+    source: zec,
+    options: [zec],
+    tokens: [],
+    balances,
+    nativeZecDestinations: [
+      { fundingSource: 'transparent', address: transparent, availableRaw: '0' },
+      { fundingSource: 'shielded', address: unified, availableRaw: '0' }
+    ]
+  }
+  assert.deepEqual(
+    buildShieldDestinationPickerRows({ ...picker, source: null }).map(row => [
+      row.key,
+      row.zcashFundingSource ?? row.sourceLabel
+    ]),
+    [
+      ['native-zec-destination:transparent', 'transparent'],
+      ['native-zec-destination:shielded', 'shielded'],
+      [assetId, 'NEAR Confidential']
+    ]
+  )
+  assert.deepEqual(
+    buildShieldDestinationPickerRows(picker).map(row => row.key),
+    ['native-zec-destination:shielded']
+  )
+  assert.deepEqual(buildShieldDestinationPickerRows({ ...picker, nativeZecDestinations: [] }), [])
+
+  const input = {
+    network: 'mainnet',
+    keyDomainId: 'wallet',
+    accountId: 'account',
+    from: zec,
+    to: zec,
+    amount: '0.01',
+    balances,
+    slippageBps: 50,
+    nativeZecRecipient: unified,
+    nativeZecFundingSource: 'shielded'
+  }
+  const request = buildShieldSwapRequest(input)
+  assert.equal(request.purpose, 'move')
+  assert.equal(request.operation, 'withdraw')
+  assert.equal(request.sourceDomain, 'shield')
+  assert.equal(request.destinationDomain, 'public')
+  assert.equal(request.source.protocolAssetId, protocolAssetId)
+  assert.equal(request.source.amountRaw, '1000000')
+  assert.equal(request.destination.assetId, assetId)
+  assert.equal(request.externalRecipient, unified)
+  assert.deepEqual(buildShieldSwapPreviewRequest(input), request)
+  for (const change of [
+    { nativeZecRecipient: undefined, nativeZecFundingSource: undefined },
+    { nativeZecRecipient: transparent },
+    { nativeZecFundingSource: 'transparent' },
+    { from: { ...zec, managed: { ...zec.managed, assetId: 'not-native-zec' } } },
+    { amount: '0.01000001' }
+  ]) {
+    assert.throws(() => buildShieldSwapRequest({ ...input, ...change }), /unavailable/)
+  }
+
+  const review = {
+    purpose: 'move',
+    operation: 'withdraw',
+    sourceDomain: 'shield',
+    destinationDomain: 'public',
+    network: 'mainnet',
+    keyDomainId: 'wallet',
+    accountId: 'account',
+    sourceAmountRaw: '1000000',
+    withdrawCount: 1,
+    requiresDeposit: false,
+    externalRecipient: unified,
+    destinationAddress: unified
+  }
+  assert.equal(matchesShieldSwapReview(review, request), true)
+  for (const change of [
+    { purpose: 'native-zec-swap' },
+    { accountId: 'other-account' },
+    { sourceAmountRaw: '1000001' },
+    { destinationAddress: transparent }
+  ]) {
+    assert.equal(matchesShieldSwapReview({ ...review, ...change }, request), false)
   }
 })

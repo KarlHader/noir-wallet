@@ -255,7 +255,9 @@ function setupMessageBridge() {
                   code: 4200,
                   message: `The requested ${chainId === 'evm' ? 'EVM' : chainId === 'bitcoin' ? 'Bitcoin' : chainId === 'solana' ? 'Solana' : 'NEAR'} method is not supported.`
                 }
-              : 'Invalid or unsupported method'
+              : chainId === 'shield' && typeof payload?.method === 'string'
+                ? { code: 4200, message: 'The requested Shield method is not supported.' }
+                : 'Invalid or unsupported method'
         },
         window.location.origin
       )

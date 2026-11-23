@@ -3,7 +3,9 @@ import { expect } from '@playwright/test'
 import {
   compareSwapTokenSearchRelevance,
   createSwapTokenPreferenceScope,
+  findSavedSwapToken,
   matchesSwapTokenSearch,
+  resolveSharedSwapPair,
   resolveSwapTokenSelection
 } from '../../../src/popup/services/swap-token-selection.ts'
 
@@ -121,16 +123,45 @@ test.describe('account-scoped Swap token selection', () => {
     ).toBeLessThan(0)
   })
 
-  test('uses separate persistent scopes for every Wallet Account', () => {
+  test('shares one persistent scope per wallet account and network', () => {
     expect(createSwapTokenPreferenceScope('wallet-a', 'account-1')).toBe('wallet-a:account-1')
     expect(createSwapTokenPreferenceScope('wallet-a', 'account-2')).toBe('wallet-a:account-2')
     expect(createSwapTokenPreferenceScope(null, 'account-1')).toBeNull()
-    expect(createSwapTokenPreferenceScope('wallet-a', 'account-1', 'mainnet', 'main')).not.toBe(
-      createSwapTokenPreferenceScope('wallet-a', 'account-1', 'testnet', 'main')
+    expect(createSwapTokenPreferenceScope('wallet-a', 'account-1', 'mainnet')).not.toBe(
+      createSwapTokenPreferenceScope('wallet-a', 'account-1', 'testnet')
     )
-    expect(createSwapTokenPreferenceScope('wallet-a', 'account-1', 'mainnet', 'main')).not.toBe(
-      createSwapTokenPreferenceScope('wallet-a', 'account-1', 'mainnet', 'private')
+  })
+
+  test('keeps the chosen symbols even when the mode cannot resolve the chosen asset identity', () => {
+    const chains = [zcashChain, ethereumChain]
+    expect(resolveSharedSwapPair(undefined, chains)).toMatchObject({
+      tokenInSymbol: 'ZEC',
+      tokenOutSymbol: 'ETH'
+    })
+    const choice = resolveSharedSwapPair(
+      {
+        tokenInId: ETH_USDC.assetId,
+        tokenInSymbol: 'USDC',
+        tokenOutId: BTC.assetId,
+        tokenOutSymbol: 'BTC'
+      },
+      chains
     )
+    const sameSymbolOnAnotherChain = token(
+      'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
+      'arb',
+      'USDC'
+    )
+    const walletRepresentation = token(
+      'eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+      'eth',
+      'USDC'
+    )
+    expect(choice).toMatchObject({ tokenInSymbol: 'USDC', tokenOutSymbol: 'BTC' })
+    expect(findSavedSwapToken([sameSymbolOnAnotherChain], choice.tokenInId)).toBeUndefined()
+    expect(
+      findSavedSwapToken([sameSymbolOnAnotherChain, walletRepresentation], choice.tokenInId)
+    ).toBe(walletRepresentation)
   })
 
   test('ignores source history that is not available to the current account', () => {

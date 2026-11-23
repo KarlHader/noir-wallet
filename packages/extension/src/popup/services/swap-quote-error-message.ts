@@ -6,7 +6,7 @@ const UNSUPPORTED_SWAP_DESTINATION =
 
 export function getSwapQuoteNotice(message: string | null | undefined): string | null {
   if (!message) return null
-  if (message === SWAP_QUOTE_DISPLAY_ERROR) return 'No quote available.'
+  if (message === SWAP_QUOTE_DISPLAY_ERROR) return 'No route'
   if (message === 'Quote expired. Try again.' || message === 'Shield quote expired. Try again.') {
     return 'Quote expired.'
   }

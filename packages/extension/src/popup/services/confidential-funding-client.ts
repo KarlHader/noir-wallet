@@ -35,7 +35,7 @@ export interface PrepareConfidentialFundingRequest {
   readonly network: Network
   readonly keyDomainId: string
   readonly accountId: string
-  readonly operation: 'deposit' | 'withdraw' | 'cluster' | 'swap'
+  readonly operation: 'deposit' | 'withdraw' | 'cluster' | 'swap' | 'confidential-transfer'
   readonly sourceDomain: 'public' | 'private' | 'shield'
   readonly destinationDomain: 'public' | 'private' | 'shield'
   readonly source: Readonly<{
@@ -240,10 +240,14 @@ function parseReview(value: unknown): ConfidentialFundingReview {
         review.externalRecipient === undefined)) ||
     !Number.isSafeInteger(review.withdrawCount) ||
     (review.operation !== undefined &&
-      !['deposit', 'withdraw', 'cluster', 'swap'].includes(review.operation)) ||
+      !['deposit', 'withdraw', 'cluster', 'swap', 'confidential-transfer'].includes(
+        review.operation
+      )) ||
     (review.operation === 'deposit'
       ? review.withdrawCount !== 0
-      : review.operation === 'withdraw' || review.operation === 'swap'
+      : review.operation === 'withdraw' ||
+          review.operation === 'swap' ||
+          review.operation === 'confidential-transfer'
         ? review.withdrawCount !== 1
         : review.withdrawCount < 2 || review.withdrawCount > 5) ||
     (review.operation === 'swap' &&
@@ -290,7 +294,9 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
     !PHASES.has(plan.phase) ||
     !/^\d+$/.test(plan.expectedOutputRaw) ||
     (plan.operation !== undefined &&
-      !['deposit', 'withdraw', 'cluster', 'swap'].includes(plan.operation)) ||
+      !['deposit', 'withdraw', 'cluster', 'swap', 'confidential-transfer'].includes(
+        plan.operation
+      )) ||
     (plan.externalRecipient !== undefined &&
       (plan.operation !== 'withdraw' ||
         plan.destinationDomain !== 'public' ||
@@ -312,7 +318,9 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         plan.batchSubmissionAttemptedAt <= 0)) ||
     (plan.operation === 'deposit'
       ? plan.withdraws.length !== 0
-      : plan.operation === 'withdraw' || plan.operation === 'swap'
+      : plan.operation === 'withdraw' ||
+          plan.operation === 'swap' ||
+          plan.operation === 'confidential-transfer'
         ? plan.withdraws.length !== 1
         : plan.withdraws.length < 2 || plan.withdraws.length > 5) ||
     (plan.operation === 'swap' &&

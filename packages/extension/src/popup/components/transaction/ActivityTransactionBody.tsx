@@ -241,7 +241,9 @@ export function buildActivityTransactionView(input: {
     item.snapshot?.shield && direction === 'self' && item.snapshot.shield.operation !== 'swap'
   )
   const isMove = isShieldMove || (swap !== null && isDirectAccountMove(item, swap))
-  const isShieldSend = isActivityShieldSend(item)
+  const isShieldSend =
+    isActivityShieldSend(item) ||
+    (item.snapshot?.shield?.operation === 'confidential-transfer' && direction === 'outgoing')
   const references = getActivityTransactionReferences(item)
   const confidentialIntentHash = confidentialPlan?.withdraws
     .find(row => row.intentHash?.trim())

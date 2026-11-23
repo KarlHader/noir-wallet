@@ -222,6 +222,149 @@ describe('dApp message bridge', () => {
     ])
   })
 
+  it('forwards a Shield balance refresh to the background', async () => {
+    const harness = createBridgeHarness([{ requestId: 'request-1', result: { balances: [] } }])
+
+    await harness.request('shield_refreshBalances', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 1)
+    assert.equal(harness.sentMessages[0].chainId, 'shield')
+    assert.equal(harness.sentMessages[0].request.method, 'shield_refreshBalances')
+    assert.deepEqual(plain(harness.postedMessages), [
+      {
+        target: 'noir-provider',
+        requestId: 'request-1',
+        result: { balances: [] }
+      }
+    ])
+  })
+
+  it('forwards a Shield quote to the background', async () => {
+    const harness = createBridgeHarness([
+      {
+        requestId: 'request-1',
+        result: { layer: 'near-confidential', action: 'receive', amount: '0.1' }
+      }
+    ])
+
+    await harness.request('shield_getQuote', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 1)
+    assert.equal(harness.sentMessages[0].request.method, 'shield_getQuote')
+  })
+
+  it('forwards a Shield chain catalog request to the background', async () => {
+    const harness = createBridgeHarness([
+      { requestId: 'request-1', result: { chains: [{ chainId: 'eip155:1', name: 'Ethereum' }] } }
+    ])
+
+    await harness.request('shield_getSupportedChains', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 1)
+    assert.equal(harness.sentMessages[0].request.method, 'shield_getSupportedChains')
+  })
+
+  it('forwards a Shield receive to the background', async () => {
+    const harness = createBridgeHarness([
+      {
+        requestId: 'request-1',
+        result: { id: 'plan-1', layer: 'near-confidential', action: 'receive', status: 'processing' }
+      }
+    ])
+
+    await harness.request('shield_receive', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 1)
+    assert.equal(harness.sentMessages[0].request.method, 'shield_receive')
+  })
+
+  it('forwards a Shield status refresh to the background', async () => {
+    const harness = createBridgeHarness([
+      {
+        requestId: 'request-1',
+        result: {
+          id: 'd065c72d-9db6-411d-ab1b-f5e977b5c55a',
+          layer: 'near-confidential',
+          action: 'receive',
+          status: 'processing'
+        }
+      }
+    ])
+
+    await harness.request('shield_getTransactionStatus', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 1)
+    assert.equal(harness.sentMessages[0].request.method, 'shield_getTransactionStatus')
+    assert.deepEqual(plain(harness.postedMessages), [
+      {
+        target: 'noir-provider',
+        requestId: 'request-1',
+        result: {
+          id: 'd065c72d-9db6-411d-ab1b-f5e977b5c55a',
+          layer: 'near-confidential',
+          action: 'receive',
+          status: 'processing'
+        }
+      }
+    ])
+  })
+
+  it('forwards Shield connect to the background', async () => {
+    const harness = createBridgeHarness([
+      { requestId: 'request-1', result: { layer: 'near-confidential', connected: true } }
+    ])
+
+    await harness.request('shield_connect', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 1)
+    assert.equal(harness.sentMessages[0].request.method, 'shield_connect')
+  })
+
+  it('forwards Shield transfer to the background', async () => {
+    const harness = createBridgeHarness([
+      {
+        requestId: 'request-1',
+        result: {
+          id: 'd065c72d-9db6-411d-ab1b-f5e977b5c55a',
+          layer: 'near-confidential',
+          action: 'transfer',
+          status: 'signing'
+        }
+      }
+    ])
+
+    await harness.request('shield_transfer', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 1)
+    assert.equal(harness.sentMessages[0].request.method, 'shield_transfer')
+  })
+
+  it('forwards Shield disconnect to the background', async () => {
+    const harness = createBridgeHarness([
+      { requestId: 'request-1', result: { layer: 'near-confidential', connected: false } }
+    ])
+
+    await harness.request('shield_disconnect', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 1)
+    assert.equal(harness.sentMessages[0].request.method, 'shield_disconnect')
+  })
+
+  it('returns code 4200 for an unsupported Shield method', async () => {
+    const harness = createBridgeHarness([])
+
+    await harness.request('shield_sign', 'request-1', 'shield')
+
+    assert.equal(harness.sentMessages.length, 0)
+    assert.deepEqual(plain(harness.postedMessages), [
+      {
+        target: 'noir-provider',
+        requestId: 'request-1',
+        error: { code: 4200, message: 'The requested Shield method is not supported.' }
+      }
+    ])
+  })
+
   it('returns EIP-1193 code 4200 for an unsupported EVM method', async () => {
     const harness = createBridgeHarness([])
 

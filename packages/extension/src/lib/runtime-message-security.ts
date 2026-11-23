@@ -12,6 +12,10 @@ import {
 } from '@/core/dapp/native-transfer-provider'
 import { CAIP25_RUNTIME_METHODS, type Caip25RuntimeMethod } from '@/core/dapp/caip25'
 import {
+  SHIELD_DAPP_RUNTIME_METHODS,
+  type ShieldDAppRuntimeMethod
+} from '@/core/dapp/shield-provider'
+import {
   RHEA_SWAP_CHAIN_CATALOG,
   parseRheaSwapQuoteRequest
 } from '@/core/services/rhea-swap/rhea-swap-model'
@@ -58,7 +62,8 @@ export const DAPP_RUNTIME_METHODS = Object.freeze([
   ...BITCOIN_DAPP_RUNTIME_METHODS,
   ...SOLANA_DAPP_RUNTIME_METHODS,
   ...NEAR_DAPP_RUNTIME_METHODS,
-  ...CAIP25_RUNTIME_METHODS
+  ...CAIP25_RUNTIME_METHODS,
+  ...SHIELD_DAPP_RUNTIME_METHODS
 ] as const)
 
 export type ZcashDAppRuntimeMethod = (typeof ZCASH_DAPP_RUNTIME_METHODS)[number]
@@ -70,11 +75,12 @@ export type DAppRuntimeMethod =
   | SolanaDAppRuntimeMethod
   | NearDAppRuntimeMethod
   | Caip25RuntimeMethod
+  | ShieldDAppRuntimeMethod
 
 export interface DAppRuntimeRequestMessage {
   readonly type: 'DAPP_REQUEST'
   readonly requestId: string
-  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain'
+  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain' | 'shield'
   readonly siteMetadata?: {
     readonly faviconUrl: string
   }
@@ -206,6 +212,7 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     'refundAddress',
     'slippageBps',
     ...(value.recipientType === undefined ? [] : ['recipientType']),
+    ...(value.userAction === undefined ? [] : ['userAction']),
     ...(value.fundingSource === undefined ? [] : ['fundingSource']),
     ...(value.requestId === undefined ? [] : ['requestId'])
   ]
@@ -217,6 +224,8 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     isNativeZecIntentsQuoteId(value.accountId) &&
     typeof value.amountZats === 'string' &&
     /^[1-9][0-9]{0,77}$/.test(value.amountZats) &&
+    (value.userAction === undefined ||
+      (value.recipientType === 'CONFIDENTIAL_INTENTS' && value.userAction === 'swap')) &&
     hasExactRuntimeKeys(destination, [
       'chainId',
       'assetId',
@@ -1290,6 +1299,7 @@ const bitcoinDappMethodSet = new Set<string>(BITCOIN_DAPP_RUNTIME_METHODS)
 const solanaDappMethodSet = new Set<string>(SOLANA_DAPP_RUNTIME_METHODS)
 const nearDappMethodSet = new Set<string>(NEAR_DAPP_RUNTIME_METHODS)
 const caip25DappMethodSet = new Set<string>(CAIP25_RUNTIME_METHODS)
+const shieldDappMethodSet = new Set<string>(SHIELD_DAPP_RUNTIME_METHODS)
 const FORBIDDEN_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
 export function isRuntimeRecord(value: unknown): value is Record<string, unknown> {
@@ -1572,12 +1582,14 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
     (value.chainId === 'solana' && !solanaDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'near' && !nearDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'multichain' && !caip25DappMethodSet.has(value.request.method)) ||
+    (value.chainId === 'shield' && !shieldDappMethodSet.has(value.request.method)) ||
     (value.chainId !== 'zcash' &&
       value.chainId !== 'evm' &&
       value.chainId !== 'bitcoin' &&
       value.chainId !== 'solana' &&
       value.chainId !== 'near' &&
-      value.chainId !== 'multichain')
+      value.chainId !== 'multichain' &&
+      value.chainId !== 'shield')
   ) {
     throw new Error('dApp runtime method does not match its provider')
   }
@@ -1585,9 +1597,13 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
   const paramsAreEvmRecord = value.chainId === 'evm' && isRuntimeRecord(value.request.params)
   const paramsAreMultichainRecord =
     value.chainId === 'multichain' && isRuntimeRecord(value.request.params)
+  const paramsAreShieldRecord = value.chainId === 'shield' && isRuntimeRecord(value.request.params)
   if (
     value.request.params !== undefined &&
-    ((!paramsAreArray && !paramsAreEvmRecord && !paramsAreMultichainRecord) ||
+    ((!paramsAreArray &&
+      !paramsAreEvmRecord &&
+      !paramsAreMultichainRecord &&
+      !paramsAreShieldRecord) ||
       (paramsAreArray && (value.request.params as unknown[]).length > 16))
   ) {
     throw new Error('Invalid dApp runtime params')

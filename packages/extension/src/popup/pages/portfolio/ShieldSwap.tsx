@@ -1,4 +1,13 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { getCachedTokens, type SwapToken } from '@/core/services/intents-api'
@@ -11,7 +20,7 @@ import { classifyError } from '@/lib/errors'
 import { formatShieldSymbol } from '@/lib/format'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
-import { useSwapPreferences } from '@/store/swap-store'
+import { useSwapPreferences, type SavedSwapTokenSelection } from '@/store/swap-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useConfidentialFundingPreview } from '@/popup/hooks/useConfidentialFundingPreview'
 import { useQuoteReview, useQuoteReviewTimer } from '@/popup/hooks/useQuoteReview'
@@ -27,7 +36,7 @@ import {
 } from '@/popup/components/swap/SwapInputView'
 import { estimateSwapOutputFromPrices, getSwapAmountValues } from '@/popup/services/swap-estimate'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { ShieldTokenPicker } from '@/popup/components/tokens/ShieldTokenPicker'
 import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
@@ -53,6 +62,7 @@ import {
 } from '@/popup/services/confidential-funding-client'
 import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-manager-client'
 import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
+import { findSavedSwapToken, isSameSwapAsset } from '@/popup/services/swap-token-selection'
 import {
   getSwapQuoteFailureMessage,
   isSwapQuoteTimeout,
@@ -107,6 +117,8 @@ interface ShieldSwapProps {
   readonly portfolio: PortfolioReadModel | null
   readonly portfolioLoading: boolean
   readonly tokens: readonly SwapToken[]
+  readonly sharedPair?: SavedSwapTokenSelection
+  readonly preferenceScope: string | null
   readonly onRefreshPortfolio: () => Promise<void>
   readonly amountFocusToken?: number
   readonly onStateChange: (state: { readonly reviewing: boolean; readonly busy: boolean }) => void
@@ -136,6 +148,8 @@ function ShieldSwapForm({
   portfolio: model,
   portfolioLoading,
   tokens: parentTokens,
+  sharedPair,
+  preferenceScope,
   onRefreshPortfolio,
   amountFocusToken,
   onStateChange,
@@ -144,6 +158,7 @@ function ShieldSwapForm({
   nativeZecAddresses,
   nativeZecTransparentRaw
 }: ShieldSwapProps) {
+  const amountErrorId = useId()
   const [params] = useSearchParams()
   const { navigate } = useNavigate()
   const routeSourceAssetId = params.get('assetId') ?? params.get('source')
@@ -322,9 +337,13 @@ function ShieldSwapForm({
       }),
     [network, sourceChoices, displayBalances, model, zcashAccountEnabled]
   )
-  const confidentialFromAssetId = fromId
-    ? resolveShieldConfidentialFromAssetId(fromId, zecSourceOptions)
+  const preferredSourceId = sharedPair?.tokenInId ?? fromId
+  const preferredDestinationId = sharedPair?.tokenOutId ?? toId
+  const confidentialFromAssetId = preferredSourceId
+    ? resolveShieldConfidentialFromAssetId(preferredSourceId, zecSourceOptions)
     : null
+  const matchesAsset = (asset: ShieldFundingAsset, id: string) =>
+    isSameSwapAsset(asset.asset.asset.id, id) || isSameSwapAsset(asset.managed.protocolAssetId, id)
   const defaultSource = selectDefaultShieldWithdrawSource(
     options,
     displayBalances,
@@ -333,7 +352,7 @@ function ShieldSwapForm({
     network
   )
   const from = confidentialFromAssetId
-    ? (sourceChoices.find(asset => asset.asset.asset.id === confidentialFromAssetId) ?? null)
+    ? (sourceChoices.find(asset => matchesAsset(asset, confidentialFromAssetId)) ?? null)
     : (sourceChoices.find(
         asset =>
           asset.asset.asset.id === defaultSource?.asset.asset.id && asset.asset.asset.id !== toId
@@ -345,8 +364,8 @@ function ShieldSwapForm({
     ?.usdcContract?.toLowerCase()
   const to = nativeZecDestination
     ? (options.find(asset => asset.managed.protocolAssetId === ZEC_ZCASH_ASSET) ?? null)
-    : toId
-      ? (options.find(asset => asset.asset.asset.id === toId) ?? null)
+    : preferredDestinationId
+      ? (options.find(asset => matchesAsset(asset, preferredDestinationId)) ?? null)
       : (options.find(
           asset =>
             asset.asset.asset.chainId === 'eip155:1' &&
@@ -378,6 +397,7 @@ function ShieldSwapForm({
   const balance = shieldSwapFormBalance(from, displayBalances)
   const currentBalance = shieldSwapFormBalance(from, trustedBalances)
   const amountError = shieldSwapFormAmountError(amount, from, trustedBalances ?? displayBalances)
+  const visibleAmountError = balanceLoading ? null : amountError
   const validAmount = Boolean(amount && from && trustedBalances && !amountError)
   const draftKey = JSON.stringify([
     active,
@@ -448,13 +468,27 @@ function ShieldSwapForm({
     error: previewError,
     retry: retryPreview
   } = useConfidentialFundingPreview(active ? previewRequest : null, scopeKey)
-  const previewNotice = getSwapQuoteNotice(previewError)
+  const noSharedRoute = Boolean(
+    sharedPair &&
+    Number(amount) > 0 &&
+    !portfolioLoading &&
+    model &&
+    (!from ||
+      !to ||
+      (!nativeZecDestination && from.managed.protocolAssetId === to.managed.protocolAssetId))
+  )
+  const previewNotice = getSwapQuoteNotice(noSharedRoute ? SWAP_QUOTE_DISPLAY_ERROR : previewError)
   const previewOutput =
     preview && to
       ? formatBaseUnitDecimalAmount(preview.amountOutRaw, to.asset.metadata.decimals)
       : null
   const fromToken = tokens.find(token => token.assetId === from?.managed.protocolAssetId) ?? null
   const toToken = tokens.find(token => token.assetId === to?.managed.protocolAssetId) ?? null
+  const rememberToken = (side: 'in' | 'out', asset: ShieldFundingAsset | undefined) => {
+    if (!preferenceScope || !asset) return
+    const token = tokens.find(token => token.assetId === asset.managed.protocolAssetId)
+    if (token) useSwapPreferences.getState().setSavedSwapToken(preferenceScope, side, token)
+  }
   const displayOutput =
     previewOutput ??
     (previewLoading
@@ -939,9 +973,11 @@ function ShieldSwapForm({
   if (activeAccount && !canManageNear) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <p role="alert" className="px-4 py-6 text-center text-sm text-muted">
-          Shield unavailable for this account
-        </p>
+        <TransactionNotice
+          className="mx-4 mt-6"
+          tone="muted"
+          message="Shield unavailable for this account"
+        />
       </div>
     )
   }
@@ -1145,7 +1181,7 @@ function ShieldSwapForm({
           }
           error={
             error || (needsNewQuote && !refreshingReview) ? (
-              <InlineError
+              <TransactionNotice
                 className="mt-3"
                 message={error ?? 'Quote expired.'}
                 tone={error ? 'error' : 'muted'}
@@ -1170,6 +1206,9 @@ function ShieldSwapForm({
         <SwapAssetCard
           direction="From"
           token={fromToken}
+          fallbackSymbol={
+            sharedPair?.tokenInSymbol ?? findSavedSwapToken(tokens, preferredSourceId)?.symbol
+          }
           tokenBadgeBlockchain={fromPickerChain?.badgeBlockchain}
           tokenNetworkLabel={fromPickerChain?.sourceLabel ?? fromPickerChain?.chainName}
           amount={amount}
@@ -1190,7 +1229,7 @@ function ShieldSwapForm({
             setAmount(value)
             setError(null)
           }}
-          validationMessage={balanceLoading ? undefined : (amountError ?? undefined)}
+          amountErrorId={visibleAmountError ? amountErrorId : undefined}
           onMaxClick={() => {
             if (!from || currentBalance === null) return
             if (!fromId) setFromId(from.asset.asset.id)
@@ -1216,10 +1255,21 @@ function ShieldSwapForm({
             }
             setFromId(to.asset.asset.id)
             setToId(from.asset.asset.id)
+            if (preferenceScope && fromToken && toToken) {
+              useSwapPreferences.getState().setSavedTokenSelection(preferenceScope, {
+                tokenInId: toToken.assetId,
+                tokenOutId: fromToken.assetId,
+                tokenInSymbol: toToken.symbol,
+                tokenOutSymbol: fromToken.symbol
+              })
+            }
             setAmount('')
             setError(null)
           }}
           token={toToken}
+          fallbackSymbol={
+            sharedPair?.tokenOutSymbol ?? findSavedSwapToken(tokens, preferredDestinationId)?.symbol
+          }
           tokenBadgeBlockchain={
             nativeDestinationChain?.badgeBlockchain ?? toPickerChain?.badgeBlockchain
           }
@@ -1268,45 +1318,48 @@ function ShieldSwapForm({
             }
           />
         )}
-        {!error && !balanceError && !previewLoading && previewError && (
-          <InlineError
+        {error || balanceError ? (
+          <TransactionNotice
             className="mt-3"
-            tone={previewNotice ? 'muted' : 'error'}
-            message={previewNotice ?? classifyError(previewError).userMessage}
-            onRetry={
-              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                ? () => void refreshBalances()
-                : retryPreview
-            }
-            retrying={connecting}
-            retryLabel={
-              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : 'Retry'
-            }
-          />
-        )}
-        {(error || balanceError) && (
-          <InlineError
-            className="mt-3"
-            tone="warning"
-            role="alert"
+            tone={error ? 'error' : 'warning'}
             message={classifyError(error || balanceError).userMessage}
             onRetry={balanceError && !error ? () => void refreshBalances() : undefined}
             retrying={connecting}
           />
-        )}
-        {status === 'error' &&
-          tokens.length === 0 &&
-          trustedBalances &&
-          !error &&
-          !balanceError && (
-            <InlineError
-              className="mt-3"
-              tone="warning"
-              role="alert"
-              message="Shield assets are unavailable"
-              onRetry={() => void onRefreshPortfolio()}
-            />
-          )}
+        ) : status === 'error' && tokens.length === 0 && trustedBalances ? (
+          <TransactionNotice
+            className="mt-3"
+            message="Shield assets are unavailable"
+            onRetry={() => void onRefreshPortfolio()}
+          />
+        ) : visibleAmountError ? (
+          <TransactionNotice
+            id={amountErrorId}
+            className="mt-3"
+            tone="warning"
+            role="alert"
+            message={visibleAmountError}
+          />
+        ) : !previewLoading && (noSharedRoute || previewError) ? (
+          <TransactionNotice
+            className="mt-3"
+            tone={previewNotice ? 'muted' : 'warning'}
+            message={previewNotice ?? classifyError(previewError).userMessage}
+            onRetry={
+              noSharedRoute
+                ? undefined
+                : previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+                  ? () => void refreshBalances()
+                  : retryPreview
+            }
+            retrying={connecting}
+            retryLabel={
+              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+                ? 'Refresh balances'
+                : undefined
+            }
+          />
+        ) : null}
       </div>
       <div className="page-footer">
         <Button
@@ -1343,7 +1396,18 @@ function ShieldSwapForm({
             }
             onSelect={row => {
               setNativeZecDestination(row.kind === 'native-zec' ? row.fundingSource : null)
-              if (row.kind === 'confidential') setToId(row.key)
+              if (row.kind === 'confidential') {
+                setToId(row.key)
+                rememberToken(
+                  'out',
+                  options.find(asset => asset.asset.asset.id === row.key)
+                )
+              } else {
+                rememberToken(
+                  'out',
+                  options.find(asset => asset.managed.protocolAssetId === ZEC_ZCASH_ASSET)
+                )
+              }
               setError(null)
               setPicker(null)
             }}
@@ -1363,7 +1427,7 @@ function ShieldSwapForm({
               zecSourceOptions.find(
                 option => option.intentsWalletAssetId === confidentialFromAssetId
               )?.selectionId ??
-              fromId ??
+              from?.asset.asset.id ??
               undefined
             }
             onSelect={({ key }) => {
@@ -1379,10 +1443,14 @@ function ShieldSwapForm({
                 onSelectNativeZecSwap?.(nativeDestination)
               } else {
                 const intents = zecSourceOptions.find(option => option.kind === 'intents')
-                setFromId(
+                const assetId =
                   key === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID
                     ? (intents?.intentsWalletAssetId ?? key)
                     : key
+                setFromId(assetId)
+                rememberToken(
+                  'in',
+                  sourceChoices.find(asset => asset.asset.asset.id === assetId)
                 )
                 setAmount('')
                 setError(null)

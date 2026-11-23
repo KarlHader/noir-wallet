@@ -35,7 +35,9 @@ import {
 } from '@/popup/services/dapp-connection-presentation'
 import { EvmAddNetworkDetails } from '@/popup/components/dapp/EvmAddNetworkDetails'
 import {
+  ApprovalCheckIcon,
   ApprovalDetailCard,
+  ConnectionPermissionSummary,
   DAppConnectionHeader,
   DAppNetworkCard,
   DAppRequestHeader
@@ -48,6 +50,7 @@ import {
 } from '@/popup/services/dapp-approval-request'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { EvmGasFundingApproval } from '@/popup/components/dapp/EvmGasFundingApproval'
+import { ShieldDappApproval } from '@/popup/components/dapp/ShieldDappApproval'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
 import {
   estimateNetworkFeeTierPreviews,
@@ -95,20 +98,6 @@ const MULTI_ACCOUNT_CONNECT_ACTIONS = new Set([
   'nearConnect'
 ])
 
-function ApprovalCheckIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" className="size-3.5" fill="none">
-      <path
-        d="m3.5 8.25 2.75 2.75 6.25-6.25"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
 function ApprovalBackIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 16 16" className="size-3.5" fill="none">
@@ -120,25 +109,6 @@ function ApprovalBackIcon() {
         strokeLinejoin="round"
       />
     </svg>
-  )
-}
-
-function ConnectionPermissionSummary({ includesActivity = false }: { includesActivity?: boolean }) {
-  return (
-    <section aria-label="Permissions" className="space-y-2 px-1 text-xs leading-5 text-muted">
-      <div className="flex items-start gap-2">
-        <span className="mt-0.5 text-primary">
-          <ApprovalCheckIcon />
-        </span>
-        <span>
-          View selected addresses and balances{includesActivity ? ' and public activity' : ''}.
-        </span>
-      </div>
-      <div className="flex items-start gap-2">
-        <Icon icon="lucide:shield-check" className="mt-0.5 size-3.5 shrink-0 text-primary" />
-        <span>Transactions and signatures still require your approval.</span>
-      </div>
-    </section>
   )
 }
 
@@ -518,9 +488,15 @@ export function Approval() {
       setAction(parsed.request.action)
       setData(requestData)
       if (
-        ['connect', 'sendTransaction', 'signMessage', 'shieldFunds'].includes(
-          parsed.request.action
-        ) &&
+        [
+          'connect',
+          'sendTransaction',
+          'signMessage',
+          'shieldFunds',
+          'shieldConnect',
+          'shieldReceive',
+          'shieldTransfer'
+        ].includes(parsed.request.action) &&
         parsed.request.walletId &&
         parsed.request.accountId
       ) {
@@ -1768,6 +1744,20 @@ export function Approval() {
         isSubmitting={isLoading}
         onReject={() => void handleDecision(false)}
         onConfirm={() => void handleDecision(true)}
+      />
+    )
+  }
+
+  if (action === 'shieldConnect' || action === 'shieldReceive' || action === 'shieldTransfer') {
+    return (
+      <ShieldDappApproval
+        action={action}
+        data={data}
+        domain={dappDomain}
+        pageUrl={dappPageUrl}
+        accountDisplayName={accountDisplayName}
+        isLoading={isLoading}
+        onDecision={approved => void handleDecision(approved)}
       />
     )
   }

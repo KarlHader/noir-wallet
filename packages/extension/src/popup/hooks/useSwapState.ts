@@ -28,13 +28,16 @@ export function useSwapState(
   options: SwapInitialCatalogOptions = {}
 ) {
   const enabledChainKey = options.enabledChains?.map(chain => chain.id).join('|')
-  // Modes share catalog metadata, but retain separate saved pairs and quote state.
   const catalogScope = options.catalogScope === undefined ? preferenceScope : options.catalogScope
   const initializedCatalogContext = useRef<string | null>(null)
   const [initialState] = useState(() => {
-    const selection = preferenceScope
+    const stored = preferenceScope
       ? useSwapPreferences.getState().tokenSelections[preferenceScope]
       : undefined
+    const selection = {
+      tokenInId: stored?.tokenInId ?? options.savedSourceAssetId ?? null,
+      tokenOutId: stored?.tokenOutId ?? options.savedDestinationAssetId ?? null
+    }
     const savedSourceAssetId = isSwapAssetOnEnabledChain(
       selection?.tokenInId,
       options.enabledChains
@@ -104,7 +107,7 @@ export function useSwapState(
   const slippage = useSwapPreferences(state => state.slippage)
   const persistAddressType = useSwapPreferences(state => state.setAddressType)
   const setSavedTokenSelection = useSwapPreferences(state => state.setSavedTokenSelection)
-  const setSavedTokenInId = useSwapPreferences(state => state.setSavedTokenInId)
+  const setSavedSwapToken = useSwapPreferences(state => state.setSavedSwapToken)
 
   const [areTokensLoading, setAreTokensLoading] = useState(true)
   const [destinationTokensLoading, setDestinationTokensLoading] = useState(true)
@@ -172,7 +175,11 @@ export function useSwapState(
     }
     const readActiveSelection = () => {
       const scope = activePreferenceScope.current
-      return scope ? useSwapPreferences.getState().tokenSelections[scope] : undefined
+      const stored = scope ? useSwapPreferences.getState().tokenSelections[scope] : undefined
+      return {
+        tokenInId: stored?.tokenInId ?? options.savedSourceAssetId ?? null,
+        tokenOutId: stored?.tokenOutId ?? options.savedDestinationAssetId ?? null
+      }
     }
     const readSavedSourceAssetId = () => {
       const savedId = readActiveSelection()?.tokenInId
@@ -549,7 +556,9 @@ export function useSwapState(
         if (preferenceScope)
           setSavedTokenSelection(preferenceScope, {
             tokenInId: pair.tokenIn.assetId,
-            tokenOutId: pair.tokenOut.assetId
+            tokenOutId: pair.tokenOut.assetId,
+            tokenInSymbol: pair.tokenIn.symbol,
+            tokenOutSymbol: pair.tokenOut.symbol
           })
 
         setAmountIn('')
@@ -614,7 +623,7 @@ export function useSwapState(
   }, [])
 
   const selectTokenIn = useCallback(
-    (token: RheaSwapToken) => {
+    (token: RheaSwapToken, remember = true) => {
       const current = currentSelectionContext.current
       if (current.catalogScope !== catalogScope) return
       markSelectionEdited()
@@ -623,11 +632,12 @@ export function useSwapState(
       )
       setTokenIn(token)
       setSelectedSourceAssetId(token.assetId)
-      if (current.preferenceScope) setSavedTokenInId(current.preferenceScope, token.assetId)
+      if (remember && current.preferenceScope)
+        setSavedSwapToken(current.preferenceScope, 'in', token)
       setAmountOut('')
       setQuoteError(null)
     },
-    [catalogScope, markSelectionEdited, setSavedTokenInId]
+    [catalogScope, markSelectionEdited, setSavedSwapToken]
   )
 
   const selectTokenOut = useCallback(
@@ -645,15 +655,11 @@ export function useSwapState(
         )
       }
       setTokenOut(token)
-      if (current.preferenceScope)
-        setSavedTokenSelection(current.preferenceScope, {
-          tokenInId: current.tokenIn?.assetId ?? null,
-          tokenOutId: token.assetId
-        })
+      if (current.preferenceScope) setSavedSwapToken(current.preferenceScope, 'out', token)
       setAmountOut('')
       setQuoteError(null)
     },
-    [catalogScope, markSelectionEdited, setSavedTokenSelection]
+    [catalogScope, markSelectionEdited, setSavedSwapToken]
   )
 
   const selectTokenOutForFlow = useCallback((token: RheaSwapToken) => {
@@ -721,14 +727,9 @@ export function useSwapState(
       setRecipientAddressState(selection.recipientAddress)
       setDepositAddress('')
       setQuoteError(null)
-      if (preferenceScope)
-        setSavedTokenSelection(preferenceScope, {
-          tokenInId: source.assetId,
-          tokenOutId: destination.assetId
-        })
       return true
     },
-    [destinationTokens, preferenceScope, setSavedTokenSelection, sourceCatalog]
+    [destinationTokens, preferenceScope, sourceCatalog]
   )
 
   return {

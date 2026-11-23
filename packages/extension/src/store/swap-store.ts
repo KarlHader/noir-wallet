@@ -11,7 +11,20 @@ export type SwapQuoteSettings = Pick<SwapPreferences, 'slippage' | 'quoteMode'>
 export interface SavedSwapTokenSelection {
   readonly tokenInId: string | null
   readonly tokenOutId: string | null
+  readonly tokenInSymbol?: string
+  readonly tokenOutSymbol?: string
 }
+
+type SwapTokenChoice = Readonly<{ assetId: string; symbol: string }>
+type PersistedSwapPreferences = Pick<
+  SwapPreferences,
+  | 'slippage'
+  | 'quoteMode'
+  | 'addressType'
+  | 'recentRefundAddresses'
+  | 'recentRecipientAddresses'
+  | 'tokenSelections'
+>
 
 interface SwapPreferences {
   slippage: number
@@ -28,8 +41,7 @@ interface SwapPreferences {
   getRecentRefundAddresses: (chain: string) => string[]
   getRecentRecipientAddresses: (chain: string) => string[]
   setSavedTokenSelection: (scope: string, selection: SavedSwapTokenSelection) => void
-  setSavedTokenInId: (scope: string, id: string | null) => void
-  setSavedTokenOutId: (scope: string, id: string | null) => void
+  setSavedSwapToken: (scope: string, side: 'in' | 'out', token: SwapTokenChoice) => void
 }
 
 function addToRecent(
@@ -63,29 +75,21 @@ export const useSwapPreferences = create<SwapPreferences>()(
           tokenSelections: { ...state.tokenSelections, [scope]: selection }
         }))
       },
-      setSavedTokenInId: (scope, id) => {
+      setSavedSwapToken: (scope, side, token) => {
         if (!scope) return
-        set(state => ({
-          tokenSelections: {
-            ...state.tokenSelections,
-            [scope]: {
-              tokenInId: id,
-              tokenOutId: state.tokenSelections[scope]?.tokenOutId ?? null
+        set(state => {
+          const previous = state.tokenSelections[scope] ?? { tokenInId: null, tokenOutId: null }
+          const selection =
+            side === 'in'
+              ? { ...previous, tokenInId: token.assetId, tokenInSymbol: token.symbol }
+              : { ...previous, tokenOutId: token.assetId, tokenOutSymbol: token.symbol }
+          return {
+            tokenSelections: {
+              ...state.tokenSelections,
+              [scope]: selection
             }
           }
-        }))
-      },
-      setSavedTokenOutId: (scope, id) => {
-        if (!scope) return
-        set(state => ({
-          tokenSelections: {
-            ...state.tokenSelections,
-            [scope]: {
-              tokenInId: state.tokenSelections[scope]?.tokenInId ?? null,
-              tokenOutId: id
-            }
-          }
-        }))
+        })
       },
 
       addRecentRefundAddress: (chain, address) => {
@@ -106,6 +110,22 @@ export const useSwapPreferences = create<SwapPreferences>()(
     {
       name: SWAP_PREFERENCES_STORAGE_KEY,
       storage: createChromeStorageAdapter('local') as any,
+      version: 1,
+      migrate: persisted => {
+        const previous = persisted as PersistedSwapPreferences
+        const selections = previous.tokenSelections ?? {}
+        const tokenSelections = Object.fromEntries(
+          Object.entries(selections).filter(([scope]) => !/:(main|private|shield)$/.test(scope))
+        )
+        for (const mode of ['main', 'private', 'shield']) {
+          for (const [scope, selection] of Object.entries(selections)) {
+            if (!scope.endsWith(`:${mode}`)) continue
+            const shared = scope.slice(0, -(mode.length + 1))
+            tokenSelections[shared] ??= selection
+          }
+        }
+        return { ...previous, tokenSelections }
+      },
       partialize: (state: SwapPreferences) => ({
         slippage: state.slippage,
         quoteMode: state.quoteMode,

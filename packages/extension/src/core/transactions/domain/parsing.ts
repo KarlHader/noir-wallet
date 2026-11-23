@@ -297,6 +297,9 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
                   shield.sourceDomain === 'shield' &&
                   (shield.destinationDomain === 'shield' ||
                     shield.destinationDomain === 'public')) ||
+                (shield.operation === 'confidential-transfer' &&
+                  shield.sourceDomain === 'shield' &&
+                  shield.destinationDomain === 'shield') ||
                 (shield.operation === 'cluster' &&
                   (shield.sourceDomain === 'public' ||
                     shield.sourceDomain === 'private' ||
@@ -310,7 +313,12 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
             }
             return Object.freeze({
               schemaVersion: 1 as const,
-              operation: shield.operation as 'deposit' | 'withdraw' | 'cluster' | 'swap',
+              operation: shield.operation as
+                | 'deposit'
+                | 'withdraw'
+                | 'cluster'
+                | 'swap'
+                | 'confidential-transfer',
               sourceDomain: shield.sourceDomain as 'public' | 'private' | 'shield',
               destinationDomain: shield.destinationDomain as 'public' | 'private' | 'shield'
             })

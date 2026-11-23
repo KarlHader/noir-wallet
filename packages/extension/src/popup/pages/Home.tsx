@@ -72,7 +72,10 @@ import { buildShieldActionPath, selectShieldActions } from '../services/shield-a
 import { canSwapNativeShieldZec } from '../services/shield-swap-zec-sources'
 import { getPrivateTransferChainIds } from '../services/private-balance-transfer'
 import { prewarmInitialSwapCatalog } from '../services/swap-catalog-loading'
-import { createSwapTokenPreferenceScope } from '../services/swap-token-selection'
+import {
+  createSwapTokenPreferenceScope,
+  resolveSharedSwapPair
+} from '../services/swap-token-selection'
 import { useSwapPreferences } from '@/store/swap-store'
 import { isRetainedV1ZcashOnlyAccount } from '@/core/wallet/account-network-selection'
 
@@ -163,31 +166,23 @@ export function Home() {
       !useSwapPreferences.persist.hasHydrated()
     )
       return
-    const evmChain =
-      swapEnabledChains.find(chain => chain.id === 'eip155:1') ??
-      swapEnabledChains.find(chain => chain.family === 'evm')
-    const zcashChain = swapEnabledChains.find(chain => chain.family === 'zcash')
-    const plans = (['main', 'shield', 'private'] as const).flatMap(mode => {
-      const scope = createSwapTokenPreferenceScope(
-        effectiveWalletId,
-        effectiveAccountId,
-        currentNetwork,
-        mode
-      )
-      const selection = scope ? swapSelections[scope] : undefined
-      if (mode === 'private' && !selection) return []
-      return [
-        {
-          enabledChains: swapEnabledChains,
-          defaultSourceChainId: mode === 'shield' ? zcashChain?.id : evmChain?.id,
-          savedSourceAssetId: selection?.tokenInId,
-          savedDestinationAssetId: selection?.tokenOutId
-        }
-      ]
-    })
+    const scope = createSwapTokenPreferenceScope(
+      effectiveWalletId,
+      effectiveAccountId,
+      currentNetwork
+    )
+    const selection = resolveSharedSwapPair(
+      scope ? swapSelections[scope] : undefined,
+      swapEnabledChains
+    )
     let active = true
     const warm = () => {
-      if (active) void Promise.all(plans.map(prewarmInitialSwapCatalog))
+      if (active)
+        void prewarmInitialSwapCatalog({
+          enabledChains: swapEnabledChains,
+          savedSourceAssetId: selection.tokenInId,
+          savedDestinationAssetId: selection.tokenOutId
+        })
     }
     const idleId = window.requestIdleCallback?.(warm, { timeout: 1500 })
     const timeoutId = idleId === undefined ? window.setTimeout(warm, 250) : undefined
@@ -220,18 +215,26 @@ export function Home() {
         connectedDApp?.evmAuthorization ||
         connectedDApp?.chainAuthorizations?.some(grant => grant.chainId.startsWith('eip155:'))
       )
-  const [modeSwitchPending, setModeSwitchPending] = useState(false)
+  const [pendingModeChange, setPendingModeChange] = useState<{
+    scopeKey: string
+    mode: DAppExecutionMode | null
+  } | null>(null)
   const requestedMode = useRef<DAppExecutionMode | null>(null)
   const modeChangeRunning = useRef(false)
   const modeChangeRunId = useRef(0)
   const modeScopeKey = JSON.stringify([currentNetwork, effectiveWalletId, effectiveAccountId])
+  const activeModeChange = pendingModeChange?.scopeKey === modeScopeKey ? pendingModeChange : null
+  const modeSwitchPending = activeModeChange !== null
   const latestModeScopeKey = useRef(modeScopeKey)
   latestModeScopeKey.current = modeScopeKey
   useEffect(() => {
     modeChangeRunId.current += 1
     modeChangeRunning.current = false
     requestedMode.current = null
-    setModeSwitchPending(false)
+    setPendingModeChange(null)
+    return () => {
+      modeChangeRunId.current += 1
+    }
   }, [modeScopeKey])
   const accountDisplayName =
     storageV2Account?.accountDisplayName ??
@@ -256,8 +259,21 @@ export function Home() {
     storageV2Account?.walletSource.kind === 'hardware' ||
     isZcashHardwareKeySource(currentWallet?.keySource)
   const requestedAssetDomain = resolveHomeAssetDomain(location.search)
-  const assetDomain =
+  const routeAssetDomain =
     hardwareWallet && requestedAssetDomain === 'private' ? 'public' : requestedAssetDomain
+  const modeActionsReady =
+    !accountContextChanging &&
+    (hardwareWallet || !supportsEvmDAppExecutionMode || dappExecutionMode.ready)
+  const modeSelectionDisabled = accountContextChanging || (!modeActionsReady && !modeSwitchPending)
+  const privateDAppMode = !hardwareWallet && dappExecutionMode.state?.mode === 'private'
+  const walletModeFollowsDApp =
+    !hardwareWallet &&
+    supportsEvmDAppExecutionMode &&
+    (dappExecutionMode.state?.privateAvailable || privateDAppMode)
+  const displayedWalletMode = activeModeChange?.mode ?? dappExecutionMode.state?.mode
+  const dappAssetDomain = displayedWalletMode === 'private' ? 'private' : 'public'
+  const assetDomain =
+    routeAssetDomain !== 'shield' && walletModeFollowsDApp ? dappAssetDomain : routeAssetDomain
   const walletMode = assetDomain === 'private' ? 'private' : 'public'
   const isShieldView = assetDomain === 'shield'
   const tabScrollRegion = useRef<HTMLDivElement>(null)
@@ -273,15 +289,8 @@ export function Home() {
     setFocusTransactionId(null)
     navigate.replace(homeAssetDomainPath(location.search, domain))
   }
-  const modeActionsReady =
-    hardwareWallet || !supportsEvmDAppExecutionMode || dappExecutionMode.ready
-  const privateDAppMode = !hardwareWallet && dappExecutionMode.state?.mode === 'private'
   const publicSendSource =
     assetDomain === 'public' ? selectHomeActionSource(multichainPortfolio, 'public', 'send') : null
-  const swapSource =
-    assetDomain === 'public' || assetDomain === 'private'
-      ? selectHomeActionSource(multichainPortfolio, assetDomain, 'swap')
-      : null
   const shieldActions = selectShieldActions({
     model: multichainPortfolio,
     prices: assetPrices,
@@ -344,18 +353,12 @@ export function Home() {
       query.set('sourceAccountId', effectiveAccountId)
     }
     query.set('balanceDomain', assetDomain)
-    if (swapSource) {
-      query.set('source', swapSource.asset.asset.id)
-    }
-    if (swapSource?.chain.chain.family === 'evm' && effectiveWalletId && effectiveAccountId) {
-      query.set('sourceMode', assetDomain === 'private' ? 'private' : 'main')
-    }
-    if (swapSource?.chain.chain.family === 'zcash') {
-      query.set('fundingSource', 'transparent')
-    }
     navigate.navigate(`/swap?${query.toString()}`)
   }
   const activityFilterAssetId = new URLSearchParams(location.search).get('assetId') || null
+  // Transaction and asset links retain their own Activity domain.
+  const activityDomain =
+    focusTransactionId || activityFilterAssetId ? routeAssetDomain : assetDomain
   const activityFilterAsset = activityFilterAssetId
     ? multichainPortfolio?.assets.find(asset => asset.asset.id === activityFilterAssetId)
     : undefined
@@ -603,7 +606,7 @@ export function Home() {
   }
 
   const handleDAppClick = async () => {
-    if (!modeActionsReady) return
+    if (!modeActionsReady || modeSwitchPending) return
     navigate.navigate(`/dapp-connections?mode=${privateDAppMode ? 'private' : 'public'}`)
   }
 
@@ -637,7 +640,7 @@ export function Home() {
   }
 
   const handleDAppExecutionModeChange = (mode: DAppExecutionMode) => {
-    if (!modeActionsReady) return
+    if (modeSelectionDisabled) return
     const current = dappExecutionMode.state
     if (!current) return
     if (mode === 'private' && !current.privateAvailable) {
@@ -645,15 +648,22 @@ export function Home() {
       return
     }
     requestedMode.current = mode
-    if (modeChangeRunning.current || current.mode === mode) return
+    if (modeChangeRunning.current) {
+      setPendingModeChange({ scopeKey: modeScopeKey, mode })
+      return
+    }
+    if (current.mode === mode) return
     modeChangeRunning.current = true
     const runId = ++modeChangeRunId.current
-    setModeSwitchPending(true)
+    setPendingModeChange({
+      scopeKey: modeScopeKey,
+      mode: mode === 'private' && !current.privateSetupCompleted ? null : mode
+    })
     void (async () => {
-      let committed = current.mode
-      while (requestedMode.current && requestedMode.current !== committed) {
+      let committed = current
+      while (requestedMode.current && requestedMode.current !== committed.mode) {
         const target = requestedMode.current
-        const confirmPrivateSetup = target === 'private' && !current.privateSetupCompleted
+        const confirmPrivateSetup = target === 'private' && !committed.privateSetupCompleted
         if (confirmPrivateSetup) {
           const accepted = await confirm({
             title: 'Enable Incognito DApp address?',
@@ -663,57 +673,51 @@ export function Home() {
           if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey)
             return
           if (!accepted) break
+          if (requestedMode.current !== target) continue
+          setPendingModeChange({ scopeKey: modeScopeKey, mode: target })
         }
         let next
         let confirmAffectedOperations = false
-        try {
-          while (true) {
-            try {
-              next = await dappExecutionMode.setMode(target, {
-                confirmPrivateSetup,
-                confirmAffectedOperations
-              })
-              break
-            } catch (error) {
-              if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey)
-                return
-              if (
-                !(error instanceof DAppExecutionModeClientError) ||
-                error.code !== 'affected-operations-confirmation-required' ||
-                confirmAffectedOperations ||
-                !error.impact
-              )
-                throw error
-              const count = error.impact.pendingApprovalCount
-              const accepted = await confirm({
-                title: 'Change DApp address?',
-                message: `${count} pending dApp ${count === 1 ? 'request' : 'requests'} will be cancelled.`,
-                confirmText: 'Change address'
-              })
-              if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey)
-                return
-              if (!accepted) break
-              confirmAffectedOperations = true
-            }
+        while (true) {
+          try {
+            next = await dappExecutionMode.setMode(target, {
+              confirmPrivateSetup,
+              confirmAffectedOperations
+            })
+            break
+          } catch (error) {
+            if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey)
+              return
+            if (requestedMode.current !== target) break
+            if (
+              !(error instanceof DAppExecutionModeClientError) ||
+              error.code !== 'affected-operations-confirmation-required' ||
+              confirmAffectedOperations ||
+              !error.impact
+            )
+              throw error
+            const count = error.impact.pendingApprovalCount
+            const accepted = await confirm({
+              title: 'Change DApp address?',
+              message: `${count} pending dApp ${count === 1 ? 'request' : 'requests'} will be cancelled.`,
+              confirmText: 'Change address'
+            })
+            if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey)
+              return
+            if (!accepted || requestedMode.current !== target) break
+            confirmAffectedOperations = true
           }
-        } catch (error) {
-          if (
-            runId === modeChangeRunId.current &&
-            latestModeScopeKey.current === modeScopeKey &&
-            requestedMode.current !== target &&
-            requestedMode.current !== committed
-          ) {
-            continue
-          }
-          throw error
         }
-        if (!next) break
+        if (!next) {
+          if (requestedMode.current !== target) continue
+          break
+        }
         if (runId !== modeChangeRunId.current || latestModeScopeKey.current !== modeScopeKey) return
-        if (next.mode === committed) {
-          if (requestedMode.current === committed) break
+        if (next.mode === committed.mode) {
+          if (requestedMode.current === committed.mode) break
           throw new Error('Mode change was not applied')
         }
-        committed = next.mode
+        committed = next
       }
     })()
       .catch(error => {
@@ -725,7 +729,7 @@ export function Home() {
         if (runId === modeChangeRunId.current && latestModeScopeKey.current === modeScopeKey) {
           requestedMode.current = null
           modeChangeRunning.current = false
-          setModeSwitchPending(false)
+          setPendingModeChange(null)
         }
       })
   }
@@ -837,7 +841,9 @@ export function Home() {
                   onClick={() =>
                     path === '/dapp-connections' ? void handleDAppClick() : navigate.navigate(path)
                   }
-                  disabled={path === '/dapp-connections' && !modeActionsReady}
+                  disabled={
+                    path === '/dapp-connections' && (!modeActionsReady || modeSwitchPending)
+                  }
                   className="wallet-interactive flex h-10 w-full items-center gap-3 rounded-md px-3 text-left text-sm hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   <Icon icon={icon} width={16} height={16} />
@@ -861,8 +867,15 @@ export function Home() {
           walletTotal={walletTotal}
           showIncognito={!hardwareWallet}
           hidden={balancesHidden}
+          modeSelectionDisabled={modeSelectionDisabled}
           onToggleHidden={() => setBalancesHidden(!balancesHidden)}
-          onSelect={selectAssetDomain}
+          onSelect={domain => {
+            if (walletModeFollowsDApp) {
+              handleDAppExecutionModeChange(domain === 'public' ? 'main' : 'private')
+            } else {
+              selectAssetDomain(domain)
+            }
+          }}
         />
 
         <div
@@ -1121,10 +1134,10 @@ export function Home() {
                   network={network}
                   portfolio={multichainPortfolio}
                   accountNetworks={storageV2Account?.networks}
-                  accountMode={assetDomain === 'private' ? 'private' : 'main'}
-                  allExecutionModes={assetDomain === 'shield'}
+                  accountMode={activityDomain === 'private' ? 'private' : 'main'}
+                  allExecutionModes={activityDomain === 'shield'}
                   filterAssetId={activityFilterAssetId ?? undefined}
-                  filterDomain={assetDomain}
+                  filterDomain={activityDomain}
                   showToolbar={!activityFilterAssetId}
                   showStatusFilter={isShieldView}
                   focusTransactionId={focusTransactionId}
@@ -1159,7 +1172,7 @@ export function Home() {
           host={currentDApp.host}
           favicon={currentDApp.favicon}
           accountName={accountDisplayName}
-          canConnect={canConnectCurrentAccount}
+          canConnect={canConnectCurrentAccount && !(currentDAppUsesEvm && modeSwitchPending)}
           disconnectedBySite={siteDisconnected !== null}
           executionMode={
             hardwareWallet || !currentDAppUsesEvm || !supportsEvmDAppExecutionMode

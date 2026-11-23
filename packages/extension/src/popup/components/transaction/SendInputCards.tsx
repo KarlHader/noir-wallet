@@ -10,6 +10,7 @@ import { Switch } from '../ui/switch'
 import { ChainIcon } from '../common/ChainIcon'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { BalanceSkeleton } from '../ui/skeleton'
+import { TransactionNotice } from './TransactionNotice'
 
 export interface TransferMaximumControl {
   readonly onClick?: () => void
@@ -422,11 +423,7 @@ function SendAmountInput({
         placeholder="0"
         className="h-12 w-full min-w-0 bg-transparent font-sans text-xl font-medium tabular-nums text-foreground outline-none placeholder:text-muted/45"
       />
-      {error && (
-        <p id={`${testId}-error`} className="px-1 text-xs text-warning" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <TransactionNotice id={`${testId}-error`} tone="warning" message={error} />}
     </div>
   )
 }

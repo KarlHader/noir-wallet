@@ -2,6 +2,10 @@ import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import { connectionAuthorizesAccount, dappManager } from '../core/dapp/dapp-manager'
 import { shouldAutoConnectDApp } from '@/core/dapp/first-party-policy'
+import {
+  mergeShieldSiteGrants,
+  type WalletConnectedDApp
+} from '@/core/dapp/shield-site-connections'
 import { syncScheduler } from './sync-scheduler'
 import type {
   AccountData,
@@ -69,6 +73,7 @@ import {
 import { dappExecutionModeRequestGate } from './dapp-execution-mode'
 import { parseEvmFeeSelection, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { createConfiguredNearRpcClient } from '@/infrastructure/chains/near/near-configured-rpc-client'
+import { ChromeConfidentialFundingStore } from './confidential-funding-store'
 
 type DAppTabInfo = {
   readonly title?: string
@@ -140,7 +145,8 @@ const CONNECT_APPROVAL_ACTIONS = new Set([
   'bitcoinConnect',
   'solanaConnect',
   'nearConnect',
-  'multichainConnect'
+  'multichainConnect',
+  'shieldConnect'
 ])
 
 const APPROVAL_ACTION_PREFIXES = Object.freeze({
@@ -263,6 +269,7 @@ export class DAppHandler {
 
   async clearConnections(): Promise<void> {
     const origins = await dappManager.clearConnections()
+    await new ChromeConfidentialFundingStore().clearShieldSiteGrants()
     this.permissions.clear()
     await Promise.all(
       origins.map(origin => this.broadcastEvent(origin, 'accountsChanged', null).catch(() => {}))
@@ -2558,6 +2565,7 @@ export class DAppHandler {
     initiatedBy: 'wallet' | 'site' = 'wallet'
   ): Promise<void> {
     await dappManager.removeConnection(origin, initiatedBy)
+    await new ChromeConfidentialFundingStore().deleteShieldSiteGrantsByOrigin(origin)
     this.permissions.delete(origin)
     pendingRequestsManager.cancelOrigin(origin)
     await Promise.allSettled([
@@ -2578,8 +2586,12 @@ export class DAppHandler {
     return Array.from(this.permissions.values())
   }
 
-  async getAllConnectedDApps() {
-    return await dappManager.getAllConnections()
+  async getAllConnectedDApps(): Promise<WalletConnectedDApp[]> {
+    const [connections, shieldGrants] = await Promise.all([
+      dappManager.getAllConnections(),
+      new ChromeConfidentialFundingStore().listShieldSiteGrants(DEFAULT_NETWORK)
+    ])
+    return mergeShieldSiteGrants(connections, shieldGrants)
   }
 
   /**

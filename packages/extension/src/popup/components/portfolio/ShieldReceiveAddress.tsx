@@ -19,7 +19,7 @@ import {
   CopyToast,
   useCopyToClipboard
 } from '@/popup/components/common/CopyToast'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { ShieldProviderLogo, SHIELD_PROVIDERS } from './shield-providers'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
@@ -350,7 +350,7 @@ export function ShieldReceiveAddress({
       >
         {busy ? 'Generating...' : 'Generate QR Code'}
       </button>
-      {error && <InlineError message={error} className="mt-2" />}
+      {error && <TransactionNotice message={error} className="mt-2" />}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           position="bottom"
@@ -431,18 +431,10 @@ export function ShieldReceiveAddress({
             }
             warning={
               (!currentRecord || canPay) && (
-                <div className="flex items-start gap-2 text-sm leading-5 text-muted">
-                  <span
-                    aria-hidden="true"
-                    className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-wallet-selected font-bold text-foreground"
-                  >
-                    !
-                  </span>
-                  <p>
-                    Only send {symbol} on {displayNetwork}. Sending other assets or using a
-                    different network will result in loss of funds.
-                  </p>
-                </div>
+                <TransactionNotice
+                  tone="warning"
+                  message={`Only send ${symbol} on ${displayNetwork}. Using a different asset or network can result in loss of funds.`}
+                />
               )
             }
           >
@@ -668,7 +660,7 @@ export function ShieldReceiveAddress({
                     Checked: {depositStatusLabel(currentRecord, now)}
                   </p>
                 )}
-                <InlineError
+                <TransactionNotice
                   message={checkError}
                   onRetry={checkError ? () => void checkStatus() : undefined}
                   retrying={refreshing}

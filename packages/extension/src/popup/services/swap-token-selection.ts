@@ -1,7 +1,7 @@
 import type { SwapToken } from '@/core/services/intents-api'
 import type { ChainDefinition } from '@/core/chains/registry'
 import type { SavedSwapTokenSelection } from '@/store/swap-store'
-import { getEnabledSwapChains } from './swap-catalog-loading'
+import { getEnabledSwapChains, getSwapCatalogDisplaySeeds } from './swap-catalog-loading'
 import { EVM_USDC_PROTOCOL_ASSET_BY_CHAIN_ID } from '@/config/asset-market-assets'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap'
@@ -127,12 +127,39 @@ export function compareSwapTokenSearchRelevance(
 export function createSwapTokenPreferenceScope(
   walletId: string | null,
   accountId: string | null,
-  network?: string,
-  mode?: string
+  network?: string
 ): string | null {
-  return walletId && accountId
-    ? [network, walletId, accountId, mode].filter(Boolean).join(':')
-    : null
+  return walletId && accountId ? [network, walletId, accountId].filter(Boolean).join(':') : null
+}
+
+export function isSameSwapAsset(assetId: string, preferredId?: string | null): boolean {
+  if (assetId === preferredId) return true
+  if (!preferredId) return false
+  const canonical = resolveRheaSwapCanonicalAssetId(assetId)
+  return Boolean(canonical && canonical === resolveRheaSwapCanonicalAssetId(preferredId))
+}
+
+export function resolveSharedSwapPair(
+  saved: SavedSwapTokenSelection | undefined,
+  enabledChains: readonly ChainDefinition[] | undefined
+): SavedSwapTokenSelection {
+  const enabled = getEnabledSwapChains(enabledChains)
+  const seeds = getSwapCatalogDisplaySeeds(enabled.map(chain => chain.tokenListChainId))
+  const defaultPair = resolveSwapTokenSelection({
+    tokens: seeds,
+    walletSourceTokens: [],
+    allowUnownedDefaultSource: true,
+    enabledChains
+  })
+  const tokenInId = saved?.tokenInId ?? defaultPair?.tokenIn?.assetId ?? null
+  const tokenOutId = saved?.tokenOutId ?? defaultPair?.tokenOut?.assetId ?? null
+  const symbol = (id: string | null) => findSavedSwapToken(seeds, id)?.symbol
+  return {
+    tokenInId,
+    tokenOutId,
+    tokenInSymbol: saved?.tokenInSymbol ?? symbol(tokenInId),
+    tokenOutSymbol: saved?.tokenOutSymbol ?? symbol(tokenOutId)
+  }
 }
 
 export function getSavedSwapDestinationAssetId(
@@ -144,12 +171,14 @@ export function getSavedSwapDestinationAssetId(
     : undefined
 }
 
-function findSavedSwapToken<T extends SwapToken>(
+export function findSavedSwapToken<T extends SwapToken>(
   tokens: readonly T[],
   assetId?: string | null
 ): T | undefined {
   if (!assetId) return undefined
-  const exact = tokens.find(token => token.assetId === assetId)
+  const exact =
+    tokens.find(token => token.assetId === assetId) ??
+    tokens.find(token => isSameSwapAsset(token.assetId, assetId))
   if (exact) return exact
 
   const evmAsset = /^eip155:([1-9]\d*)\/erc20:(0x[0-9a-f]{40})$/i.exec(assetId)

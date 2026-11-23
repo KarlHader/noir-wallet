@@ -154,10 +154,17 @@ export function normalizeConfidentialWithdrawRequest(
   })
 }
 
+export type ConfidentialFundingOperation =
+  | 'deposit'
+  | 'withdraw'
+  | 'cluster'
+  | 'swap'
+  | 'confidential-transfer'
+
 export interface ConfidentialFundingPlan {
   readonly schemaVersion: 1
   readonly purpose?: 'move' | 'native-zec-swap'
-  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
+  readonly operation?: ConfidentialFundingOperation
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly planId: string
@@ -242,7 +249,7 @@ export function canRetryConfidentialSubmission(
 export interface ConfidentialFundingReview {
   readonly planId: string
   readonly purpose?: 'move' | 'native-zec-swap'
-  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
+  readonly operation?: ConfidentialFundingOperation
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly network?: Network

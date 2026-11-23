@@ -12,6 +12,7 @@ export function isExplicitMultichainConnectRequest(message: DAppRuntimeRequestMe
     case 'near':
       return message.request.method === 'connect' || message.request.method === 'requestAccounts'
     case 'zcash':
+    case 'shield':
       return false
     case 'multichain':
       return message.request.method === 'wallet_createSession'

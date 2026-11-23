@@ -3,7 +3,7 @@ import { Icon } from '@iconify/react'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import { formatChainName, formatSymbol } from '@/lib/format'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { RouteProviderLabel } from './RouteProviderLabel'
@@ -114,7 +114,7 @@ export function CrossChainSendFormView({
             readOnly: initializing,
             invalid: Boolean(recipientError),
             onSelectRecipient,
-            feedback: recipientError && <InlineError message={recipientError} />,
+            feedback: recipientError && <TransactionNotice message={recipientError} />,
             network: {
               name: destinationName,
               icon: destination?.icon ?? tokenOut?.blockchain ?? destinationNameFallback,
@@ -155,10 +155,6 @@ export function CrossChainSendFormView({
           />
         }
       >
-        {hasInsufficientFunds && (
-          <InlineError message={insufficientMessage ?? 'Insufficient balance'} tone="muted" />
-        )}
-
         <SendRouteInfoCard
           provider={
             isQuoting ? (
@@ -188,12 +184,17 @@ export function CrossChainSendFormView({
               : undefined
           }
         />
-        {catalogError ? (
-          <InlineError message="Unable to load assets" onRetry={onRetryCatalog} />
-        ) : !isQuoting && !recipientError && quoteError ? (
-          <InlineError
+        {recipientError ? null : catalogError ? (
+          <TransactionNotice message="Unable to load assets" onRetry={onRetryCatalog} />
+        ) : hasInsufficientFunds ? (
+          <TransactionNotice
+            message={insufficientMessage ?? 'Insufficient balance'}
+            tone="warning"
+          />
+        ) : !isQuoting && quoteError ? (
+          <TransactionNotice
             message={quoteNotice ?? quoteError}
-            tone={quoteNotice ? 'muted' : 'error'}
+            tone={quoteNotice ? 'muted' : onRetryQuote ? 'warning' : 'error'}
             onRetry={onRetryQuote}
           />
         ) : null}

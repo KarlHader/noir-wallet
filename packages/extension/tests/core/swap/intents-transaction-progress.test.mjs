@@ -237,6 +237,33 @@ test('Activity hides an unused refund branch but shows a refund that actually st
   ).toMatchObject({ label: 'Refund transaction', state: 'complete' })
 })
 
+test('a finished Shield receive no longer presents its relay step as processing', () => {
+  const steps = getActivityProgressSteps(
+    {
+      status: 'final',
+      segments: [
+        {
+          id: 'origin',
+          role: 'origin',
+          target: { kind: 'protocol', provider: 'Confidential Intents' },
+          status: 'final'
+        },
+        {
+          id: 'relay',
+          role: 'relay',
+          target: { kind: 'protocol', provider: 'Confidential Intents' },
+          status: 'final'
+        }
+      ]
+    },
+    () => 'Ethereum'
+  )
+  expect(steps.map(step => [step.label, step.state, step.statusLabel])).toEqual([
+    ['Deposit confirmed', 'complete', 'Completed'],
+    ['Received', 'complete', 'Completed']
+  ])
+})
+
 test('legacy Withdraw keeps destination Zcash confirmations separate from source status', () => {
   const presentation = getLegacyIntentsProgressPresentation(
     {

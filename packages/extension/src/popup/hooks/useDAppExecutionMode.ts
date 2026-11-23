@@ -128,10 +128,14 @@ export function useDAppExecutionMode(
         if (version === requestVersion.current && latestScopeKey.current === scopeKey) {
           confirmedModes.set(scopeKey, next)
           setScopedState({ scopeKey, state: next })
+          setConfirmedScopeKey(scopeKey)
+          setLoading(false)
         }
         return next
       } catch (caught) {
         if (version === requestVersion.current && latestScopeKey.current === scopeKey) {
+          // A queued write may supersede the previous write's storage-triggered read.
+          void refresh().catch(() => {})
           setError(caught instanceof Error ? caught.message : 'Unable to change dApp account mode')
         }
         throw caught
@@ -142,7 +146,7 @@ export function useDAppExecutionMode(
         }
       }
     },
-    [scopeKey]
+    [refresh, scopeKey]
   )
 
   return Object.freeze({ state, loading, ready, updating, error, refresh, setMode })

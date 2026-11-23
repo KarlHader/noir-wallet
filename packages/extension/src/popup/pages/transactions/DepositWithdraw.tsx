@@ -39,7 +39,7 @@ import {
   type BalanceTransferEstimate
 } from '@/popup/services/balance-transfer-estimate'
 import { PageHeader } from '@/popup/components/common/PageHeader'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
@@ -383,6 +383,7 @@ function NativeZcashReceiveForm({
     onStateChange
   })
   const { action } = transfer
+  const notice = transfer.depositErrors.find(Boolean) ?? transfer.balanceError
   if (!transfer.available) {
     return (
       <div className="flex flex-1 items-center justify-center px-5">
@@ -402,15 +403,15 @@ function NativeZcashReceiveForm({
             max={transfer.maximum}
           />
           {accounts}
-          {transfer.depositErrors.map((error, index) =>
-            error ? <InlineError key={index} {...error} /> : null
-          )}
-          {transfer.balanceError && <InlineError {...transfer.balanceError} />}
-          <ZcashTransferRoute route={transfer.route} />
+          {notice && <TransactionNotice {...notice} />}
+          <ZcashTransferRoute route={transfer.route} showNotice={!notice} />
         </div>
       </div>
       <div className="page-footer">
-        <ZcashTransferSyncStatus sync={transfer.sync} />
+        <ZcashTransferSyncStatus
+          sync={transfer.sync}
+          showError={!notice && !transfer.route.maximumError && !transfer.route.error}
+        />
         <Button
           size="wallet"
           disabled={action.disabled}
@@ -2314,22 +2315,17 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           ]}
           error={
             shieldError ? (
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <p role="alert" className="text-xs text-warning">
-                  {shieldError}
-                </p>
-                {feeRefresh && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={cancellingShield || preparingShield}
-                    onClick={() => void changeShieldFee(feeRefresh.selection).catch(() => {})}
-                  >
-                    Retry
-                  </Button>
-                )}
-              </div>
+              <TransactionNotice
+                className="mt-3"
+                message={shieldError}
+                tone={feeRefresh ? 'warning' : 'error'}
+                retrying={cancellingShield || preparingShield}
+                onRetry={
+                  feeRefresh
+                    ? () => void changeShieldFee(feeRefresh.selection).catch(() => {})
+                    : undefined
+                }
+              />
             ) : undefined
           }
           confirmLabel={confirmUncertain ? 'Check status' : actionLabel}
@@ -2584,11 +2580,29 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                 No transferable assets
               </p>
             )}
-            {transferError && (
-              <p role="alert" className="mt-2 text-xs text-warning">
-                {transferError}
-              </p>
-            )}
+            {loadState === 'error' && !portfolio ? (
+              <TransactionNotice
+                className="mt-2"
+                message="Assets could not be loaded."
+                onRetry={() => void refreshPortfolio(true, { forceDiscovery: true })}
+              />
+            ) : shieldPair && shieldConnection === 'required' && !shieldConnecting ? (
+              <TransactionNotice
+                className="mt-2"
+                message={shieldError ?? 'Shield balance unavailable.'}
+                onRetry={() => void refreshShield(shieldNeedsAuthorization)}
+              />
+            ) : transferError ? (
+              <TransactionNotice className="mt-2" message={transferError} tone="warning" />
+            ) : shieldError && !activeShieldReview && shieldConnection !== 'required' ? (
+              <TransactionNotice className="mt-2" message={shieldError} />
+            ) : showGenericEstimateError ? (
+              <TransactionNotice
+                className="mt-2"
+                message="Transfer estimate unavailable."
+                onRetry={() => setRetry(value => value + 1)}
+              />
+            ) : null}
             {(selected?.chain.chain.family === 'evm' || nearPublicPrivate) &&
               clusterPair &&
               (clusterAvailable || methodAvailable) && (
@@ -2670,29 +2684,6 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   />
                 </div>
               )}
-            {showGenericEstimateError && (
-              <InlineError
-                message="Transfer estimate unavailable. Try again."
-                onRetry={() => setRetry(value => value + 1)}
-              />
-            )}
-            {loadState === 'error' && !portfolio && (
-              <InlineError
-                message="Assets could not be loaded."
-                onRetry={() => void refreshPortfolio(true, { forceDiscovery: true })}
-              />
-            )}
-            {shieldPair && shieldConnection === 'required' && !shieldConnecting && (
-              <InlineError
-                message={shieldError ?? 'Shield balance unavailable.'}
-                onRetry={() => void refreshShield(shieldNeedsAuthorization)}
-              />
-            )}
-            {shieldError && !activeShieldReview && shieldConnection !== 'required' && (
-              <p role="alert" className="text-xs text-warning">
-                {shieldError}
-              </p>
-            )}
           </div>
           <div className="page-footer">
             <Button

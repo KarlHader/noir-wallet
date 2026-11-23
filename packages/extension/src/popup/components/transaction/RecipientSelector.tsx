@@ -15,7 +15,7 @@ import {
   getAddressBookNetworkChoice,
   getAddressBookNetworkChoices
 } from '@/popup/services/address-book-network'
-import { InlineError } from '../common/InlineError'
+import { TransactionNotice } from './TransactionNotice'
 import { ChainIcon } from '../common/ChainIcon'
 import { Button } from '../ui/button'
 import { SearchInput } from '../ui/input'
@@ -220,11 +220,7 @@ export function RecipientSelector({
         {loading ? (
           <ListSkeleton rows={3} label="Loading wallet accounts" className="px-1 py-1" card />
         ) : error ? (
-          <InlineError
-            className="px-1 py-7"
-            message="Unable to load accounts"
-            onRetry={loadAccounts}
-          />
+          <TransactionNotice message="Unable to load accounts" onRetry={loadAccounts} />
         ) : visibleWalletGroups.length === 0 ? (
           <EmptyState
             icon="lucide:wallet"

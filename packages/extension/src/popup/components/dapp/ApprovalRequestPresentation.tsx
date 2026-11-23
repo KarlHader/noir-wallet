@@ -1,6 +1,44 @@
+import { Icon } from '@iconify/react'
 import { useState, type ReactNode } from 'react'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { cn } from '@/lib/utils'
+
+export function ApprovalCheckIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="size-3.5" fill="none">
+      <path
+        d="m3.5 8.25 2.75 2.75 6.25-6.25"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+export function ConnectionPermissionSummary({
+  access = 'View selected addresses and balances.',
+  safeguard = 'Transactions and signatures still require your approval.'
+}: {
+  readonly access?: string
+  readonly safeguard?: string
+}) {
+  return (
+    <section aria-label="Permissions" className="space-y-2 px-1 text-xs leading-5 text-muted">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 text-primary">
+          <ApprovalCheckIcon />
+        </span>
+        <span>{access}</span>
+      </div>
+      <div className="flex items-start gap-2">
+        <Icon icon="lucide:shield-check" className="mt-0.5 size-3.5 shrink-0 text-primary" />
+        <span>{safeguard}</span>
+      </div>
+    </section>
+  )
+}
 
 export type ApprovalRequestTone = 'standard' | 'caution' | 'blocked'
 

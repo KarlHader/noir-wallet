@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useWalletStore } from '@/store/wallet-store'
 import type { ConnectedDApp, SiteDisconnectedDApp } from '@/core/dapp/dapp-manager'
+import type { WalletConnectedDApp } from '@/core/dapp/shield-site-connections'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 
 export type { ConnectedDApp } from '@/core/dapp/dapp-manager'
@@ -9,7 +10,7 @@ export function useDAppConnection() {
   const [currentDApp, setCurrentDApp] = useState<ConnectedDApp | SiteDisconnectedDApp | null>(null)
   const [currentAccountAuthorized, setCurrentAccountAuthorized] = useState(true)
   const [canConnectCurrentAccount, setCanConnectCurrentAccount] = useState(false)
-  const [connectedDApps, setConnectedDApps] = useState<ConnectedDApp[]>([])
+  const [connectedDApps, setConnectedDApps] = useState<WalletConnectedDApp[]>([])
   const [loading, setLoading] = useState(true)
   const [connectionError, setConnectionError] = useState(false)
   const { currentWalletId, currentAccountId } = useWalletStore()
