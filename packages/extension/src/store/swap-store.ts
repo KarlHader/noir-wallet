@@ -5,6 +5,8 @@ import type { AddressType } from '@/types'
 import type { RheaSwapQuoteMode } from '@/core/services/rhea-swap'
 
 const MAX_RECENT_ADDRESSES = 5
+export const SWAP_PREFERENCES_STORAGE_KEY = 'swap_preferences'
+export type SwapQuoteSettings = Pick<SwapPreferences, 'slippage' | 'quoteMode'>
 
 export interface SavedSwapTokenSelection {
   readonly tokenInId: string | null
@@ -19,8 +21,7 @@ interface SwapPreferences {
   recentRecipientAddresses: Record<string, string[]>
   tokenSelections: Record<string, SavedSwapTokenSelection>
 
-  setSlippage: (slippage: number) => void
-  setQuoteMode: (mode: RheaSwapQuoteMode) => void
+  setQuoteSettings: (settings: SwapQuoteSettings) => void
   setAddressType: (type: AddressType) => void
   addRecentRefundAddress: (chain: string, address: string) => void
   addRecentRecipientAddress: (chain: string, address: string) => void
@@ -54,8 +55,7 @@ export const useSwapPreferences = create<SwapPreferences>()(
       recentRecipientAddresses: {},
       tokenSelections: {},
 
-      setSlippage: slippage => set({ slippage }),
-      setQuoteMode: quoteMode => set({ quoteMode }),
+      setQuoteSettings: ({ slippage, quoteMode }) => set({ slippage, quoteMode }),
       setAddressType: type => set({ addressType: type }),
       setSavedTokenSelection: (scope, selection) => {
         if (!scope) return
@@ -104,7 +104,7 @@ export const useSwapPreferences = create<SwapPreferences>()(
       getRecentRecipientAddresses: chain => get().recentRecipientAddresses[chain] || []
     }),
     {
-      name: 'swap_preferences',
+      name: SWAP_PREFERENCES_STORAGE_KEY,
       storage: createChromeStorageAdapter('local') as any,
       partialize: (state: SwapPreferences) => ({
         slippage: state.slippage,

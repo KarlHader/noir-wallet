@@ -664,6 +664,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
         value === 'private-swap' ||
         value === 'private-transfer' ||
         value === 'private-cross-chain-send' ||
+        value === 'private-cross-chain-withdraw' ||
         value === 'public-private-send',
       zcashFundingSource: (value: unknown) => value === 'transparent' || value === 'shielded'
     }
@@ -779,6 +780,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       refreshConfidential: isBoolean,
       automatic: isBoolean,
       chainIds: isChainIdArray,
+      detailAssetId: isShortString,
       expectedWalletId: isShortString,
       expectedAccountId: isShortString
     }

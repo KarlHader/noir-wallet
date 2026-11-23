@@ -111,7 +111,7 @@ import { transactionFailedBeforeBroadcast } from '@/core/transactions/transactio
 
 import { SwapTokenSelector } from '../../components/swap/SwapTokenSelector'
 import { isBundledWalletAsset } from '@/popup/services/token-display-policy'
-import { SlippageSettingContent, SwapSettingsButton } from '../../components/swap/SlippageSetting'
+import { SwapSettingsButton } from '../../components/swap/SwapSettings'
 import { SwapReviewView } from '../../components/swap/SwapReviewView'
 import { SwapInputView } from '../../components/swap/SwapInputView'
 import { CrossChainSendFormView } from '../../components/transaction/CrossChainSendFormView'
@@ -163,6 +163,8 @@ import { AmountDisplay } from '../../components/common/AmountDisplay'
 import { Button } from '../../components/ui/button'
 import { Skeleton } from '../../components/ui/skeleton'
 import { SwapApprovalSubmittedView } from '@/popup/components/transaction/SwapApprovalSubmittedView'
+import { SwapStatusDisplay } from '@/popup/components/swap/SwapStatus'
+import type { SwapApprovalProgress } from '@/popup/services/transaction-progress'
 
 import {
   type TransactionGraph,
@@ -173,7 +175,6 @@ import {
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseAccountId } from '@/core/accounts/domain'
 import {
-  ExecutionAccountBadge,
   ExecutionAccountSelectorDialog,
   AccountAddressSelectorButton
 } from '../../components/account/ExecutionAccountSelector'
@@ -268,6 +269,7 @@ import {
 import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-continuation-client'
 import type { SwapApprovalContinuation } from '@/background/swap-approval-continuation'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
+import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import {
@@ -775,8 +777,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     swapPreferenceScope,
     defaultShieldZecSource
   ])
-  const storedQuoteMode = useSwapPreferences(state => state.quoteMode)
-  const setQuoteMode = useSwapPreferences(state => state.setQuoteMode)
+  const quoteMode = useSwapPreferences(state => state.quoteMode)
   const defaultSwapChainId =
     storageV2Account?.walletSource.kind === 'private-key'
       ? (storageV2Account.networks.find(
@@ -1335,6 +1336,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     useState<PreparedQuoteDepositTransfer | null>(null)
   const [rheaSigningReview, setRheaSigningReview] = useState<PendingRheaSigningReview | null>(null)
   const [submittedApproval, setSubmittedApproval] = useState<SubmittedSwapApproval | null>(null)
+  const [combinedApprovalProgress, setCombinedApprovalProgress] = useState<{
+    readonly transactionId: string
+    readonly progress: SwapApprovalProgress
+    readonly continuing: boolean
+  } | null>(null)
   const [approvalError, setApprovalError] = useState<string | null>(null)
   const [approvalToRestore, setApprovalToRestore] = useState<{
     record: SwapApprovalContinuation
@@ -1346,10 +1352,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const combinedSwapConsent = useRef<{
     readonly scope: string
     readonly requestKey: string
-    readonly quoteHandle: string
-    readonly estimatedOut: string
-    readonly minAmountOut: string
-    readonly router: RheaSwapReviewView['router']
+    readonly review: RheaSwapReviewView
     readonly feeLimit: CombinedSwapFeeLimit
     readonly transaction: RheaSwapEvmCallView
     readonly owner: string
@@ -1594,8 +1597,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     searchParams.get('balanceDomain') === 'shield' &&
     searchParams.get('fundingSource') === 'shielded' &&
     !searchParams.has('shieldZecSource')
-  const showSwapSettings = ordinarySwapRequested && !lockedAssetFlowRequested
-  const quoteMode = showSwapSettings && storedQuoteMode === 'fast' ? 'fast' : 'best-price'
   const requestedFundingSource =
     privateSwapRequested && swap.isZecSource
       ? 'shielded'
@@ -2348,6 +2349,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     quoteRequestSequence.current += 1
     initializedPrivateFundingScope.current = null
     combinedSwapConsent.current = null
+    setCombinedApprovalProgress(null)
     initializedPrivateFundingAmountScope.current = null
     initializedCrossChainSendScope.current = null
     setHydratedCrossChainSendScope(null)
@@ -3468,6 +3470,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         refundAddress: resolvedRefundAddress,
         slippageBps,
         recipientType: 'CONFIDENTIAL_INTENTS' as const,
+        userAction: 'swap' as const,
         fundingSource
       } as const
       return {
@@ -3685,9 +3688,14 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           if (lockedAssetFlowRequested || feeTierOverride) setTransferPreparationError(message)
           return
         }
-        const review = await measure('rhea-prepare', () =>
-          rheaSwapClient.prepare(result.quoteHandle)
-        )
+        const consent = combinedSwapConsent.current
+        const review =
+          !newlyQuoted &&
+          consent?.scope === walletSourcesScope &&
+          consent.requestKey === requestKey &&
+          consent.review.quoteHandle === result.quoteHandle
+            ? consent.review
+            : await measure('rhea-prepare', () => rheaSwapClient.prepare(result.quoteHandle))
         if (requestSequence !== quoteRequestSequence.current) {
           if (newlyQuoted) await rheaSwapClient.discard(result.quoteHandle).catch(() => {})
           return
@@ -4188,6 +4196,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       quoteResult,
       liveQuoteRequest,
       liveQuoteKey,
+      walletSourcesScope,
       quoteReceivedAt,
       viewStep,
       hasInsufficientFunds,
@@ -4337,6 +4346,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           originChain: originChain || getChainFromAssetId(swap.tokenIn?.assetId || ''),
           originTxHash: txHash,
           activityTransactionId,
+          approvalProgress:
+            combinedApprovalProgress?.progress.status === 'confirmed'
+              ? combinedApprovalProgress.progress
+              : undefined,
           ...(zcashTransaction
             ? {
                 zcashAccountKey: zcashTransaction.accountKey,
@@ -4382,6 +4395,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     },
     [
       activityDomain,
+      combinedApprovalProgress,
       swap,
       quoteResult?.quoteHandle,
       nativeIntentsQuote,
@@ -5231,13 +5245,25 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             combinedSwapConsent.current = {
               scope: walletSourcesScope,
               requestKey: liveQuoteRequest.key,
-              quoteHandle: rheaReview.quoteHandle,
-              estimatedOut: rheaReview.estimatedOut,
-              minAmountOut: rheaReview.minAmountOut,
-              router: rheaReview.router,
+              review: rheaReview,
               feeLimit: combined.limit,
               transaction: combined.transaction,
               owner: preparedQuoteTransfer.source.refundAddress
+            }
+            if (ordinarySwapRequested && preparedQuoteTransfer.family === 'evm') {
+              const approvalOrigin = submission.value.graph.segments.find(
+                segment => segment.role === 'origin'
+              )
+              setCombinedApprovalProgress({
+                transactionId: submission.value.graph.root.id,
+                progress: {
+                  chainId: preparedQuoteTransfer.source.chain.chain.id,
+                  networkName: preparedQuoteTransfer.source.chain.chain.displayName,
+                  transactionHash: approvalOrigin?.evidence?.transactionHash,
+                  status: 'confirming'
+                },
+                continuing: true
+              })
             }
           }
           setSubmittedApproval({
@@ -5265,6 +5291,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           getChainFromAssetId(swap.tokenIn?.assetId || ''),
           submission.value.graph.root.id
         )
+        return true
       } catch (error) {
         if (!pendingRheaEvmAfterApproval) {
           const reviewGraph = preparedQuoteTransfer.review.graph
@@ -5348,6 +5375,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     isSending,
     liveQuoteKey,
     liveQuoteRequest,
+    ordinarySwapRequested,
     publicPrivacySendRequested,
     transferPreparationError,
     viewStep,
@@ -5374,6 +5402,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     navigate
   ])
 
+  const markCombinedApprovalFailed = useCallback(() => {
+    setCombinedApprovalProgress(current =>
+      current ? { ...current, progress: { ...current.progress, status: 'failed' } } : null
+    )
+  }, [])
+
   const handleContinueAfterApproval = useSwapApprovalContinuation({
     phase: viewStep,
     approval: submittedApproval,
@@ -5395,9 +5429,19 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     sequence: quoteRequestSequence,
     onPreparing: setIsPreparingReview,
     onError: setApprovalError,
+    onApprovalFailed: markCombinedApprovalFailed,
     onReady: ({ restoredQuote, reuseApprovedQuote }) => {
       if (!liveQuoteRequest) return
       if (!reuseApprovedQuote) combinedSwapConsent.current = null
+      setCombinedApprovalProgress(current =>
+        current
+          ? {
+              ...current,
+              progress: { ...current.progress, status: 'confirmed' },
+              continuing: Boolean(combinedSwapConsent.current)
+            }
+          : null
+      )
       if (restoredQuote && swap.tokenOut) {
         setQuoteResult(restoredQuote)
         setLiveQuoteKey(liveQuoteRequest.key)
@@ -5419,20 +5463,25 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     if (!consent || viewStep !== 'review' || isPreparingReview || isSending) return
     combinedSwapConsent.current = null
     const summary = preparedQuoteTransfer?.review.review.summary
+    const finishAutomaticContinuation = () =>
+      setCombinedApprovalProgress(current =>
+        current?.continuing ? { ...current, continuing: false } : current
+      )
     if (
       consent.scope !== walletSourcesScope ||
       consent.requestKey !== liveQuoteRequest?.key ||
-      consent.quoteHandle !== rheaReview?.quoteHandle ||
-      consent.estimatedOut !== rheaReview.estimatedOut ||
-      consent.minAmountOut !== rheaReview.minAmountOut ||
-      consent.router !== rheaReview.router ||
+      consent.review !== rheaReview ||
       !rheaQuoteAccepted ||
       pendingRheaEvmAfterApproval ||
       summary?.schema !== 'evm.transaction.v1' ||
       !canContinueCombinedSwap(summary, consent.feeLimit, consent.transaction, consent.owner)
-    )
+    ) {
+      finishAutomaticContinuation()
       return
-    void handleConfirmSwap()
+    }
+    void handleConfirmSwap().then(submitted => {
+      if (!submitted) finishAutomaticContinuation()
+    }, finishAutomaticContinuation)
   }, [
     handleConfirmSwap,
     isPreparingReview,
@@ -6017,35 +6066,16 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     walletSourcesScope
   ])
 
-  const handleOpenSlippageSetting = useCallback(async () => {
-    await openModal({
-      title: showSwapSettings ? 'Swap Settings' : 'Slippage Tolerance',
-      showCloseButton: true,
-      body: (_resolve, close) => (
-        <SlippageSettingContent
-          currentSlippage={swap.slippage}
-          currentQuoteMode={
-            showSwapSettings && !confidentialShieldSwapActive ? quoteMode : undefined
-          }
-          onSave={(newSlippage, newQuoteMode) => {
-            reviewAfterQuoteRefresh.current = null
-            if (swap.slippage !== newSlippage || (newQuoteMode && newQuoteMode !== quoteMode)) {
-              quoteRequestSequence.current += 1
-              setQuoteResult(null)
-              setRheaReview(null)
-              setLiveQuoteKey(null)
-              setQuoteReceivedAt(null)
-              swap.setAmountOut('')
-              swap.setDepositAddress('')
-            }
-            swap.setSlippage(newSlippage)
-            if (newQuoteMode) setQuoteMode(newQuoteMode)
-            close()
-          }}
-        />
-      )
-    })
-  }, [showSwapSettings, confidentialShieldSwapActive, quoteMode, setQuoteMode, swap])
+  const invalidateQuoteForSettings = () => {
+    reviewAfterQuoteRefresh.current = null
+    quoteRequestSequence.current += 1
+    setQuoteResult(null)
+    setRheaReview(null)
+    setLiveQuoteKey(null)
+    setQuoteReceivedAt(null)
+    swap.setAmountOut('')
+    swap.setDepositAddress('')
+  }
 
   const handleSelectProviderRoute = async (routeIndex: number) => {
     if (
@@ -6100,6 +6130,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const handleReturnToInput = useCallback(() => {
     if (feeConfirmationInFlight.current) return
     combinedSwapConsent.current = null
+    setCombinedApprovalProgress(null)
     setCustomReviewFee(null)
     quoteRequestSequence.current += 1
     resetQuoteReview()
@@ -6392,9 +6423,49 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
 
   const resumingApprovalReview =
     walletSourcesScope !== null && approvalReviewScope === walletSourcesScope
+  const showCombinedSwapProgress = Boolean(
+    combinedApprovalProgress &&
+    (viewStep === 'approval-pending' ||
+      (combinedApprovalProgress.continuing &&
+        (viewStep === 'review' || (!swap.quoteError && !transferPreparationError))))
+  )
 
   // Render content based on view step
   const renderContent = () => {
+    if (showCombinedSwapProgress && combinedApprovalProgress && swap.tokenIn && swap.tokenOut) {
+      const canContinue =
+        Boolean(approvalError) && combinedApprovalProgress.progress.status !== 'failed'
+      return (
+        <SwapStatusDisplay
+          network={currentNetwork}
+          status={null}
+          tokenInSymbol={swap.tokenIn.symbol}
+          tokenOutSymbol={swap.tokenOut.symbol}
+          amountIn={swap.amountIn}
+          amountOut={swap.amountOut}
+          originChain={swap.tokenIn.blockchain}
+          destinationChain={swap.tokenOut.blockchain}
+          router={quoteResult?.router}
+          approvalProgress={combinedApprovalProgress.progress}
+          beforeSubmission={{
+            token: swap.tokenIn,
+            error: approvalError,
+            continueDisabled: isPreparingReview || !liveQuoteRequest || walletSourcesLoading,
+            onContinue: canContinue
+              ? () => {
+                  combinedSwapConsent.current = null
+                  void handleContinueAfterApproval()
+                }
+              : undefined
+          }}
+          onClose={handleReturnToInput}
+          onViewActivity={() =>
+            navigate(homeActivityPath(activityDomain, combinedApprovalProgress.transactionId))
+          }
+          viewActivityDisabled={combinedApprovalProgress.progress.status === 'confirmed'}
+        />
+      )
+    }
     if (viewStep === 'input' && resumingApprovalReview) {
       const message = swap.quoteError || transferPreparationError
       const retryPreparation = () => {
@@ -6651,39 +6722,29 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           privateBalanceTransferReview.executionId === rheaReview.executionId
             ? privateBalanceTransferReview
             : null
-        const sourceMode = isPrivateFunding ? 'main' : 'private'
-        const destinationMode = isPrivateFunding ? 'private' : 'main'
         const reviewRows = [
           {
             label: 'From',
             content: (
-              <span className="inline-flex min-w-0 max-w-full items-center justify-end gap-1.5">
-                <span
-                  className="truncate font-mono text-muted"
-                  title={walletOwnedSource.refundAddress}
-                >
-                  {formatSortAddress(walletOwnedSource.refundAddress)}
-                </span>
-                <ExecutionAccountBadge mode={sourceMode} />
-              </span>
+              <TransactionReviewParty
+                accountName={accountDisplayName}
+                domain={isPrivateFunding ? 'public' : 'private'}
+                address={walletOwnedSource.refundAddress}
+                chain={walletOwnedSource.chain.chain}
+              />
             )
           },
           {
             label: 'To',
-            content: <ExecutionAccountBadge mode={destinationMode} />
+            content: (
+              <TransactionReviewParty
+                accountName={accountDisplayName}
+                domain={isPrivateFunding ? 'private' : 'public'}
+                address={transferReview?.recipient}
+                chain={walletDestinationTarget?.chain ?? walletOwnedSource.chain.chain}
+              />
+            )
           },
-          ...(transferReview
-            ? [
-                {
-                  label: 'Address',
-                  content: (
-                    <span className="font-mono text-muted" title={transferReview.recipient}>
-                      {formatSortAddress(transferReview.recipient)}
-                    </span>
-                  )
-                }
-              ]
-            : []),
           {
             label: 'You receive',
             content: (
@@ -6814,6 +6875,14 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             destination={swap.tokenOut}
             sourceNetwork={walletOwnedSource?.chain.chain.displayName}
             sourceAddress={walletOwnedSource?.refundAddress}
+            sourceAccountName={walletOwnedSource ? accountDisplayName : undefined}
+            sourceDomain={
+              walletOwnedSource
+                ? executionSourceMode === 'private'
+                  ? 'private'
+                  : 'public'
+                : undefined
+            }
             review={rheaReview}
             routeCost={routeCost}
             sourceNetworkFee={sourceNetworkFee}
@@ -7173,7 +7242,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           canGetQuote={canGetQuote && !bitcoinMaximumLoading}
           actionLoading={isPreparingReview || feeLoading || bitcoinMaximumLoading}
           providerName={activeQuote?.router}
-          slippage={swap.slippage}
           onAmountChange={value => {
             reviewAfterQuoteRefresh.current = null
             setMaxSelected(false)
@@ -7205,7 +7273,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                     }
                   : undefined
           }
-          onOpenSlippage={handleOpenSlippageSetting}
           onReview={() => void reviewLiveQuote()}
         />
       )
@@ -7453,8 +7520,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 }
               : undefined
         }
-        onOpenSlippageSetting={handleOpenSlippageSetting}
-        showSlippageSetting={!showSwapSettings}
         onGetQuote={() => {
           void reviewLiveQuote()
         }}
@@ -7564,7 +7629,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         sharedSendLayout && crossChainSendMode === 'public' ? 'contents' : 'page-container'
       }
     >
-      {!shieldReviewing &&
+      {showCombinedSwapProgress && <PageHeader title="Swap" />}
+      {!showCombinedSwapProgress &&
+        !shieldReviewing &&
         (viewStep === 'review' || (resumingApprovalReview && viewStep === 'input')) && (
           <div className="flex h-14 shrink-0 items-center justify-between bg-background px-5">
             <h1 className="min-w-0 truncate text-lg font-medium leading-[23px]">
@@ -7594,7 +7661,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             </button>
           </div>
         )}
-      {!shieldReviewing &&
+      {!showCombinedSwapProgress &&
+        !shieldReviewing &&
         viewStep !== 'review' &&
         !(resumingApprovalReview && viewStep === 'input') && (
           <PageHeader
@@ -7633,10 +7701,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             }
             {...(viewStep === 'approval-pending' ? {} : getHeaderProps())}
             rightContent={
-              ordinarySwapInput && showSwapSettings ? (
+              viewStep === 'input' ? (
                 <SwapSettingsButton
-                  disabled={swapControlsDisabled}
-                  onClick={() => void handleOpenSlippageSetting()}
+                  disabled={swapControlsDisabled || crossChainDraftPending}
+                  onChange={invalidateQuoteForSettings}
                 />
               ) : undefined
             }
@@ -7732,14 +7800,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               {
                 label: publicPrivacySendRequested ? 'Send from' : 'From',
                 content: walletOwnedSource ? (
-                  <span className="inline-flex items-center justify-end gap-1.5">
-                    <span className="font-mono text-muted" title={walletOwnedSource.refundAddress}>
-                      {formatSortAddress(walletOwnedSource.refundAddress)}
-                    </span>
-                    <ExecutionAccountBadge
-                      mode={isPrivateFunding || publicPrivacySendRequested ? 'main' : 'private'}
-                    />
-                  </span>
+                  <TransactionReviewParty
+                    accountName={accountDisplayName}
+                    domain={isPrivateFunding || publicPrivacySendRequested ? 'public' : 'private'}
+                    address={walletOwnedSource.refundAddress}
+                    chain={walletOwnedSource.chain.chain}
+                  />
                 ) : (
                   <Skeleton className="h-4 w-32" />
                 )
@@ -7749,29 +7815,36 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                     {
                       label: 'To',
                       content: (
-                        <ExecutionAccountBadge mode={isPrivateFunding ? 'private' : 'main'} />
+                        <TransactionReviewParty
+                          accountName={accountDisplayName}
+                          domain={isPrivateFunding ? 'private' : 'public'}
+                          address={resolvedRecipientAddress || privateTransferRecipient}
+                          chain={walletDestinationTarget?.chain ?? walletOwnedSource?.chain.chain}
+                        />
                       )
                     }
                   ]
                 : []),
-              {
-                label: publicPrivacySendRequested
-                  ? 'Recipient'
-                  : balanceAction
-                    ? 'Address'
-                    : 'Send To',
-                content:
-                  resolvedRecipientAddress || privateTransferRecipient ? (
-                    <span
-                      className="font-mono text-muted"
-                      title={resolvedRecipientAddress || privateTransferRecipient}
-                    >
-                      {formatSortAddress(resolvedRecipientAddress || privateTransferRecipient)}
-                    </span>
-                  ) : (
-                    <Skeleton className="h-4 w-32" />
-                  )
-              },
+              ...(!privateBalanceTransferRequested
+                ? [
+                    {
+                      label: publicPrivacySendRequested
+                        ? 'Recipient'
+                        : balanceAction
+                          ? 'Address'
+                          : 'Send To',
+                      content:
+                        resolvedRecipientAddress || privateTransferRecipient ? (
+                          <TransactionReviewParty
+                            address={resolvedRecipientAddress || privateTransferRecipient}
+                            chain={walletDestinationTarget?.chain}
+                          />
+                        ) : (
+                          <Skeleton className="h-4 w-32" />
+                        )
+                    }
+                  ]
+                : []),
               { label: 'You receive', content: <Skeleton className="h-4 w-24" /> },
               { label: 'Network fee', content: <Skeleton className="h-8 w-28" /> }
             ]}

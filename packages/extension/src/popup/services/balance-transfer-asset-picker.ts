@@ -8,7 +8,7 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { Network } from '@/types'
 import { getTransferDomainBalanceRaw, type TransferDomain } from './private-balance-transfer'
 import { resolveShieldManagedAsset } from './shield-transfer'
-import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
+import { getPrivateCrossChainTransferAssetGroup } from '@/core/chains/cross-chain-asset-group'
 import { toWalletEvmQuoteToken } from './token-address-discovery'
 
 type BalanceTransferAsset = Readonly<{ asset: PortfolioAssetView; chain: PortfolioChainView }>
@@ -17,42 +17,38 @@ type ShieldBalance = Readonly<{ tokenId: string; available: string }>
 type BalanceTransferAssetPickerRow = BalanceTransferAsset &
   Readonly<{ sourceRaw: string; valueUsd: string | null }>
 
-export function listTransferSameChainDestinationAssets(input: {
+export function listPrivateTransferDestinationAssets(input: {
   readonly source: BalanceTransferAsset
   readonly assets: readonly BalanceTransferAsset[]
-  readonly from: TransferDomain
+  readonly catalogAssets?: readonly BalanceTransferAsset[]
   readonly eligibleChainIds: readonly string[]
-  readonly destinationChainIds: readonly string[]
-  readonly managedAssets: readonly IntentsManagedAsset[]
-  readonly catalogTokens: readonly SwapToken[]
-  readonly network: Network
 }): readonly BalanceTransferAsset[] {
-  const sourceGroup = getCrossChainSendAssetGroup(input.source.asset.asset)
+  const sourceGroup = getPrivateCrossChainTransferAssetGroup(input.source.asset.asset)
   const eligible = new Set(input.eligibleChainIds)
-  const destinations = new Set(input.destinationChainIds)
-  return [
-    input.source,
-    ...input.assets.filter(item => item.asset.asset.id !== input.source.asset.asset.id)
-  ].filter(item => {
+  if (
+    !eligible.has(input.source.chain.chain.id) ||
+    input.source.chain.chain.capabilities.transaction.status !== 'available' ||
+    !toWalletEvmQuoteToken(input.source.asset)
+  )
+    return []
+  const candidates = new Map([[input.source.asset.asset.id, input.source]])
+  for (const item of [...input.assets, ...(input.catalogAssets ?? [])]) {
+    if (!candidates.has(item.asset.asset.id)) candidates.set(item.asset.asset.id, item)
+  }
+  return [...candidates.values()].filter(item => {
     if (
       item.chain.chain.family !== 'evm' ||
       item.chain.chain.capabilities.transaction.status !== 'available' ||
       !eligible.has(item.chain.chain.id) ||
-      !destinations.has(item.chain.chain.id) ||
-      getTransferDomainBalanceRaw(item.asset, input.from) === null ||
-      (!toWalletEvmQuoteToken(item.asset) &&
-        !resolveShieldManagedAsset(
-          item.asset,
-          input.managedAssets,
-          input.catalogTokens,
-          input.network
-        ))
+      item.asset.asset.chainId !== item.chain.chain.id ||
+      !toWalletEvmQuoteToken(item.asset)
     )
       return false
     if (item.asset.asset.id === input.source.asset.asset.id) return true
     return (
       sourceGroup !== null &&
-      sourceGroup === getCrossChainSendAssetGroup(item.asset.asset) &&
+      item.chain.chain.id !== input.source.chain.chain.id &&
+      sourceGroup === getPrivateCrossChainTransferAssetGroup(item.asset.asset) &&
       item.asset.asset.kind === input.source.asset.asset.kind
     )
   })

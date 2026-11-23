@@ -57,6 +57,7 @@ export interface CreateExternalShieldDepositInput {
   readonly source: Omit<ExternalShieldDeposit['source'], 'amountRaw'> &
     Readonly<{ amountRaw?: string }>
   readonly refundAddress: string
+  readonly slippageBps?: number
   readonly requestId?: string
 }
 

@@ -1,7 +1,7 @@
 import { getActivityAssetEffects, type ActivityItem, type ActivityReadModel } from '@/core/activity'
 import { getZcashChainId, parseAssetId } from '@/core/chains/registry'
 import { resolveActivityChainId } from '@/core/activity/activity-chain'
-import { resolveOwnedActivitySettlement } from './activity-balance-route'
+import { getActivityBalanceDomains, projectActivityReceipts } from './activity-balance-route'
 
 const ZCASH_CHAIN_IDS = new Set([getZcashChainId('mainnet'), getZcashChainId('testnet')])
 
@@ -70,6 +70,7 @@ export function filterActivityItems(input: {
   readonly status?: ActivityStatusFilter
   readonly accountMode?: 'main' | 'private'
   readonly confidentialIntentsOnly?: boolean
+  readonly includeAllConfidentialChains?: boolean
   readonly shieldProvider?: 'near-confidential' | 'zcash-shield'
   readonly executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
 }): readonly ActivityItem[] {
@@ -82,7 +83,19 @@ export function filterActivityItems(input: {
       return []
     }
   }
-  return input.items.filter(item => {
+  const domain =
+    input.domain ??
+    (input.shieldProvider || input.confidentialIntentsOnly || input.accountMode === undefined
+      ? undefined
+      : input.accountMode === 'private'
+        ? 'private'
+        : 'public')
+  const receipts = domain
+    ? projectActivityReceipts(input.items, domain, input.executionAddressModes)
+    : []
+  const items = input.items.concat(receipts)
+  const visible = items.filter(item => {
+    if (domain && !getActivityBalanceDomains(item).includes(domain)) return false
     if (input.status && input.status !== 'all' && getActivityFilterStatus(item) !== input.status) {
       return false
     }
@@ -93,44 +106,14 @@ export function filterActivityItems(input: {
       primaryAssetId === input.assetId ||
       counterAssetId === input.assetId ||
       getActivityAssetEffects(item)?.changes.some(change => change.assetId === input.assetId)
-    const shield = item.snapshot?.shield
-    const settlement = resolveOwnedActivitySettlement(item, input.executionAddressModes)
-    const settlementMatches =
-      settlement &&
-      input.domain === settlement.domain &&
-      selectedChainIdSet.has(settlement.chainId) &&
-      (!input.assetId || settlement.assetId === input.assetId)
-    const viewingShieldWithdrawalDestination =
-      Boolean(input.domain) &&
-      shield?.operation === 'withdraw' &&
-      shield.sourceDomain === 'shield' &&
-      shield.destinationDomain === input.domain
     const chainId =
       requestedAssetChainId && originMatchesAsset
         ? requestedAssetChainId
-        : ((viewingShieldWithdrawalDestination ? item.snapshot?.recipient?.chainId : undefined) ??
-          resolveActivityChainId(item))
-    const senderMode = item.snapshot?.sender?.address
-      ? input.executionAddressModes?.get(item.snapshot.sender.address.toLowerCase())
-      : undefined
-    const recipientMode = item.snapshot?.recipient?.address
-      ? input.executionAddressModes?.get(item.snapshot.recipient.address.toLowerCase())
-      : undefined
-    const crossModeMove =
-      (shield?.sourceDomain === 'public' && shield.destinationDomain === 'private') ||
-      (shield?.sourceDomain === 'private' && shield.destinationDomain === 'public') ||
-      (item.kind === 'transfer' &&
-        senderMode !== undefined &&
-        recipientMode !== undefined &&
-        senderMode !== recipientMode)
+        : resolveActivityChainId(item)
     const hasConfidentialIntentsSegment = item.segments.some(
       segment =>
         segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents'
     )
-    const shieldActivity =
-      shield?.sourceDomain === 'shield' ||
-      shield?.destinationDomain === 'shield' ||
-      hasConfidentialIntentsSegment
     const providerMatches =
       input.shieldProvider === undefined ||
       (input.shieldProvider === 'near-confidential'
@@ -141,42 +124,23 @@ export function filterActivityItems(input: {
               segment =>
                 segment.target.kind === 'onchain' && ZCASH_CHAIN_IDS.has(segment.target.chainId)
             )))
-    // Shield activity belongs to a separate asset domain, independent of EVM execution mode.
-    const modeMatches =
-      input.accountMode === undefined ||
-      !(chainId?.startsWith('eip155:') || chainId?.startsWith('near:')) ||
-      shieldActivity ||
-      (input.accountMode === 'private'
-        ? item.accountMode === 'private'
-        : item.accountMode !== 'private') ||
-      crossModeMove
     return (
       providerMatches &&
-      (!input.confidentialIntentsOnly ||
-        item.segments.some(
-          segment =>
-            segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents'
-        )) &&
-      (!!settlementMatches ||
-        (chainId !== undefined &&
-          (input.confidentialIntentsOnly ||
-            (input.shieldProvider === 'zcash-shield'
-              ? ZCASH_CHAIN_IDS.has(chainId)
-              : selectedChainIdSet.has(chainId))) &&
-          (input.domain === undefined
-            ? modeMatches
-            : input.domain === 'shield'
-              ? shieldActivity || item.assetDomains?.includes('shield') === true
-              : shield
-                ? shield.sourceDomain === input.domain || shield.destinationDomain === input.domain
-                : item.source === 'zcash-v1'
-                  ? input.domain === 'public' && item.assetDomains?.includes('public') === true
-                  : input.domain === 'private'
-                    ? item.accountMode === 'private'
-                    : item.accountMode !== 'private') &&
-          originMatchesAsset))
+      (!input.confidentialIntentsOnly || hasConfidentialIntentsSegment) &&
+      chainId !== undefined &&
+      (input.confidentialIntentsOnly ||
+        (input.includeAllConfidentialChains &&
+          domain === 'shield' &&
+          hasConfidentialIntentsSegment) ||
+        (input.shieldProvider === 'zcash-shield'
+          ? ZCASH_CHAIN_IDS.has(chainId)
+          : selectedChainIdSet.has(chainId))) &&
+      originMatchesAsset
     )
   })
+  return receipts.length === 0
+    ? visible
+    : visible.sort((left, right) => right.createdAt - left.createdAt)
 }
 
 function activityDateLabel(timestamp: number, now: number): string {

@@ -13,6 +13,7 @@ export interface PrepareNativeZecIntentsSwapInput {
   }>
   readonly refundAddress: string
   readonly recipientType?: 'DESTINATION_CHAIN' | 'CONFIDENTIAL_INTENTS'
+  readonly userAction?: 'swap'
   readonly fundingSource?: 'transparent' | 'shielded'
   readonly slippageBps: number
   readonly requestId?: string

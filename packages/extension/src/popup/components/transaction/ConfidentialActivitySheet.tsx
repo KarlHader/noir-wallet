@@ -340,7 +340,10 @@ export function ConfidentialActivityView({
         }
       >
         {activityView ? (
-          <ActivityTransactionBody view={activityView} />
+          <ActivityTransactionBody
+            view={activityView}
+            showDate={activityView.item.snapshot?.shield?.operation === 'cluster'}
+          />
         ) : (
           <div className="divide-y divide-border/60 border-y border-border/60 text-sm">
             {display && (

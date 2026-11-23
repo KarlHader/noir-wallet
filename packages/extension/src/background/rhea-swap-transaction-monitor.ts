@@ -56,6 +56,7 @@ export interface RheaSwapPortfolioRefreshRequest {
 }
 
 export interface RheaSwapTransactionMonitorOptions {
+  readonly recoverWithdrawActivity?: (graph: TransactionGraph) => Promise<TransactionGraph>
   readonly refreshPortfolio?: (request: RheaSwapPortfolioRefreshRequest) => Promise<void>
   readonly revealDestinationAsset?: (assetId: string) => Promise<void>
   readonly prepareZcashDestinationCatchUp?: (scope: TransactionAccountScope) => Promise<void>
@@ -151,6 +152,7 @@ export class RheaSwapTransactionMonitor {
   private readonly pending = new Map<string, PendingRheaSwapTransaction>()
   private readonly pendingQueue = new SerialTaskQueue()
   private readonly checkDedup = new Map<string, DedupPromise<void>>()
+  private readonly graphPoll = new DedupPromise<boolean>()
   private loaded = false
   private readonly repository = new IndexedDbTransactionRepository()
   private readonly storageRepository = new IndexedDbStorageV2Repository()
@@ -569,7 +571,11 @@ export class RheaSwapTransactionMonitor {
     await chrome.storage.local.set({ [STORAGE_KEY]: [...this.pending.values()] })
   }
 
-  private async pollGraphs(): Promise<boolean> {
+  private pollGraphs(): Promise<boolean> {
+    return this.graphPoll.run(() => this.pollPersistedGraphs())
+  }
+
+  private async pollPersistedGraphs(): Promise<boolean> {
     const scopes = await this.loadPersistedScopes()
     const graphs = (
       await Promise.all(
@@ -627,6 +633,7 @@ export class RheaSwapTransactionMonitor {
     graph = latest
     const binding = graph.root.intent?.protocol
     if (!binding || binding.provider !== 'rhea-cross-chain-dex') return true
+    const usesIntents = isRheaIntentsRoute(binding.router)
     const origins = graph.segments.filter(segment => segment.role === 'origin')
     if (origins.length === 0) return false
     const isSignedOrder = origins.every(origin => origin.target.kind !== 'onchain')
@@ -646,6 +653,7 @@ export class RheaSwapTransactionMonitor {
     if (!sourceHash && !orderReference) return false
     if (sourceHash) {
       await this.service.recordTransactionSubmission(binding.quoteHandle, sourceHash)
+      graph = (await this.options.recoverWithdrawActivity?.(graph)) ?? graph
     }
     try {
       await this.service.reportSubmission(binding.quoteHandle)
@@ -654,7 +662,7 @@ export class RheaSwapTransactionMonitor {
     }
 
     // Intents can settle with a separate destination transaction on the source chain.
-    if (!binding.isCrossChain && !isSignedOrder && !isRheaIntentsRoute(binding.router)) {
+    if (!binding.isCrossChain && !isSignedOrder && !usesIntents) {
       if (origins.some(origin => origin.target.kind === 'onchain' && origin.status !== 'final')) {
         return false
       }
@@ -688,23 +696,24 @@ export class RheaSwapTransactionMonitor {
       status
     })
     const destination = graph.segments.find(segment => segment.role === 'destination')
+    const requiresIndependentDestination = usesIntents && destination?.target.kind === 'onchain'
+    const evmDestination =
+      destination?.target.kind === 'onchain' && destination.target.chainId.startsWith('eip155:')
     const requiresDestinationReceipt =
       binding.isCrossChain &&
-      destination?.target.kind === 'onchain' &&
-      binding.destination.chainId.startsWith('eip155:') &&
-      binding.origin.chainId === binding.destination.chainId &&
-      isRheaIntentsRoute(binding.router)
-    const isIndependentDestinationHash = (hash: string | null | undefined) =>
+      requiresIndependentDestination &&
+      evmDestination &&
+      binding.origin.chainId === binding.destination.chainId
+    const isIndependentDestinationHash = (hash: string | null | undefined): hash is string =>
       !!hash &&
-      /^0x[0-9a-f]{64}$/i.test(hash) &&
+      (!evmDestination || /^0x[0-9a-f]{64}$/i.test(hash)) &&
       !sourceHashes.some(source => source.toLowerCase() === hash.toLowerCase())
-    const destinationHash = orderStatus.destinationHash
-    if (
-      destinationHash &&
-      destination &&
-      !destination.evidence?.transactionHash &&
-      (!requiresDestinationReceipt || isIndependentDestinationHash(destinationHash))
-    ) {
+    const reportedHash = orderStatus.destinationHash
+    const destinationHash =
+      requiresIndependentDestination && !isIndependentDestinationHash(reportedHash)
+        ? null
+        : reportedHash
+    if (destinationHash && destination && !destination.evidence?.transactionHash) {
       const applied = await this.applyGraphSegment(
         graph.root.scope,
         graph.root.id,
@@ -726,15 +735,17 @@ export class RheaSwapTransactionMonitor {
     }
     if (status === 'completed') {
       if (
-        requiresDestinationReceipt &&
-        (destination.status !== 'final' ||
-          !isIndependentDestinationHash(destination.evidence?.transactionHash))
+        requiresIndependentDestination &&
+        !isIndependentDestinationHash(destination?.evidence?.transactionHash ?? destinationHash)
       ) {
+        return false
+      }
+      if (requiresDestinationReceipt && destination?.status !== 'final') {
         return false
       }
       if (
         !binding.isCrossChain &&
-        !orderStatus.destinationHash &&
+        !destinationHash &&
         !graph.segments.some(
           segment => segment.role === 'destination' && segment.evidence?.transactionHash
         )

@@ -5,6 +5,7 @@ import type { AccountRef } from '@/core/dapp/dapp-manager'
 import { formatWalletNameAtIndex, getAccountDisplayName } from '@/lib/format'
 import type { StorageV2ReadRepository, StorageV2Snapshot } from '@/ports/repositories'
 import type { KeyDomainSource } from '@/core/keyring/domain'
+import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
 import type { AccountNetworkFamily } from '@/core/wallet/account-network-selection'
 import { isStoredAccountNetworkEnabledForSource } from '@/lib/wallet-metadata-storage'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
@@ -87,17 +88,8 @@ function descriptorId(reference: AccountRef): string {
 export async function listDAppChainAccounts(
   options: ListDAppChainAccountsOptions
 ): Promise<readonly DAppChainAccountDescriptor[]> {
-  const pointer = await options.repository.getActivePointer()
-  if (!pointer) return Object.freeze([])
-  const snapshot = await options.repository.getSnapshot(pointer.generationId)
-  if (!snapshot) throw new Error('Active Storage V2 generation is missing')
-  if (
-    snapshot.manifest.status !== 'verified' ||
-    snapshot.manifest.generationId !== pointer.generationId ||
-    snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint
-  ) {
-    throw new Error('Active Storage V2 generation does not match its pointer')
-  }
+  const snapshot = await readActiveStorageV2Snapshot(options.repository)
+  if (!snapshot) return Object.freeze([])
 
   const descriptors: DAppChainAccountDescriptor[] = []
   const keyDomainOrder = [...snapshot.keyDomains].sort(

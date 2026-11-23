@@ -17,6 +17,10 @@ import {
 } from '@/config/asset-market-assets'
 import { NOIR_SWAP_REFERRAL } from '@/config/intents'
 import { createInitialProductChainRegistry, getZcashChainId } from '@/core/chains/registry'
+import {
+  getEvmRouteAssetIdentity,
+  getPrivateCrossChainTransferAssetGroup
+} from '@/core/chains/cross-chain-asset-group'
 import { assertNearPrivateQuoteRoute } from './rhea-swap-near-private-route'
 
 const RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
@@ -41,6 +45,7 @@ export type PrivateQuotePurpose =
   | 'private-swap'
   | 'private-transfer'
   | 'private-cross-chain-send'
+  | 'private-cross-chain-withdraw'
   | 'private-dapp-transfer'
   | 'public-private-send'
 
@@ -247,6 +252,30 @@ function assertEstablishedPrivateQuoteRoute(
     }
     return
   }
+  if (purpose === 'private-cross-chain-withdraw') {
+    const destination = account.networks.find(
+      network => network.chainId === `eip155:${request.toChain}`
+    )
+    const recipient = request.recipient?.toLowerCase()
+    const origin = getPrivateWithdrawAsset(request.fromChain, request.tokenIn)
+    const target = getPrivateWithdrawAsset(request.toChain, request.tokenOut)
+    if (
+      !scope ||
+      request.fromChain === request.toChain ||
+      !origin ||
+      !target ||
+      origin.group !== target.group ||
+      origin.namespace !== target.namespace ||
+      !recipient ||
+      !/^0x[0-9a-f]{40}$/.test(recipient) ||
+      /^0x0{40}$/.test(recipient) ||
+      !destination?.addresses?.some(address => address.value.toLowerCase() === recipient) ||
+      destination.privateExecutionAddress?.toLowerCase() === recipient
+    ) {
+      throw new Error('Cross-chain Withdraw must stay in this Account and asset.')
+    }
+    return
+  }
   if (purpose === 'private-dapp-transfer') {
     if (
       request.fromChain !== request.toChain ||
@@ -294,6 +323,38 @@ function assertEstablishedPrivateQuoteRoute(
   ) {
     throw new Error('Private Swap must stay in this Account.')
   }
+}
+
+export function isEvmNativeQuoteAddress(chain: string, address: string): boolean {
+  return new Set([
+    '0x0000000000000000000000000000000000000000',
+    '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    getEvmNativeProtocolAssetId(`eip155:${chain}`)?.toLowerCase(),
+    ...(chain === '137' ? ['0x0000000000000000000000000000000000001010'] : [])
+  ]).has(address.toLowerCase())
+}
+
+export function getPrivateWithdrawAsset(chain: ChainRef, token: AssetRef) {
+  if (
+    token.chain !== chain ||
+    !RHEA_SWAP_CHAIN_CATALOG.some(item => item.apiChainId === chain && item.walletFamily === 'evm')
+  )
+    return null
+  const nativeAddress = isEvmNativeQuoteAddress(chain, token.address)
+  if (
+    Boolean(token.isNative) !== nativeAddress ||
+    (!nativeAddress && !/^0x[0-9a-f]{40}$/i.test(token.address))
+  )
+    return null
+  const asset = getEvmRouteAssetIdentity(`eip155:${chain}`, token.address, nativeAddress)
+  const group = asset && getPrivateCrossChainTransferAssetGroup(asset)
+  return asset && group
+    ? {
+        group,
+        namespace: asset.namespace,
+        id: `${asset.chainId}/${asset.namespace}:${asset.reference}`
+      }
+    : null
 }
 
 const RHEA_NATIVE_QUOTE_ADDRESSES = Object.freeze(
@@ -781,9 +842,9 @@ export function toRheaSwapProtocolRequest(value: RheaSwapQuoteRequest): QuoteReq
     tokenIn: toRheaSwapProtocolAsset(value.tokenIn),
     tokenOut: toRheaSwapProtocolAsset(value.tokenOut),
     extensions: Object.freeze({ referral: NOIR_SWAP_REFERRAL }),
-    quoteWaitingTimeMs: fast ? 1_500 : 6_000,
-    sameChainTimeoutMs: fast ? 500 : 1_500,
-    crossChainTimeoutMs: fast ? 1_500 : 6_000
+    quoteWaitingTimeMs: fast ? 2_000 : 6_000,
+    sameChainTimeoutMs: fast ? 1_000 : 1_500,
+    crossChainTimeoutMs: fast ? 2_000 : 6_000
   })
 }
 

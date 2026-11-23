@@ -391,7 +391,7 @@ test.describe('confidential funding safety rules', () => {
               refundType: 'ORIGIN_CHAIN',
               recipient: request.signerId,
               recipientType: 'CONFIDENTIAL_INTENTS',
-              slippageTolerance: 0
+              slippageTolerance: request.slippageBps
             },
             quote: {
               amountIn: '35000000000001',
@@ -804,13 +804,19 @@ test.describe('confidential funding safety rules', () => {
       { tokenId: source.protocolAssetId, available: '2', source: 'intents' }
     ])
     const { amountRaw: _amountRaw, ...sourceWithoutAmount } = source
-    const minimumRequest = { ...request, requestId: 'minimum-one', source: sourceWithoutAmount }
+    const minimumRequest = {
+      ...request,
+      requestId: 'minimum-one',
+      source: sourceWithoutAmount,
+      slippageBps: 125
+    }
     const minimumDeposit = await coordinator.createExternalDeposit(minimumRequest)
     expect(minimumDeposit).toMatchObject({
       amountMode: 'minimum',
       amountRaw: '35000000000001',
       source: { amountRaw: '35000000000001' },
-      slippageBps: 0
+      slippageBps: 125,
+      quote: { quoteRequest: { slippageTolerance: 125 } }
     })
     expect((await coordinator.createExternalDeposit(minimumRequest)).depositId).toBe(
       minimumDeposit.depositId
@@ -818,6 +824,9 @@ test.describe('confidential funding safety rules', () => {
     await expect(coordinator.createExternalDeposit({ ...minimumRequest, source })).rejects.toThrow(
       'request ID was reused'
     )
+    await expect(
+      coordinator.createExternalDeposit({ ...minimumRequest, slippageBps: 200 })
+    ).rejects.toThrow('request ID was reused')
     const deletionRace = {
       ...created,
       depositId: 'deletion-race',
@@ -888,13 +897,13 @@ test.describe('confidential funding safety rules', () => {
     }
     try {
       const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', '')
-      const input = { originAsset: asset, signerId, refundTo }
+      const input = { originAsset: asset, signerId, refundTo, slippageBps: 125 }
       const quote = await api.quoteFlexibleDeposit(input)
       expect(requests.map(request => [request.dry, request.amount, request.swapType])).toEqual([
         [true, '1', 'FLEX_INPUT'],
         [false, '35000000000001', 'FLEX_INPUT']
       ])
-      expect(requests.every(request => request.slippageTolerance === 0)).toBe(true)
+      expect(requests.map(request => request.slippageTolerance)).toEqual([125, 125])
       expect(requests.every(request => request.referral === 'noir_receive')).toBe(true)
       expect(quote.quote.minAmountIn).toBe('35000000000001')
       tamper = true

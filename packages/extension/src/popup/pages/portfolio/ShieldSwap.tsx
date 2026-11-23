@@ -8,8 +8,7 @@ import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import { confidentialDestinationFormToken } from '@/popup/services/swap-page-model'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { classifyError } from '@/lib/errors'
-import { formatSortAddress, formatShieldSymbol } from '@/lib/format'
-import { resolveChainIconAlias } from '@/lib/chain-icon'
+import { formatShieldSymbol } from '@/lib/format'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useSwapPreferences } from '@/store/swap-store'
@@ -38,6 +37,7 @@ import {
   TransactionReviewExchangeSummary,
   TransactionReviewView
 } from '@/popup/components/transaction/TransactionReviewView'
+import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { RouteProviderLabel } from '@/popup/components/transaction/RouteProviderLabel'
 import {
@@ -75,11 +75,14 @@ import {
   buildShieldDestinationPickerRows,
   buildShieldSwapRequest,
   buildShieldSwapPreviewRequest,
+  canMoveShieldSwapZecToUnifiedAddress,
   formatShieldSwapPreviewRate,
   matchesShieldSwapReview,
   nativeZecDestinationKey,
   shieldSwapFormAmountError,
-  shieldSwapFormBalance
+  shieldSwapFormBalance,
+  shieldSwapPickerChain,
+  sortShieldSwapPickerRows
 } from '@/popup/services/shield-swap-form'
 import {
   buildShieldSwapZecSourceOptions,
@@ -359,9 +362,23 @@ function ShieldSwapForm({
         ) ??
         options.find(asset => asset.asset.asset.id !== from?.asset.asset.id) ??
         null)
-  const nativeZecRecipient = nativeZecDestination
-    ? nativeZecAddresses?.[nativeZecDestination]
-    : undefined
+  const nativeZecRecipient =
+    nativeZecDestination && zcashAccountEnabled
+      ? nativeZecAddresses?.[nativeZecDestination]
+      : undefined
+  const canSelectConfidentialZec =
+    to?.managed.protocolAssetId !== ZEC_ZCASH_ASSET ||
+    (nativeZecDestination === 'shielded' &&
+      canMoveShieldSwapZecToUnifiedAddress(to, nativeZecRecipient, network))
+  const sameAssetNativeDestination =
+    nativeZecDestination !== null &&
+    from !== null &&
+    to !== null &&
+    from.managed.protocolAssetId === to.managed.protocolAssetId
+  const balance = shieldSwapFormBalance(from, displayBalances)
+  const currentBalance = shieldSwapFormBalance(from, trustedBalances)
+  const amountError = shieldSwapFormAmountError(amount, from, trustedBalances ?? displayBalances)
+  const validAmount = Boolean(amount && from && trustedBalances && !amountError)
   const draftKey = JSON.stringify([
     active,
     scopeKey,
@@ -370,9 +387,11 @@ function ShieldSwapForm({
     routeNativeZecDestination,
     from?.asset.asset.id,
     to?.asset.asset.id,
+    nativeZecDestination,
     nativeZecRecipient,
     amount,
-    slippageBps
+    slippageBps,
+    sameAssetNativeDestination ? canManageNear && validAmount : null
   ])
   const latestDraft = useRef({ key: draftKey, revision: 0 })
   if (latestDraft.current.key !== draftKey)
@@ -382,11 +401,8 @@ function ShieldSwapForm({
     nativeZecDestination && !nativeZecRecipient ? 'Zcash receive address unavailable' : null
   const canReverse =
     reverseUnavailableReason === null &&
+    !sameAssetNativeDestination &&
     Boolean(to && sourceChoices.some(asset => asset.asset.asset.id === to.asset.asset.id))
-  const balance = shieldSwapFormBalance(from, displayBalances)
-  const currentBalance = shieldSwapFormBalance(from, trustedBalances)
-  const amountError = shieldSwapFormAmountError(amount, from, trustedBalances ?? displayBalances)
-  const validAmount = Boolean(amount && from && trustedBalances && !amountError)
   const previewRequest = useMemo(() => {
     if (
       !account ||
@@ -407,6 +423,7 @@ function ShieldSwapForm({
         amount,
         balances: trustedBalances,
         nativeZecRecipient,
+        nativeZecFundingSource: nativeZecDestination ?? undefined,
         slippageBps
       })
     } catch {
@@ -459,6 +476,7 @@ function ShieldSwapForm({
   })
   const fromPickerItems = useMemo((): readonly ShieldTokenPickerItem[] => {
     if (!fromPickerReady) return []
+    const zecPrice = tokenPrices.get(ZEC_ZCASH_ASSET)
     const transparentZecRow: ShieldTokenPickerItem[] =
       nativeZecTransparentRaw !== null
         ? [
@@ -470,14 +488,13 @@ function ShieldSwapForm({
               zcashFundingSource: 'transparent' as const,
               nativeIconChain: 'zcash',
               availableRaw: nativeZecTransparentRaw,
-              decimals: ZEC_DECIMALS
+              decimals: ZEC_DECIMALS,
+              priceUsd: zecPrice
             }
           ]
         : []
     const zecRows = zecSourceOptions
-      .filter(
-        option => option.kind !== 'intents' || to?.managed.protocolAssetId !== ZEC_ZCASH_ASSET
-      )
+      .filter(option => option.kind !== 'intents' || canSelectConfidentialZec)
       .map(option =>
         Object.freeze({
           key: option.selectionId,
@@ -492,13 +509,7 @@ function ShieldSwapForm({
           nativeIconChain: 'zcash',
           availableRaw: option.availableRaw,
           decimals: option.decimals,
-          priceUsd:
-            (option.intentsWalletAssetId
-              ? tokenPrices.get(option.intentsWalletAssetId)
-              : undefined) ??
-            (option.kind === 'native-shielded'
-              ? tokens.find(token => token.blockchain === 'zec' && token.symbol === 'ZEC')?.price
-              : null),
+          priceUsd: zecPrice,
           disabledReason: option.disabledReason
         })
       )
@@ -516,40 +527,31 @@ function ShieldSwapForm({
           contractAddress: asset.asset.asset.reference,
           searchTerms: [asset.asset.metadata.name, asset.asset.asset.reference],
           iconUrl: asset.asset.metadata.iconUrl,
-          chainName: asset.chain.chain.displayName,
-          chainId: asset.chain.chain.id,
-          badgeBlockchain: resolveChainIconAlias(
-            asset.chain.chain.family,
-            asset.chain.chain.displayName,
-            asset.chain.chain.id
-          ),
+          ...shieldSwapPickerChain(asset),
           availableRaw: shieldFundingAvailableRaw(asset, displayBalances),
           decimals: asset.asset.metadata.decimals,
           priceUsd: tokenPrices.get(asset.managed.protocolAssetId) ?? null
         })
       )
-    return Object.freeze([...transparentZecRow, ...zecRows, ...nonZecRows])
+    return sortShieldSwapPickerRows([...transparentZecRow, ...zecRows, ...nonZecRows])
   }, [
     network,
     fromPickerReady,
     sourceChoices,
     to?.managed.protocolAssetId,
+    canSelectConfidentialZec,
     zecSourceOptions,
     displayBalances,
-    tokens,
     tokenPrices,
     nativeZecTransparentRaw
   ])
-  const fromZecSource =
-    from?.asset.metadata.symbol.toUpperCase() === 'ZEC'
-      ? zecSourceOptions.find(option => option.intentsWalletAssetId === from?.asset.asset.id)
-      : undefined
-  const toZecSource =
-    to?.asset.metadata.symbol.toUpperCase() === 'ZEC'
-      ? zecSourceOptions.find(option => option.intentsWalletAssetId === to?.asset.asset.id)
-      : undefined
+  const fromPickerChain = from ? shieldSwapPickerChain(from) : undefined
+  const toPickerChain = to ? shieldSwapPickerChain(to) : undefined
+  const nativeDestinationChain = nativeZecDestination
+    ? getZcashTokenPickerChain(network)
+    : undefined
   const nativeZecDestinations = useMemo(() => {
-    if (!zcashAccountEnabled || from?.managed.protocolAssetId === ZEC_ZCASH_ASSET) return []
+    if (!zcashAccountEnabled) return []
     return (['transparent', 'shielded'] as const).flatMap(fundingSource => {
       const address = nativeZecAddresses?.[fundingSource]
       return address
@@ -566,34 +568,22 @@ function ShieldSwapForm({
           ]
         : []
     })
-  }, [
-    zcashAccountEnabled,
-    from?.managed.protocolAssetId,
-    nativeZecAddresses,
-    nativeZecTransparentRaw,
-    zecSourceOptions
-  ])
+  }, [zcashAccountEnabled, nativeZecAddresses, nativeZecTransparentRaw, zecSourceOptions])
   const toPickerRows = useMemo(
     () =>
       toPickerReady
-        ? buildShieldDestinationPickerRows({
-            options,
-            tokens,
-            balances: displayBalances,
-            network,
-            excludedProtocolAssetId: from?.managed.protocolAssetId,
-            nativeZecDestinations
-          })
+        ? sortShieldSwapPickerRows(
+            buildShieldDestinationPickerRows({
+              options,
+              tokens,
+              balances: displayBalances,
+              network,
+              source: from,
+              nativeZecDestinations
+            })
+          )
         : [],
-    [
-      toPickerReady,
-      options,
-      tokens,
-      displayBalances,
-      network,
-      from?.managed.protocolAssetId,
-      nativeZecDestinations
-    ]
+    [toPickerReady, options, tokens, displayBalances, network, from, nativeZecDestinations]
   )
   const scopeStillCurrent = () => {
     const state = useWalletStore.getState()
@@ -606,7 +596,12 @@ function ShieldSwapForm({
     )
   }
   const draftStillCurrent = () =>
-    scopeStillCurrent() && active && latestDraft.current.revision === draftRevision
+    scopeStillCurrent() &&
+    active &&
+    latestDraft.current.revision === draftRevision &&
+    (previewRequest?.purpose !== 'move' ||
+      useWalletStore.getState().getCurrentAccount()?.addresses.shielded ===
+        previewRequest.externalRecipient)
   const openActivity = (transactionId: string) => {
     if (!scopeStillCurrent() || !account) return
     const display: ConfidentialActivityDisplay | undefined = prepared
@@ -662,7 +657,7 @@ function ShieldSwapForm({
       !preview ||
       preview.expiresAt <= Date.now() + 5_000 ||
       busy ||
-      !scopeStillCurrent()
+      !draftStillCurrent()
     )
       return
     const requestId = ++reviewRequestId.current
@@ -680,6 +675,7 @@ function ShieldSwapForm({
         amount,
         balances: trustedBalances,
         nativeZecRecipient,
+        nativeZecFundingSource: nativeZecDestination ?? undefined,
         slippageBps
       })
       const review = await confidentialFundingClient.prepare(request)
@@ -735,9 +731,14 @@ function ShieldSwapForm({
     }
     return plan.phase === 'prepared' ? 'prepared' : 'pending'
   }
+  const reviewMatchesDraft =
+    prepared !== null &&
+    previewRequest !== null &&
+    (prepared.request.purpose !== 'move' || validAmount) &&
+    JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
   const refreshReview = async () => {
     if (!prepared || busy || uncertain || !canManageNear || !scopeStillCurrent()) return
-    if (!previewRequest || JSON.stringify(previewRequest) !== JSON.stringify(prepared.request)) {
+    if (!reviewMatchesDraft || !draftStillCurrent()) {
       setError('Swap details changed. Go back and review again.')
       return
     }
@@ -827,7 +828,9 @@ function ShieldSwapForm({
     expiresAt: prepared?.review.expiresAt ?? null,
     active: active && Boolean(prepared),
     refresh:
-      reviewAccepted && !busy && !uncertain && !error ? () => void refreshReview() : undefined,
+      reviewAccepted && reviewMatchesDraft && !busy && !uncertain && !error
+        ? () => void refreshReview()
+        : undefined,
     autoRefreshMs: 60_000
   })
   const cancelReview = async () => {
@@ -857,12 +860,12 @@ function ShieldSwapForm({
     if (!uncertain && prepared.review.expiresAt <= Date.now()) return
     if (
       !uncertain &&
-      (!quoteReview.isAccepted(
-        draftKey,
-        JSON.stringify([prepared.review.planId, prepared.review.payloadFingerprint])
-      ) ||
-        !previewRequest ||
-        JSON.stringify(previewRequest) !== JSON.stringify(prepared.request) ||
+      (!draftStillCurrent() ||
+        !quoteReview.isAccepted(
+          draftKey,
+          JSON.stringify([prepared.review.planId, prepared.review.payloadFingerprint])
+        ) ||
+        !reviewMatchesDraft ||
         Boolean(error))
     )
       return
@@ -945,8 +948,6 @@ function ShieldSwapForm({
 
   if (prepared) {
     const acceptLabel = reviewDescription.acceptLabel
-    const reviewMatchesDraft =
-      previewRequest !== null && JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
     const needsNewQuote = !uncertain && reviewExpired
     const primaryAction = quoteReviewPrimaryAction({
       confirmLabel: uncertain ? 'Check status' : 'Confirm',
@@ -962,7 +963,7 @@ function ShieldSwapForm({
           ? { onClick: () => void refreshReview(), retry: Boolean(error && !reviewExpired) }
           : undefined,
       accept:
-        !uncertain && !error && !needsNewQuote && acceptLabel
+        !uncertain && reviewMatchesDraft && !error && !needsNewQuote && acceptLabel
           ? { label: acceptLabel, onClick: () => void quoteReview.accept(draftKey, reviewId) }
           : undefined
     })
@@ -1006,7 +1007,8 @@ function ShieldSwapForm({
                 asset: {
                   assetId: prepared.from.asset.asset.id,
                   symbol: formatShieldSymbol(prepared.from.asset.metadata.symbol),
-                  icon: prepared.from.asset.metadata.iconUrl
+                  icon: prepared.from.asset.metadata.iconUrl,
+                  blockchain: shieldSwapPickerChain(prepared.from).badgeBlockchain
                 },
                 amount: prepared.amount
               }}
@@ -1014,7 +1016,8 @@ function ShieldSwapForm({
                 asset: {
                   assetId: prepared.to.asset.asset.id,
                   symbol: formatShieldSymbol(prepared.to.asset.metadata.symbol),
-                  icon: prepared.to.asset.metadata.iconUrl
+                  icon: prepared.to.asset.metadata.iconUrl,
+                  blockchain: shieldSwapPickerChain(prepared.to).badgeBlockchain
                 },
                 amount: output
               }}
@@ -1028,23 +1031,22 @@ function ShieldSwapForm({
             },
             ...(prepared.request.externalRecipient
               ? [
-                  { label: 'Destination network', content: 'Zcash' },
                   {
                     label: 'Recipient',
                     content: (
-                      <span
-                        className="inline-flex items-center gap-2"
-                        title={prepared.request.externalRecipient}
-                      >
-                        <ZcashFundingBadge
-                          source={
-                            prepared.request.externalRecipient.startsWith('t')
-                              ? 'transparent'
-                              : 'shielded'
-                          }
-                        />
-                        <span>{formatSortAddress(prepared.request.externalRecipient)}</span>
-                      </span>
+                      <TransactionReviewParty
+                        address={prepared.request.externalRecipient}
+                        chain={{ name: 'Zcash', icon: 'zcash' }}
+                        badge={
+                          <ZcashFundingBadge
+                            source={
+                              prepared.request.externalRecipient.startsWith('t')
+                                ? 'transparent'
+                                : 'shielded'
+                            }
+                          />
+                        }
+                      />
                     )
                   }
                 ]
@@ -1097,7 +1099,7 @@ function ShieldSwapForm({
                       ]),
                   {
                     label: 'Slippage',
-                    content: `${((prepared.review.slippageBps ?? 0) / 100).toString()}%`
+                    content: `${(prepared.request.slippageBps / 100).toString()}%`
                   },
                   {
                     label: 'Used account',
@@ -1168,8 +1170,8 @@ function ShieldSwapForm({
         <SwapAssetCard
           direction="From"
           token={fromToken}
-          tokenBadgeBlockchain={fromZecSource?.badgeBlockchain}
-          tokenNetworkLabel={fromZecSource?.chainName}
+          tokenBadgeBlockchain={fromPickerChain?.badgeBlockchain}
+          tokenNetworkLabel={fromPickerChain?.sourceLabel ?? fromPickerChain?.chainName}
           amount={amount}
           fiatValue={fromToken?.price ? fromFiat : ''}
           balance={hidden ? '••••' : (balance ?? '—')}
@@ -1201,9 +1203,7 @@ function ShieldSwapForm({
         <SwapDestinationPanel
           canSwitchAssets={Boolean(!busy && from && to && canReverse)}
           reverseUnavailableReason={
-            canReverse
-              ? undefined
-              : (reverseUnavailableReason ?? 'Reverse source asset is unavailable')
+            canReverse ? undefined : (reverseUnavailableReason ?? 'Reverse route is unavailable')
           }
           onSwitchAssets={() => {
             if (!from || !to || !canReverse) return
@@ -1220,8 +1220,14 @@ function ShieldSwapForm({
             setError(null)
           }}
           token={toToken}
-          tokenBadgeBlockchain={nativeZecDestination ? 'zec' : toZecSource?.badgeBlockchain}
-          tokenNetworkLabel={nativeZecDestination ? 'Zcash' : toZecSource?.chainName}
+          tokenBadgeBlockchain={
+            nativeDestinationChain?.badgeBlockchain ?? toPickerChain?.badgeBlockchain
+          }
+          tokenNetworkLabel={
+            nativeDestinationChain?.chainName ??
+            toPickerChain?.sourceLabel ??
+            toPickerChain?.chainName
+          }
           zcashFundingSource={nativeZecDestination ?? undefined}
           accountAddress={nativeZecRecipient}
           amount={displayOutput}
@@ -1313,6 +1319,7 @@ function ShieldSwapForm({
             !from ||
             !to ||
             !validAmount ||
+            !previewRequest ||
             !preview ||
             previewLoading ||
             busy

@@ -18,6 +18,7 @@ import {
 } from './rhea-swap-protocol'
 import {
   RHEA_SWAP_CHAIN_CATALOG,
+  isEvmNativeQuoteAddress,
   parseRheaSwapQuoteRequest,
   toRheaSwapExecutionView,
   toRheaSwapToken,
@@ -30,10 +31,11 @@ import {
   type RheaSwapSolanaTransactionPlan,
   type RheaSwapNearTransactionBatchPlan,
   type RheaSwapSubmissionView,
-  type RheaSwapToken
+  type RheaSwapToken,
+  type PrivateQuotePurpose
 } from './rhea-swap-model'
 import { isDeprecatedIntentsToken } from '@/core/services/intents-evm-assets'
-import { getEvmNativeProtocolAssetId } from '@/config/asset-market-assets'
+import { isRheaIntentsRoute } from '@/core/transactions/domain/protocol'
 import { readRheaDestinationHash } from './rhea-order-status'
 import { getRheaSwapQuoteDeadline, isRheaSwapQuoteFresh } from './rhea-swap-quote-validity'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
@@ -57,13 +59,7 @@ function sameQuoteAssetAddress(
     return true
   }
   if (!isNative) return false
-  const nativeAddresses = new Set([
-    '0x0000000000000000000000000000000000000000',
-    '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-    getEvmNativeProtocolAssetId(`eip155:${chain}`)?.toLowerCase(),
-    ...(chain === '137' ? ['0x0000000000000000000000000000000000001010'] : [])
-  ])
-  return nativeAddresses.has(left.toLowerCase()) && nativeAddresses.has(right.toLowerCase())
+  return isEvmNativeQuoteAddress(chain, left) && isEvmNativeQuoteAddress(chain, right)
 }
 
 function toEvmCallView(tx: EvmTx): RheaSwapEvmTransactionPlan['transaction'] {
@@ -121,15 +117,7 @@ export interface RheaSwapQuoteSessionRecord {
     walletId: string
     accountId: string
     zcashFundingSource?: 'transparent' | 'shielded'
-    purpose?:
-      | 'wallet-swap'
-      | 'public-cross-chain-send'
-      | 'confidential-funding'
-      | 'private-swap'
-      | 'private-transfer'
-      | 'private-cross-chain-send'
-      | 'private-dapp-transfer'
-      | 'public-private-send'
+    purpose?: PrivateQuotePurpose
   }>
   readonly quoteRaw: SwapQuoteDataRaw
   readonly receivedAt: number
@@ -375,7 +363,7 @@ export class RheaSwapService {
     const quote = normalizeQuote(record.request, record.quoteRaw, record.receivedAt)
     this.assertQuoteFresh(record, quote)
     const build = await this.client.buildSwap({ quote, signal })
-    this.assertBuildMatchesQuote(build, quote)
+    this.assertBuildMatchesQuote(build, quote, record.privateSwapScope?.purpose)
     if (!build.request) throw new Error('RHEA Swap build is missing its normalized request')
     const updated = Object.freeze({
       ...record,
@@ -417,7 +405,7 @@ export class RheaSwapService {
     const quote = normalizeQuote(record.request, record.quoteRaw, record.receivedAt)
     this.assertQuoteFresh(record, quote)
     const build = normalizeBuild(record.build.raw, record.build.executionId, record.build.request)
-    this.assertBuildMatchesQuote(build, quote)
+    this.assertBuildMatchesQuote(build, quote, record.privateSwapScope?.purpose)
     return build
   }
 
@@ -823,21 +811,7 @@ export class RheaSwapService {
     const record = await this.requireSession(quoteHandle)
     const submission = record.submission
     if (!submission) throw new Error('RHEA Swap has not been submitted')
-    let status: SwapOrderStatusDataRaw
-    if (submission.recordId !== undefined) {
-      status = await this.client.getOrderStatusRaw({ recordId: submission.recordId }, { signal })
-    } else if (submission.orderId !== null) {
-      status = await this.client.getOrderStatusRaw(
-        {
-          orderId: submission.orderId,
-          router: submission.router,
-          ...(submission.statusChainId === null ? {} : { chainId: submission.statusChainId })
-        },
-        { signal }
-      )
-    } else {
-      throw new Error('RHEA Swap has no order status key')
-    }
+    const status = await this.readOrderObservation(submission, signal)
     return Object.freeze({
       quoteHandle: record.quoteHandle,
       orderId: record.submission.orderId,
@@ -845,6 +819,46 @@ export class RheaSwapService {
       status: normalizeOrderStatus(status),
       destinationHash: readRheaDestinationHash(status) ?? null
     })
+  }
+
+  private async readOrderObservation(
+    submission: NonNullable<RheaSwapQuoteSessionRecord['submission']>,
+    signal?: AbortSignal
+  ): Promise<SwapOrderStatusDataRaw> {
+    const { orderId, recordId, router, statusChainId, sourceHash } = submission
+    const intents = isRheaIntentsRoute(router)
+    const readSettlement = (observation: SwapOrderStatusDataRaw) => {
+      if (!intents) return observation
+      if (observation.provider === 'evm_receipt') return undefined
+      if (readRheaDestinationHash(observation)?.toLowerCase() === sourceHash.toLowerCase()) {
+        return undefined
+      }
+      return observation
+    }
+    const orderQuery =
+      orderId === null
+        ? undefined
+        : { orderId, router, ...(statusChainId === null ? {} : { chainId: statusChainId }) }
+    if (orderQuery && (intents || recordId === undefined)) {
+      try {
+        const observation = readSettlement(
+          await this.client.getOrderStatusRaw(orderQuery, { signal })
+        )
+        if (observation) return observation
+      } catch (error) {
+        if (signal?.aborted || recordId === undefined) throw error
+      }
+    }
+    if (recordId !== undefined) {
+      const observation = readSettlement(
+        await this.client.getOrderStatusRaw({ recordId }, { signal })
+      )
+      if (observation) return observation
+    }
+    if (orderQuery === undefined && recordId === undefined) {
+      throw new Error('RHEA Swap has no order status key')
+    }
+    return { status: 'pending' }
   }
 
   async hasRecordedOrder(quoteHandle: string): Promise<boolean> {
@@ -928,7 +942,7 @@ export class RheaSwapService {
     const quote = normalizeQuote(record.request, record.quoteRaw, record.receivedAt)
     if (!allowExpired) this.assertQuoteFresh(record, quote)
     const build = normalizeBuild(record.build.raw, record.build.executionId, record.build.request)
-    this.assertBuildMatchesQuote(build, quote)
+    this.assertBuildMatchesQuote(build, quote, record.privateSwapScope?.purpose)
     return build
   }
 
@@ -1096,8 +1110,17 @@ export class RheaSwapService {
     }
   }
 
-  private assertBuildMatchesQuote(build: SwapBuild, quote: Quote): void {
+  private assertBuildMatchesQuote(
+    build: SwapBuild,
+    quote: Quote,
+    purpose?: PrivateQuotePurpose
+  ): void {
     const mismatches = [
+      ['isCrossChain', purpose === 'private-cross-chain-withdraw' && !build.isCrossChain],
+      [
+        'execution kind',
+        purpose === 'private-cross-chain-withdraw' && build.execution.kind !== 'evm-transaction'
+      ],
       ['fromChain', build.fromChain !== quote.fromChain],
       ['toChain', build.toChain !== quote.toChain],
       [

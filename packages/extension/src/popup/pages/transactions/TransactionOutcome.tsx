@@ -859,6 +859,7 @@ export function TransactionOutcome() {
           fee={data.fee}
           confidentialFunding={data.confidentialFunding}
           activityItem={scopedOriginActivity}
+          approvalProgress={data.approvalProgress}
           activeAccount={activeAccount}
           onResumeConfidentialFunding={handleResumeConfidentialFunding}
           resumingConfidentialFunding={resumingConfidentialFunding}

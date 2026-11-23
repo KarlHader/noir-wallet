@@ -1,6 +1,7 @@
 import type { ActivityItem } from '@/core/activity'
 import { parseAssetId } from '@/core/chains/registry'
 import { ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { isExternalShieldDepositActivity } from './activity-balance-route'
 
 export type ActivityPerspective = {
   readonly viewedDomain?: 'public' | 'private' | 'shield'
@@ -10,6 +11,16 @@ export type ActivityPerspective = {
 export type ActivityAction = {
   readonly label: 'Send' | 'Receive' | 'Deposit' | 'Withdraw' | 'Transfer' | 'Swap'
   readonly side: 'source' | 'destination' | 'none'
+}
+
+export function isActivityShieldSend(item: ActivityItem): boolean {
+  const snapshot = item.snapshot
+  return (
+    snapshot?.shield?.operation === 'withdraw' &&
+    snapshot.shield.sourceDomain === 'shield' &&
+    snapshot.direction === 'outgoing' &&
+    snapshot.recipient !== undefined
+  )
 }
 
 type Domain = NonNullable<ActivityPerspective['viewedDomain']>
@@ -55,6 +66,13 @@ export function getActivityAction(
   perspective: ActivityPerspective = {},
   route?: Route | null
 ): ActivityAction {
+  if (item.kind === 'receive' || isExternalShieldDepositActivity(item))
+    return { label: 'Receive', side: 'destination' }
+
+  const protocol = item.snapshot?.protocol
+  if (protocol?.provider === 'rhea-cross-chain-dex' && protocol.balanceTransfer === 'withdraw')
+    return { label: 'Withdraw', side: 'source' }
+
   const shield = item.snapshot?.shield
   const source =
     shield?.sourceDomain ??
@@ -70,6 +88,9 @@ export function getActivityAction(
   const direction = item.snapshot?.direction
   const sourceAssetId = route?.source?.assetId ?? item.snapshot?.primaryAmount?.assetId
   const destinationAssetId = route?.destination?.assetId ?? item.snapshot?.counterAmount?.assetId
+  if (isActivityShieldSend(item)) {
+    return { label: 'Send', side: 'source' }
+  }
 
   if (
     item.kind === 'swap' &&
@@ -82,6 +103,16 @@ export function getActivityAction(
 
   if (
     item.kind === 'swap' &&
+    source === 'public' &&
+    route?.sourceFundingSource === 'transparent' &&
+    route.destinationAccountMode === 'Confidential' &&
+    (!viewed || viewed === source)
+  ) {
+    return { label: 'Swap', side: 'source' }
+  }
+
+  if (
+    item.kind === 'swap' &&
     !shield &&
     !route?.sourceFundingSource &&
     sourceAssetId !== destinationAssetId
@@ -89,21 +120,29 @@ export function getActivityAction(
     return { label: 'Swap', side: 'none' }
 
   if (source === 'shield' && destination === 'shield') {
+    const isConfidentialSource =
+      shield?.sourceDomain === 'shield' &&
+      item.source === 'wallet-v2' &&
+      item.id.startsWith('tx:confidential:')
     const sourceProvider =
       route?.sourceFundingSource === 'shielded'
         ? 'zcash-shield'
-        : shieldProviderForAsset(item, sourceAssetId)
+        : isConfidentialSource
+          ? 'near-confidential'
+          : shieldProviderForAsset(item, sourceAssetId)
     const destinationProvider =
       route?.destinationFundingSource === 'shielded'
         ? 'zcash-shield'
         : route?.destinationAccountMode === 'Confidential'
           ? 'near-confidential'
           : shieldProviderForAsset(item, destinationAssetId)
-    if (perspective.shieldProvider && sourceProvider !== destinationProvider) {
-      if (perspective.shieldProvider === sourceProvider)
-        return { label: 'Withdraw', side: 'source' }
-      if (perspective.shieldProvider === destinationProvider)
+    if (sourceProvider !== destinationProvider) {
+      if (perspective.shieldProvider === destinationProvider && destinationProvider)
         return { label: 'Deposit', side: 'destination' }
+      if (sourceProvider && perspective.shieldProvider === sourceProvider)
+        return shield?.operation === 'swap'
+          ? { label: 'Swap', side: 'none' }
+          : { label: 'Withdraw', side: 'source' }
     }
     return shield?.operation === 'swap' || item.kind === 'swap'
       ? { label: 'Swap', side: 'none' }
@@ -113,7 +152,8 @@ export function getActivityAction(
   if (source && destination && source !== destination) {
     if (
       shield?.operation === 'swap' &&
-      !perspective.shieldProvider &&
+      source === 'shield' &&
+      (!perspective.shieldProvider || perspective.shieldProvider === 'near-confidential') &&
       (!viewed || viewed === 'shield')
     )
       return { label: 'Swap', side: 'none' }
@@ -129,7 +169,7 @@ export function getActivityAction(
     if (side) {
       return {
         label:
-          viewed === 'public'
+          viewed !== 'shield'
             ? side === 'source'
               ? 'Send'
               : 'Receive'
@@ -148,8 +188,7 @@ export function getActivityAction(
     if (viewed === 'public') return { label: 'Send', side: 'source' }
     return { label: 'Transfer', side: 'none' }
   }
-  if (item.kind === 'receive' || direction === 'incoming')
-    return { label: 'Receive', side: 'destination' }
+  if (direction === 'incoming') return { label: 'Receive', side: 'destination' }
   if (item.kind === 'transfer' || direction === 'outgoing') return { label: 'Send', side: 'source' }
   return { label: 'Transfer', side: 'none' }
 }

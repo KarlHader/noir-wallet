@@ -24,7 +24,6 @@ import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
 import type { AccountScope } from '@/core/wallet/account-scope'
 import { isAccountScopeForNetwork, resolveAccountScope } from '@/core/wallet/account-scope'
 import { useWalletStore, waitForHydration } from '@/store/wallet-store'
-import { getZcashConfirmationNotificationCopy } from '@/lib/transaction-status-copy'
 import { getZcashDestinationCatchUpThreshold } from '@/lib/intents-progress'
 import { deliverTerminalNotificationAndRemoveTask } from './tx-monitor-finalization'
 
@@ -598,10 +597,7 @@ export class ZcashTxMonitor {
       }
       await deliverTerminalNotificationAndRemoveTask(
         !!tx.notificationPending && canNotify,
-        () => {
-          this.notifyFrontend(tx, status, reason)
-          this.showNotification(tx, status, reason)
-        },
+        () => this.notifyFrontend(tx, status, reason),
         () => this.removePersistedTask(tx)
       )
     } finally {
@@ -657,26 +653,6 @@ export class ZcashTxMonitor {
     }
 
     chrome.runtime.sendMessage(message).catch(() => {})
-  }
-
-  private showNotification(
-    tx: PendingZcashTx,
-    status: 'success' | 'failed',
-    reason: 'confirmed' | 'expired' | 'timeout'
-  ) {
-    const copy = getZcashConfirmationNotificationCopy(tx.type, status, reason)
-
-    try {
-      chrome.notifications.create(`zcash-confirm-${tx.txHash.slice(0, 8)}-${Date.now()}`, {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: copy.title,
-        message: copy.message,
-        priority: 1
-      })
-    } catch (error) {
-      console.error(TAG, 'Notification error:', error)
-    }
   }
 }
 

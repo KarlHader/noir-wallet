@@ -23,6 +23,7 @@ import { AmountDisplay } from '../common/AmountDisplay'
 import { ChainIcon } from '../common/ChainIcon'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyToast'
 import { DetailRow } from '../common/DetailRow'
+import { AccountDomainBadge } from '../account/AccountDomainBadge'
 import { PrivateAddressWarningDialog } from '../account/PrivateAddressWarningDialog'
 import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
@@ -30,19 +31,28 @@ import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
 import { TransactionProgressSteps } from './TransactionProgressSteps'
 import { TransactionReferenceValue } from './TransactionReferenceValue'
+import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
 import {
   getActivityApprovalDetails,
   getActivityInteractionPresentation
 } from '@/popup/services/activity-interaction-adapters'
 import { resolveActivityChainId } from '@/core/activity/activity-chain'
-import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
 import {
+  getActivityAction,
+  isActivityShieldSend,
+  type ActivityPerspective
+} from '@/popup/services/activity-action-label'
+import {
+  getActivityAccountRouteLabel,
   getActivityCancellationPresentation,
   getActivityDisplayChanges,
   getActivityProgressSteps,
   getActivityStatusPresentation,
   getActivitySwapPresentation,
   getActivityTransferRecipient,
+  getClusterBatchStatusLabel,
+  getClusterChildStatusLabel,
+  getClusterSettledDestination,
   isDirectAccountMove,
   isOwnedAccountTransfer,
   resolveActivityChainMetadata
@@ -66,6 +76,7 @@ export interface ActivityTransactionView {
   readonly status: ActivityStatus
   readonly statusLabel: string
   readonly statusTone: ActivityStatus['tone']
+  readonly clusterPlan: ConfidentialFundingPlan | null
   readonly amount: {
     readonly value: string
     readonly symbol: string
@@ -110,7 +121,6 @@ export function buildActivityTransactionView(input: {
   readonly chainMetadata: ReadonlyMap<string, ActivityChainMetadata>
   readonly executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
   readonly perspective?: ActivityPerspective
-  readonly settledDestination?: Parameters<typeof getActivitySwapPresentation>[4]
   readonly fallback?: ActivityTransactionFallback
   readonly refunded?: boolean
   readonly replacementHash?: string
@@ -119,12 +129,21 @@ export function buildActivityTransactionView(input: {
   readonly confidentialPlan?: ConfidentialFundingPlan | null
 }): ActivityTransactionView {
   const { item, network, assetMetadata, chainMetadata, fallback } = input
+  const plan = input.confidentialPlan
+  const confidentialPlan =
+    plan?.transactionId === item.id &&
+    plan.network === network &&
+    plan.keyDomainId === item.scope.keyDomainId &&
+    plan.accountId === item.scope.accountId
+      ? plan
+      : null
+  const clusterPlan = confidentialPlan?.operation === 'cluster' ? confidentialPlan : null
   const rawSwap = getActivitySwapPresentation(
     item,
     assetMetadata,
     chainMetadata,
     input.executionAddressModes,
-    input.settledDestination
+    getClusterSettledDestination(item, clusterPlan)
   )
   const sourceAmount = item.snapshot?.primaryAmount
   const destinationAmount = item.snapshot?.counterAmount
@@ -222,20 +241,15 @@ export function buildActivityTransactionView(input: {
     item.snapshot?.shield && direction === 'self' && item.snapshot.shield.operation !== 'swap'
   )
   const isMove = isShieldMove || (swap !== null && isDirectAccountMove(item, swap))
-  const isShieldSend = item.snapshot?.shield?.operation === 'withdraw' && direction === 'outgoing'
+  const isShieldSend = isActivityShieldSend(item)
   const references = getActivityTransactionReferences(item)
-  const confidentialPlan = input.confidentialPlan
   const confidentialIntentHash = confidentialPlan?.withdraws
     .find(row => row.intentHash?.trim())
     ?.intentHash?.trim()
   const confidentialReference =
     confidentialPlan?.operation === 'swap' &&
     confidentialPlan.sourceDomain === 'shield' &&
-    confidentialPlan.destinationDomain === 'shield' &&
-    confidentialPlan.transactionId === item.id &&
-    confidentialPlan.network === network &&
-    confidentialPlan.keyDomainId === item.scope.keyDomainId &&
-    confidentialPlan.accountId === item.scope.accountId
+    confidentialPlan.destinationDomain === 'shield'
       ? confidentialIntentHash
         ? { label: 'Intent Hash', value: confidentialIntentHash }
         : confidentialPlan.orderId?.trim()
@@ -288,8 +302,10 @@ export function buildActivityTransactionView(input: {
     network,
     swap,
     status,
-    statusLabel: input.statusLabel ?? status.label,
+    statusLabel:
+      input.statusLabel ?? (clusterPlan ? getClusterBatchStatusLabel(clusterPlan) : status.label),
     statusTone: input.statusTone ?? status.tone,
+    clusterPlan,
     amount,
     changes,
     showChanges,
@@ -506,6 +522,56 @@ export function ActivityTransactionRoute({ view }: { readonly view: ActivityTran
           {swap.destinationNetwork}
         </span>
       </span>
+    </DetailRow>
+  )
+}
+
+function ActivityTransactionAccountRoute({ view }: { readonly view: ActivityTransactionView }) {
+  const { swap } = view
+  if (
+    !swap?.sourceAccountMode ||
+    !swap.destinationAccountMode ||
+    swap.sourceAccountMode === swap.destinationAccountMode
+  )
+    return null
+  return (
+    <DetailRow label={view.actionSide === 'none' ? 'Account' : 'Direction'}>
+      {swap.destinationFundingSource ? (
+        <span className="text-sm">{getActivityAccountRouteLabel(swap)}</span>
+      ) : (
+        <span className="flex items-center gap-1.5">
+          {swap.sourceFundingSource === 'shielded' ? (
+            <span className="text-sm">Zcash Shield</span>
+          ) : swap.sourceAccountMode === 'External' ? (
+            <span className="text-sm">External</span>
+          ) : (
+            <AccountDomainBadge
+              chainFamily={swap.sourceFundingSource ? 'zcash' : undefined}
+              domain={
+                swap.sourceAccountMode === 'Confidential'
+                  ? 'private'
+                  : swap.sourceAccountMode === 'Shield'
+                    ? 'shield'
+                    : 'public'
+              }
+            />
+          )}
+          <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
+          {swap.sourceFundingSource ? (
+            <span className="text-sm">NEAR Confidential</span>
+          ) : (
+            <AccountDomainBadge
+              domain={
+                swap.destinationAccountMode === 'Confidential'
+                  ? 'private'
+                  : swap.destinationAccountMode === 'Shield'
+                    ? 'shield'
+                    : 'public'
+              }
+            />
+          )}
+        </span>
+      )}
     </DetailRow>
   )
 }
@@ -756,9 +822,20 @@ export function ActivityTransactionReferences({
   )
 }
 
-export function ActivityTransactionProgress({ view }: { readonly view: ActivityTransactionView }) {
-  if (!view.isCrossChain) return null
+type PrecedingProgress = { readonly step: TransactionProgressStep; readonly reference?: ReactNode }
+
+export function ActivityTransactionProgress({
+  view,
+  precedingProgress
+}: {
+  readonly view: ActivityTransactionView
+  readonly precedingProgress?: PrecedingProgress
+}) {
+  if (!view.isCrossChain && !precedingProgress) return null
   const referenceByStepId = new Map<string, ReactNode>()
+  if (precedingProgress?.reference) {
+    referenceByStepId.set(precedingProgress.step.id, precedingProgress.reference)
+  }
   for (const segment of view.item.segments) {
     const hash = segment.evidence?.transactionHash
     const reference =
@@ -806,7 +883,9 @@ export function ActivityTransactionProgress({ view }: { readonly view: ActivityT
   }
   return (
     <TransactionProgressSteps
-      steps={view.progressSteps}
+      steps={
+        precedingProgress ? [precedingProgress.step, ...view.progressSteps] : view.progressSteps
+      }
       referenceByStepId={referenceByStepId}
       className="mt-5"
     />
@@ -815,10 +894,14 @@ export function ActivityTransactionProgress({ view }: { readonly view: ActivityT
 
 export function ActivityTransactionBody({
   view,
-  showDate = false
+  precedingProgress,
+  showDate = false,
+  showAccountRoute = false
 }: {
   readonly view: ActivityTransactionView
+  readonly precedingProgress?: PrecedingProgress
   readonly showDate?: boolean
+  readonly showAccountRoute?: boolean
 }) {
   return (
     <>
@@ -837,8 +920,40 @@ export function ActivityTransactionBody({
         <ActivityTransactionFee view={view} />
         {view.isShieldMove && <ActivityTransactionStatus view={view} />}
         <ActivityTransactionReferences view={view} />
+        {(showAccountRoute || view.item.snapshot?.shield?.operation === 'cluster') && (
+          <ActivityTransactionAccountRoute view={view} />
+        )}
+        {view.clusterPlan && <ActivityClusterTransfers plan={view.clusterPlan} />}
       </div>
-      <ActivityTransactionProgress view={view} />
+      <ActivityTransactionProgress view={view} precedingProgress={precedingProgress} />
+    </>
+  )
+}
+
+function ActivityClusterTransfers({ plan }: { readonly plan: ConfidentialFundingPlan }) {
+  return (
+    <>
+      <DetailRow label="Method">
+        <span className="text-sm">Cluster</span>
+      </DetailRow>
+      <DetailRow label="Transfers">
+        <span className="text-sm">{plan.withdraws.length}</span>
+      </DetailRow>
+      <div className="space-y-2 border-t border-border/60 pt-3">
+        {plan.withdraws.map(row => (
+          <div key={row.sequence} className="flex items-start justify-between gap-3 text-sm">
+            <span className="text-muted">Transfer {row.sequence + 1}</span>
+            <div className="min-w-0 text-right">
+              <div>{getClusterChildStatusLabel(row, plan)}</div>
+              {row.scheduledAt && Number.isSafeInteger(row.scheduledAt) && (
+                <div className="text-xs text-muted">
+                  Earliest broadcast {new Date(row.scheduledAt).toLocaleString()}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </>
   )
 }

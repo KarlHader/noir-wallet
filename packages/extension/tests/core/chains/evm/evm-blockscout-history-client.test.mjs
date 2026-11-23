@@ -249,7 +249,7 @@ test.describe('EVM Blockscout history client', () => {
     expect(await client.readAddressActivity({ scope: SCOPE, address: ADDRESS })).toEqual([])
   })
 
-  test('keeps proxy token transfers without fabricated block hashes or nonces', async () => {
+  test('maps complete proxy token receipts without fabricated block hashes or nonces', async () => {
     const client = createClient(async request => {
       const action = new URL(request).searchParams.get('action')
       return action === 'tokentx'
@@ -260,7 +260,7 @@ test.describe('EVM Blockscout history client', () => {
     const [item] = await client.readAddressActivity({ scope: SCOPE, address: ADDRESS })
     expect(item).toMatchObject({
       id: `rpc:evm:eip155:1:${hash('d')}:token`,
-      completeness: 'partial',
+      completeness: 'complete',
       segments: [
         {
           evidence: {

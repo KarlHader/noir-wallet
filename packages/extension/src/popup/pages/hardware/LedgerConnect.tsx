@@ -1,6 +1,7 @@
 import { InlineError } from '@/popup/components/common/InlineError'
 import { ANALYTICS_EVENTS, sendAnalyticsEvent } from '@/lib/analytics'
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
@@ -75,6 +76,10 @@ const CHAIN_NAMES: Record<LedgerChainFamily, string> = {
 }
 export function LedgerConnect() {
   const { replace } = useNavigate()
+  const [searchParams] = useSearchParams()
+  const requestedWalletId = searchParams.get('walletId')
+  const requestedAccountId = searchParams.get('accountId')
+  const scoped = requestedWalletId !== null || requestedAccountId !== null
   const network = useWalletStore(state => state.currentNetwork)
   const retainedWalletCount = useWalletStore(state => state.wallets.length)
   const [catalog, setCatalog] = useState<AccountNetworksCatalogView | null>(null)
@@ -89,12 +94,12 @@ export function LedgerConnect() {
   const [step, setStep] = useState<'connect' | 'waiting' | 'accounts' | 'configure' | 'success'>(
     'connect'
   )
-  const [targetWalletId, setTargetWalletId] = useState('')
-  const [targetAccount, setTargetAccount] = useState('0')
+  const [selectedWalletId, setTargetWalletId] = useState('')
+  const [selectedAccount, setTargetAccount] = useState('0')
   const [existingCredential, setExistingCredential] = useState<
     LedgerHardwareCredential | undefined
   >()
-  const [families, setFamilies] = useState<readonly LedgerChainFamily[]>(['zcash'])
+  const [families, setFamilies] = useState<readonly LedgerChainFamily[]>(scoped ? [] : ['zcash'])
   const [deviceIndex, setDeviceIndex] = useState('0')
   const [exported, setExported] = useState<{
     credential: LedgerHardwareCredential
@@ -131,6 +136,17 @@ export function LedgerConnect() {
   const connecting = useRef(false)
   const provisioning = useRef(false)
   const wallets = ledgerCatalogWallets(catalog)
+  const requestedAccount = scoped
+    ? catalog?.accounts.find(
+        account =>
+          account.walletId === requestedWalletId &&
+          account.accountId === requestedAccountId &&
+          account.walletSource.kind === 'hardware' &&
+          account.walletSource.hardware.vendor === 'ledger'
+      )
+    : undefined
+  const targetWalletId = scoped ? (requestedAccount?.walletId ?? '') : selectedWalletId
+  const targetAccount = scoped ? String(requestedAccount?.accountIndex ?? '') : selectedAccount
   const target = wallets.find(wallet => wallet.id === targetWalletId)
   const accountIndex = ledgerLogicalAccountIndex(targetAccount, target?.accounts ?? [])
   const registeredFamilies = ledgerRegisteredFamilies(existingCredential, accountIndex, network)
@@ -380,7 +396,8 @@ export function LedgerConnect() {
       !catalogAvailable ||
       loading ||
       connecting.current ||
-      selectedFamilies.length === 0
+      selectedFamilies.length === 0 ||
+      (!!targetWalletId && !existingCredential)
     )
       return
     connecting.current = true
@@ -486,7 +503,9 @@ export function LedgerConnect() {
   return (
     <div className="page-container page-container--tab">
       <PageHeader
-        title={targetWalletId ? 'Add Ledger Accounts' : 'Connect Ledger'}
+        title={
+          scoped ? 'Add Ledger Networks' : targetWalletId ? 'Add Ledger Accounts' : 'Connect Ledger'
+        }
         showBack={step === 'connect' || step === 'configure' || step === 'accounts'}
         backDisabled={creating}
         onBack={
@@ -506,6 +525,7 @@ export function LedgerConnect() {
                   </label>
                   <select
                     id="ledger-wallet"
+                    disabled={scoped}
                     className="h-[45px] w-full min-w-0 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
                     value={targetWalletId}
                     onChange={event => {
@@ -536,6 +556,7 @@ export function LedgerConnect() {
                     </label>
                     <select
                       id="ledger-logical-account"
+                      disabled={scoped}
                       className="h-[45px] w-full min-w-0 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
                       value={targetAccount}
                       onChange={event => setTargetAccount(event.target.value)}
@@ -642,6 +663,9 @@ export function LedgerConnect() {
                 retrying={loading}
                 onRetry={() => setCredentialLoadAttempt(value => value + 1)}
               />
+            )}
+            {scoped && catalogAvailable && !requestedAccount && (
+              <p className="text-sm text-danger">Ledger account unavailable</p>
             )}
             {error && <p className="text-sm text-danger">{error}</p>}
           </div>

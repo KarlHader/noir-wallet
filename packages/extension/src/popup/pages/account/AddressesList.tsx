@@ -37,6 +37,7 @@ import { AccountAvatar } from '../../components/account/AccountAvatar'
 import { availableSoftwareAccountFamilies } from '@/popup/services/account-network-selection-client'
 import { useDAppExecutionMode } from '@/popup/hooks/useDAppExecutionMode'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import type { ActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import {
   nearIncognitoReceiveUnavailableMessage,
   selectNearReceiveAddress,
@@ -468,15 +469,24 @@ function AddressNetworkGroup({
   )
 }
 
-export function AddressesList({ receive = false }: { readonly receive?: boolean }) {
+export function AddressesList({
+  receive = false,
+  receiveAccount
+}: {
+  readonly receive?: boolean
+  readonly receiveAccount?: ActiveAccountIdentity
+}) {
   const { navigate } = useNavigate()
   const location = useLocation()
   const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
   const [searchParams] = useSearchParams()
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
-  const walletId = searchParams.get('walletId') ?? (receive ? currentWalletId : null)
-  const accountId = searchParams.get('accountId') ?? (receive ? currentAccountId : null)
+  const walletId =
+    searchParams.get('walletId') ?? (receive ? (receiveAccount?.walletId ?? currentWalletId) : null)
+  const accountId =
+    searchParams.get('accountId') ??
+    (receive ? (receiveAccount?.accountId ?? currentAccountId) : null)
   const requestedIncognito =
     searchParams.get('mode') === 'incognito' || searchParams.get('mode') === 'private'
   const currentShieldedAddress = useWalletStore(state =>

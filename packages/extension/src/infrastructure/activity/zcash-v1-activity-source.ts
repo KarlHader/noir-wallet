@@ -13,6 +13,7 @@ import type {
 import { getEvmNetworkConfig, getEvmNetworkConfigs } from '@/config/networks'
 import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
 import type { Transaction, TransactionType } from '@/types'
+import { safeBig } from '@/lib/big'
 import { getZcashIntentsOriginStatus } from '@/lib/cross-chain-transaction'
 import { parseDisplayUnitAmount } from '@/lib/number-format'
 
@@ -31,12 +32,19 @@ function decimalToRaw(value: string): string {
   return raw
 }
 
-function mapKind(transaction: Transaction): TransactionKind {
+function mapKind(
+  transaction: Transaction,
+  sourceAssetId: string,
+  destinationAssetId: string | null
+): TransactionKind {
+  const quote = transaction.quoteBinding
   return transaction.type === 'send' ||
     transaction.type === 'unshield' ||
     (transaction.type === 'swap' &&
-      transaction.quoteBinding?.provider === 'rhea-cross-chain-dex' &&
-      transaction.quoteBinding.userAction === 'transfer')
+      ((quote?.provider === 'rhea-cross-chain-dex' && quote.userAction === 'transfer') ||
+        (quote?.recipientType === 'CONFIDENTIAL_INTENTS' &&
+          (quote.userAction === 'transfer' ||
+            (quote.userAction !== 'swap' && sourceAssetId === destinationAssetId)))))
     ? 'transfer'
     : transaction.type
 }
@@ -62,12 +70,44 @@ function direction(type: TransactionType): 'incoming' | 'outgoing' | 'self' {
 }
 
 function assetDomains(transaction: Transaction): readonly ('public' | 'shield')[] | undefined {
-  if (transaction.type === 'shield' || transaction.type === 'unshield') {
-    return Object.freeze(['public', 'shield'] as const)
-  }
+  if (transaction.type === 'shield') return Object.freeze(['public'] as const)
+  if (transaction.type === 'unshield') return Object.freeze(['shield'] as const)
   if (transaction.fromType === 'transparent') return Object.freeze(['public'] as const)
   if (transaction.fromType === 'shielded') return Object.freeze(['shield'] as const)
   return undefined
+}
+
+export function mapZcashSelfTransferReceipt(
+  transaction: Transaction,
+  sourceItem: ActivityItem
+): ActivityItem | undefined {
+  if (transaction.type !== 'shield' && transaction.type !== 'unshield') return undefined
+  const segment = sourceItem.segments[0]
+  if (segment?.status !== 'final' || !segment.evidence?.transactionHash) return undefined
+
+  const amount =
+    transaction.type === 'shield' && transaction.id.startsWith('wasm_')
+      ? transaction.amount
+      : transaction.settledSelfTransferAmount
+  const assetId = sourceItem.snapshot?.primaryAmount?.assetId
+  if (!amount || !assetId) return undefined
+  const amountRaw = decimalToRaw(amount)
+  if (amountRaw === '0') return undefined
+
+  const domain: 'shield' | 'public' = transaction.type === 'shield' ? 'shield' : 'public'
+  return Object.freeze({
+    ...sourceItem,
+    id: `receive:${transaction.id}`,
+    kind: 'receive',
+    assetDomains: Object.freeze([domain]),
+    snapshot: Object.freeze({
+      schemaVersion: 1,
+      direction: 'incoming',
+      primaryAmount: Object.freeze({ assetId, amountRaw }),
+      ...(sourceItem.snapshot?.recipient ? { recipient: sourceItem.snapshot.recipient } : {})
+    }),
+    segments: Object.freeze([Object.freeze({ ...segment, id: `receive:${segment.id}` })])
+  })
 }
 
 function isCrossChain(type: TransactionType): type is 'swap' | 'supply' | 'withdraw' | 'claim' {
@@ -389,14 +429,18 @@ export function mapZcashV1TransactionToActivityItem(
       keyDomainId: scope.keyDomainId,
       accountId: scope.accountId
     }),
-    kind: mapKind(transaction),
+    kind: mapKind(transaction, assetId, counterAssetId),
     status,
     snapshot: Object.freeze({
       schemaVersion: 1,
       direction: direction(transaction.type),
       primaryAmount: Object.freeze({
         assetId,
-        amountRaw: decimalToRaw(transaction.amount)
+        amountRaw: decimalToRaw(
+          transaction.type === 'shield' && transaction.id.startsWith('wasm_')
+            ? safeBig(transaction.amount).plus(transaction.fee).toFixed()
+            : transaction.amount
+        )
       }),
       ...(counterAmount ? { counterAmount } : {}),
       ...(transaction.from && !(transaction.type === 'send' && transaction.fromType === 'shielded')

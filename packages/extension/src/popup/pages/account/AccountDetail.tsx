@@ -25,6 +25,7 @@ import { useDialog } from '../../hooks/useDialog'
 import { useWalletStore } from '@/store/wallet-store'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { getAccountDisplayName } from '@/lib/format'
+import { openHardwareConnectTab } from '@/lib/hardware-tab'
 import { toast } from '@/store/toast-store'
 import { useResyncZcash } from '../../hooks/useResyncZcash'
 import { accountNetworksClient } from '../../services/account-networks-client'
@@ -73,17 +74,25 @@ export function AccountDetail() {
       icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
       action: () => navigate(`/addresses-list?accountId=${accountId}&walletId=${walletId}`)
     },
-    !isHardwareWallet && wallet.keySource !== 'private-key'
+    wallet.keySource === 'ledger'
       ? {
-          label: 'Networks',
+          label: 'Add networks',
           value: undefined,
           icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
           action: () =>
-            navigate(
-              `/account-networks?accountId=${encodeURIComponent(accountId!)}&walletId=${encodeURIComponent(walletId!)}`
-            )
+            openHardwareConnectTab('ledger', { walletId: wallet.id, accountId: account.id })
         }
-      : null,
+      : !isHardwareWallet && wallet.keySource !== 'private-key'
+        ? {
+            label: 'Networks',
+            value: undefined,
+            icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
+            action: () =>
+              navigate(
+                `/account-networks?accountId=${encodeURIComponent(accountId!)}&walletId=${encodeURIComponent(walletId!)}`
+              )
+          }
+        : null,
     // Hardware wallets are watch-only: there is no seed phrase on this device
     isHardwareWallet
       ? {

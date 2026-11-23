@@ -613,6 +613,7 @@ test('retains a processing destination hash when completion omits it', async () 
 
 test('still reads cross-chain completion when submission reporting fails', async () => {
   const calls = []
+  let observedHash = sourceHashes[1]
   const service = {
     async recordTransactionSubmission() {
       calls.push('record')
@@ -623,7 +624,7 @@ test('still reads cross-chain completion when submission reporting fails', async
     },
     async getOrderStatus() {
       calls.push('status')
-      return { status: 'completed' }
+      return { status: 'completed', destinationHash: observedHash }
     },
     async retireReportedSubmission() {
       calls.push('retire')
@@ -637,6 +638,14 @@ test('still reads cross-chain completion when submission reporting fails', async
   const monitor = new RheaSwapTransactionMonitor(service, { notifyStatus: () => {} })
   monitor.repository = repository
 
+  assert.equal(await monitor.checkGraph(fullBroadcast), false)
+  const waiting = await repository.get(scope, fullBroadcast.root.id)
+  assert.equal(
+    waiting.segments.find(segment => segment.role === 'destination').evidence?.transactionHash,
+    undefined
+  )
+  assert.deepEqual(calls.splice(0), ['record', 'report', 'status'])
+  observedHash = destinationHash
   assert.equal(await monitor.checkGraph(fullBroadcast), true)
   assert.deepEqual(calls, ['record', 'report', 'status', 'retire'])
 })

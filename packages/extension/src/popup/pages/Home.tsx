@@ -730,8 +730,9 @@ export function Home() {
       })
   }
 
-  const showInlineSyncProgress = supportsZcash && isSyncing
-  const syncIssue = supportsZcash && !isSyncing ? getHomeZcashSyncIssue(syncReason) : null
+  const showZcashSyncStatus = supportsZcash && walletMode === 'public'
+  const showInlineSyncProgress = showZcashSyncStatus && isSyncing
+  const syncIssue = showZcashSyncStatus && !isSyncing ? getHomeZcashSyncIssue(syncReason) : null
 
   const retryZcashSync = async () => {
     if (syncActionPending) return
@@ -1064,7 +1065,7 @@ export function Home() {
                     const assetId = resolveConfidentialDetailAssetId(multichainPortfolio, tokenId)
                     navigate.navigate(
                       assetId
-                        ? `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=shield`
+                        ? `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=shield&mode=${walletMode}`
                         : `/shield-provider?provider=near-confidential&assetId=${encodeURIComponent(tokenId)}`
                     )
                   }}

@@ -20,6 +20,7 @@ import type { AccountNetworkView } from '@/popup/services/account-networks-clien
 import {
   activityAddressKey,
   getActivityAddressMode,
+  isExternalShieldDepositActivity,
   resolveOwnedActivitySettlement
 } from '@/popup/services/activity-balance-route'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
@@ -279,6 +280,7 @@ export function getClusterSettledDestination(
   if (
     item.snapshot?.shield?.operation !== 'cluster' ||
     item.status !== 'final' ||
+    item.reconfirming ||
     item.completeness !== 'complete' ||
     !plan ||
     plan.operation !== 'cluster' ||
@@ -328,11 +330,7 @@ export function getActivitySwapPresentation(
     return null
   }
 
-  const isExternalDeposit =
-    item.source === 'wallet-v2' &&
-    item.id.startsWith('tx:confidential-external:') &&
-    item.snapshot?.direction === 'incoming' &&
-    item.snapshot.shield?.operation === 'deposit'
+  const isExternalDeposit = isExternalShieldDepositActivity(item)
   const source = resolveActivityDisplayAmount(item.snapshot?.primaryAmount, assetMetadata)
   const settledDestination =
     item.status === 'final' && item.completeness === 'complete'
@@ -388,8 +386,12 @@ export function getActivitySwapPresentation(
   const shieldDomainLabel = (domain: 'public' | 'private' | 'shield') =>
     domain === 'shield' ? 'Shield' : domain === 'private' ? 'Confidential' : 'Public'
   const settlement = resolveOwnedActivitySettlement(item, executionAddressModes)
-  const sourceAccountMode =
-    confidentialDestination || (settlement && item.source === 'zcash-v1')
+  const protocol = item.snapshot?.protocol
+  const privateWithdraw =
+    protocol?.provider === 'rhea-cross-chain-dex' && protocol.balanceTransfer === 'withdraw'
+  const sourceAccountMode = privateWithdraw
+    ? 'Confidential'
+    : confidentialDestination || (settlement && item.source === 'zcash-v1')
       ? shieldDomainLabel(item.assetDomains?.includes('shield') ? 'shield' : 'public')
       : isExternalDeposit
         ? 'External'
@@ -398,23 +400,25 @@ export function getActivitySwapPresentation(
           : senderAddress
             ? executionAddressModes.get(senderAddress.toLowerCase())
             : undefined
-  const destinationAccountMode = confidentialDestination
-    ? 'Confidential'
-    : shield
-      ? shieldDomainLabel(shield.destinationDomain)
-      : settlement
-        ? shieldDomainLabel(settlement.domain)
-        : (getActivityAddressMode(
-            executionAddressModes,
-            item.snapshot?.recipient?.chainId,
-            recipientAddress
-          ) ??
-          (recipientAddress
-            ? executionAddressModes.get(recipientAddress.toLowerCase())
-            : undefined))
-  const protocol = item.snapshot?.protocol
+  const destinationAccountMode = privateWithdraw
+    ? 'Public'
+    : confidentialDestination
+      ? 'Confidential'
+      : shield
+        ? shieldDomainLabel(shield.destinationDomain)
+        : settlement
+          ? shieldDomainLabel(settlement.domain)
+          : (getActivityAddressMode(
+              executionAddressModes,
+              item.snapshot?.recipient?.chainId,
+              recipientAddress
+            ) ??
+            (recipientAddress
+              ? executionAddressModes.get(recipientAddress.toLowerCase())
+              : undefined))
   const hideDestinationCredit =
     !shield &&
+    !privateWithdraw &&
     item.kind === 'transfer' &&
     protocol?.provider === 'rhea-cross-chain-dex' &&
     protocol.userAction === 'transfer' &&
@@ -534,6 +538,40 @@ export function getActivityDisplayChanges(
     )
 }
 
+export function getConfirmedFailedActivityAmount(
+  item: ActivityItem,
+  assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>,
+  direction: 'incoming' | 'outgoing',
+  assetId?: string
+): ActivityDisplayAmount | undefined {
+  if (item.status !== 'failed' || item.reconfirming || !assetId) return undefined
+  const role = direction === 'incoming' ? 'destination' : 'origin'
+  const amounts = item.segments.flatMap(segment => {
+    const evidence = segment.evidence
+    if (
+      segment.role !== role ||
+      segment.status !== 'final' ||
+      segment.failureCode ||
+      segment.reconfirming ||
+      segment.target.kind !== 'onchain' ||
+      !assetId.startsWith(`${segment.target.chainId}/`) ||
+      !evidence?.transactionHash ||
+      evidence.replacementTransactionHash
+    ) {
+      return []
+    }
+    if (direction === 'incoming' && evidence.settledAmount?.assetId === assetId) {
+      return [evidence.settledAmount]
+    }
+    return (
+      evidence.assetEffects?.changes.filter(
+        change => change.assetId === assetId && change.direction === direction
+      ) ?? []
+    )
+  })
+  return amounts.length === 1 ? resolveActivityDisplayAmount(amounts[0], assetMetadata) : undefined
+}
+
 export function resolveActivityDisplayAmount(
   amount: TransactionAssetAmount | undefined,
   assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>
@@ -598,6 +636,7 @@ export function getActivityDetailTitle(
     const label = getActivityAction(item, perspective, route).label
     return label === 'Swap' ? 'Shield Swap' : label
   }
+  if (route?.sourceFundingSource) return getActivityAction(item, perspective, route).label
   if (isConfidentialFundingActivity(item)) return 'Add to Confidential'
   if (item.failureCode === 'refunded') return 'Refund'
   if (
@@ -605,7 +644,9 @@ export function getActivityDetailTitle(
     item.snapshot?.protocol?.provider === 'rhea-cross-chain-dex' &&
     item.snapshot.protocol.userAction === 'transfer'
   ) {
-    return 'Transfer'
+    return item.snapshot.protocol.balanceTransfer === 'withdraw'
+      ? getActivityAction(item, perspective, route).label
+      : 'Transfer'
   }
   if (item.kind === 'transfer') return getActivityAction(item, perspective, route).label
   switch (item.kind) {
@@ -1056,6 +1097,9 @@ function getActivityTitle(
   if (item.snapshot?.shield) return getActivityAction(item, perspective, route).label
   if (isConfidentialFundingActivity(item)) return 'Added to Confidential'
   if (item.failureCode === 'refunded') return 'Refunded'
+  const protocol = item.snapshot?.protocol
+  if (protocol?.provider === 'rhea-cross-chain-dex' && protocol.balanceTransfer === 'withdraw')
+    return getActivityAction(item, perspective, route).label
   const interaction = getActivityInteractionPresentation(item, chainId)
   if (interaction) return interaction.title
   return item.snapshot?.direction === 'incoming' && item.kind === 'transfer'

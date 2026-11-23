@@ -103,7 +103,6 @@ export function useSwapState(
   const addressType = useSwapPreferences(state => state.addressType)
   const slippage = useSwapPreferences(state => state.slippage)
   const persistAddressType = useSwapPreferences(state => state.setAddressType)
-  const setSlippage = useSwapPreferences(state => state.setSlippage)
   const setSavedTokenSelection = useSwapPreferences(state => state.setSavedTokenSelection)
   const setSavedTokenInId = useSwapPreferences(state => state.setSavedTokenInId)
 
@@ -768,7 +767,6 @@ export function useSwapState(
     setRecipientAddress,
     setDepositAddress,
     setAddressType,
-    setSlippage,
     setIsQuoting,
     setQuoteError,
 

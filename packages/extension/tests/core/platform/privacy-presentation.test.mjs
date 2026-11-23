@@ -25,10 +25,12 @@ import {
   projectPortfolioForChains
 } from '../../../src/popup/services/portfolio-presentation.ts'
 import {
+  getConfidentialWalletDetailAssetId,
   getNearConfidentialChainId,
   getNearConfidentialIconChain,
   listStandaloneNearConfidentialHoldings,
   resolveConfidentialDetailAssetId,
+  resolveNearConfidentialZecDetail,
   resolveNearConfidentialZecHolding,
   withNearConfidentialZecChain
 } from '../../../src/popup/services/near-confidential-holdings.ts'
@@ -267,6 +269,37 @@ test('NEAR Confidential ZEC stays separate from on-chain ZEC and inside its acco
       }
     })
   ).toBeNull()
+})
+
+test('Confidential-only ZEC resolves to its detail without a native account position', () => {
+  const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const assetId = `${chainId}/slip44:133`
+  const holding = {
+    tokenId: 'private-zec',
+    protocolAssetId: 'nep141:zec.omft.near',
+    availableRaw: '125000000'
+  }
+  const model = {
+    scope: { keyDomainId: 'wallet-a', accountId: 'account-a' },
+    assets: [],
+    chains: [],
+    confidential: { status: 'ready', assets: [holding] }
+  }
+  const input = { model, network: 'mainnet', walletId: 'wallet-a', accountId: 'account-a', assetId }
+  expect(resolveConfidentialDetailAssetId(model, holding.tokenId)).toBe(assetId)
+  expect(getConfidentialWalletDetailAssetId(model, holding)).toBe(assetId)
+  expect(resolveNearConfidentialZecDetail(input)).toMatchObject({
+    asset: { asset: { id: assetId }, balance: { totalRaw: '0' }, chainAccountIds: [] },
+    chain: { chain: { id: chainId }, assets: [] }
+  })
+  expect(resolveNearConfidentialZecDetail({ ...input, accountId: 'account-b' })).toBeNull()
+  const mismatchedHolding = { ...holding, chainId: 'eip155:1' }
+  const mismatchedModel = {
+    ...model,
+    confidential: { ...model.confidential, assets: [mismatchedHolding] }
+  }
+  expect(resolveConfidentialDetailAssetId(mismatchedModel, holding.tokenId)).toBeNull()
+  expect(getConfidentialWalletDetailAssetId(mismatchedModel, mismatchedHolding)).toBeNull()
 })
 
 test('Home keeps native and Confidential ZEC as separate balances', () => {

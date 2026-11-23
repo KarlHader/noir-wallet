@@ -48,6 +48,7 @@ export interface RheaSwapTransactionBinding {
   readonly provider: 'rhea-cross-chain-dex'
   readonly kind: 'swap'
   readonly userAction?: 'transfer'
+  readonly balanceTransfer?: 'withdraw'
   readonly quoteHandle: string
   readonly executionId: string
   readonly router: string
@@ -267,7 +268,8 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
       'isCrossChain',
       'origin',
       'destination',
-      ...(value.userAction === undefined ? [] : ['userAction'])
+      ...(value.userAction === undefined ? [] : ['userAction']),
+      ...(value.balanceTransfer === undefined ? [] : ['balanceTransfer'])
     ],
     'RHEA Swap binding'
   )
@@ -276,17 +278,32 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
     value.provider !== 'rhea-cross-chain-dex' ||
     value.kind !== 'swap' ||
     (value.userAction !== undefined && value.userAction !== 'transfer') ||
+    (value.balanceTransfer !== undefined &&
+      (value.balanceTransfer !== 'withdraw' ||
+        value.userAction !== 'transfer' ||
+        value.isCrossChain !== true)) ||
     !Number.isSafeInteger(value.expiresAt) ||
     (value.expiresAt as number) <= 0 ||
     typeof value.isCrossChain !== 'boolean'
   ) {
     throw new Error('Invalid RHEA Swap binding')
   }
+  const origin = parseRheaAssetBinding(value.origin, 'RHEA Swap origin')
+  const destination = parseRheaDestinationBinding(value.destination)
+  if (
+    value.balanceTransfer === 'withdraw' &&
+    (!origin.chainId.startsWith('eip155:') ||
+      !destination.chainId.startsWith('eip155:') ||
+      origin.chainId === destination.chainId)
+  ) {
+    throw new Error('Invalid RHEA Swap Withdraw binding')
+  }
   return Object.freeze({
     schemaVersion: 1,
     provider: 'rhea-cross-chain-dex',
     kind: 'swap',
     ...(value.userAction === undefined ? {} : { userAction: 'transfer' as const }),
+    ...(value.balanceTransfer === 'withdraw' ? { balanceTransfer: 'withdraw' as const } : {}),
     quoteHandle: parseString(value.quoteHandle, 'RHEA Swap quote handle'),
     executionId: parseString(value.executionId, 'RHEA Swap execution ID'),
     router: parseString(value.router, 'RHEA Swap router'),
@@ -295,8 +312,8 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
     originAmountRaw: parseRawAmount(value.originAmountRaw, 'RHEA Swap input amount'),
     expiresAt: value.expiresAt as number,
     isCrossChain: value.isCrossChain,
-    origin: parseRheaAssetBinding(value.origin, 'RHEA Swap origin'),
-    destination: parseRheaDestinationBinding(value.destination)
+    origin,
+    destination
   })
 }
 

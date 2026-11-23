@@ -49,7 +49,7 @@ import { credentialSession } from './credential-session'
 import { nearLedgerSigningBridge } from './ledger-signing-bridge'
 import { encodeNearDAppFunctionArgs, parseNearDAppTransactionBatch } from './near-dapp-codecs'
 import { loadActiveNearTransferContext, type ActiveNearTransferContext } from './near-transfer'
-import { NEAR_TRANSACTION_MONITOR_ALARM } from './near-transaction-monitor'
+import { NEAR_TRANSACTION_MONITOR_ALARM } from './native-transaction-monitor'
 import { RHEA_SWAP_TRANSACTION_MONITOR_ALARM } from './rhea-swap-transaction-monitor'
 
 const STORAGE_PREFIX = 'rhea_swap_near:'

@@ -1006,6 +1006,7 @@ export class ConfidentialFundingApi {
     readonly originAsset: string
     readonly signerId: string
     readonly refundTo: string
+    readonly slippageBps: number
   }): Promise<ConfidentialQuote> {
     const normalized = normalizeNearConfidentialQuote({
       originAsset: input.originAsset,
@@ -1018,7 +1019,7 @@ export class ConfidentialFundingApi {
     const request = {
       dry: true,
       swapType: 'FLEX_INPUT',
-      slippageTolerance: 0,
+      slippageTolerance: input.slippageBps,
       originAsset: normalized.originAsset,
       depositType: 'ORIGIN_CHAIN',
       destinationAsset: input.originAsset,
@@ -1053,7 +1054,7 @@ export class ConfidentialFundingApi {
           depositType: 'ORIGIN_CHAIN',
           refundType: 'ORIGIN_CHAIN',
           recipientType: 'CONFIDENTIAL_INTENTS',
-          slippageBps: 0
+          slippageBps: input.slippageBps
         },
         Date.now(),
         true
@@ -1083,7 +1084,7 @@ export class ConfidentialFundingApi {
       depositType: 'ORIGIN_CHAIN',
       refundType: 'ORIGIN_CHAIN',
       recipientType: 'CONFIDENTIAL_INTENTS',
-      slippageBps: 0
+      slippageBps: input.slippageBps
     })
     if (nearSource && quote.quote.depositMemo) {
       throw new Error('NEAR Shield quote must not include a memo')

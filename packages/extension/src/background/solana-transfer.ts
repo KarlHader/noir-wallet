@@ -2,6 +2,7 @@ import { resolveKeyDomain } from '@/core/accounts/application'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { resolveSolanaRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
+import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
 import {
   createAssetRegistry,
   createInitialProductChainRegistry,
@@ -21,7 +22,7 @@ import {
 import type { StorageV2ReadRepository } from '@/ports/repositories'
 import { credentialSession } from './credential-session'
 import { solanaLedgerSigningBridge } from './ledger-signing-bridge'
-import { SOLANA_TRANSACTION_MONITOR_ALARM } from './solana-transaction-monitor'
+import { SOLANA_TRANSACTION_MONITOR_ALARM } from './native-transaction-monitor'
 import { reportBackgroundSendBroadcast } from './analytics/send-broadcast'
 import {
   isSelectedTransferScope,
@@ -41,17 +42,8 @@ export async function loadActiveSolanaTransferContext(
   repository: SolanaTransferStorageRepository,
   chainId: string
 ): Promise<ActiveSolanaTransferContext | null> {
-  const pointer = await repository.getActivePointer()
-  if (!pointer) return null
-  const snapshot = await repository.getSnapshot(pointer.generationId)
-  if (!snapshot) throw new Error('Active Storage V2 generation is missing')
-  if (
-    snapshot.manifest.status !== 'verified' ||
-    snapshot.manifest.generationId !== pointer.generationId ||
-    snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint
-  ) {
-    throw new Error('Active Storage V2 generation does not match its pointer')
-  }
+  const snapshot = await readActiveStorageV2Snapshot(repository)
+  if (!snapshot) return null
   const active = snapshot.manifest.activeAccount
   if (!active) return null
   const accounts = snapshot.accounts.filter(

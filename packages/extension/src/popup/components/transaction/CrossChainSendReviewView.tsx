@@ -7,12 +7,15 @@ import { InlineError } from '@/popup/components/common/InlineError'
 import { quoteReviewPrimaryAction } from '@/popup/services/quote-review'
 import { RouteProviderLabel } from './RouteProviderLabel'
 import { TransactionReviewView } from './TransactionReviewView'
+import { TransactionReviewParty } from './TransactionReviewParty'
 
 export function CrossChainSendReviewView({
   source,
   destination,
   sourceNetwork = formatChainName(source.blockchain),
   sourceAddress,
+  sourceAccountName,
+  sourceDomain,
   review,
   routeCost,
   sourceNetworkFee,
@@ -38,6 +41,8 @@ export function CrossChainSendReviewView({
   readonly destination: RheaSwapToken
   readonly sourceNetwork?: string
   readonly sourceAddress?: string
+  readonly sourceAccountName?: string
+  readonly sourceDomain?: 'public' | 'private'
   readonly review: Pick<RheaSwapReviewView, 'amountIn' | 'estimatedOut' | 'recipient' | 'router'>
   readonly routeCost: string | null
   readonly sourceNetworkFee: { readonly amount: string; readonly symbol: string } | null
@@ -91,22 +96,25 @@ export function CrossChainSendReviewView({
         {
           label: 'From',
           content: (
-            <span className="font-mono" title={sourceAddress}>
-              {formatSortAddress(sourceAddress ?? '')}
-            </span>
+            <TransactionReviewParty
+              accountName={sourceAccountName}
+              domain={sourceDomain}
+              address={sourceAddress}
+              chain={{ name: sourceNetwork, icon: source.blockchain }}
+            />
           )
         },
         {
           label: 'Recipient',
           content: (
-            <span className="font-mono" title={review.recipient}>
-              {formatSortAddress(review.recipient)}
-            </span>
+            <TransactionReviewParty
+              address={review.recipient}
+              chain={{
+                name: formatChainName(destination.blockchain),
+                icon: destination.blockchain
+              }}
+            />
           )
-        },
-        {
-          label: 'Network',
-          content: `${sourceNetwork} to ${formatChainName(destination.blockchain)}`
         },
         {
           label: 'Est. receive',

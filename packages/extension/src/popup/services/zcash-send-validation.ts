@@ -87,6 +87,16 @@ export function resolveZcashTransparentShieldFundingBalance(
     : funding
 }
 
+export function resolveZcashTransparentShieldMaximum(
+  balance: ZcashBalance | null | undefined,
+  amount: string | null,
+  fee: string | null
+): string | null {
+  if (amount === null || fee === null) return null
+  const { available } = resolveZcashTransparentShieldFundingBalance(balance)
+  return safeBig(amount).plus(fee).lte(available) ? amount : null
+}
+
 export function getZcashTransparentToShieldMoveAmountError(
   amount: string,
   balance: ZcashBalance | null | undefined,

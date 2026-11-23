@@ -32,7 +32,6 @@ export interface TransactionStatusCopy {
 export interface IntentsStatusCopy extends TransactionStatusCopy {
   title: string
   resultStatus: TransactionResultStatus
-  notification?: StatusNotificationCopy
 }
 
 export interface TransactionResultCopy {
@@ -99,11 +98,7 @@ const INTENTS_STATUS_COPY: Record<
       compactLabel: 'Completed',
       description,
       tone: 'success',
-      resultStatus: 'success',
-      notification: {
-        title: label,
-        message: description
-      }
+      resultStatus: 'success'
     }
   },
   REFUNDED: ({ actionName }) => {
@@ -115,11 +110,7 @@ const INTENTS_STATUS_COPY: Record<
       compactLabel: 'Refund submitted',
       description,
       tone: 'neutral',
-      resultStatus: 'submitted',
-      notification: {
-        title: `${actionName} refund submitted`,
-        message: description
-      }
+      resultStatus: 'submitted'
     }
   },
   FAILED: ({ actionName }) => {
@@ -130,11 +121,7 @@ const INTENTS_STATUS_COPY: Record<
       compactLabel: 'Failed',
       description,
       tone: 'error',
-      resultStatus: 'failed',
-      notification: {
-        title: `${actionName} Failed`,
-        message: description
-      }
+      resultStatus: 'failed'
     }
   }
 }
@@ -172,11 +159,7 @@ export function getIntentsStatusCopy(
       compactLabel: label,
       description,
       tone: 'neutral',
-      resultStatus: 'loading',
-      notification: {
-        title: `${actionName} Processing`,
-        message: `Your ${actionName.toLowerCase()} relay has confirmed. Waiting for destination Zcash confirmations.`
-      }
+      resultStatus: 'loading'
     }
   }
 
@@ -402,34 +385,4 @@ export function getTransactionToastCopy(
   }
   const failed = getConfirmationFailureResultCopy()
   return { title: failed.title, message: failed.description }
-}
-
-export function getActionFailureNotificationCopy(
-  actionName: string,
-  message: string
-): StatusNotificationCopy {
-  return { title: `${actionName} Failed`, message }
-}
-
-export function getZcashConfirmationNotificationCopy(
-  type: TransactionType | undefined,
-  status: 'success' | 'failed',
-  reason: 'confirmed' | 'expired' | 'timeout'
-): StatusNotificationCopy {
-  const actionName =
-    type === 'shield' ? 'Shielding' : type === 'unshield' ? 'Unshielding' : 'Transaction'
-  const action = actionName.toLowerCase()
-  if (status === 'success') {
-    return {
-      title: `${actionName} Confirmed`,
-      message: `Your ZEC ${action} has been confirmed on-chain.`
-    }
-  }
-  return {
-    title: `${actionName} Failed`,
-    message:
-      reason === 'expired'
-        ? `Your ZEC ${action} expired before it was mined. You can speed it up by resending at a higher fee.`
-        : `Your ZEC ${action} could not be confirmed in time.`
-  }
 }

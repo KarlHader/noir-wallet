@@ -42,14 +42,12 @@ interface CrossChainSendFormViewProps {
   readonly canGetQuote: boolean
   readonly actionLoading: boolean
   readonly providerName?: string
-  readonly slippage: number
   readonly onAmountChange: (value: string) => void
   readonly onMaxClick?: () => void
   readonly onRecipientChange: (value: string) => void
   readonly onSelectRecipient?: () => void
   readonly onRetryCatalog: () => void
   readonly onRetryQuote?: () => void
-  readonly onOpenSlippage: () => void
   readonly onReview: () => void
 }
 
@@ -85,14 +83,12 @@ export function CrossChainSendFormView({
   canGetQuote,
   actionLoading,
   providerName,
-  slippage,
   onAmountChange,
   onMaxClick,
   onRecipientChange,
   onSelectRecipient,
   onRetryCatalog,
   onRetryQuote,
-  onOpenSlippage,
   onReview
 }: CrossChainSendFormViewProps) {
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
@@ -185,20 +181,6 @@ export function CrossChainSendFormView({
             ) : (
               <AmountDisplay value={routeCost} symbol={sourceSymbol} profile="fee" />
             )
-          }
-          extra={
-            <div className="flex min-h-5 items-center justify-between gap-3">
-              <span className="text-muted">Slippage</span>
-              <button
-                type="button"
-                onClick={onOpenSlippage}
-                disabled={initializing}
-                className="inline-flex items-center gap-1 hover:text-primary"
-                aria-label={`Set slippage, currently ${slippage}%`}
-              >
-                {slippage}% <Icon icon="lucide:chevron-down" width={12} />
-              </button>
-            </div>
           }
           estimatedReceive={
             !isQuoting && tokenOut && estimatedOut

@@ -1,15 +1,12 @@
 import { Icon } from '@iconify/react'
 import { useEffect, useRef, type ComponentProps } from 'react'
-import { formatSortAddress } from '@/lib/format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatPortfolioNetworkName } from '@/popup/services/portfolio-format'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
-import { SendRecipientAddress } from '@/popup/components/transaction/SendInputCards'
-import { ExecutionAccountBadge } from '@/popup/components/account/ExecutionAccountSelector'
+import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import {
   SendFormActions,
   SendRouteInfoCard,
@@ -217,44 +214,29 @@ function getEvmSendReview(state: EvmSendTransferState): SendReview | null {
       {
         label: 'Send from',
         content: (
-          <span className="inline-flex min-w-0 max-w-full items-center justify-end gap-1.5">
-            <ExecutionAccountBadge mode={review.sourceMode} />
-            <span
-              className="min-w-0 truncate font-mono text-sm"
-              title={`${accountDisplayName}: ${summary.fields.from}`}
-            >
-              {formatSortAddress(summary.fields.from)}
-            </span>
-          </span>
+          <TransactionReviewParty
+            accountName={accountDisplayName}
+            domain={review.sourceMode === 'private' ? 'private' : 'public'}
+            address={summary.fields.from}
+            chain={chain.chain}
+          />
         )
       },
       {
         label: 'Recipient',
         content: (
-          <span className="inline-flex min-w-0 max-w-full items-center justify-end gap-1.5">
-            {reviewRecipientRole !== 'unknown' && (
-              <ExecutionAccountBadge
-                mode={reviewRecipientRole === 'confidential' ? 'private' : 'main'}
-              />
-            )}
-            <SendRecipientAddress address={review.recipient} name={recipientContactName} />
-          </span>
-        )
-      },
-      {
-        label: 'Network',
-        content: (
-          <span className="inline-flex items-center justify-end gap-1.5">
-            <ChainIcon
-              chain={resolveChainIconAlias(
-                chain.chain.family,
-                chain.chain.displayName,
-                chain.chain.id
-              )}
-              className="size-4"
-            />
-            {formatPortfolioNetworkName(chain)}
-          </span>
+          <TransactionReviewParty
+            accountName={recipientContactName}
+            domain={
+              reviewRecipientRole === 'unknown'
+                ? undefined
+                : reviewRecipientRole === 'confidential'
+                  ? 'private'
+                  : 'public'
+            }
+            address={review.recipient}
+            chain={chain.chain}
+          />
         )
       },
       {

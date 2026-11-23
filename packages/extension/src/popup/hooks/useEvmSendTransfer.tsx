@@ -191,6 +191,7 @@ export function useEvmSendTransfer({
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const networkMode = useWalletStore(state => state.currentNetwork)
   const slippage = useSwapPreferences(state => state.slippage)
+  const quoteMode = useSwapPreferences(state => state.quoteMode)
   const endpoints = useSettingsStore(state =>
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
@@ -497,6 +498,7 @@ export function useEvmSendTransfer({
     amountRaw: amountRaw ?? '',
     amount,
     slippage,
+    quoteMode,
     feeSelectionKey: JSON.stringify(feeSelection),
     portfolio,
     chain,
@@ -553,6 +555,7 @@ export function useEvmSendTransfer({
             amount,
             amountRaw,
             slippage,
+            quoteMode,
             feeSelectionKey
           } = latestPrivatePreviewInputs.current
           const descriptor = getEnabledSwapChains([chain.chain])[0]
@@ -594,6 +597,7 @@ export function useEvmSendTransfer({
             amount,
             amountRaw,
             slippage,
+            quoteMode,
             feeSelectionKey,
             sourceToken: pair.sourceToken,
             destinationToken: pair.destinationToken

@@ -17,6 +17,7 @@ import {
   getActivityTransferRecipient,
   getActivitySegmentStatusPresentation,
   getActivityStatusPresentation,
+  getConfirmedFailedActivityAmount,
   getActivitySwapPresentation,
   getClusterSettledDestination,
   getActivitySwapSourceMethodLabel,
@@ -77,6 +78,46 @@ function failedItem(evidence) {
 }
 
 test.describe('Multichain Activity presentation', () => {
+  test('shows confirmed debits but never quoted credits on a failed routed transfer', () => {
+    const assetId = 'eip155:1/slip44:60'
+    const assets = new Map([[assetId, { metadata: { symbol: 'ETH', decimals: 18 } }]])
+    const item = {
+      ...failedItem({ transactionHash }),
+      snapshot: {
+        schemaVersion: 1,
+        direction: 'outgoing',
+        primaryAmount: { assetId, amountRaw: '3000000000000000000' },
+        counterAmount: { assetId, amountRaw: '2000000000000000000' }
+      }
+    }
+    expect(getConfirmedFailedActivityAmount(item, assets, 'outgoing', assetId)).toBeUndefined()
+
+    const debit = {
+      id: 'confirmed-origin',
+      role: 'origin',
+      target: { kind: 'onchain', chainId: 'eip155:1' },
+      status: 'final',
+      evidence: {
+        transactionHash,
+        assetEffects: {
+          source: 'receipt',
+          completeness: 'complete',
+          changes: [{ assetId, amountRaw: '1000000000000000000', direction: 'outgoing' }]
+        }
+      }
+    }
+    const failedAfterDebit = { ...item, segments: [debit] }
+    expect(
+      getConfirmedFailedActivityAmount(failedAfterDebit, assets, 'outgoing', assetId)
+    ).toMatchObject({
+      symbol: 'ETH',
+      exact: '1'
+    })
+    expect(
+      getConfirmedFailedActivityAmount(failedAfterDebit, assets, 'incoming', assetId)
+    ).toBeUndefined()
+  })
+
   test('classifies internal movement from the viewed domain and known Shield provider', () => {
     const item = {
       ...failedItem({ transactionHash }),
@@ -87,13 +128,37 @@ test.describe('Multichain Activity presentation', () => {
       }
     }
     expect(getActivityAction(item, { viewedDomain: 'private' })).toEqual({
-      label: 'Deposit',
+      label: 'Receive',
       side: 'destination'
     })
     expect(getActivityAction(item, { viewedDomain: 'shield' })).toEqual({
       label: 'Withdraw',
       side: 'source'
     })
+    const zcashWithdrawal = {
+      ...item,
+      snapshot: {
+        ...item.snapshot,
+        shield: { ...item.snapshot.shield, destinationDomain: 'public' },
+        recipient: {
+          chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+          address: 't1recipient'
+        }
+      }
+    }
+    for (const shieldProvider of [undefined, 'near-confidential']) {
+      const perspective = { viewedDomain: 'shield', shieldProvider }
+      expect(getActivityAction(zcashWithdrawal, perspective)).toEqual({
+        label: 'Withdraw',
+        side: 'source'
+      })
+      expect(
+        getActivityAction(
+          { ...zcashWithdrawal, snapshot: { ...zcashWithdrawal.snapshot, direction: 'outgoing' } },
+          perspective
+        )
+      ).toEqual({ label: 'Send', side: 'source' })
+    }
     expect(
       getActivityAction(
         {
@@ -144,7 +209,7 @@ test.describe('Multichain Activity presentation', () => {
     }
     expect(
       getActivityAction(nativeSwap, { viewedDomain: 'shield', shieldProvider: 'near-confidential' })
-    ).toEqual({ label: 'Withdraw', side: 'source' })
+    ).toEqual({ label: 'Swap', side: 'none' })
     expect(
       getActivityAction(nativeSwap, { viewedDomain: 'shield', shieldProvider: 'zcash-shield' })
     ).toEqual({ label: 'Deposit', side: 'destination' })
@@ -169,7 +234,7 @@ test.describe('Multichain Activity presentation', () => {
         { viewedDomain: 'shield', shieldProvider: 'near-confidential' },
         shieldedDestination
       )
-    ).toEqual({ label: 'Withdraw', side: 'source' })
+    ).toEqual({ label: 'Swap', side: 'none' })
     expect(
       getActivityAction(
         nativeZecRecipient,
@@ -229,9 +294,41 @@ test.describe('Multichain Activity presentation', () => {
 
     expect(route(item)?.destinationAccountMode).toBe('Confidential')
     const filters = { items: [project(item)], selectedChainIds: [chainId] }
-    expect(filterActivityItems({ ...filters, domain: 'private' })).toEqual(filters.items)
+    expect(filterActivityItems({ ...filters, domain: 'private' })).toEqual([])
     expect(filterActivityItems({ ...filters, domain: 'public' })).toEqual([])
     expect(filterActivityItems({ ...filters, domain: 'shield' })).toEqual(filters.items)
+    const confirmed = {
+      ...project(item),
+      status: 'final',
+      failureCode: undefined,
+      segments: [
+        {
+          id: 'settlement:one',
+          role: 'destination',
+          status: 'final',
+          target: { kind: 'onchain', chainId },
+          evidence: { transactionHash, settledAmount: { assetId, amountRaw: '86' } }
+        }
+      ]
+    }
+    const executionAddressModes = new Map([[`${chainId}:${privateAddress}`, 'Confidential']])
+    const destinationFilters = { ...filters, domain: 'private', executionAddressModes }
+    const [receipt] = filterActivityItems({ ...destinationFilters, items: [confirmed] })
+    expect(receipt).toMatchObject({
+      kind: 'receive',
+      snapshot: { direction: 'incoming', primaryAmount: { assetId, amountRaw: '86' } }
+    })
+    const observed = { ...receipt, id: 'rpc:private-credit', source: 'rpc' }
+    expect(filterActivityItems({ ...destinationFilters, items: [confirmed, observed] })).toEqual([
+      observed
+    ])
+    expect(
+      filterActivityItems({
+        ...destinationFilters,
+        items: [confirmed],
+        executionAddressModes: new Map()
+      })
+    ).toEqual([])
     expect(route(item, { ...plan, externalRecipient: publicAddress })?.destinationAccountMode).toBe(
       'Public'
     )
@@ -303,7 +400,7 @@ test.describe('Multichain Activity presentation', () => {
     })
     expect(route.hideDestinationCredit).toBeUndefined()
     expect(getActivityRouteTitle(item, route, { viewedDomain: 'public' })).toBe('Send')
-    expect(getActivityRouteTitle(item, route, { viewedDomain: 'private' })).toBe('Deposit')
+    expect(getActivityRouteTitle(item, route, { viewedDomain: 'private' })).toBe('Receive')
     expect(hasMatchingActivityTokenIcons(route)).toBe(true)
     expect(
       hasMatchingActivityTokenIcons({
@@ -954,6 +1051,7 @@ test.describe('Multichain Activity presentation', () => {
     )
     expect(route?.destinationIsSettled).toBe(true)
     expect(route?.destination?.exact).toBe('0.144798')
+    expect(getClusterSettledDestination({ ...item, reconfirming: true }, plan)).toBeUndefined()
     expect(getClusterSettledDestination(item, { ...plan, phase: 'processing' })).toBeUndefined()
     expect(
       getClusterSettledDestination(item, {

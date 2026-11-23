@@ -131,6 +131,9 @@ export function resolveConfidentialDetailAssetId(
   const matches = holdings.filter(entry => entry.tokenId === tokenId)
   if (matches.length !== 1) return null
   const holding = matches[0]!
+  if (getNearConfidentialChainId(holding) === mainnetZcashChain.id) {
+    return getConfidentialWalletDetailAssetId(model, holding)
+  }
   if (holdings.filter(entry => entry.assetId === holding.assetId).length !== 1) {
     return null
   }
@@ -148,8 +151,32 @@ export function getConfidentialWalletDetailAssetId(
   asset: ConfidentialAsset,
   catalogAssetId?: string
 ): string | null {
+  if (getNearConfidentialChainId(asset) === mainnetZcashChain.id) {
+    if (!model || !asset.availableRaw || !/^[0-9]+$/.test(asset.availableRaw)) return null
+    const holding = resolveNearConfidentialZecHolding({
+      model,
+      network: 'mainnet',
+      walletId: model.scope.keyDomainId,
+      accountId: model.scope.accountId
+    })
+    return holding?.protocolAssetId === asset.protocolAssetId &&
+      holding.availableRaw === asset.availableRaw &&
+      BigInt(holding.availableRaw) > 0n
+      ? holding.assetId
+      : null
+  }
   const candidate = asset.assetId ?? catalogAssetId ?? asset.tokenId
   return model?.assets.some(item => item.asset.id === candidate) ? candidate : null
+}
+
+export function resolveNearConfidentialZecDetail(
+  input: Parameters<typeof resolveNearConfidentialZecHolding>[0]
+): { asset: PortfolioAssetView; chain: PortfolioChainView } | null {
+  if (!input.model || !input.assetId) return null
+  const holding = resolveNearConfidentialZecHolding(input)
+  if (!holding || BigInt(holding.availableRaw) <= 0n) return null
+  const asset = createConfidentialZecDisplayAsset(input.model, holding.assetId)
+  return asset ? { asset, chain: confidentialZecChainView() } : null
 }
 
 export function getNearConfidentialChainId(asset: ConfidentialAsset): string | null {
@@ -188,10 +215,26 @@ export function withNearConfidentialZecChain(
   // Network selection only; this does not give the account a native Zcash position.
   return {
     ...model,
-    chains: [
-      ...model.chains,
-      { chain: mainnetZcashChain, status: 'ready', assets: [], errorCodes: [] }
-    ]
+    chains: [...model.chains, confidentialZecChainView()]
+  }
+}
+
+function confidentialZecChainView(): PortfolioChainView {
+  return { chain: mainnetZcashChain, status: 'ready', assets: [], errorCodes: [] }
+}
+
+function createConfidentialZecDisplayAsset(
+  model: PortfolioReadModel,
+  assetId: string
+): PortfolioAssetView | undefined {
+  const registeredAsset = mainnetAssets.get(assetId)
+  if (!registeredAsset) return undefined
+  return {
+    ...registeredAsset,
+    balance: { totalRaw: '0', spendableRaw: '0', availableRaw: '0', pendingRaw: '0' },
+    chainAccountIds: [],
+    freshness: model.confidential?.freshness === 'fresh' ? 'fresh' : 'stale',
+    updatedAt: model.confidential?.updatedAt ?? 0
   }
 }
 
@@ -247,8 +290,6 @@ export function resolveNearConfidentialZecRow(
       holdingChain?.chain.id === chain.chain.id
   )
   if (holding.availableRaw === '0' ? !hasNativeRow : !mergedHolding) return null
-  const registeredAsset = mainnetAssets.get(holding.assetId)
-  if (!registeredAsset) return null
   return {
     assetId: holding.assetId,
     chainId: chain.chain.id,
@@ -259,13 +300,7 @@ export function resolveNearConfidentialZecRow(
       ? {}
       : {
           // A row for presentation only. Its Confidential amount is rendered separately.
-          displayAsset: {
-            ...registeredAsset,
-            balance: { totalRaw: '0', spendableRaw: '0', availableRaw: '0', pendingRaw: '0' },
-            chainAccountIds: [],
-            freshness: sourceModel.confidential?.freshness === 'fresh' ? 'fresh' : 'stale',
-            updatedAt: sourceModel.confidential?.updatedAt ?? 0
-          }
+          displayAsset: createConfidentialZecDisplayAsset(sourceModel, holding.assetId)
         })
   }
 }

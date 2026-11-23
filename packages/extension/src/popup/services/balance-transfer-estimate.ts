@@ -4,8 +4,8 @@ import {
   nearDirectCatalogToken,
   nearDirectQuoteAsset
 } from '@/core/chains/near/near-incognito-move'
-import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
-import { preferWalletEvmQuoteToken } from './token-address-discovery'
+import { resolveRheaPrivateTransferToken, type RheaSwapQuoteMode } from '@/core/services/rhea-swap'
+import { preferWalletEvmQuoteToken, toWalletEvmQuoteToken } from './token-address-discovery'
 import type { ConfidentialFundingPreview } from '@/core/services/confidential-funding'
 import {
   formatBaseUnitDecimalAmount,
@@ -69,16 +69,21 @@ export function clusterTransferEstimate(
 export async function estimateDirectTransfer(input: {
   readonly asset: PortfolioAssetView
   readonly chain: PortfolioChainView
+  readonly destinationAsset?: PortfolioAssetView
   readonly nativeFeeAsset: PortfolioAssetView | null
   readonly amountRaw: string
   readonly sender: string
   readonly recipient: string
   readonly executionMode: 'main' | 'private'
+  readonly slippageBps: number
+  readonly quoteMode: RheaSwapQuoteMode
   readonly signal: AbortSignal
 }): Promise<BalanceTransferEstimate> {
   if (input.chain.chain.family === 'near') return estimateNearDirectTransfer(input)
   const match = /^eip155:([1-9][0-9]*)$/.exec(input.chain.chain.id)
-  if (!match) throw new Error('This network does not support the transfer')
+  if (!match || input.asset.asset.chainId !== input.chain.chain.id) {
+    throw new Error('This network does not support the transfer')
+  }
   const catalog = await rheaSwapClient
     .listTokens({ direction: 'from', tokenListChainIds: [Number(match[1])] })
     .catch(() => null)
@@ -89,29 +94,72 @@ export async function estimateDirectTransfer(input: {
   )
   const token = preferWalletEvmQuoteToken(input.asset, catalogToken)
   if (!token) throw new Error('This asset is unavailable for the transfer')
-  const asset = {
-    chain: token.rheaChainId,
-    address: token.rheaAddress,
-    symbol: token.symbol,
-    decimals: token.decimals,
-    isNative: token.isNative
+  const destination = input.destinationAsset ? toWalletEvmQuoteToken(input.destinationAsset) : token
+  if (!destination || (input.destinationAsset && destination.rheaChainId === token.rheaChainId)) {
+    throw new Error('This destination is unavailable for the transfer')
   }
+  const asset = (item: typeof token) => ({
+    chain: item.rheaChainId,
+    address: item.rheaAddress,
+    symbol: item.symbol,
+    decimals: item.decimals,
+    isNative: item.isNative
+  })
   const quote = await rheaSwapClient.quote(
     {
       fromChain: token.rheaChainId,
-      toChain: token.rheaChainId,
-      tokenIn: asset,
-      tokenOut: asset,
+      toChain: destination.rheaChainId,
+      tokenIn: asset(token),
+      tokenOut: asset(destination),
       amountIn: input.amountRaw,
       sender: input.sender,
       recipient: input.recipient,
-      slippageBps: 100,
+      slippageBps: input.slippageBps,
+      quoteMode: input.quoteMode,
       confidentiality: 'basic'
     },
-    input.executionMode === 'private' ? 'private-transfer' : 'confidential-funding'
+    input.executionMode === 'private'
+      ? input.destinationAsset
+        ? 'private-cross-chain-withdraw'
+        : 'private-transfer'
+      : 'confidential-funding'
   )
   try {
     input.signal.throwIfAborted()
+    if (input.destinationAsset) {
+      const review = await rheaSwapClient.prepare(quote.quoteHandle)
+      input.signal.throwIfAborted()
+      if (
+        !review.isCrossChain ||
+        review.quoteHandle !== quote.quoteHandle ||
+        review.recipient.toLowerCase() !== input.recipient.toLowerCase() ||
+        review.fromChain !== token.rheaChainId ||
+        review.toChain !== destination.rheaChainId ||
+        review.execution.chain !== token.rheaChainId ||
+        (review.execution.kind !== 'evm-transaction' && review.execution.kind !== 'evm-signature')
+      ) {
+        throw new Error('Cross-chain transfer execution is unavailable')
+      }
+      if (input.executionMode === 'private') {
+        if (review.execution.kind !== 'evm-transaction')
+          throw new Error('Cross-chain transfer execution is unavailable')
+        const plan = await rheaSwapClient.getEvmTransactionPlan(quote.quoteHandle)
+        input.signal.throwIfAborted()
+        if (
+          plan.quoteHandle !== review.quoteHandle ||
+          plan.executionId !== review.executionId ||
+          String(plan.transaction.chainId) !== token.rheaChainId ||
+          (plan.transaction.from !== null &&
+            plan.transaction.from.toLowerCase() !== input.sender.toLowerCase())
+        )
+          throw new Error('Cross-chain transfer execution is unavailable')
+      }
+      return {
+        expiresAt: Math.min(quote.expiresAt ?? Infinity, Date.now() + 30_000),
+        routeFeeRaw: null,
+        time: formatTransferTime(review.timeEstimateSeconds, DIRECT_MAXIMUM_MINUTES)
+      }
+    }
     let result: BalanceTransferEstimate = {
       expiresAt: Math.min(quote.expiresAt ?? Infinity, Date.now() + 30_000),
       routeFeeRaw: routeFee(input.amountRaw, quote.estimatedOut),
@@ -223,7 +271,9 @@ async function estimateNearDirectTransfer(
 export function formatBalanceTransferFee(
   estimate: BalanceTransferEstimate | null,
   asset: PortfolioAssetView | null
-): { routeDifference: string; networkFeeCap: string } {
+): { value: string; detail: string | null } {
+  if (!estimate || !asset || estimate.routeFeeRaw === null) return { value: '—', detail: null }
+  const gas = estimate.sourceNetworkFee
   const format = (raw: string, decimals: number, native = false) => {
     const value = BigInt(raw)
     const amount = formatBaseUnitDecimalAmount(value < 0n ? -value : value, decimals)
@@ -232,12 +282,18 @@ export function formatBalanceTransferFee(
       : formatFeeAmount(amount)
     return `${display.startsWith('<') ? '' : '~'}${value < 0n ? '-' : ''}${display}`
   }
-  const gas = estimate?.sourceNetworkFee
+  if (gas && asset.asset.kind === 'native') {
+    const total = BigInt(estimate.routeFeeRaw) + BigInt(gas.raw)
+    return {
+      value: `${format(total.toString(), asset.metadata.decimals, true)} ${asset.metadata.symbol}`,
+      detail: null
+    }
+  }
   return {
-    routeDifference:
-      estimate?.routeFeeRaw != null && asset
-        ? `${format(estimate.routeFeeRaw, asset.metadata.decimals, asset.asset.kind === 'native')} ${asset.metadata.symbol}`
-        : '—',
-    networkFeeCap: gas ? `${formatBaseUnitDecimalAmount(gas.raw, gas.decimals)} ${gas.symbol}` : '—'
+    value:
+      asset.asset.kind === 'native'
+        ? `${format(estimate.routeFeeRaw, asset.metadata.decimals, true)} ${asset.metadata.symbol}`
+        : format(estimate.routeFeeRaw, asset.metadata.decimals),
+    detail: gas ? `${format(gas.raw, gas.decimals, true)} ${gas.symbol}` : null
   }
 }

@@ -32,11 +32,12 @@ export function isPortfolioModelForScope(
 }
 
 export async function readCachedPortfolio(
-  scope: Pick<PortfolioCacheScope, 'walletId' | 'accountId'>
+  scope: Pick<PortfolioCacheScope, 'walletId' | 'accountId'> & { readonly detailAssetId?: string }
 ): Promise<PortfolioReadModel | null> {
   const cached = await evmWalletClient.getPortfolio('read', {
     expectedWalletId: scope.walletId,
-    expectedAccountId: scope.accountId
+    expectedAccountId: scope.accountId,
+    detailAssetId: scope.detailAssetId
   })
   return isPortfolioModelForScope(cached, scope.walletId, scope.accountId) ? cached : null
 }

@@ -59,3 +59,11 @@ export function getSafeTransactionBirthdayHeight(
 export function getFullZcashRecoveryBirthdayHeight(network: Network): number {
   return SAPLING_ACTIVATION_HEIGHT[network]
 }
+
+export function getRetainedZcashHardwareBirthdayHeight(
+  birthdayHeight: number | undefined,
+  network: Network
+): number {
+  // WASM fetches the tree state of the prior block when importing a UFVK.
+  return birthdayHeight || getFullZcashRecoveryBirthdayHeight(network) + 1
+}

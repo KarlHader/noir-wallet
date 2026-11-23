@@ -14,8 +14,11 @@ import {
   parseDisplayUnitAmount
 } from '@/lib/number-format'
 import type { PrepareConfidentialFundingRequest } from './confidential-funding-client'
+import { sortSendAssetsByBalanceValue } from './send-asset-order'
 import {
+  buildExternalShieldWithdrawRequest,
   getZcashTokenPickerChain,
+  matchesExternalShieldWithdrawReview,
   shieldFundingAvailableRaw,
   type ShieldFundingAsset,
   type ShieldTokenPickerItem
@@ -24,19 +27,70 @@ import {
 export const nativeZecDestinationKey = (source: 'transparent' | 'shielded') =>
   `native-zec-destination:${source}`
 
+export function shieldSwapPickerChain(asset: ShieldFundingAsset) {
+  const chain = asset.chain.chain
+  return {
+    chainId: chain.id,
+    chainName: chain.displayName,
+    badgeBlockchain: resolveChainIconAlias(chain.family, chain.displayName, chain.id),
+    sourceLabel: asset.managed.protocolAssetId === ZEC_ZCASH_ASSET ? 'NEAR Confidential' : undefined
+  }
+}
+
+export function sortShieldSwapPickerRows<Row extends ShieldTokenPickerItem>(
+  rows: readonly Row[]
+): readonly Row[] {
+  return sortSendAssetsByBalanceValue(
+    rows.map(row => ({
+      key: row.key,
+      amount:
+        row.availableRaw === undefined
+          ? null
+          : formatBaseUnitDecimalAmount(row.availableRaw, row.decimals),
+      priceUsd: row.priceUsd ?? null,
+      row
+    }))
+  ).map(({ row }) => row)
+}
+
+function isNativeZecAsset(asset: ShieldFundingAsset, network: Network): boolean {
+  const chainId = getZcashChainId(network)
+  const assetId = `${chainId}/slip44:133`
+  return (
+    asset.chain.chain.id === chainId &&
+    asset.asset.asset.id === assetId &&
+    asset.managed.chainId === chainId &&
+    asset.managed.assetId === assetId &&
+    asset.managed.protocolAssetId === ZEC_ZCASH_ASSET
+  )
+}
+
+export function canMoveShieldSwapZecToUnifiedAddress(
+  source: ShieldFundingAsset | null,
+  address: string | undefined,
+  network: Network
+): boolean {
+  if (!source || !address || !isNativeZecAsset(source, network)) return false
+  try {
+    return parseZcashAddress(address, network).scheme === 'zcash-full-unified'
+  } catch {
+    return false
+  }
+}
+
 export function buildShieldDestinationPickerRows({
   options,
   tokens,
   balances,
   network,
-  excludedProtocolAssetId,
+  source = null,
   nativeZecDestinations = []
 }: Readonly<{
   options: readonly ShieldFundingAsset[]
   tokens: readonly SwapToken[]
   balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
   network: Network
-  excludedProtocolAssetId?: string
+  source?: ShieldFundingAsset | null
   nativeZecDestinations?: readonly Readonly<{
     fundingSource: 'transparent' | 'shielded'
     address: string
@@ -49,28 +103,34 @@ export function buildShieldDestinationPickerRows({
   ))[] {
   const origins = shieldOriginIdentifiers(options)
   const prices = new Map(tokens.map(token => [token.assetId, token.price]))
-  const nativePrice = tokens.find(
-    token => token.blockchain === 'zec' && token.symbol === 'ZEC'
-  )?.price
+  const nativePrice = prices.get(ZEC_ZCASH_ASSET)
+  const excludedProtocolAssetId = source?.managed.protocolAssetId
   return [
-    ...nativeZecDestinations.map(({ address, availableRaw, fundingSource }) => ({
-      ...getZcashTokenPickerChain(network),
-      kind: 'native-zec' as const,
-      fundingSource,
-      key: nativeZecDestinationKey(fundingSource),
-      assetId: 'zec',
-      searchTerms: [address],
-      symbol: 'ZEC',
-      name: 'Zcash',
-      nativeIconChain: 'zcash',
-      zcashFundingSource: fundingSource,
-      decimals: ZEC_DECIMALS,
-      availableRaw: availableRaw ?? undefined,
-      displayBalance: availableRaw === null ? '—' : undefined,
-      priceUsd: nativePrice,
-      title: address,
-      ariaLabel: `ZEC ${fundingSource} on Zcash`
-    })),
+    ...nativeZecDestinations
+      .filter(
+        ({ fundingSource, address }) =>
+          excludedProtocolAssetId !== ZEC_ZCASH_ASSET ||
+          (fundingSource === 'shielded' &&
+            canMoveShieldSwapZecToUnifiedAddress(source, address, network))
+      )
+      .map(({ address, availableRaw, fundingSource }) => ({
+        ...getZcashTokenPickerChain(network),
+        kind: 'native-zec' as const,
+        fundingSource,
+        key: nativeZecDestinationKey(fundingSource),
+        assetId: 'zec',
+        searchTerms: [address],
+        symbol: 'ZEC',
+        name: 'Zcash',
+        nativeIconChain: 'zcash',
+        zcashFundingSource: fundingSource,
+        decimals: ZEC_DECIMALS,
+        availableRaw: availableRaw ?? undefined,
+        displayBalance: availableRaw === null ? '—' : undefined,
+        priceUsd: nativePrice,
+        title: address,
+        ariaLabel: `ZEC ${fundingSource} on Zcash`
+      })),
     ...options
       .filter(asset => asset.managed.protocolAssetId !== excludedProtocolAssetId)
       .map(asset => {
@@ -87,10 +147,9 @@ export function buildShieldDestinationPickerRows({
           name,
           iconUrl,
           decimals,
-          chainId: chain.id,
-          chainName: chain.displayName,
-          badgeBlockchain: resolveChainIconAlias(chain.family, chain.displayName, chain.id),
-          displayBalance: shieldSwapFormBalance(asset, balances) ?? '—',
+          ...shieldSwapPickerChain(asset),
+          availableRaw: balances ? shieldFundingAvailableRaw(asset, balances) : undefined,
+          displayBalance: balances ? undefined : '—',
           priceUsd: prices.get(asset.managed.protocolAssetId),
           title: asset.managed.protocolAssetId,
           subtitle: origin ? `${chain.displayName} · ${origin}` : chain.displayName
@@ -203,17 +262,21 @@ export function buildShieldSwapRequest(
     balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
     slippageBps: number
     nativeZecRecipient?: string
+    nativeZecFundingSource?: 'transparent' | 'shielded'
   }>,
   preview = false
 ): PrepareConfidentialFundingRequest {
-  const nativeZecSwap = input.nativeZecRecipient !== undefined
+  const { nativeZecRecipient } = input
+  const nativeZecSwap = nativeZecRecipient !== undefined
+  const sameAsset = input.from.managed.protocolAssetId === input.to.managed.protocolAssetId
+  const nativeZecMove =
+    sameAsset &&
+    input.nativeZecFundingSource === 'shielded' &&
+    canMoveShieldSwapZecToUnifiedAddress(input.from, nativeZecRecipient, input.network)
   const amountError = shieldSwapFormAmountError(input.amount, input.from, input.balances)
   if (
-    input.from.managed.protocolAssetId === input.to.managed.protocolAssetId ||
-    (nativeZecSwap &&
-      (input.to.managed.chainId !== getZcashChainId(input.network) ||
-        input.to.managed.protocolAssetId !== ZEC_ZCASH_ASSET ||
-        input.to.managed.assetId !== `${getZcashChainId(input.network)}/slip44:133`)) ||
+    (sameAsset && !nativeZecMove) ||
+    (nativeZecSwap && !isNativeZecAsset(input.to, input.network)) ||
     (amountError &&
       !(
         preview &&
@@ -225,20 +288,31 @@ export function buildShieldSwapRequest(
     input.slippageBps > 10_000
   )
     throw new Error('Shield swap is unavailable')
+  const amountRaw = parseDisplayUnitAmount(input.amount, input.from.asset.metadata.decimals)
+  if (nativeZecMove && nativeZecRecipient !== undefined) {
+    return Object.freeze({
+      ...buildExternalShieldWithdrawRequest({
+        network: input.network,
+        keyDomainId: input.keyDomainId,
+        accountId: input.accountId,
+        amountRaw,
+        recipient: nativeZecRecipient,
+        source: input.from,
+        destination: input.to,
+        slippageBps: input.slippageBps
+      }),
+      purpose: 'move' as const
+    })
+  }
   if (nativeZecSwap) {
     try {
-      const parsed = parseZcashAddress(input.nativeZecRecipient!, input.network)
-      if (
-        parsed.address !== input.nativeZecRecipient ||
-        (!parsed.scheme.startsWith('zcash-transparent-') &&
-          !input.nativeZecRecipient!.startsWith(input.network === 'mainnet' ? 'u1' : 'utest1'))
-      )
+      const parsed = parseZcashAddress(nativeZecRecipient, input.network)
+      if (!parsed.scheme.startsWith('zcash-transparent-') && parsed.scheme !== 'zcash-full-unified')
         throw new Error('Invalid recipient')
     } catch {
       throw new Error('Shield swap recipient is invalid')
     }
   }
-  const amountRaw = parseDisplayUnitAmount(input.amount, input.from.asset.metadata.decimals)
   const source = Object.freeze({
     chainId: input.from.managed.chainId,
     chainName: input.from.managed.blockchain,
@@ -263,7 +337,7 @@ export function buildShieldSwapRequest(
     source,
     destination,
     slippageBps: input.slippageBps,
-    ...(nativeZecSwap ? { externalRecipient: input.nativeZecRecipient } : {})
+    ...(nativeZecSwap ? { externalRecipient: nativeZecRecipient } : {})
   })
 }
 
@@ -277,6 +351,14 @@ export function matchesShieldSwapReview(
   review: ConfidentialFundingReview,
   request: PrepareConfidentialFundingRequest
 ): boolean {
+  if (request.purpose === 'move') {
+    return (
+      review.purpose === 'move' &&
+      review.externalRecipient === request.externalRecipient &&
+      review.destinationAddress === request.externalRecipient &&
+      matchesExternalShieldWithdrawReview(review, request)
+    )
+  }
   const nativeZecSwap = request.purpose === 'native-zec-swap'
   return (
     review.operation === (nativeZecSwap ? 'withdraw' : 'swap') &&

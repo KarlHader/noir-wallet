@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { mapTransactionGraphToActivityItem, type ActivityItem } from '@/core/activity'
 import { getBitcoinNetworkConfig } from '@/config/networks'
+import { getZcashChainId } from '@/core/chains/registry'
 import { parseTransactionId } from '@/core/transactions/domain'
 import { loadTransactions } from '@/lib/indexed-db'
 import { getTransactionRecoveryAction } from '@/lib/transaction-replacement'
@@ -40,10 +41,7 @@ import { resolveActivityChainId } from '@/core/activity/activity-chain'
 import { getActivityTransactionReferences } from '@/popup/services/activity-transaction-references'
 import {
   getActivityDetailTitle,
-  getActivityAccountRouteLabel,
   getActivityRouteTitle,
-  getClusterBatchStatusLabel,
-  getClusterChildStatusLabel,
   getActivitySwapSourceMethodLabel,
   getActivityFailureLabel,
   getActivityRecoveryAction,
@@ -61,7 +59,7 @@ import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { selectActivityObservation } from '@/popup/services/activity-observation'
 import { EvmPendingTransactionActions } from '../evm/EvmPendingTransactionActions'
-import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
+import type { ActivityPerspective } from '@/popup/services/activity-action-label'
 
 interface MultichainActivityDetailProps {
   readonly item: ActivityItem
@@ -264,10 +262,14 @@ export function MultichainActivityDetail({
     getConfidentialFundingPlanId(visibleItem.id) !== null &&
     visibleItem.status !== 'final' &&
     visibleItem.status !== 'failed'
+  const pendingZcashReceive =
+    visibleItem.source === 'zcash-v1' &&
+    visibleItem.kind === 'receive' &&
+    (visibleItem.status === 'broadcast' || visibleItem.status === 'confirming')
 
   useEffect(() => {
     if (
-      (!pendingEvmOrigin && !pendingConfidentialActivity) ||
+      (!pendingEvmOrigin && !pendingConfidentialActivity && !pendingZcashReceive) ||
       effectiveWalletId !== item.scope.keyDomainId ||
       effectiveAccountId !== item.scope.accountId ||
       currentNetwork !== network
@@ -279,7 +281,11 @@ export function MultichainActivityDetail({
     let recheckInFlight = false
     const refreshActivity = async () => {
       try {
-        const model = await evmWalletClient.getActivity('read')
+        const model = pendingZcashReceive
+          ? await evmWalletClient.getActivity('refresh', 'all', {
+              chainIds: [getZcashChainId(network)]
+            })
+          : await evmWalletClient.getActivity('read')
         const next = model?.items.find(
           candidate => candidate.id === item.id && candidate.source === item.source
         )
@@ -295,7 +301,8 @@ export function MultichainActivityDetail({
       } catch {
         // Retry while the transaction is still pending.
       } finally {
-        if (active) timer = setTimeout(() => void refreshActivity(), 3_000)
+        if (active)
+          timer = setTimeout(() => void refreshActivity(), pendingZcashReceive ? 15_000 : 3_000)
       }
       if (active && pendingEvmOrigin && !recheckInFlight) {
         recheckInFlight = true
@@ -322,7 +329,8 @@ export function MultichainActivityDetail({
     item.source,
     network,
     pendingEvmOrigin,
-    pendingConfidentialActivity
+    pendingConfidentialActivity,
+    pendingZcashReceive
   ])
   const { assetMetadata, chainMetadata, evmChainIds } = useMemo(
     () =>
@@ -358,7 +366,6 @@ export function MultichainActivityDetail({
   const swapSourceMethod = getActivitySwapSourceMethodLabel(visibleItem, swap?.source?.symbol)
   const amount = visibleItem.snapshot?.primaryAmount
   const asset = amount ? assetMetadata.get(amount.assetId) : undefined
-  const isMove = Boolean(swap && getActivityAction(visibleItem, perspective, swap).side !== 'none')
   const status = getActivityStatusPresentation(visibleItem)
   const primaryOnchainSegment = visibleItem.segments.find(
     segment => segment.target.kind === 'onchain'
@@ -559,15 +566,10 @@ export function MultichainActivityDetail({
     chainMetadata,
     executionAddressModes,
     perspective,
-    settledDestination: getClusterSettledDestination(visibleItem, activeConfidentialPlan),
     confidentialPlan: activeConfidentialPlan,
     refunded: activeConfidentialPlan?.phase === 'refunded',
     replacementHash: scopedZcashRecord?.replacedByTxHash,
-    statusLabel: needsSubmissionCheck
-      ? 'Needs attention'
-      : activeConfidentialPlan?.operation === 'cluster'
-        ? getClusterBatchStatusLabel(activeConfidentialPlan)
-        : undefined,
+    statusLabel: needsSubmissionCheck ? 'Needs attention' : undefined,
     statusTone: needsSubmissionCheck ? 'warning' : undefined,
     fallback:
       scopedZcashRecord?.fee &&
@@ -586,50 +588,8 @@ export function MultichainActivityDetail({
         {title}
       </h2>
 
-      <ActivityTransactionBody view={sharedView} showDate />
+      <ActivityTransactionBody view={sharedView} showDate showAccountRoute />
       <div className="mb-6 space-y-4">
-        {swap?.sourceAccountMode &&
-          swap.destinationAccountMode &&
-          swap.sourceAccountMode !== swap.destinationAccountMode && (
-            <DetailRow label={isMove ? 'Direction' : 'Account'}>
-              {swap.destinationFundingSource ? (
-                <span className="text-sm">{getActivityAccountRouteLabel(swap)}</span>
-              ) : (
-                <span className="flex items-center gap-1.5">
-                  {swap.sourceFundingSource === 'shielded' ? (
-                    <span className="text-sm">Zcash Shield</span>
-                  ) : swap.sourceAccountMode === 'External' ? (
-                    <span className="text-sm">External</span>
-                  ) : (
-                    <AccountDomainBadge
-                      {...(swap.sourceFundingSource ? { chainFamily: 'zcash' as const } : {})}
-                      domain={
-                        swap.sourceAccountMode === 'Confidential'
-                          ? 'private'
-                          : swap.sourceAccountMode === 'Shield'
-                            ? 'shield'
-                            : 'public'
-                      }
-                    />
-                  )}
-                  <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
-                  {swap.sourceFundingSource ? (
-                    <span className="text-sm">NEAR Confidential</span>
-                  ) : (
-                    <AccountDomainBadge
-                      domain={
-                        swap.destinationAccountMode === 'Confidential'
-                          ? 'private'
-                          : swap.destinationAccountMode === 'Shield'
-                            ? 'shield'
-                            : 'public'
-                      }
-                    />
-                  )}
-                </span>
-              )}
-            </DetailRow>
-          )}
         {!swap && primaryChainId?.startsWith('eip155:') && (
           <DetailRow label="Account">
             <span className="flex items-center gap-1.5">
@@ -646,31 +606,6 @@ export function MultichainActivityDetail({
               )}
             </span>
           </DetailRow>
-        )}
-        {activeConfidentialPlan?.operation === 'cluster' && (
-          <>
-            <DetailRow label="Method">
-              <span className="text-sm">Cluster</span>
-            </DetailRow>
-            <DetailRow label="Transfers">
-              <span className="text-sm">{activeConfidentialPlan.withdraws.length}</span>
-            </DetailRow>
-            <div className="space-y-2 border-t border-white/10 pt-3">
-              {activeConfidentialPlan.withdraws.map(row => (
-                <div key={row.sequence} className="flex items-start justify-between gap-3 text-sm">
-                  <span className="text-muted">Transfer {row.sequence + 1}</span>
-                  <div className="min-w-0 text-right">
-                    <div>{getClusterChildStatusLabel(row, activeConfidentialPlan)}</div>
-                    {row.scheduledAt && Number.isSafeInteger(row.scheduledAt) && (
-                      <div className="text-xs text-muted">
-                        Earliest broadcast {new Date(row.scheduledAt).toLocaleString()}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
         )}
         {visibleItem.kind === 'shield' && !visibleItem.snapshot?.shield && (
           <DetailRow label="Privacy">

@@ -103,7 +103,7 @@ export function parseKeystoneZcashVerificationInput(
     (value.account.accountIndex as number) < 0 ||
     (value.account.accountIndex as number) > 0x7fffffff ||
     !Number.isSafeInteger(value.account.birthdayHeight) ||
-    (value.account.birthdayHeight as number) <= 0 ||
+    (value.account.birthdayHeight as number) < 0 ||
     (value.account.birthdayHeight as number) > 0xffffffff ||
     !isRecord(value.account.expected)
   ) {

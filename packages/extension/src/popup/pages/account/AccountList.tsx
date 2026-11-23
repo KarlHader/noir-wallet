@@ -806,6 +806,8 @@ function NativeAccountItem({
 }) {
   const { navigate } = useNavigate()
   const isPrivateKey = account.walletSource.kind === 'private-key'
+  const isLedger =
+    account.walletSource.kind === 'hardware' && account.walletSource.hardware.vendor === 'ledger'
   return (
     <AccountRow
       name={account.accountDisplayName}
@@ -832,6 +834,20 @@ function NativeAccountItem({
         <Icon icon="lucide:qr-code" className="mr-2 h-4 w-4" />
         Addresses
       </DropdownMenuItem>
+      {isLedger && (
+        <DropdownMenuItem
+          onClick={event => {
+            event.stopPropagation()
+            openHardwareConnectTab('ledger', {
+              walletId: account.walletId,
+              accountId: account.accountId
+            })
+          }}
+        >
+          <Icon icon="lucide:network" className="mr-2 h-4 w-4" />
+          Add networks
+        </DropdownMenuItem>
+      )}
       {isPrivateKey && (
         <DropdownMenuItem
           onClick={event => {

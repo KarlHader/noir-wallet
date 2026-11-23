@@ -252,6 +252,12 @@ export function MultichainActivityPanel({
     [availableChainIds, filteredChainId, persistedChainSelection]
   )
   const selectedChainKey = selectedChainIds.join(',')
+  const includeAllConfidentialChains =
+    allExecutionModes &&
+    filterDomain === 'shield' &&
+    !filterAssetId &&
+    !filteredChainId &&
+    selectedChainIds.length === availableChainIds.length
   const providerChainIds = useMemo(
     () =>
       shieldProvider === 'zcash-shield'
@@ -442,6 +448,7 @@ export function MultichainActivityPanel({
         domain: filterDomain,
         status: showStatusFilter ? statusFilter : undefined,
         confidentialIntentsOnly,
+        includeAllConfidentialChains,
         shieldProvider,
         accountMode: filterAssetId || allExecutionModes ? undefined : accountMode,
         executionAddressModes
@@ -450,6 +457,7 @@ export function MultichainActivityPanel({
       accountMode,
       allExecutionModes,
       confidentialIntentsOnly,
+      includeAllConfidentialChains,
       shieldProvider,
       executionAddressModes,
       filterAssetId,
@@ -566,23 +574,22 @@ export function MultichainActivityPanel({
     maxItems === undefined &&
     (visibleItems.length > visibleLimit ||
       (!localPagination &&
+        visibleItems.length > 1 &&
         visibleModel?.hasMore === true &&
         historyPageCount.current < MAX_HISTORY_PAGE_COUNT))
   const loadOlder = async () => {
-    if (olderStatus === 'loading') return
+    if (!canLoadOlder || olderStatus === 'loading') return
     if (visibleItems.length > visibleLimit) {
       setVisibleLimit(limit => limit + pageSize)
       return
     }
-    if (localPagination) return
     const request = ++olderRequestSequence.current
     const refreshRequest = requestSequence.current
     const nextPageCount = historyPageCount.current + 1
     setOlderStatus('loading')
     try {
       const next = await evmWalletClient.getActivity('refresh', 'all', {
-        ...(providerChainIds?.length ? { chainIds: providerChainIds } : {}),
-        ...(confidentialIntentsOnly ? { protocolProvider: 'Confidential Intents' as const } : {}),
+        ...activityOptions,
         historyPageCount: nextPageCount
       })
       if (request !== olderRequestSequence.current || refreshRequest !== requestSequence.current)

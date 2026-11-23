@@ -1,4 +1,5 @@
 import type { AssetDomain } from './asset-domains'
+import { EXTENSION_ACTIVITY_ROUTE } from '@/config/extension'
 
 export type HomeDefaultTab = 'assets' | 'dapp' | 'providers' | 'activity'
 export type HomeAssetDomain = Exclude<AssetDomain, 'all'>
@@ -37,6 +38,21 @@ export function homeActivityPath(domain: HomeAssetDomain, transactionId?: string
   if (domain !== 'public') params.set('domain', domain)
   if (transactionId) params.set('transactionId', transactionId)
   return `/?${params}`
+}
+
+export function resolveWalletEntryRoute(hash: string): string {
+  const entry = hash.slice(1)
+  if (entry === '/manage-tokens') return entry
+  if (!entry.startsWith('/?')) return '/'
+  const params = new URLSearchParams(entry.slice(2))
+  if (params.get('tab') !== 'activity') return '/'
+  const domain = params.get('domain')
+  const transactionId = params.get('transactionId')
+  if (!transactionId) return EXTENSION_ACTIVITY_ROUTE
+  return homeActivityPath(
+    domain === 'shield' || domain === 'private' ? domain : 'public',
+    transactionId
+  )
 }
 
 export function clearHomeTransactionFocus(search: string): string | null {

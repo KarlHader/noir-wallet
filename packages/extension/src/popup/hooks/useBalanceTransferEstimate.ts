@@ -72,7 +72,7 @@ export function useBalanceTransferEstimate<T>({
     }
   }, [enabled, requestKey])
   if (!enabled || state.key !== requestKey) {
-    return { value: null, loading: false, error: false, errorMessage: null }
+    return { value: null, loading: enabled, error: false, errorMessage: null }
   }
   return {
     value: state.value,

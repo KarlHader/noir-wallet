@@ -1,6 +1,5 @@
 import { Icon } from '@iconify/react'
 import type { ComponentProps, ReactNode } from 'react'
-import { formatSortAddress } from '@/lib/format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { ChainSelector } from '../common/ChainSelector'
 import {
@@ -8,13 +7,9 @@ import {
   type TransactionReviewAsset,
   type TransactionReviewRow
 } from './TransactionReviewView'
-import {
-  type SendFormAdapter,
-  SendFormActions,
-  SendRouteInfoCard,
-  SendRecipientAddress
-} from './SendInputCards'
+import { type SendFormAdapter, SendFormActions, SendRouteInfoCard } from './SendInputCards'
 import { SendFormSlot } from './SendFormLayout'
+import { TransactionReviewParty } from './TransactionReviewParty'
 
 type DestinationPicker = Pick<
   ComponentProps<typeof ChainSelector>,
@@ -53,7 +48,6 @@ interface SendTransferReviewState {
   readonly total: string | null
   readonly asset?: TransactionReviewAsset
   readonly feeContent?: ReactNode
-  readonly networkBeforeSender?: boolean
   readonly beforeFeeRows?: readonly TransactionReviewRow[]
   readonly afterTotalRows?: readonly TransactionReviewRow[]
   readonly preparing?: boolean
@@ -202,9 +196,10 @@ export function SendTransferView({
             {
               label: 'Recipient',
               content: (
-                <SendRecipientAddress
+                <TransactionReviewParty
                   address={review.recipient}
-                  name={
+                  chain={{ name: networkName, icon: family }}
+                  accountName={
                     selectedRecipient?.address === review.recipient
                       ? selectedRecipient.name
                       : undefined
@@ -212,16 +207,16 @@ export function SendTransferView({
                 />
               )
             },
-            ...(review.networkBeforeSender ? [{ label: 'Network', content: networkName }] : []),
             {
               label: 'From',
               content: (
-                <span className="font-mono text-muted" title={review.sender}>
-                  {formatSortAddress(review.sender)}
-                </span>
+                <TransactionReviewParty
+                  domain="public"
+                  address={review.sender}
+                  chain={{ name: networkName, icon: family }}
+                />
               )
             },
-            ...(!review.networkBeforeSender ? [{ label: 'Network', content: networkName }] : []),
             ...(review.beforeFeeRows ?? []),
             {
               label: 'Network fee',

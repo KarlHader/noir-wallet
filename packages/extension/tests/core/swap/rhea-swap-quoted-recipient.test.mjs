@@ -29,9 +29,9 @@ it('returns the requested recipient with the quote and binds transfer activity t
   const fastRequest = toRheaSwapProtocolRequest(
     parseRheaSwapQuoteRequest({ ...request, quoteMode: 'fast' })
   )
-  assert.equal(fastRequest.quoteWaitingTimeMs, 1_500)
-  assert.equal(fastRequest.sameChainTimeoutMs, 500)
-  assert.equal(fastRequest.crossChainTimeoutMs, 1_500)
+  assert.equal(fastRequest.quoteWaitingTimeMs, 2_000)
+  assert.equal(fastRequest.sameChainTimeoutMs, 1_000)
+  assert.equal(fastRequest.crossChainTimeoutMs, 2_000)
   assert.equal('quoteMode' in fastRequest, false)
   assert.throws(() => parseRheaSwapQuoteRequest({ ...request, quoteMode: 'turbo' }), /quote mode/)
   const service = new RheaSwapService(

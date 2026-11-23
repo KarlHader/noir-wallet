@@ -834,6 +834,7 @@ export function buildShieldTransferRequest(
     asset: PortfolioAssetView
     chain: PortfolioChainView
     managed: ShieldTransferAsset
+    slippageBps: number
     destination?: ShieldFundingAsset
     feeSelection?: EvmFeeSelection
     dedupKey?: string
@@ -894,7 +895,7 @@ export function buildShieldTransferRequest(
     destinationDomain: input.to,
     source: Object.freeze({ ...sourceRoute, amountRaw: input.amountRaw }),
     destination: destinationRoute,
-    slippageBps: 50,
+    slippageBps: input.slippageBps,
     ...(input.from === 'shield' || input.chain.chain.family === 'near' || !input.feeSelection
       ? {}
       : { feeSelection: input.feeSelection }),

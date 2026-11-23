@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PortfolioReadModel, PortfolioAssetView } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
-import { Icon } from '@iconify/react'
 import nearLogo from '@/images/figma-near-confidential.svg'
 import { resolveEvmChainIconAlias } from '@/config/icons'
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
@@ -21,14 +20,13 @@ import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { findAssetPrice } from '@/core/prices'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { useNavigate } from '@/popup/provider/Router'
-import { SlippageSettingContent } from '@/popup/components/swap/SlippageSetting'
+import { useSwapPreferences } from '@/store/swap-store'
 import {
   SendFormView,
   SendFormActions,
   SendRouteInfoCard
 } from '@/popup/components/transaction/SendInputCards'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import type { ShieldTokenPickerItem } from '@/popup/services/shield-transfer'
 import { sortSendAssetsByBalanceValue, sortSendNetworks } from '@/popup/services/send-asset-order'
@@ -37,6 +35,7 @@ import {
   TransactionReviewExchangeSummary,
   TransactionReviewView
 } from '@/popup/components/transaction/TransactionReviewView'
+import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { InlineError } from '@/popup/components/common/InlineError'
@@ -174,9 +173,9 @@ export function ConfidentialSendForm({
   const { sourceId, destinationNetworkId, awaitingCatalog } = routeSelection
   const [amount, setAmount] = useState(routeAmount)
   const [recipient, setRecipient] = useState(routeRecipient)
-  const [picker, setPicker] = useState<'recipient' | 'slippage' | null>(null)
+  const [recipientPickerOpen, setRecipientPickerOpen] = useState(false)
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
-  const [slippage, setSlippage] = useState(0.5)
+  const slippage = useSwapPreferences(state => state.slippage)
   const [prepared, setPrepared] = useState<Readonly<{
     review: ConfidentialFundingReview
     request: PrepareConfidentialFundingRequest
@@ -248,7 +247,7 @@ export function ConfidentialSendForm({
 
   useEffect(() => {
     if (!active) {
-      setPicker(null)
+      setRecipientPickerOpen(false)
       setNetworkPickerOpen(false)
       setRecoveryPending(false)
     }
@@ -273,7 +272,7 @@ export function ConfidentialSendForm({
     })
     setAmount(routeAmount)
     setRecipient(routeRecipient)
-    setPicker(null)
+    setRecipientPickerOpen(false)
     setNetworkPickerOpen(false)
     setPrepared(null)
     setRecoveryPending(false)
@@ -1022,23 +1021,24 @@ export function ConfidentialSendForm({
             />
           }
           rows={[
-            { label: 'From', content: 'Shield · NEAR Confidential' },
             {
-              label: 'Recipient',
-              content: prepared.review.destinationAddress
+              label: 'From',
+              content: (
+                <TransactionReviewParty
+                  accountName={activeAccount?.accountDisplayName}
+                  domain="shield"
+                  confidential
+                />
+              )
             },
             {
-              label: 'Network',
+              label: 'Recipient',
               content: (
-                <span className="inline-flex items-center gap-1.5">
-                  <ChainIcon
-                    chain={withdrawChainIconAlias(prepared.destination.chain.chain)}
-                    width={16}
-                    height={16}
-                    className="shrink-0 rounded-sm"
-                  />
-                  {prepared.destination.chain.chain.displayName}
-                </span>
+                <TransactionReviewParty
+                  address={prepared.review.destinationAddress}
+                  chain={prepared.destination.chain.chain}
+                  fullAddress
+                />
               )
             },
             {
@@ -1162,21 +1162,6 @@ export function ConfidentialSendForm({
               Confidential
             </span>
           }
-          extra={
-            <div className="flex min-h-5 items-center justify-between gap-3">
-              <span className="text-muted">Slippage</span>
-              <button
-                type="button"
-                aria-label={`Slippage settings, currently ${slippage}%`}
-                disabled={busy}
-                onClick={() => setPicker('slippage')}
-                className="wallet-interactive inline-flex items-center gap-2 rounded text-foreground hover:text-primary disabled:opacity-45"
-              >
-                {slippage}%
-                <Icon icon="lucide:settings-2" width={15} height={15} />
-              </button>
-            </div>
-          }
           time={
             previewRequest && destination && !previewError && preview?.timeEstimateSeconds ? (
               <span>{estimateConfidentialSendTime(preview?.timeEstimateSeconds, undefined)}</span>
@@ -1259,7 +1244,7 @@ export function ConfidentialSendForm({
                 ? undefined
                 : () => {
                     keepSelectedSource()
-                    setPicker('recipient')
+                    setRecipientPickerOpen(true)
                   },
             network: {
               name: destinationNetwork?.displayName ?? 'Select network',
@@ -1339,36 +1324,25 @@ export function ConfidentialSendForm({
       >
         {routeDetails}
       </SendFormView>
-      <Dialog open={active && picker !== null} onOpenChange={open => !open && setPicker(null)}>
+      <Dialog open={active && recipientPickerOpen} onOpenChange={setRecipientPickerOpen}>
         <DialogContent
           position="bottom"
-          scroll={picker === 'recipient' ? 'body' : 'content'}
-          fixedHeight={picker === 'recipient'}
+          scroll="body"
+          fixedHeight
           className="bg-wallet-surface p-4 pb-6"
         >
-          <DialogTitle>{picker === 'slippage' ? 'Slippage' : 'Recipient'}</DialogTitle>
-          <DialogDescription className="sr-only">
-            Set {actionLabel} {picker}
-          </DialogDescription>
-          {picker === 'slippage' ? (
-            <SlippageSettingContent
-              key={slippage}
-              currentSlippage={slippage}
-              onSave={value => {
-                setSlippage(value)
-                setPicker(null)
-              }}
-            />
-          ) : picker === 'recipient' && destination ? (
+          <DialogTitle>Recipient</DialogTitle>
+          <DialogDescription className="sr-only">Set {actionLabel} recipient</DialogDescription>
+          {destination && (
             <RecipientSelector
               chainId={destination.chain.chain.id}
               includeCurrentAccount
               onSelect={address => {
                 setRecipient(address)
-                setPicker(null)
+                setRecipientPickerOpen(false)
               }}
             />
-          ) : null}
+          )}
         </DialogContent>
       </Dialog>
       <ChainSelector

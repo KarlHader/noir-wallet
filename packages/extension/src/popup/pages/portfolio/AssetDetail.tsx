@@ -51,7 +51,10 @@ import {
   getPrivateTransferChainIds,
   type BalanceTransferIntent
 } from '@/popup/services/private-balance-transfer'
-import { resolveNearConfidentialZecHolding } from '@/popup/services/near-confidential-holdings'
+import {
+  resolveNearConfidentialZecDetail,
+  resolveNearConfidentialZecHolding
+} from '@/popup/services/near-confidential-holdings'
 import {
   nearIncognitoReceiveUnavailableMessage,
   selectNearReceiveAddress
@@ -98,12 +101,26 @@ export function AssetDetail() {
   const sendOriginPath = `${location.pathname}${location.search}`
   const [searchParams] = useSearchParams()
   const requestedAssetId = searchParams.get('assetId')
+  const requestedAsset = useMemo(() => {
+    if (!requestedAssetId) return null
+    try {
+      return parseAssetId(requestedAssetId)
+    } catch {
+      return null
+    }
+  }, [requestedAssetId])
   const { goBack, navigate } = useNavigate()
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentWallet = useWalletStore(state => state.getCurrentWallet())
   const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const { activeAccount: storageV2Account } = useActiveAccountNetworks()
+  const {
+    activeAccount: storageV2Account,
+    loading: accountNetworksLoading,
+    contextChanging: accountContextChanging,
+    error: accountNetworksError,
+    refresh: refreshAccountNetworks
+  } = useActiveAccountNetworks()
   const effectiveAccount = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
@@ -119,14 +136,17 @@ export function AssetDetail() {
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
   const historyRequestSequence = useRef(0)
-  const missingAssetRefreshes = useRef(new Set<string>())
+  const [assetRefresh, setAssetRefresh] = useState<{ key: string; success: boolean } | null>(null)
+  const [assetRetry, setAssetRetry] = useState(0)
   const {
     model,
     status,
     scopeKey: portfolioScopeKey,
     refresh,
     refreshSource
-  } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId)
+  } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId, {
+    detailAssetId: requestedAsset?.id
+  })
   const [settledConfidentialScope, setSettledConfidentialScope] = useState<string | null>(null)
   const [prices, setPrices] = useState<AssetPriceReadModel | null>(null)
   const [priceStatus, setPriceStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -206,59 +226,56 @@ export function AssetDetail() {
   }, [requestedAssetId])
 
   const visibleModel = model
-  const requestedChainId = useMemo(() => {
-    if (!requestedAssetId) return null
-    try {
-      return parseAssetId(requestedAssetId).chainId
-    } catch {
-      return null
-    }
-  }, [requestedAssetId])
+  const requestedChainId = requestedAsset?.chainId ?? null
   const requestedChainEnabled =
     requestedChainId !== null &&
     storageV2Account?.walletId === effectiveWalletId &&
     storageV2Account.accountId === effectiveAccountId &&
     storageV2Account.networks.some(network => network.chain.id === requestedChainId)
-  useEffect(() => {
-    if (
-      !visibleModel ||
-      !requestedAssetId ||
-      !requestedChainId ||
-      !requestedChainEnabled ||
-      !effectiveWalletId ||
-      !effectiveAccountId
-    )
-      return
-    if (visibleModel.assets.some(item => item.asset.id === requestedAssetId)) return
-    const attemptKey = JSON.stringify([
+  const nativeAsset = visibleModel?.assets.find(item => item.asset.id === requestedAssetId)
+  const confidentialOnlyDetail = useMemo(
+    () =>
+      nativeAsset || !requestedAssetId
+        ? null
+        : resolveNearConfidentialZecDetail({
+            model: visibleModel,
+            network: currentNetwork,
+            walletId: effectiveWalletId,
+            accountId: effectiveAccountId,
+            assetId: requestedAssetId
+          }),
+    [
+      nativeAsset,
+      visibleModel,
       currentNetwork,
       effectiveWalletId,
       effectiveAccountId,
-      chainEndpointRuntimeKey,
       requestedAssetId
-    ])
-    if (missingAssetRefreshes.current.has(attemptKey)) return
-    missingAssetRefreshes.current.add(attemptKey)
-    void refresh(false, { additionalChainIds: [requestedChainId] })
-  }, [
-    visibleModel,
-    requestedAssetId,
-    effectiveWalletId,
-    effectiveAccountId,
-    requestedChainEnabled,
-    requestedChainId,
-    currentNetwork,
-    chainEndpointRuntimeKey,
-    refresh
-  ])
+    ]
+  )
+  const asset = nativeAsset ?? confidentialOnlyDetail?.asset ?? null
+  const chain =
+    confidentialOnlyDetail?.chain ??
+    visibleModel?.chains.find(item => item.chain.id === asset?.asset.chainId) ??
+    null
+  const assetRefreshKey =
+    !asset && visibleModel && requestedChainEnabled && portfolioScopeKey
+      ? JSON.stringify([portfolioScopeKey, requestedAssetId, assetRetry])
+      : null
+  useEffect(() => {
+    if (!assetRefreshKey || !requestedChainId) return
+    let active = true
+    void refresh(assetRetry > 0, { additionalChainIds: [requestedChainId] }).then(success => {
+      if (active) setAssetRefresh({ key: assetRefreshKey, success })
+    })
+    return () => {
+      active = false
+    }
+  }, [assetRefreshKey, assetRetry, requestedChainId, refresh])
   const displayPrices = useMemo(
     () => withConfidentialAssetPrices(visibleModel, prices),
     [visibleModel, prices]
   )
-  const asset = visibleModel?.assets.find(item => item.asset.id === requestedAssetId) ?? null
-  const chain = asset
-    ? (visibleModel?.chains.find(item => item.chain.id === asset.asset.chainId) ?? null)
-    : null
   const lendingRate = useLendingMarketRate(
     currentNetwork === 'mainnet' &&
       requestedChainEnabled &&
@@ -320,7 +337,11 @@ export function AssetDetail() {
             ? 'private'
             : 'all'
   const detailMode: AssetDomain =
-    categories && !categories.domains.includes(initialDomain) ? 'all' : initialDomain
+    confidentialOnlyDetail && initialDomain === 'public'
+      ? 'shield'
+      : categories && !categories.domains.includes(initialDomain)
+        ? 'all'
+        : initialDomain
   const actionDomain = detailMode === 'private' ? 'private' : 'public'
   const activityFilterDomain = detailMode === 'all' ? undefined : detailMode
   const selectDetailMode = (domain: AssetDomain) => {
@@ -423,6 +444,7 @@ export function AssetDetail() {
     ['zcash', 'evm', 'bitcoin', 'near'].includes(chain.chain.family)
   )
   const canSwapNativeZec =
+    !confidentialOnlyDetail &&
     chain?.chain.family === 'zcash' &&
     canSwapNativeShieldZec({
       account: storageV2Account,
@@ -699,15 +721,21 @@ export function AssetDetail() {
 
   const handleShieldAction = (action: 'send' | 'receive' | 'swap', provider?: ShieldProvider) => {
     if (!asset || !chain) return
+    if (confidentialOnlyDetail && !hasConfidentialCapability) return
     const preferNativeSwap =
       action === 'swap' &&
       canSwapNativeZec &&
       (!hasConfidentialCapability ||
         !nearConfidentialZec ||
         BigInt(nearConfidentialZec.availableRaw) === 0n)
+    const defaultProvider = confidentialOnlyDetail
+      ? 'near-confidential'
+      : preferNativeSwap
+        ? 'zcash-shield'
+        : undefined
     navigate(
       buildShieldActionPath(action, {
-        provider: provider ?? (preferNativeSwap ? 'zcash-shield' : undefined),
+        provider: provider ?? defaultProvider,
         assetId: asset.asset.id,
         account: effectiveAccount,
         originPath: sendOriginPath
@@ -740,10 +768,15 @@ export function AssetDetail() {
     [currentNetwork, visibleModel, navigate, storageV2Account?.networks, activityFilterDomain]
   )
 
+  const accountLoading =
+    !storageV2Account && !accountNetworksError && (accountNetworksLoading || accountContextChanging)
+  const assetRefreshing = assetRefreshKey !== null && assetRefresh?.key !== assetRefreshKey
+  const assetRefreshFailed =
+    assetRefreshKey !== null && assetRefresh?.key === assetRefreshKey && !assetRefresh.success
   if (
     (!asset || !chain || !display) &&
     requestedChainId &&
-    (status === 'loading' || requestedChainEnabled)
+    (accountLoading || status === 'loading' || assetRefreshing)
   ) {
     return (
       <div className="page-container">
@@ -767,30 +800,29 @@ export function AssetDetail() {
             <Skeleton className="h-4 w-24" />
             <ListSkeleton rows={2} label="Loading activity" className="mt-2 px-0 py-1" />
           </div>
-          {status === 'error' && (
-            <InlineError
-              message="This asset could not be refreshed. Check your connection."
-              onRetry={() => void refresh(true, { additionalChainIds: [requestedChainId] })}
-            />
-          )}
         </div>
       </div>
     )
   }
 
   if (!requestedAssetId || !asset || !chain || !display) {
+    const refreshFailed = status === 'error' || assetRefreshFailed || accountNetworksError
     return (
       <div className="page-container">
         <PageHeader title="Asset details" showBack />
         <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
           <Icon icon="lucide:circle-alert" width={40} height={40} className="text-muted" />
-          <p className={cn('mt-4 text-base font-medium', status !== 'error' && 'text-muted')}>
+          <p className={cn('mt-4 text-base font-medium', !refreshFailed && 'text-muted')}>
             Asset unavailable
           </p>
-          {status === 'error' ? (
+          {refreshFailed ? (
             <InlineError
               message="This asset could not be refreshed. Check your connection."
-              onRetry={() => void load(true)}
+              onRetry={() => {
+                if (accountNetworksError) void refreshAccountNetworks()
+                if (assetRefreshFailed) setAssetRetry(retry => retry + 1)
+                else if (status === 'error') void load(true)
+              }}
               className="mt-4 w-full text-left"
             />
           ) : (
@@ -811,8 +843,9 @@ export function AssetDetail() {
   const isZcashAsset = chain.chain.family === 'zcash'
   const isTotalDetail = detailMode === 'all'
   const nativeRaw = categories?.raw[detailMode] ?? null
-  const displayRaw =
-    isZcashAsset && hasConfidentialCapability && (detailMode === 'all' || detailMode === 'shield')
+  const displayRaw = confidentialOnlyDetail
+    ? (nearConfidentialZec?.availableRaw ?? null)
+    : isZcashAsset && hasConfidentialCapability && (detailMode === 'all' || detailMode === 'shield')
       ? sumZcashDetailBalanceRaw(nativeRaw, nearConfidentialZec?.availableRaw ?? null)
       : nativeRaw
   const detailAmount =
@@ -1066,7 +1099,10 @@ export function AssetDetail() {
           <PageTabsTrigger
             key={value}
             value={value}
-            disabled={!categories?.domains.includes(value)}
+            disabled={
+              !categories?.domains.includes(value) ||
+              (Boolean(confidentialOnlyDetail) && value === 'public')
+            }
           >
             {label}
           </PageTabsTrigger>
@@ -1160,11 +1196,10 @@ export function AssetDetail() {
                   label="Send"
                   disabled={
                     detailMode === 'shield'
-                      ? isZcashAsset
-                        ? !hasConfidentialCapability &&
-                          Boolean(getFundingSourceUnavailableReason(zcashKeySource, 'shielded'))
-                        : getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet')
-                            .length === 0
+                      ? !hasConfidentialCapability &&
+                        (Boolean(confidentialOnlyDetail) ||
+                          !isZcashAsset ||
+                          Boolean(getFundingSourceUnavailableReason(zcashKeySource, 'shielded')))
                       : !canSend ||
                         (isZcashAsset &&
                           Boolean(getFundingSourceUnavailableReason(zcashKeySource, 'transparent')))
@@ -1177,7 +1212,11 @@ export function AssetDetail() {
                 <WalletActionButton
                   icon={<WalletActionIcon action="receive" />}
                   label="Receive"
-                  disabled={detailMode === 'public' && !canReceive}
+                  disabled={
+                    detailMode === 'public'
+                      ? !canReceive
+                      : Boolean(confidentialOnlyDetail) && !hasConfidentialCapability
+                  }
                   onClick={() =>
                     detailMode === 'shield' ? handleShieldAction('receive') : handleReceive()
                   }
@@ -1358,7 +1397,7 @@ export function AssetDetail() {
 
         {isZcashAsset && (isTotalDetail || detailMode === 'shield') && (
           <section className="py-2" aria-label="Zcash balance breakdown">
-            {isTotalDetail && (
+            {isTotalDetail && !confidentialOnlyDetail && (
               <AssetDetailBalanceRow
                 label="Public"
                 onSelect={() => selectDetailMode('public')}
@@ -1379,27 +1418,29 @@ export function AssetDetail() {
                 }
               />
             )}
-            <AssetDetailBalanceRow
-              label="Zcash Shield"
-              onSelect={isTotalDetail ? () => selectDetailMode('shield') : undefined}
-              actions={isTotalDetail ? zcashActions('shielded') : undefined}
-              subtitle={renderBalanceAddress(
-                accountNetwork?.addresses.find(address => address.privacy === 'shielded')?.value,
-                'Zcash Shield'
-              )}
-              balance={
-                categories?.raw.shield != null && zcashDisplay
-                  ? `${zcashDisplay.shielded} ZEC`
-                  : '—'
-              }
-              fiat={formatBalanceFiat(categories?.fiat.shield)}
-              pending={
-                zcashDisplay?.shieldedPending
-                  ? `${zcashDisplay.shieldedPending} ZEC pending`
-                  : undefined
-              }
-            />
-            {hasConfidentialCapability && (
+            {!confidentialOnlyDetail && (
+              <AssetDetailBalanceRow
+                label="Zcash Shield"
+                onSelect={isTotalDetail ? () => selectDetailMode('shield') : undefined}
+                actions={isTotalDetail ? zcashActions('shielded') : undefined}
+                subtitle={renderBalanceAddress(
+                  accountNetwork?.addresses.find(address => address.privacy === 'shielded')?.value,
+                  'Zcash Shield'
+                )}
+                balance={
+                  categories?.raw.shield != null && zcashDisplay
+                    ? `${zcashDisplay.shielded} ZEC`
+                    : '—'
+                }
+                fiat={formatBalanceFiat(categories?.fiat.shield)}
+                pending={
+                  zcashDisplay?.shieldedPending
+                    ? `${zcashDisplay.shieldedPending} ZEC pending`
+                    : undefined
+                }
+              />
+            )}
+            {(hasConfidentialCapability || confidentialOnlyDetail) && (
               <AssetDetailBalanceRow
                 label="NEAR Confidential"
                 onSelect={isTotalDetail ? () => selectDetailMode('shield') : undefined}

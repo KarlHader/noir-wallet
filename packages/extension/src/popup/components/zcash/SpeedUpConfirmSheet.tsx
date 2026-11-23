@@ -6,7 +6,7 @@ import {
   TransactionActionRow,
   TransactionActionRows
 } from '../transaction/TransactionActionReview'
-import { SendRecipientAddress } from '../transaction/SendInputCards'
+import { TransactionReviewParty } from '../transaction/TransactionReviewParty'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useMaxTransferEstimate } from '../../hooks/useMaxTransferEstimate'
 import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-policy'
@@ -161,7 +161,7 @@ export function SpeedUpConfirmSheet({
           >
             <TransactionActionRows>
               <TransactionActionRow label="Recipient">
-                {tx?.to && <SendRecipientAddress address={tx.to} />}
+                {tx?.to && <TransactionReviewParty address={tx.to} />}
               </TransactionActionRow>
               <TransactionActionRow label="Amount">
                 <AmountDisplay value={displayedAmount} symbol="ZEC" />

@@ -16,6 +16,8 @@ import { quoteReviewPrimaryAction } from '@/popup/services/quote-review'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
 import { RouteProviderLabel } from '../transaction/RouteProviderLabel'
 import { ReviewDownTriangle } from '../transaction/TransactionReviewView'
+import { TransactionReviewParty } from '../transaction/TransactionReviewParty'
+import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 
 import { TokenIcon } from '../tokens/TokenIcon'
 import { ChainIcon } from '../common/ChainIcon'
@@ -304,10 +306,13 @@ export function SwapReviewView({
             <>
               {onRefreshQuote && sourceAddress && (
                 <DetailItem label="Used account">
-                  <span title={sourceAddress} className="text-xs">
-                    {sourceAccount?.name ? `${sourceAccount.name} · ` : ''}
-                    {formatSortAddress(sourceAddress)}
-                  </span>
+                  <SwapReviewParty
+                    account={{ ...sourceAccount, address: sourceAddress, badge: sourceBadge }}
+                    chain={{
+                      name: sourceNetwork,
+                      icon: sourceTransferDetails?.chainIcon ?? tokenIn.blockchain
+                    }}
+                  />
                 </DetailItem>
               )}
               <DetailItem label={combinedNetworkFee ? 'Approval fee' : 'Network fee'}>
@@ -338,9 +343,14 @@ export function SwapReviewView({
                 )}
               </DetailItem>
               <DetailItem label={recipientLabel}>
-                <span className="block break-all text-xs" title={recipient}>
-                  {recipient}
-                </span>
+                <SwapReviewParty
+                  account={{ ...destinationAccount, address: recipient }}
+                  chain={{
+                    name: destinationNetwork,
+                    icon: destinationDetails?.chainIcon ?? tokenOut.blockchain
+                  }}
+                  fullAddress
+                />
               </DetailItem>
               <DetailItem label="Price impact">
                 <span className={priceImpact > 5 ? 'text-danger' : undefined}>
@@ -515,7 +525,6 @@ function QuoteAssetRow({
   loading?: boolean
   showAccountDetails?: boolean
 }) {
-  const badge = account.badge
   return (
     <section className="flex min-w-0 items-start gap-4">
       <TokenIcon token={token} size={42} />
@@ -544,37 +553,42 @@ function QuoteAssetRow({
             <p className="mt-0.5 text-sm text-muted">
               {formatFiatAmount(fiatValue, { showSign: true })}
             </p>
-            {showAccountDetails && (account.name || badge || account.address) && (
-              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-                {account.name && (
-                  <span className="max-w-full truncate font-medium" title={account.name}>
-                    {account.name}
-                  </span>
-                )}
-                {badge && (
-                  <span
-                    className={
-                      badge === 'Shield'
-                        ? 'shrink-0 rounded bg-success/15 px-2 py-0.5 text-[11px] text-success'
-                        : badge === 'Incognito' || badge === 'Confidential'
-                          ? 'shrink-0 rounded bg-private/12 px-2 py-0.5 text-[11px] text-private'
-                          : 'shrink-0 rounded border border-dashed border-border px-2 py-0.5 text-[11px] text-muted'
-                    }
-                  >
-                    {badge}
-                  </span>
-                )}
-                {account.address && (
-                  <span className="min-w-0 truncate text-muted" title={account.address}>
-                    {formatSortAddress(account.address)}
-                  </span>
-                )}
+            {showAccountDetails && (account.name || account.badge || account.address) && (
+              <div className="mt-2 text-xs font-medium">
+                <SwapReviewParty account={account} align="start" />
               </div>
             )}
           </>
         )}
       </div>
     </section>
+  )
+}
+
+function SwapReviewParty({
+  account,
+  ...layout
+}: Pick<React.ComponentProps<typeof TransactionReviewParty>, 'align' | 'chain' | 'fullAddress'> & {
+  readonly account: SwapReviewAccount
+}) {
+  const { name, badge, address } = account
+  const domain =
+    badge === 'Public'
+      ? 'public'
+      : badge === 'Incognito'
+        ? 'private'
+        : badge === 'Shield'
+          ? 'shield'
+          : undefined
+  return (
+    <TransactionReviewParty
+      {...layout}
+      accountName={name}
+      domain={domain}
+      badge={badge === 'Transparent' ? <ZcashFundingBadge source="transparent" /> : undefined}
+      confidential={badge === 'Confidential'}
+      address={address}
+    />
   )
 }
 

@@ -54,6 +54,7 @@ export function useSwapApprovalContinuation({
   sequence,
   onPreparing,
   onError,
+  onApprovalFailed,
   onReady
 }: {
   readonly phase: 'input' | 'review' | 'approval-pending'
@@ -69,6 +70,7 @@ export function useSwapApprovalContinuation({
   readonly sequence: RefObject<number>
   readonly onPreparing: (value: boolean) => void
   readonly onError: (error: string | null) => void
+  readonly onApprovalFailed: () => void
   readonly onReady: (result: {
     readonly restoredQuote: RheaSwapQuoteView | null
     readonly reuseApprovedQuote: boolean
@@ -149,6 +151,7 @@ export function useSwapApprovalContinuation({
         )
         if (!active) return
         if (graph?.root.status === 'failed') {
+          onApprovalFailed()
           onError('Token approval failed. Start a new Swap.')
           return
         }
@@ -173,7 +176,17 @@ export function useSwapApprovalContinuation({
       active = false
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [phase, approval, walletId, accountId, chainId, preparing, requestKey, onError])
+  }, [
+    phase,
+    approval,
+    walletId,
+    accountId,
+    chainId,
+    preparing,
+    requestKey,
+    onError,
+    onApprovalFailed
+  ])
 
   useEffect(() => {
     if (phase !== 'review' || !completedApprovalId.current) return

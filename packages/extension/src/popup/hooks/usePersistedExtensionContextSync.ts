@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { SETTINGS_STORAGE_KEY, useSettingsStore } from '@/store/settings-store'
+import { SWAP_PREFERENCES_STORAGE_KEY, useSwapPreferences } from '@/store/swap-store'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
@@ -162,7 +163,7 @@ function readWalletScope(): string | null {
   return currentWalletId && currentAccountId ? `${currentWalletId}:${currentAccountId}` : null
 }
 
-/** Keeps long-lived extension pages aligned with authoritative Background writes. */
+/** Keeps long-lived extension pages aligned with persisted wallet state. */
 export function usePersistedExtensionContextSync(): void {
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
@@ -178,7 +179,11 @@ export function usePersistedExtensionContextSync(): void {
       if (areaName !== 'local') return
       const walletChanged = Object.prototype.hasOwnProperty.call(changes, WALLET_STORAGE_KEY)
       const settingsChanged = Object.prototype.hasOwnProperty.call(changes, SETTINGS_STORAGE_KEY)
-      if (!walletChanged && !settingsChanged) return
+      const swapPreferencesChanged = Object.prototype.hasOwnProperty.call(
+        changes,
+        SWAP_PREFERENCES_STORAGE_KEY
+      )
+      if (!walletChanged && !settingsChanged && !swapPreferencesChanged) return
 
       queue = queue
         .catch(() => {})
@@ -186,6 +191,7 @@ export function usePersistedExtensionContextSync(): void {
           const previousWalletScope = readWalletScope()
           if (walletChanged) await rehydrateWalletStore()
           if (settingsChanged) await useSettingsStore.persist.rehydrate()
+          if (swapPreferencesChanged) await useSwapPreferences.persist.rehydrate()
 
           if (walletChanged && readWalletScope() !== previousWalletScope) {
             useTransactionResultStore.getState().clear()
