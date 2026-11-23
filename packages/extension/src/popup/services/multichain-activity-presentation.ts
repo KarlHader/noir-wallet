@@ -586,8 +586,12 @@ export function resolveActivityDisplayAmount(
 
 function getActivitySegmentLabel(segment: ActivitySegment, item?: ActivityItem): string {
   if (segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents') {
-    if (segment.role === 'origin') return 'Shield authorization'
-    if (segment.role === 'relay') return 'Shield processing'
+    if (segment.role === 'origin') {
+      return segment.status === 'final' ? 'Deposit confirmed' : 'Shield authorization'
+    }
+    if (segment.role === 'relay') {
+      return segment.status === 'final' ? 'Received' : 'Shield processing'
+    }
   }
   switch (segment.role) {
     case 'origin':

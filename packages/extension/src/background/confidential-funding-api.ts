@@ -908,10 +908,19 @@ export class ConfidentialFundingApi {
       input.recipient.toLowerCase() === input.signerId.toLowerCase() &&
       input.refundTo === undefined &&
       input.originAsset !== input.destinationAsset
-    if (!isWithdrawal && !isDeposit && !isInternalSwap) {
+    const isConfidentialAccountTransfer =
+      input.depositType === 'CONFIDENTIAL_INTENTS' &&
+      input.refundType === 'CONFIDENTIAL_INTENTS' &&
+      input.recipientType === 'CONFIDENTIAL_INTENTS' &&
+      input.recipient.toLowerCase() !== input.signerId.toLowerCase() &&
+      input.refundTo === undefined
+    if (!isWithdrawal && !isDeposit && !isInternalSwap && !isConfidentialAccountTransfer) {
       throw new Error('Confidential quote route is invalid')
     }
-    const appFees = isWithdrawal || isInternalSwap ? await this.getConfidentialAppFees() : undefined
+    const appFees =
+      isWithdrawal || isInternalSwap || isConfidentialAccountTransfer
+        ? await this.getConfidentialAppFees()
+        : undefined
     const request = {
       dry: input.dry,
       swapType: 'EXACT_INPUT',

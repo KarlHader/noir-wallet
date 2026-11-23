@@ -252,7 +252,10 @@ export function projectConfidentialPlanResult(
       privacyRoute: 'confidential',
       provider: 'near_confidential',
       transferType:
-        next.externalRecipient && next.purpose !== 'native-zec-swap' ? 'external' : 'self',
+        next.operation === 'confidential-transfer' ||
+        (next.externalRecipient && next.purpose !== 'native-zec-swap')
+          ? 'external'
+          : 'self',
       activityType:
         next.operation === 'swap' || next.purpose === 'native-zec-swap' ? 'swap' : 'transfer'
     },

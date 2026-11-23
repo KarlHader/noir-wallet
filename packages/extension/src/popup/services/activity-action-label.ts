@@ -91,6 +91,11 @@ export function getActivityAction(
   if (isActivityShieldSend(item)) {
     return { label: 'Send', side: 'source' }
   }
+  // A confidential transfer pays another Shield account, so it stays a Send
+  // even though both domains are Shield. Same-account Shield movement is Transfer.
+  if (shield?.operation === 'confidential-transfer') {
+    return { label: 'Send', side: 'source' }
+  }
 
   if (
     item.kind === 'swap' &&

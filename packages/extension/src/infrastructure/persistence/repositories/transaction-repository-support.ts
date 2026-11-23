@@ -221,7 +221,8 @@ export function assertPersistableTransactionGraph(graph: TransactionGraph): void
       (graph.root.kind === 'swap' ||
         (graph.root.kind === 'withdraw' &&
           (graph.root.intent?.shield?.operation === 'withdraw' ||
-            graph.root.intent?.shield?.operation === 'cluster'))) &&
+            graph.root.intent?.shield?.operation === 'cluster' ||
+            graph.root.intent?.shield?.operation === 'confidential-transfer'))) &&
       graph.root.id.startsWith('tx:confidential:') &&
       segment.target.kind === 'protocol' &&
       segment.target.provider === 'Confidential Intents' &&

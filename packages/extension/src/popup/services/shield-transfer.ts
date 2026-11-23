@@ -572,7 +572,12 @@ export function shieldQuoteFeeRaw(review: ConfidentialFundingReview): string | n
 export function hasShieldTransferStarted(plan: ConfidentialFundingPlan): boolean {
   if (plan.operation === 'deposit')
     return Boolean(plan.preparedDeposit?.transactionHash || plan.preparedDeposit?.rawTransaction)
-  if (plan.operation === 'withdraw' || plan.operation === 'cluster' || plan.operation === 'swap')
+  if (
+    plan.operation === 'withdraw' ||
+    plan.operation === 'cluster' ||
+    plan.operation === 'swap' ||
+    plan.operation === 'confidential-transfer'
+  )
     return Boolean(
       plan.batchSubmissionAttemptedAt ||
       plan.orderId ||

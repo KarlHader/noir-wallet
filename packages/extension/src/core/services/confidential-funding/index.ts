@@ -55,3 +55,23 @@ export {
   type ConfidentialPortfolioAssetMapping,
   type ConfidentialPortfolioBalance
 } from './confidential-funding-portfolio'
+export {
+  projectShieldDappBalances,
+  projectShieldDappCatalog,
+  projectShieldDappDepositStatus,
+  projectShieldDappOperationDetails,
+  projectShieldDappPlanStatus,
+  projectShieldDappQuote,
+  selectShieldSameTokenAsset,
+  shieldDappOperationReport,
+  shieldDappPlanAction,
+  shieldSameDecimalsQuoteDifferenceRaw,
+  unknownShieldDappOperation,
+  type ShieldDappBalance,
+  type ShieldDappChain,
+  type ShieldDappOperationDetails,
+  type ShieldDappOperationReport,
+  type ShieldDappOperationStatus,
+  type ShieldDappStatusProjection,
+  type ShieldDappToken
+} from './shield-dapp-projection'

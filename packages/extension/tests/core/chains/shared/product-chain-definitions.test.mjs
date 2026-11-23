@@ -13,6 +13,7 @@ import {
   createAssetRegistry,
   createEvmBitcoinChainRegistry,
   createInitialProductChainRegistry,
+  selectAdditionalEvmNetworks,
   filterAssetDefinitionsForChains,
   getBundledBitcoinAssetDefinitions,
   getBundledInitialProductAssetDefinitions,
@@ -157,6 +158,27 @@ test.describe('initial multichain product definitions', () => {
     expect(() =>
       filterAssetDefinitionsForChains([{ chainId: 'invalid', reference: '0' }], visible)
     ).toThrow(/Invalid CAIP-2/)
+  })
+
+  test('does not register a bundled EVM chain twice when the full catalog is supplied', () => {
+    const bundled = getEvmNetworkConfigs('mainnet')
+    const ethereum = bundled[0]
+    const custom = {
+      ...ethereum,
+      chainId: 'eip155:999999',
+      numericChainId: 999999,
+      networkName: 'custom',
+      displayName: 'Custom'
+    }
+    expect(() => createInitialProductChainRegistry('mainnet', bundled)).toThrow(
+      /Duplicate chain definition: eip155:1/
+    )
+    const registry = createInitialProductChainRegistry(
+      'mainnet',
+      selectAdditionalEvmNetworks('mainnet', [...bundled, custom])
+    )
+    expect(registry.resolve('eip155:1').displayName).toBe('Ethereum')
+    expect(registry.resolve('eip155:999999').displayName).toBe('Custom')
   })
 
   test('binds Zcash and its native asset to the build network genesis', () => {

@@ -236,6 +236,21 @@ export function createInitialProductChainRegistry(
   return createChainRegistry(getInitialProductChainDefinitions(network, additionalEvmNetworks))
 }
 
+/** Built-in EVM chains are already in the product registry. Passing them again duplicates eip155:1. */
+export function selectAdditionalEvmNetworks(
+  network: Network,
+  evmNetworks: readonly EvmNetworkConfig[]
+): readonly EvmNetworkConfig[] {
+  const seen = new Set(getEvmNetworkConfigs(network).map(item => item.chainId))
+  const additional: EvmNetworkConfig[] = []
+  for (const item of evmNetworks) {
+    if (seen.has(item.chainId)) continue
+    seen.add(item.chainId)
+    additional.push(item)
+  }
+  return Object.freeze(additional)
+}
+
 export function getZcashChainId(network: Network): string {
   return ZCASH_CHAIN_IDS[network]
 }

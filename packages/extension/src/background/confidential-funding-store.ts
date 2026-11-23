@@ -17,7 +17,15 @@ const EXTERNAL_DEPOSIT_PREFIX = 'confidential_external_deposit:'
 const SESSION_PREFIX = 'confidential_funding_session:'
 const HISTORY_SESSION_PREFIX = 'confidential_order_history_session:'
 const BALANCE_PREFIX = 'confidential_funding_balance:'
+const SHIELD_GRANT_PREFIX = 'confidential_shield_site_grant:'
 export const CONFIDENTIAL_BALANCE_CACHE_TTL_MS = 5 * 60 * 1000
+
+export interface ShieldSiteGrant {
+  readonly origin: string
+  readonly network: Network
+  readonly keyDomainId: string
+  readonly accountId: string
+}
 
 export interface ConfidentialBalanceSnapshot {
   readonly balances: readonly ConfidentialBalance[]
@@ -44,6 +52,35 @@ const PHASES = new Set<ConfidentialFundingPlan['phase']>([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isShieldOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return false
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'https:' || url.protocol === 'http:') && url.origin === value
+  } catch {
+    return false
+  }
+}
+
+function parseShieldSiteGrant(value: unknown): ShieldSiteGrant {
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== 1 ||
+    !isShieldOrigin(value.origin) ||
+    (value.network !== 'mainnet' && value.network !== 'testnet') ||
+    !isBoundedString(value.keyDomainId) ||
+    !isBoundedString(value.accountId)
+  ) {
+    throw new Error('Stored Shield site grant is invalid')
+  }
+  return Object.freeze({
+    origin: value.origin,
+    network: value.network,
+    keyDomainId: value.keyDomainId,
+    accountId: value.accountId
+  })
 }
 
 function isBoundedString(value: unknown, maximum = 512): value is string {
@@ -172,7 +209,8 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
       plan.operation !== 'deposit' &&
       plan.operation !== 'withdraw' &&
       plan.operation !== 'cluster' &&
-      plan.operation !== 'swap') ||
+      plan.operation !== 'swap' &&
+      plan.operation !== 'confidential-transfer') ||
     (plan.purpose !== undefined &&
       (!['move', 'native-zec-swap'].includes(plan.purpose) ||
         plan.operation !== 'withdraw' ||
@@ -223,11 +261,35 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         (plan.withdraws[0].signedPayload !== undefined && !plan.frozenRequest) ||
         plan.depositQuote !== undefined ||
         plan.preparedDeposit !== undefined)) ||
+    (plan.operation === 'confidential-transfer' &&
+      (plan.sourceDomain !== 'shield' ||
+        plan.destinationDomain !== 'shield' ||
+        plan.source.address.toLowerCase() !== plan.signerId.toLowerCase() ||
+        plan.destination.address.toLowerCase() === plan.signerId.toLowerCase() ||
+        !/^0x[0-9a-fA-F]{40}$/.test(plan.destination.address) ||
+        /^0x0{40}$/i.test(plan.destination.address) ||
+        plan.requiresDeposit ||
+        plan.externalRecipient !== undefined ||
+        plan.withdraws.length !== 1 ||
+        plan.splitSourceAmounts[0] !== plan.source.amountRaw ||
+        !plan.swapQuote ||
+        plan.swapQuote.quoteRequest.dry !== false ||
+        plan.swapQuote.quoteRequest.recipientType !== 'CONFIDENTIAL_INTENTS' ||
+        plan.swapQuote.quoteRequest.depositType !== 'CONFIDENTIAL_INTENTS' ||
+        plan.swapQuote.quoteRequest.refundType !== 'CONFIDENTIAL_INTENTS' ||
+        String(plan.swapQuote.quoteRequest.recipient).toLowerCase() !==
+          plan.destination.address.toLowerCase() ||
+        plan.swapQuote.quoteRequest.originAsset !== plan.source.protocolAssetId ||
+        plan.swapQuote.quoteRequest.destinationAsset !== plan.destination.protocolAssetId ||
+        (plan.withdraws[0].signedPayload !== undefined && !plan.frozenRequest) ||
+        plan.depositQuote !== undefined ||
+        plan.preparedDeposit !== undefined)) ||
     (plan.purpose === 'native-zec-swap' &&
       (!plan.swapQuote ||
         plan.swapQuote.quoteRequest.dry !== false ||
         plan.reviewedAppFeesFingerprint !== undefined)) ||
     (plan.operation !== 'swap' &&
+      plan.operation !== 'confidential-transfer' &&
       plan.purpose !== 'native-zec-swap' &&
       plan.swapQuote !== undefined) ||
     (plan.reviewedAppFeesFingerprint !== undefined &&
@@ -685,6 +747,117 @@ export class ChromeConfidentialFundingStore {
     await chrome.storage.session.remove(this.sessionKey(network, keyDomainId, accountId))
   }
 
+  private shieldGrantKey(grant: ShieldSiteGrant): string {
+    return `${SHIELD_GRANT_PREFIX}${encodeURIComponent(grant.origin)}:${grant.network}:${encodeURIComponent(grant.keyDomainId)}:${encodeURIComponent(grant.accountId)}`
+  }
+
+  async hasShieldSiteGrant(
+    origin: string,
+    network: Network,
+    keyDomainId: string,
+    accountId: string
+  ): Promise<boolean> {
+    let grant: ShieldSiteGrant
+    try {
+      grant = parseShieldSiteGrant({ schemaVersion: 1, origin, network, keyDomainId, accountId })
+    } catch {
+      return false
+    }
+    const key = this.shieldGrantKey(grant)
+    const value = (await chrome.storage.local.get(key))[key]
+    if (value === undefined) return false
+    try {
+      const stored = parseShieldSiteGrant(value)
+      return (
+        stored.origin === grant.origin &&
+        stored.network === grant.network &&
+        stored.keyDomainId === grant.keyDomainId &&
+        stored.accountId === grant.accountId
+      )
+    } catch {
+      await chrome.storage.local.remove(key)
+      return false
+    }
+  }
+
+  async putShieldSiteGrant(grant: ShieldSiteGrant): Promise<void> {
+    const parsed = parseShieldSiteGrant({ schemaVersion: 1, ...grant })
+    await withUndeletedWalletAccountMetadata(
+      parsed.keyDomainId,
+      parsed.accountId,
+      parsed.network,
+      () =>
+        chrome.storage.local.set({
+          [this.shieldGrantKey(parsed)]: { schemaVersion: 1, ...parsed }
+        })
+    )
+  }
+
+  async deleteShieldSiteGrant(
+    origin: string,
+    network: Network,
+    keyDomainId: string,
+    accountId: string
+  ): Promise<void> {
+    let grant: ShieldSiteGrant
+    try {
+      grant = parseShieldSiteGrant({ schemaVersion: 1, origin, network, keyDomainId, accountId })
+    } catch {
+      return
+    }
+    await chrome.storage.local.remove(this.shieldGrantKey(grant))
+  }
+
+  async listShieldSiteGrants(network: Network): Promise<readonly ShieldSiteGrant[]> {
+    const values = await chrome.storage.local.get(null)
+    return Object.entries(values).flatMap(([key, value]) => {
+      if (!key.startsWith(SHIELD_GRANT_PREFIX)) return []
+      try {
+        const grant = parseShieldSiteGrant(value)
+        return grant.network === network && key === this.shieldGrantKey(grant) ? [grant] : []
+      } catch {
+        return []
+      }
+    })
+  }
+
+  async deleteShieldSiteGrantsByAccountScope(
+    keyDomainId: string,
+    accountId: string
+  ): Promise<void> {
+    const values = await chrome.storage.local.get(null)
+    const keys = Object.entries(values).flatMap(([key, value]) => {
+      if (!key.startsWith(SHIELD_GRANT_PREFIX)) return []
+      try {
+        const grant = parseShieldSiteGrant(value)
+        return grant.keyDomainId === keyDomainId && grant.accountId === accountId ? [key] : []
+      } catch {
+        return []
+      }
+    })
+    if (keys.length > 0) await chrome.storage.local.remove(keys)
+  }
+
+  async deleteShieldSiteGrantsByOrigin(origin: string): Promise<void> {
+    const values = await chrome.storage.local.get(null)
+    const keys = Object.entries(values).flatMap(([key, value]) => {
+      if (!key.startsWith(SHIELD_GRANT_PREFIX)) return []
+      try {
+        return parseShieldSiteGrant(value).origin === origin ? [key] : []
+      } catch {
+        return []
+      }
+    })
+    if (keys.length > 0) await chrome.storage.local.remove(keys)
+  }
+
+  async clearShieldSiteGrants(): Promise<void> {
+    const keys = Object.keys(await chrome.storage.local.get(null)).filter(key =>
+      key.startsWith(SHIELD_GRANT_PREFIX)
+    )
+    if (keys.length > 0) await chrome.storage.local.remove(keys)
+  }
+
   async deleteSessionsByAccountScope(keyDomainId: string, accountId: string): Promise<void> {
     await chrome.storage.session.remove(
       (['mainnet', 'testnet'] as const).flatMap(network => [
@@ -711,7 +884,8 @@ export class ChromeConfidentialFundingStore {
         key =>
           key.startsWith(PLAN_PREFIX) ||
           key.startsWith(EXTERNAL_DEPOSIT_PREFIX) ||
-          key.startsWith(BALANCE_PREFIX)
+          key.startsWith(BALANCE_PREFIX) ||
+          key.startsWith(SHIELD_GRANT_PREFIX)
       )
       const sessionKeys = Object.keys(session).filter(
         key => key.startsWith(SESSION_PREFIX) || key.startsWith(HISTORY_SESSION_PREFIX)

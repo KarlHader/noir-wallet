@@ -155,6 +155,9 @@ interface NoirWalletProvider {
   readonly bitcoin?: BitcoinProvider
   readonly solana?: SolanaProvider
   readonly near?: NearProvider
+  readonly shield: {
+    readonly request: (args: ProviderRequestArguments) => Promise<unknown>
+  }
 }
 
 interface ProviderErrorValue {
@@ -242,7 +245,7 @@ function removeProviderListener(chainId: string, event: string, handler: Provide
 }
 
 async function requestProvider(
-  chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain',
+  chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain' | 'shield',
   args: ProviderRequestArguments
 ) {
   if (
@@ -801,7 +804,10 @@ const noirWalletProvider: NoirWalletProvider = Object.freeze({
   ...(ethereumProvider ? { ethereum: ethereumProvider } : {}),
   ...(bitcoinProvider ? { bitcoin: bitcoinProvider } : {}),
   ...(solanaProvider ? { solana: solanaProvider } : {}),
-  ...(nearProvider ? { near: nearProvider } : {})
+  ...(nearProvider ? { near: nearProvider } : {}),
+  shield: Object.freeze({
+    request: (args: ProviderRequestArguments) => requestProvider('shield', args)
+  })
 })
 
 window.addEventListener('message', event => {

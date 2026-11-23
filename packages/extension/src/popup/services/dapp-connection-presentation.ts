@@ -6,7 +6,8 @@ import {
   getZcashChainId,
   parseChainId
 } from '@/core/chains/registry'
-import type { AccountRef, ConnectedDApp } from '@/core/dapp/dapp-manager'
+import type { AccountRef } from '@/core/dapp/dapp-manager'
+import type { WalletConnectedDApp } from '@/core/dapp/shield-site-connections'
 import type { Network } from '@/types'
 
 export interface DAppPermissionPresentation {
@@ -107,8 +108,10 @@ export function toggleMultichainConnectionAccount(
   return next
 }
 
+const SHIELD_PERMISSION_ID = 'shield'
+
 export function presentDAppPermissions(
-  dapp: ConnectedDApp,
+  dapp: WalletConnectedDApp,
   { network, endpointSettings, account }: DAppPermissionContext
 ): readonly DAppPermissionPresentation[] {
   const evmNetworks = resolveEvmNetworkCatalog(network, endpointSettings)
@@ -152,10 +155,16 @@ export function presentDAppPermissions(
   if (dapp.evmAuthorization) {
     addAccounts('evm', dapp.evmAuthorization.accounts)
   }
+  if (dapp.shieldAccounts) {
+    addAccounts(SHIELD_PERMISSION_ID, dapp.shieldAccounts)
+  }
 
   return [...accountsByChain].map(([chainId, accounts]) => {
     if (chainId === 'evm') {
       return { chainId, label: 'EVM', iconChain: 'evm', accountCount: accounts.size }
+    }
+    if (chainId === SHIELD_PERMISSION_ID) {
+      return { chainId, label: 'NEAR Confidential', iconChain: 'near', accountCount: accounts.size }
     }
     const parsed = parseChainId(chainId)
     const chain = chains.get(parsed.id)

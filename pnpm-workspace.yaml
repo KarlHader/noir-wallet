@@ -1,6 +1,7 @@
 packages:
   - 'packages/*'
   - 'packages/sdk/example'
+  - 'packages/shield-sdk/example'
 allowBuilds:
   bigint-buffer: true
   bufferutil: true

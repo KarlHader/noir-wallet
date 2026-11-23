@@ -25,6 +25,10 @@ import {
   splitConfidentialFundingAmount
 } from '../../../src/core/services/confidential-funding/confidential-funding-model.ts'
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
+import {
+  getActivityDetailTitle,
+  getActivityRouteTitle
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
 import { getEvmNetworkConfigs } from '../../../src/config/networks.ts'
 import {
   availableDepositTokens,
@@ -1199,6 +1203,54 @@ test.describe('confidential funding safety rules', () => {
         refundTo: withdrawal.signerId,
         appFees: [{ recipient: 'platform.near', fee: 50 }]
       })
+      const accountTransferStart = quoteRequests.length
+      await api.quote({
+        ...withdrawal,
+        referral: 'noir_send',
+        destinationAsset: withdrawal.originAsset,
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        dry: true
+      })
+      expect(quoteRequests[accountTransferStart + 1]).toMatchObject({
+        referral: 'noir_send',
+        originAsset: withdrawal.originAsset,
+        destinationAsset: withdrawal.originAsset,
+        depositType: 'CONFIDENTIAL_INTENTS',
+        refundType: 'CONFIDENTIAL_INTENTS',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        recipient: withdrawal.recipient,
+        refundTo: withdrawal.signerId,
+        dry: true,
+        appFees: [{ recipient: 'platform.near', fee: 50 }]
+      })
+      const crossChainStart = quoteRequests.length
+      await api.quote({
+        ...withdrawal,
+        referral: 'noir_send',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        dry: true
+      })
+      expect(quoteRequests[crossChainStart + 1]).toMatchObject({
+        referral: 'noir_send',
+        originAsset: withdrawal.originAsset,
+        destinationAsset: withdrawal.destinationAsset,
+        depositType: 'CONFIDENTIAL_INTENTS',
+        refundType: 'CONFIDENTIAL_INTENTS',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        recipient: withdrawal.recipient,
+        refundTo: withdrawal.signerId,
+        dry: true,
+        appFees: [{ recipient: 'platform.near', fee: 50 }]
+      })
+      await expect(
+        api.quote({
+          ...withdrawal,
+          destinationAsset: withdrawal.originAsset,
+          recipient: withdrawal.signerId,
+          recipientType: 'CONFIDENTIAL_INTENTS',
+          dry: true
+        })
+      ).rejects.toThrow('Confidential quote route is invalid')
       const concurrentApi = new ConfidentialFundingApi(
         apiConfig,
         'https://near.example.test',
@@ -1237,7 +1289,7 @@ test.describe('confidential funding safety rules', () => {
           withdrawal
         )
       ).rejects.toThrow('fee rate is invalid')
-      expect(quoteRequests).toHaveLength(21)
+      expect(quoteRequests).toHaveLength(25)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1783,3 +1835,197 @@ test.describe('confidential funding safety rules', () => {
     }
   })
 })
+
+test('confidential account transfer freezes the signed-intent quote for the other account', async () => {
+  const signerId = '0x1111111111111111111111111111111111111111'
+  const recipient = '0x3333333333333333333333333333333333333333'
+  const assetId = 'eip155:1/slip44:60'
+  const protocolAssetId = 'nep141:eth.omft.near'
+  const destinationAssetId = 'eip155:56/slip44:714'
+  const destinationProtocolAssetId = 'nep141:bnb.omft.near'
+  const plans = new Map()
+  const quotes = []
+  let intentDepositAddress = null
+  const deadline = new Date(120_000).toISOString()
+  const repository = new InMemoryTransactionRepository()
+  const coordinator = new ConfidentialFundingCoordinator({
+    network: 'mainnet',
+    evmNetworks: [{ chainId: 'eip155:1', rpcUrl: 'https://rpc.example.test' }],
+    now: () => 1_000,
+    createId: () => 'plan-transfer',
+    scheduleMonitoring: async () => {},
+    assets: {
+      get: () => ({ metadata: { decimals: 18, symbol: 'ETH' } }),
+      list: () => []
+    },
+    assetMappings: [
+      { assetId, protocolAssetId },
+      { assetId: destinationAssetId, protocolAssetId: destinationProtocolAssetId }
+    ],
+    repository,
+    store: {
+      getSession: async () => ({
+        accessToken: 'token',
+        refreshToken: 'refresh',
+        expiresAt: 1_000_000,
+        refreshExpiresAt: 1_000_000
+      }),
+      putSession: async () => {},
+      putBalances: async () => {},
+      listPlans: async () => [...plans.values()],
+      getPlan: async id => plans.get(id) ?? null,
+      putPlan: async plan => {
+        plans.set(plan.planId, plan)
+      },
+      deletePlan: async id => {
+        plans.delete(id)
+      }
+    },
+    signer: {
+      resolveIdentity: async () => ({
+        address: signerId,
+        peaAddress: signerId,
+        addressIndex: 0,
+        context: {
+          chainAccount: { scope: { keyDomainId: 'wallet:one', accountId: 'account:one' } }
+        }
+      }),
+      signMessage: async input => ({
+        standard: 'erc191',
+        payload: input.payload,
+        signature: '0xsignature'
+      })
+    },
+    api: {
+      getBalances: async () => [{ tokenId: protocolAssetId, available: '1000', source: 'intents' }],
+      quote: async request => {
+        quotes.push(request)
+        return {
+          correlationId: 'quote-transfer',
+          quoteRequest: {
+            dry: request.dry,
+            swapType: 'EXACT_INPUT',
+            confidentiality: 'basic',
+            originAsset: request.originAsset,
+            destinationAsset: request.destinationAsset,
+            amount: request.amountRaw,
+            refundTo: request.refundTo ?? request.signerId,
+            recipient: request.recipient,
+            depositType: request.depositType,
+            refundType: request.refundType,
+            recipientType: request.recipientType,
+            slippageTolerance: request.slippageBps,
+            deadline
+          },
+          quote: {
+            amountIn: request.amountRaw,
+            amountOut: request.amountRaw,
+            minAmountOut: request.amountRaw,
+            depositAddress: 'deposit.near',
+            deadline
+          }
+        }
+      },
+      generateIntent: async input => {
+        intentDepositAddress = input.depositAddress
+        return {
+          intent: {
+            standard: 'erc191',
+            payload: JSON.stringify({
+              verifying_contract: 'intents.far',
+              signer_id: signerId,
+              deadline,
+              nonce: btoa(String.fromCharCode(...new Uint8Array(32))),
+              intents: [
+                {
+                  intent: 'transfer',
+                  receiver_id: input.depositAddress,
+                  tokens: { [confidentialPrivateTokenId(protocolAssetId)]: '1000' }
+                }
+              ]
+            })
+          },
+          correlationId: 'intent-transfer'
+        }
+      },
+      submitIntent: async () => ({ intentHash: 'hash', correlationId: 'submitted' }),
+      getOneClickStatus: async () => ({ status: 'PROCESSING' })
+    }
+  })
+  const request = {
+    network: 'mainnet',
+    keyDomainId: 'wallet:one',
+    accountId: 'account:one',
+    operation: 'confidential-transfer',
+    sourceDomain: 'shield',
+    destinationDomain: 'shield',
+    source: {
+      chainId: 'eip155:1',
+      chainName: 'eth',
+      assetId,
+      protocolAssetId,
+      amountRaw: '1000'
+    },
+    destination: {
+      chainId: 'eip155:56',
+      chainName: 'bsc',
+      assetId: destinationAssetId,
+      protocolAssetId: destinationProtocolAssetId
+    },
+    confidentialRecipient: recipient,
+    slippageBps: 50
+  }
+  await expect(
+    coordinator.prepare({ ...request, confidentialRecipient: signerId })
+  ).rejects.toThrow('Shield recipient account is invalid.')
+  expect(quotes).toEqual([])
+  const review = await coordinator.prepare(request)
+  const stored = await coordinatorOptionsPlan(plans, review.planId)
+  expect(quotes).toHaveLength(1)
+  expect(quotes[0]).toMatchObject({
+    originAsset: protocolAssetId,
+    destinationAsset: destinationProtocolAssetId,
+    recipient,
+    signerId,
+    depositType: 'CONFIDENTIAL_INTENTS',
+    refundType: 'CONFIDENTIAL_INTENTS',
+    recipientType: 'CONFIDENTIAL_INTENTS',
+    dry: false,
+    referral: 'noir_send'
+  })
+  expect(stored.swapQuote.quoteRequest.dry).toBe(false)
+  expect(stored.swapQuote.quoteRequest.destinationAsset).toBe(destinationProtocolAssetId)
+  expect(stored.destination.address).toBe(recipient)
+  expect(stored.destination.assetId).toBe(destinationAssetId)
+  const confirmed = await coordinator.confirm(review.planId, review.payloadFingerprint)
+  expect(quotes).toHaveLength(1)
+  expect(intentDepositAddress).toBe('deposit.near')
+  expect(confirmed.withdraws[0].signedPayload.payload).toContain('deposit.near')
+  expect(confirmed.phase).toBe('submitting')
+  const graph = await repository.get(
+    { keyDomainId: 'wallet:one', accountId: 'account:one' },
+    review.transactionId
+  )
+  expect(graph.root.intent).toMatchObject({
+    direction: 'outgoing',
+    shield: {
+      operation: 'confidential-transfer',
+      sourceDomain: 'shield',
+      destinationDomain: 'shield'
+    },
+    recipient: { address: recipient }
+  })
+  const activity = {
+    ...graph.root,
+    source: 'wallet-v2',
+    snapshot: graph.root.intent,
+    segments: graph.segments
+  }
+  expect(getActivityRouteTitle(activity, {})).toBe('Send')
+  expect(getActivityDetailTitle(activity)).toBe('Send')
+  expect(() => assertPersistableTransactionGraph(graph)).not.toThrow()
+})
+
+function coordinatorOptionsPlan(plans, planId) {
+  return plans.get(planId)
+}

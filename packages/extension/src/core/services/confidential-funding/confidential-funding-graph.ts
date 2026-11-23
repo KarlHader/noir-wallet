@@ -123,7 +123,7 @@ export function projectShieldDepositSettlement(
 
 export function createConfidentialFundingGraph(input: {
   readonly planId: string
-  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
+  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap' | 'confidential-transfer'
   readonly purpose?: 'native-zec-swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
@@ -160,6 +160,8 @@ export function createConfidentialFundingGraph(input: {
         (input.sourceDomain !== 'shield' ||
           !['public', 'private'].includes(input.destinationDomain ?? ''))) ||
       (input.operation === 'swap' &&
+        (input.sourceDomain !== 'shield' || input.destinationDomain !== 'shield')) ||
+      (input.operation === 'confidential-transfer' &&
         (input.sourceDomain !== 'shield' || input.destinationDomain !== 'shield')) ||
       (input.operation === 'cluster' &&
         (!['public', 'private', 'shield'].includes(input.sourceDomain ?? '') ||
@@ -198,7 +200,9 @@ export function createConfidentialFundingGraph(input: {
           ? 'swap'
           : input.operation === 'deposit'
             ? 'shield'
-            : input.operation === 'withdraw' || input.operation === 'cluster'
+            : input.operation === 'withdraw' ||
+                input.operation === 'cluster' ||
+                input.operation === 'confidential-transfer'
               ? 'withdraw'
               : 'swap',
       status: input.requiresDeposit ? 'signed' : 'confirming',
@@ -208,7 +212,12 @@ export function createConfidentialFundingGraph(input: {
       revision: 0,
       intent: {
         schemaVersion: 1,
-        direction: input.operation && !input.externalRecipient ? 'self' : 'outgoing',
+        direction:
+          input.operation === 'confidential-transfer'
+            ? 'outgoing'
+            : input.operation && !input.externalRecipient
+              ? 'self'
+              : 'outgoing',
         ...(input.operation
           ? {
               shield: {
@@ -293,7 +302,7 @@ export function createConfidentialFundingGraph(input: {
         transactionId,
         role: 'destination' as const,
         target:
-          input.operation === 'swap'
+          input.operation === 'swap' || input.operation === 'confidential-transfer'
             ? {
                 kind: 'protocol' as const,
                 provider: 'Confidential Intents',
