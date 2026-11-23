@@ -685,6 +685,26 @@ function getSwapQuoteErrorMessage(error: unknown): string {
 /**
  * Fetches cross-chain swap quote from the API
  */
+/**
+ * Posts a quote body unchanged. Callers must build that body with the private
+ * NEAR route so the asset, deposit mode, and referral are not rewritten here.
+ */
+export async function postExactNearIntentsQuote(
+  body: object,
+  signal?: AbortSignal
+): Promise<unknown> {
+  assertMainnetProtocolFeature('Swap')
+  const response = await fetchWithTimeout(`${INTENTS_API_BASE}/quote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    timeoutMs: 20000,
+    maxBytes: 1024 * 1024,
+    signal
+  })
+  return response.json() as unknown
+}
+
 export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
   assertMainnetProtocolFeature('Swap')
   try {

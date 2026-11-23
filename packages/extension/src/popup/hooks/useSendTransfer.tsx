@@ -62,6 +62,12 @@ export interface SendTransferConfig<R extends TransferReview, S extends Transfer
   readonly reviewSender: (review: R) => string
   readonly prepareError: (error: unknown, networkName: string, symbol: string) => string
   readonly approvalError: (error: unknown) => string
+  readonly blockPublicPrepare?: (input: {
+    readonly recipient: string
+    readonly amountRaw: string
+  }) => string | null
+  readonly onDraftChange?: (draft: { readonly recipient: string; readonly amount: string }) => void
+  readonly privacy?: { readonly checked: boolean; readonly onChange: () => void }
 }
 
 export function useSendTransfer<R extends TransferReview, S extends TransferSubmission>(
@@ -139,6 +145,10 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
     maximumRaw: maximum.value?.amountRaw ?? null
   })
   const amountWithinBalance = isTransferAmountSpendable(amountRaw, availability.amountRaw)
+  const publicBlock =
+    parsedRecipient && amountRaw
+      ? (config.blockPublicPrepare?.({ recipient: parsedRecipient, amountRaw }) ?? null)
+      : null
   const maximumPending =
     maxSelected && asset.asset.kind === 'native' && (maximum.loading || !maximum.value)
   useEffect(() => {
@@ -189,7 +199,13 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
     void maximum.request()
   }
 
+  const onDraftChange = config.onDraftChange
+  useEffect(() => {
+    onDraftChange?.({ recipient, amount })
+  }, [amount, onDraftChange, recipient])
+
   const estimateFee = useCallback(async () => {
+    if (publicBlock) throw new Error(publicBlock)
     if (!amountWithinBalance || !amountRaw || !parsedRecipient) {
       throw new Error(`Incomplete ${config.feeSymbol} transfer`)
     }
@@ -204,9 +220,18 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
     } finally {
       if (value) await config.reject(value.graph.root.id).catch(() => {})
     }
-  }, [amountRaw, amountWithinBalance, asset.asset.id, chain.chain.id, config, parsedRecipient])
+  }, [
+    amountRaw,
+    amountWithinBalance,
+    asset.asset.id,
+    chain.chain.id,
+    config,
+    parsedRecipient,
+    publicBlock
+  ])
   const feePreview = useTransferFeePreview({
     enabled:
+      publicBlock === null &&
       amountWithinBalance &&
       parsedRecipient !== null &&
       !preparing &&
@@ -221,6 +246,7 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
     await config.reject(value.graph.root.id).catch(() => {})
   }
   const continueTransfer = async () => {
+    if (publicBlock) return
     if (!amountWithinBalance || !amountRaw || !parsedRecipient || maximumPending) return
     setPreparing(true)
     setError(null)
@@ -313,14 +339,19 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
       (asset.asset.kind === 'native' && !parsedRecipient) ||
       maximum.loading,
     continueDisabled:
-      !amountWithinBalance || !parsedRecipient || maximumPending || feePreview.loading,
+      publicBlock !== null ||
+      !amountWithinBalance ||
+      !parsedRecipient ||
+      maximumPending ||
+      feePreview.loading,
     continueLoading: preparing || (maxSelected && maximum.loading) || feePreview.loading,
     feePreviewLoading: feePreview.loading,
     previewFee: feePreview.amountRaw
       ? formatBaseUnitAmount(feePreview.amountRaw, config.feeDecimals)
       : '—',
     approving,
-    error,
+    privacy: config.privacy,
+    error: publicBlock ?? error,
     review:
       review && reviewAmounts
         ? {

@@ -95,13 +95,20 @@ export function createBackgroundNearTransferController(
     ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK),
     ...protocolAssets
   ])
+  const signer = new NearMultichainSigningClient({
+    credentials: credentialSession,
+    ledger: nearLedgerSigningBridge
+  })
+  const deriveNearPea = (
+    keyDomainId: Parameters<NearMultichainSigningClient['deriveNearPea']>[0],
+    accountIndex: number,
+    signal?: AbortSignal
+  ) => signer.deriveNearPea(keyDomainId, accountIndex, signal)
   const orchestrator = new NearTransferOrchestrator({
     repository: new IndexedDbTransactionRepository(),
     pendingStore: new ChromeSessionNearPendingTransferStore(),
-    signer: new NearMultichainSigningClient({
-      credentials: credentialSession,
-      ledger: nearLedgerSigningBridge
-    }),
+    signer,
+    deriveNearPea,
     rpc: createConfiguredNearRpcClient({ chainId: network.chainId, rpcUrl: network.rpcUrl }),
     assets,
     canBroadcastSigned: scope => isSelectedTransferScope(storageRepository, scope, 'near'),
@@ -115,6 +122,7 @@ export function createBackgroundNearTransferController(
   })
   return new BackgroundNearTransferController({
     orchestrator,
+    deriveNearPea,
     loadActiveContext: async () =>
       requireSelectedTransferNetwork(
         await loadActiveNearTransferContext(storageRepository, network.chainId),

@@ -9,7 +9,6 @@ import type {
   SigningResult
 } from '@/core/keyring/ports'
 import type { LedgerSigningResume } from '@/infrastructure/keyring/multichain/ledger-signing-bridge'
-import type { NearSigningPreparePayload } from '@/infrastructure/keyring/multichain/signing-adapter-near'
 import {
   type NearIntentsTransactionBinding,
   parseTransactionEventId,
@@ -23,6 +22,8 @@ import {
 } from '@/core/transactions/domain'
 import type { TransactionRepository } from '@/ports/repositories'
 import type { NearTransactionSigningPreparePayload } from '@/infrastructure/keyring/multichain/near-signing-client'
+import type { NearSigningPreparePayload } from '@/infrastructure/keyring/multichain/signing-adapter-near'
+import { nearPublicKeyFromImplicitAccountId } from '@/core/chains/near'
 import {
   hasReachedTransactionStatus,
   persistSignedTransactionGraph,
@@ -49,7 +50,9 @@ import { createNearTransferGraph } from './near-transaction-graph'
 export interface NearTransferSigningPort {
   readonly prepare: (
     keyDomainId: ChainAccount['scope']['keyDomainId'],
-    payload: NearTransactionSigningPreparePayload,
+    payload:
+      | NearTransactionSigningPreparePayload
+      | Extract<NearSigningPreparePayload, { readonly kind: 'pea-near-transaction' }>,
     signal?: AbortSignal
   ) => Promise<PreparedSigningCommand>
   readonly confirm: (
@@ -81,6 +84,11 @@ export interface NearTransferOrchestratorOptions {
     graph: TransactionGraph,
     recovered: boolean
   ) => Promise<void> | void
+  readonly deriveNearPea?: (
+    keyDomainId: ChainAccount['scope']['keyDomainId'],
+    accountIndex: number,
+    signal?: AbortSignal
+  ) => Promise<Readonly<{ readonly address: string }>>
 }
 
 interface PrepareNearTransferBaseInput {
@@ -99,7 +107,9 @@ export type PrepareNearTransferInput = PrepareNearTransferBaseInput &
     | Readonly<{
         readonly kind: 'intents-deposit'
         readonly amountRaw: string
-        readonly memo: string
+        readonly memo?: string
+        readonly signerId?: string
+        readonly signingKind?: 'near-transaction' | 'pea-near-transaction'
       }>
   )
 
@@ -198,6 +208,7 @@ export class NearTransferOrchestrator {
     graph: TransactionGraph,
     recovered: boolean
   ) => Promise<void> | void
+  private readonly deriveNearPea?: NearTransferOrchestratorOptions['deriveNearPea']
 
   constructor(options: NearTransferOrchestratorOptions) {
     this.repository = options.repository
@@ -210,6 +221,7 @@ export class NearTransferOrchestrator {
     this.onPendingBroadcast = options.onPendingBroadcast
     this.canBroadcastSigned = options.canBroadcastSigned
     this.onMonitoringRequired = options.onMonitoringRequired
+    this.deriveNearPea = options.deriveNearPea
   }
 
   private async prepareTransfer(input: PrepareNearTransferInput): Promise<PreparedNearTransfer> {
@@ -225,14 +237,15 @@ export class NearTransferOrchestrator {
       ) {
         throw new Error('NEAR Intents deposit asset is not wNEAR')
       }
+      const signerId = input.signerId ?? input.chainAccount.identity.value
       return prepareNearIntentsDeposit({
         chainId: input.chainAccount.scope.chainId,
         accountIndex: input.accountIndex,
-        signerId: input.chainAccount.identity.value,
+        signerId,
         publicKey: input.publicKey,
         depositAddress: input.receiverId,
         amountRaw: input.amountRaw,
-        memo: input.memo,
+        ...(input.memo === undefined ? {} : { memo: input.memo }),
         rpc: this.rpc,
         signal: input.signal
       })
@@ -270,11 +283,56 @@ export class NearTransferOrchestrator {
     })
   }
 
+  private async resolveIntentsSigning(input: PrepareNearTransferInput): Promise<
+    Readonly<{
+      input: PrepareNearTransferInput
+      signingKind: 'near-transaction' | 'pea-near-transaction'
+    }>
+  > {
+    if (!('kind' in input) || input.kind !== 'intents-deposit') {
+      return Object.freeze({ input, signingKind: 'near-transaction' as const })
+    }
+    const signingKind = input.signingKind ?? 'near-transaction'
+    const signerId = input.signerId ?? input.chainAccount.identity.value
+    if (signingKind === 'pea-near-transaction') {
+      const derived = this.deriveNearPea
+        ? await this.deriveNearPea(
+            input.chainAccount.scope.keyDomainId,
+            input.accountIndex,
+            input.signal
+          )
+        : null
+      if (
+        derived === null ||
+        derived.address !== signerId ||
+        derived.address === input.chainAccount.identity.value
+      ) {
+        throw new Error('The Incognito signer does not match its parent account.')
+      }
+    } else if (signerId !== input.chainAccount.identity.value) {
+      throw new Error('The private transfer could not be prepared.')
+    }
+    const publicKey =
+      /^[0-9a-f]{64}$/.test(signerId) && signerId !== input.chainAccount.identity.value
+        ? nearPublicKeyFromImplicitAccountId(signerId)
+        : input.publicKey
+    return Object.freeze({
+      signingKind,
+      input: Object.freeze({
+        ...input,
+        publicKey,
+        signerId,
+        signingKind
+      })
+    })
+  }
+
   async prepare(input: PrepareNearTransferInput): Promise<PreparedNearTransferApproval> {
     if (input.chainAccount.identity.kind !== 'account-identifier') {
       throw new Error('NEAR transfer requires an account-identifier binding')
     }
-    const prepared = await this.prepareTransfer(input)
+    const resolved = await this.resolveIntentsSigning(input)
+    const prepared = await this.prepareTransfer(resolved.input)
     const signingTransaction = Object.freeze({
       chainId: prepared.transaction.chainId,
       accountIndex: prepared.transaction.accountIndex,
@@ -287,7 +345,7 @@ export class NearTransferOrchestrator {
     const signing = await this.signer.prepare(
       input.chainAccount.scope.keyDomainId,
       Object.freeze({
-        kind: 'near-transaction' as const,
+        kind: resolved.signingKind,
         chainId: input.chainAccount.scope.chainId,
         accountIndex: prepared.accountIndex,
         transaction: signingTransaction

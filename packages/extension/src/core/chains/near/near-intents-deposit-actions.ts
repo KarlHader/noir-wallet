@@ -23,7 +23,8 @@ export interface BuildNearIntentsDepositActionsInput {
   readonly wrappedBalanceYocto: bigint
   readonly signerRegistered: boolean
   readonly recipientRegistered: boolean
-  readonly memo: string
+  /** Omitted for SIMPLE deposits. A provided memo is still attached to ft_transfer. */
+  readonly memo?: string
 }
 
 export interface NearIntentsDepositAction {
@@ -116,7 +117,7 @@ export function buildNearIntentsDepositActions(
   const wrapped = assertU128(input.wrappedBalanceYocto, 'wNEAR balance')
   assertBoolean(input.signerRegistered, 'NEAR signer registration')
   assertBoolean(input.recipientRegistered, 'NEAR recipient registration')
-  const memo = parseMemo(input.memo)
+  const memo = input.memo === undefined ? undefined : parseMemo(input.memo)
   const recipientIsSigner = depositAddress === signerId
   const wrapAmount = amount > wrapped ? amount - wrapped : 0n
   const storageFee = nearIntentsDepositStorageFeeYocto({
@@ -145,7 +146,7 @@ export function buildNearIntentsDepositActions(
       args: Object.freeze({
         receiver_id: depositAddress,
         amount: amount.toString(),
-        memo
+        ...(memo === undefined ? {} : { memo })
       }),
       gas: NEAR_FT_TRANSFER_GAS.toString(),
       depositYocto: NEAR_FT_TRANSFER_DEPOSIT_YOCTO.toString()

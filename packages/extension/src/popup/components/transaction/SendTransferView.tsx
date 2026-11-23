@@ -85,6 +85,7 @@ export interface SendTransferViewState {
   readonly continueDisabled: boolean
   readonly continueLoading: boolean
   readonly approving: boolean
+  readonly privacy?: { readonly checked: boolean; readonly onChange: () => void }
   readonly error: string | null
   readonly review: SendTransferReviewState | null
   readonly setInputAmount: (value: string) => void
@@ -149,6 +150,7 @@ export function SendTransferView({
             disabled={state.continueDisabled}
             loading={state.continueLoading}
             onContinue={() => void state.continueTransfer()}
+            privacy={state.privacy}
           />
         ),
         children: (

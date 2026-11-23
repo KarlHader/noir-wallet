@@ -26,6 +26,16 @@ export interface NearTransferIntent {
   readonly amountRaw: string
 }
 
+export interface NearPrivateSendIntent {
+  readonly source: 'main' | 'incognito'
+  readonly assetId: string
+  readonly amountRaw: string
+  readonly recipient: string
+  readonly slippageTolerance: number
+  readonly deadline: string
+  readonly quote: unknown
+}
+
 export interface NearTransferReview {
   readonly graph: TransactionGraph
   readonly debit: {
@@ -70,6 +80,7 @@ export interface NearWalletClient {
       nearIntentsBinding?: NearIntentsTransactionBinding
     }>
   ) => Promise<NearTransferReview>
+  readonly preparePrivateSend: (intent: NearPrivateSendIntent) => Promise<NearTransferReview>
   readonly getPendingTransfer: (transactionId: TransactionId) => Promise<NearTransferReview | null>
   readonly approveTransfer: (
     transactionId: TransactionId,
@@ -142,6 +153,41 @@ function parseTimestamp(value: unknown): number {
     throw new Error('Invalid NEAR signing expiry')
   }
   return value as number
+}
+
+function parsePrivateSendIntent(value: NearPrivateSendIntent): NearPrivateSendIntent {
+  const record = readRecord(value, 'NEAR private send')
+  assertExactKeys(
+    record,
+    ['source', 'assetId', 'amountRaw', 'recipient', 'slippageTolerance', 'deadline', 'quote'],
+    'NEAR private send'
+  )
+  if (
+    (record.source !== 'main' && record.source !== 'incognito') ||
+    typeof record.assetId !== 'string' ||
+    typeof record.amountRaw !== 'string' ||
+    typeof record.recipient !== 'string' ||
+    typeof record.deadline !== 'string' ||
+    !Number.isSafeInteger(record.slippageTolerance) ||
+    !isPlainQuote(record.quote)
+  ) {
+    throw new Error('Invalid NEAR private send')
+  }
+  return Object.freeze({
+    source: record.source,
+    assetId: record.assetId,
+    amountRaw: record.amountRaw,
+    recipient: record.recipient,
+    slippageTolerance: record.slippageTolerance as number,
+    deadline: record.deadline,
+    quote: record.quote
+  })
+}
+
+function isPlainQuote(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
 function parseIntent(value: NearTransferIntent): NearTransferIntent {
@@ -349,11 +395,12 @@ function parseReview(
         )
       if (typeof decoded === 'object' && decoded !== null && !Array.isArray(decoded)) {
         const args = decoded as Record<string, unknown>
+        const hasMemo = Object.prototype.hasOwnProperty.call(args, 'memo')
         intentsMatches =
-          Object.keys(args).length === 3 &&
+          Object.keys(args).length === (hasMemo ? 3 : 2) &&
           args.receiver_id === graph.root.intent?.recipient?.address &&
           args.amount === graph.root.intent?.primaryAmount?.amountRaw &&
-          typeof args.memo === 'string' &&
+          (!hasMemo || typeof args.memo === 'string') &&
           intentsDepositDebit?.wrapAmountRaw === depositTotal('near_deposit').toString() &&
           intentsDepositDebit.storageFeeRaw === depositTotal('storage_deposit').toString()
       }
@@ -446,6 +493,25 @@ export function createNearWalletClient(sendMessage: NearRuntimeMessenger): NearW
             : { nearIntentsBinding: options.nearIntentsBinding })
         },
         value => parseReview(value, undefined, intent)
+      )
+    },
+    preparePrivateSend: async (intentValue: NearPrivateSendIntent) => {
+      const intent = parseClientInput(() => parsePrivateSendIntent(intentValue))
+      return send(
+        {
+          type: 'PREPARE_NEAR_TRANSFER',
+          intent: {
+            kind: 'near-private-send',
+            source: intent.source,
+            assetId: intent.assetId,
+            amountRaw: intent.amountRaw,
+            recipient: intent.recipient,
+            slippageTolerance: intent.slippageTolerance,
+            deadline: intent.deadline,
+            quote: intent.quote
+          }
+        },
+        value => parseReview(value)
       )
     },
     getPendingTransfer: async (transactionIdValue: TransactionId) => {

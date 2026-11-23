@@ -1,5 +1,7 @@
 import type { Account, ChainAccount } from '@/core/accounts/domain'
 import { parseNearAccountId } from '@/core/chains/near'
+import { supportsNearPrivateExecution } from '@/core/chains/near/execution-capability'
+import { describeNearPrivateSendRoute } from '@/popup/services/near-send-routing'
 import type { ChainId } from '@/core/chains/domain'
 import type { KeyDomainSource, SigningSummary } from '@/core/keyring/domain'
 import {
@@ -38,6 +40,10 @@ export interface BackgroundNearTransferControllerOptions {
     | 'clearPendingTransfers'
   >
   readonly loadActiveContext: () => Promise<ActiveNearTransferContext | null>
+  readonly deriveNearPea?: (
+    keyDomainId: ChainAccount['scope']['keyDomainId'],
+    accountIndex: number
+  ) => Promise<Readonly<{ readonly address: string }>>
 }
 
 export interface BackgroundNearTransferReview {
@@ -137,6 +143,57 @@ function toBackgroundReview(value: PreparedNearTransferApproval): BackgroundNear
   })
 }
 
+interface NearPrivateSendIntent {
+  readonly kind: 'near-private-send'
+  readonly source: 'main' | 'incognito'
+  readonly assetId: string
+  readonly amountRaw: string
+  readonly recipient: string
+  readonly slippageTolerance: number
+  readonly deadline: string
+  readonly quote: unknown
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function isNearPrivateSendIntent(value: unknown): value is NearPrivateSendIntent {
+  if (!isPlainRecord(value)) return false
+  const keys = [
+    'kind',
+    'source',
+    'assetId',
+    'amountRaw',
+    'recipient',
+    'slippageTolerance',
+    'deadline',
+    'quote'
+  ]
+  return (
+    Object.keys(value).length === keys.length &&
+    keys.every(key => Object.prototype.hasOwnProperty.call(value, key)) &&
+    value.kind === 'near-private-send' &&
+    (value.source === 'main' || value.source === 'incognito') &&
+    typeof value.assetId === 'string' &&
+    typeof value.amountRaw === 'string' &&
+    typeof value.recipient === 'string' &&
+    typeof value.deadline === 'string' &&
+    Number.isSafeInteger(value.slippageTolerance)
+  )
+}
+
+function nearPrivateKeySource(
+  source: KeyDomainSource
+): 'software' | 'imported' | 'hardware' | null {
+  if (source.kind === 'software') return 'software'
+  if (source.kind === 'hardware') return 'hardware'
+  if (source.kind === 'private-key') return 'imported'
+  return null
+}
+
 export class BackgroundNearTransferController {
   constructor(private readonly options: BackgroundNearTransferControllerOptions) {}
 
@@ -144,6 +201,12 @@ export class BackgroundNearTransferController {
     intentValue: unknown,
     nearIntentsBindingValue?: unknown
   ): Promise<BackgroundNearTransferReview> {
+    if (isNearPrivateSendIntent(intentValue)) {
+      if (nearIntentsBindingValue !== undefined) {
+        throw new Error('The private transfer could not be prepared.')
+      }
+      return this.preparePrivateSend(intentValue)
+    }
     const intent = parseIntent(intentValue)
     const nearIntentsBinding =
       nearIntentsBindingValue === undefined
@@ -266,6 +329,77 @@ export class BackgroundNearTransferController {
     return accountContextTransition.runActiveOperation(() =>
       this.options.orchestrator.resumePendingBroadcasts()
     )
+  }
+
+  private async preparePrivateSend(
+    intent: NearPrivateSendIntent
+  ): Promise<BackgroundNearTransferReview> {
+    return accountContextTransition.runActiveOperation(async () => {
+      const context = await this.requireActiveContext()
+      if (context.chainAccount.identity.kind !== 'account-identifier') {
+        throw new Error('The private transfer could not be prepared.')
+      }
+      const keySource = nearPrivateKeySource(context.keyDomainSource)
+      if (keySource === null) throw new Error('The private transfer could not be prepared.')
+      let peaImplicitAccountId: string | null = null
+      if (
+        keySource !== null &&
+        supportsNearPrivateExecution(
+          context.keyDomainSource.kind === 'private-key'
+            ? {
+                kind: 'private-key',
+                chainFamily: context.keyDomainSource.chainFamily,
+                accountIndex: context.accountIndex
+              }
+            : { kind: context.keyDomainSource.kind }
+        ) &&
+        this.options.deriveNearPea
+      ) {
+        try {
+          peaImplicitAccountId = (
+            await this.options.deriveNearPea(
+              context.chainAccount.scope.keyDomainId,
+              context.accountIndex
+            )
+          ).address
+        } catch {
+          peaImplicitAccountId = null
+        }
+      }
+      const described = describeNearPrivateSendRoute({
+        chainId: context.chainAccount.scope.chainId,
+        source: intent.source,
+        assetId: intent.assetId,
+        amountRaw: intent.amountRaw,
+        recipient: intent.recipient,
+        slippageTolerance: intent.slippageTolerance,
+        deadline: intent.deadline,
+        account: {
+          accountIndex: context.accountIndex,
+          keySource,
+          mainAccountId: context.chainAccount.identity.value,
+          peaImplicitAccountId
+        },
+        quote: intent.quote
+      })
+      if (!described.ok || described.phase !== 'intents-deposit') {
+        throw new Error(
+          described.ok ? 'The private transfer could not be prepared.' : described.message
+        )
+      }
+      return toBackgroundReview(
+        await this.options.orchestrator.prepare({
+          chainAccount: context.chainAccount,
+          accountIndex: context.accountIndex,
+          publicKey: context.publicKey,
+          receiverId: described.intentsDeposit.depositAddress,
+          kind: 'intents-deposit',
+          amountRaw: described.intentsDeposit.amountRaw,
+          signerId: described.signing.signerId,
+          signingKind: described.signing.kind
+        })
+      )
+    })
   }
 
   private async requireActiveContext(): Promise<ActiveNearTransferContext> {

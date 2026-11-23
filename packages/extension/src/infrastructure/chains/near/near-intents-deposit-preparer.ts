@@ -40,7 +40,7 @@ export interface PrepareNearIntentsDepositInput {
   readonly publicKey: string
   readonly depositAddress: string
   readonly amountRaw: string
-  readonly memo: string
+  readonly memo?: string
   readonly rpc: Pick<
     NearReadRpc,
     | 'assertExpectedChain'
@@ -64,7 +64,7 @@ export interface PreparedNearIntentsDeposit {
   readonly recipientId: string
   readonly tokenContractId: typeof WRAP_NEAR_CONTRACT_ID
   readonly amountRaw: string
-  readonly memo: string
+  readonly memo?: string
   readonly wrapAmountYocto: string
   readonly storageFeeYocto: string
   readonly estimatedFeeYocto: string
@@ -193,7 +193,7 @@ export async function prepareNearIntentsDeposit(
     wrappedBalanceYocto: wrapped,
     signerRegistered,
     recipientRegistered,
-    memo: input.memo
+    ...(input.memo === undefined ? {} : { memo: input.memo })
   })
   const nonce = parseUnsigned(accessKey.nonce, MAXIMUM_U64, 'NEAR access key nonce')
   if (nonce === MAXIMUM_U64) throw new Error('NEAR access key nonce is exhausted')
@@ -249,6 +249,7 @@ export async function prepareNearIntentsDeposit(
     )
   }
   const actions = Object.freeze(plan.actions.map(encodeAction))
+  const transferMemo = plan.actions.at(-1)?.args.memo
   return Object.freeze({
     kind: 'intents-deposit' as const,
     chainId: chainId.id,
@@ -259,7 +260,7 @@ export async function prepareNearIntentsDeposit(
     recipientId: depositAddress,
     tokenContractId: WRAP_NEAR_CONTRACT_ID,
     amountRaw: amount.toString(),
-    memo: plan.actions.at(-1)?.args.memo as string,
+    ...(typeof transferMemo === 'string' ? { memo: transferMemo } : {}),
     wrapAmountYocto: plan.wrapAmountYocto.toString(),
     storageFeeYocto: plan.storageFeeYocto.toString(),
     estimatedFeeYocto: estimatedFee.toString(),
@@ -290,7 +291,6 @@ export function parsePreparedNearIntentsDeposit(value: unknown): PreparedNearInt
     'recipientId',
     'tokenContractId',
     'amountRaw',
-    'memo',
     'wrapAmountYocto',
     'storageFeeYocto',
     'estimatedFeeYocto',
@@ -299,12 +299,17 @@ export function parsePreparedNearIntentsDeposit(value: unknown): PreparedNearInt
     'totalRequiredYocto',
     'transaction'
   ]
-  assertExactKeys(record, required, 'Prepared NEAR Intents deposit')
+  const hasMemo = Object.prototype.hasOwnProperty.call(record, 'memo')
+  assertExactKeys(
+    record,
+    hasMemo ? [...required.slice(0, 9), 'memo', ...required.slice(9)] : required,
+    'Prepared NEAR Intents deposit'
+  )
   if (
     record.kind !== 'intents-deposit' ||
     typeof record.chainId !== 'string' ||
     typeof record.assetId !== 'string' ||
-    typeof record.memo !== 'string' ||
+    (hasMemo && (typeof record.memo !== 'string' || record.memo.length === 0)) ||
     record.tokenContractId !== WRAP_NEAR_CONTRACT_ID
   ) {
     throw new Error('Invalid prepared NEAR Intents deposit')
@@ -412,11 +417,18 @@ export function parsePreparedNearIntentsDeposit(value: unknown): PreparedNearInt
   if (
     finalAction?.methodName !== 'ft_transfer' ||
     finalAction.args !==
-      encodeNearFunctionArgs({
-        receiver_id: recipientId,
-        amount: amount.toString(),
-        memo: record.memo
-      }) ||
+      encodeNearFunctionArgs(
+        hasMemo
+          ? {
+              receiver_id: recipientId,
+              amount: amount.toString(),
+              memo: record.memo
+            }
+          : {
+              receiver_id: recipientId,
+              amount: amount.toString()
+            }
+      ) ||
     finalAction.gas !== NEAR_FT_TRANSFER_GAS.toString() ||
     finalAction.depositYocto !== NEAR_FT_TRANSFER_DEPOSIT_YOCTO.toString()
   ) {
@@ -448,7 +460,7 @@ export function parsePreparedNearIntentsDeposit(value: unknown): PreparedNearInt
     recipientId,
     tokenContractId: WRAP_NEAR_CONTRACT_ID,
     amountRaw: amount.toString(),
-    memo: record.memo,
+    ...(hasMemo ? { memo: record.memo as string } : {}),
     wrapAmountYocto: wrapAmount.toString(),
     storageFeeYocto: storageFee.toString(),
     estimatedFeeYocto: estimatedFee.toString(),

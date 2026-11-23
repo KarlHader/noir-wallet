@@ -52,6 +52,10 @@ import {
   type BalanceTransferIntent
 } from '@/popup/services/private-balance-transfer'
 import { resolveNearConfidentialZecHolding } from '@/popup/services/near-confidential-holdings'
+import {
+  nearIncognitoReceiveUnavailableMessage,
+  selectNearReceiveAddress
+} from '@/popup/services/near-send-receive-page'
 
 import { formatDisplayTokenAmount } from '@/popup/services/portfolio-format'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
@@ -516,6 +520,7 @@ export function AssetDetail() {
       query.set('sourceAccountId', effectiveAccountId)
     }
     if (domain === 'private') query.set('mode', 'private')
+    if (chain.chain.family === 'near' && domain === 'private') query.set('source', 'incognito')
     if (chain.chain.family === 'evm') {
       if (domain === 'public') query.set('sourceMode', 'main')
     }
@@ -531,14 +536,14 @@ export function AssetDetail() {
     })
   }
 
-  const handleReceive = () => {
+  const handleReceive = (mode: 'public' | 'incognito' = 'public') => {
     if (!chain || !asset || !canReceive || !effectiveWalletId || !effectiveAccountId) return
     const query = new URLSearchParams({
       walletId: effectiveWalletId,
       accountId: effectiveAccountId,
       chainId: chain.chain.id,
       assetId: asset.asset.id,
-      mode: 'public'
+      mode: mode === 'incognito' ? 'incognito' : 'public'
     })
     navigate(`/receive?${query.toString()}`)
   }
@@ -610,7 +615,23 @@ export function AssetDetail() {
           }
         ]
       : []),
-    ...(privateTransferEligible && domain === 'private'
+    ...(domain === 'private' && chain?.chain.family === 'near'
+      ? [
+          {
+            action: 'send' as const,
+            label: 'Send',
+            disabled: !canSend,
+            onClick: () => handleSend('private')
+          },
+          {
+            action: 'receive' as const,
+            label: 'Receive',
+            disabled: !canReceive,
+            onClick: () => handleReceive('incognito')
+          }
+        ]
+      : []),
+    ...(privateTransferEligible && domain === 'private' && chain?.chain.family !== 'near'
       ? [
           {
             action: 'deposit' as const,
@@ -627,7 +648,9 @@ export function AssetDetail() {
     {
       action: 'swap' as const,
       label: 'Swap',
-      disabled: !canSwap || (domain === 'private' && !privateTransferEligible),
+      disabled:
+        !canSwap ||
+        (domain === 'private' && chain?.chain.family !== 'near' && !privateTransferEligible),
       onClick: () => handleSwap(domain)
     }
   ]
@@ -819,6 +842,30 @@ export function AssetDetail() {
       ? accountNetwork?.addresses.find(address => address.privacy === 'transparent')?.value
       : (preferredBitcoinAddress?.value ??
         accountNetwork?.addresses.find(address => address.preferredForReceive)?.value)
+  const nearKeySource =
+    storageV2Account?.walletSource.kind === 'hardware'
+      ? 'hardware'
+      : storageV2Account?.walletSource.kind === 'private-key'
+        ? 'imported'
+        : 'software'
+  const nearIncognitoReceive =
+    chain.chain.family === 'near'
+      ? selectNearReceiveAddress({
+          mode: 'incognito',
+          keySource: nearKeySource,
+          mainAccountId: publicAddress,
+          persistedPeaAccountId: accountNetwork?.privateExecutionAddress
+        })
+      : null
+  const nearPublicReceive =
+    chain.chain.family === 'near'
+      ? selectNearReceiveAddress({
+          mode: 'public',
+          keySource: nearKeySource,
+          mainAccountId: publicAddress,
+          persistedPeaAccountId: accountNetwork?.privateExecutionAddress
+        })
+      : null
   const confidentialIdentity = resolveConfidentialIdentity(
     storageV2Account
       ? {
@@ -860,10 +907,14 @@ export function AssetDetail() {
     ) : null
   const historyAddress =
     detailMode === 'public'
-      ? publicAddress
-      : detailMode === 'private' && privateTransferEligible
-        ? accountNetwork?.privateExecutionAddress
-        : undefined
+      ? nearPublicReceive?.status === 'address'
+        ? nearPublicReceive.address
+        : publicAddress
+      : detailMode === 'private' && nearIncognitoReceive?.status === 'address'
+        ? nearIncognitoReceive.address
+        : detailMode === 'private' && privateTransferEligible
+          ? accountNetwork?.privateExecutionAddress
+          : undefined
   const historyUrl = historyAddress
     ? formatChainAddressExplorerUrl(chain.chain.id, historyAddress, currentNetwork)
     : null
@@ -1059,26 +1110,49 @@ export function AssetDetail() {
         {detailMode !== 'all' && (
           <div className="flex justify-center gap-2 pb-3">
             {detailMode === 'private' ? (
-              <>
-                <WalletActionButton
-                  icon={<WalletActionIcon action="deposit" />}
-                  label="Deposit"
-                  disabled={!privateTransferEligible}
-                  onClick={() => handlePrivateTransfer('deposit')}
-                />
-                <WalletActionButton
-                  icon={<WalletActionIcon action="withdraw" />}
-                  label="Withdraw"
-                  disabled={!privateTransferEligible}
-                  onClick={() => handlePrivateTransfer('withdraw')}
-                />
-                <WalletActionButton
-                  icon={<WalletActionIcon action="swap" />}
-                  label="Swap"
-                  disabled={!privateTransferEligible || !canSwap}
-                  onClick={() => handleSwap('private')}
-                />
-              </>
+              chain.chain.family === 'near' ? (
+                <>
+                  <WalletActionButton
+                    icon={<WalletActionIcon action="send" />}
+                    label="Send"
+                    disabled={!canSend}
+                    onClick={() => handleSend('private')}
+                  />
+                  <WalletActionButton
+                    icon={<WalletActionIcon action="receive" />}
+                    label="Receive"
+                    disabled={!canReceive}
+                    onClick={() => handleReceive('incognito')}
+                  />
+                  <WalletActionButton
+                    icon={<WalletActionIcon action="swap" />}
+                    label="Swap"
+                    disabled={!canSwap}
+                    onClick={() => handleSwap('private')}
+                  />
+                </>
+              ) : (
+                <>
+                  <WalletActionButton
+                    icon={<WalletActionIcon action="deposit" />}
+                    label="Deposit"
+                    disabled={!privateTransferEligible}
+                    onClick={() => handlePrivateTransfer('deposit')}
+                  />
+                  <WalletActionButton
+                    icon={<WalletActionIcon action="withdraw" />}
+                    label="Withdraw"
+                    disabled={!privateTransferEligible}
+                    onClick={() => handlePrivateTransfer('withdraw')}
+                  />
+                  <WalletActionButton
+                    icon={<WalletActionIcon action="swap" />}
+                    label="Swap"
+                    disabled={!privateTransferEligible || !canSwap}
+                    onClick={() => handleSwap('private')}
+                  />
+                </>
+              )
             ) : (
               <>
                 <WalletActionButton
@@ -1210,12 +1284,25 @@ export function AssetDetail() {
                           ? (renderBalanceAddress(evmIntentsAddress, 'Shield') ??
                             'NEAR Confidential Intents')
                           : domain === 'private'
-                            ? renderBalanceAddress(
-                                accountNetwork?.privateExecutionAddress,
-                                'Incognito',
-                                true
+                            ? chain.chain.family === 'near'
+                              ? nearIncognitoReceive?.status === 'address'
+                                ? renderBalanceAddress(
+                                    nearIncognitoReceive.address,
+                                    'Incognito',
+                                    true
+                                  )
+                                : nearIncognitoReceiveUnavailableMessage(nearKeySource)
+                              : renderBalanceAddress(
+                                  accountNetwork?.privateExecutionAddress,
+                                  'Incognito',
+                                  true
+                                )
+                            : renderBalanceAddress(
+                                nearPublicReceive?.status === 'address'
+                                  ? nearPublicReceive.address
+                                  : publicAddress,
+                                'Public'
                               )
-                            : renderBalanceAddress(publicAddress, 'Public')
                       }
                       balance={
                         domain === 'shield' && raw === null && loadingConfidentialBalance ? (
