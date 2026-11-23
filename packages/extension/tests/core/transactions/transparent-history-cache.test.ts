@@ -279,6 +279,7 @@ test.describe('Transparent history transaction cache', () => {
     const immatureHash = txid('b')
     const mismatchedHash = txid('c')
     const linkedHash = txid('d')
+    const transparentHash = txid('e')
     const receipt = (hash: string, idPrefix = 'rpc_treceive_') =>
       walletTransaction({
         id: `${idPrefix}${hash}`,
@@ -289,11 +290,12 @@ test.describe('Transparent history transaction cache', () => {
         confirmations: 3,
         requiredConfirmations: 10
       })
-    const staleWasmReceipt = receipt(matureHash, 'wasm_')
+    const staleWasmReceipt = { ...receipt(matureHash, 'wasm_'), fromType: 'shielded' as const }
     const linkedSend = walletTransaction({ txHash: linkedHash })
     const transactions = [
       staleWasmReceipt,
       receipt(immatureHash),
+      receipt(transparentHash, 'wasm_'),
       receipt(mismatchedHash),
       receipt(linkedHash),
       linkedSend
@@ -314,12 +316,13 @@ test.describe('Transparent history transaction cache', () => {
         })
       }
       const observed = await readExternalReceiveConfirmations(transactions, 'https://node.example')
-      expect(queried.sort()).toEqual([matureHash, immatureHash, mismatchedHash])
+      expect(queried.sort()).toEqual([matureHash, immatureHash, mismatchedHash, transparentHash])
       const updated = applyExternalReceiveConfirmations(transactions, observed)
       expect(updated).toEqual([
         { ...staleWasmReceipt, status: 'success', confirmations: 41 },
         { ...transactions[1], confirmations: 9 },
-        ...transactions.slice(2)
+        { ...transactions[2], status: 'success', confirmations: 41 },
+        ...transactions.slice(3)
       ])
       const merged = mergeTransactionsWithWasmHistory(updated, [staleWasmReceipt], [])
       expect(merged.transactions.find(tx => tx.txHash === matureHash)).toMatchObject({

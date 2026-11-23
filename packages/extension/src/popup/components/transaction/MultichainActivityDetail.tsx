@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { mapTransactionGraphToActivityItem, type ActivityItem } from '@/core/activity'
 import { getBitcoinNetworkConfig } from '@/config/networks'
+import { getZcashChainId } from '@/core/chains/registry'
 import { parseTransactionId } from '@/core/transactions/domain'
 import { loadTransactions } from '@/lib/indexed-db'
 import { getTransactionRecoveryAction } from '@/lib/transaction-replacement'
@@ -261,10 +262,14 @@ export function MultichainActivityDetail({
     getConfidentialFundingPlanId(visibleItem.id) !== null &&
     visibleItem.status !== 'final' &&
     visibleItem.status !== 'failed'
+  const pendingZcashReceive =
+    visibleItem.source === 'zcash-v1' &&
+    visibleItem.kind === 'receive' &&
+    (visibleItem.status === 'broadcast' || visibleItem.status === 'confirming')
 
   useEffect(() => {
     if (
-      (!pendingEvmOrigin && !pendingConfidentialActivity) ||
+      (!pendingEvmOrigin && !pendingConfidentialActivity && !pendingZcashReceive) ||
       effectiveWalletId !== item.scope.keyDomainId ||
       effectiveAccountId !== item.scope.accountId ||
       currentNetwork !== network
@@ -276,7 +281,11 @@ export function MultichainActivityDetail({
     let recheckInFlight = false
     const refreshActivity = async () => {
       try {
-        const model = await evmWalletClient.getActivity('read')
+        const model = pendingZcashReceive
+          ? await evmWalletClient.getActivity('refresh', 'all', {
+              chainIds: [getZcashChainId(network)]
+            })
+          : await evmWalletClient.getActivity('read')
         const next = model?.items.find(
           candidate => candidate.id === item.id && candidate.source === item.source
         )
@@ -292,7 +301,8 @@ export function MultichainActivityDetail({
       } catch {
         // Retry while the transaction is still pending.
       } finally {
-        if (active) timer = setTimeout(() => void refreshActivity(), 3_000)
+        if (active)
+          timer = setTimeout(() => void refreshActivity(), pendingZcashReceive ? 15_000 : 3_000)
       }
       if (active && pendingEvmOrigin && !recheckInFlight) {
         recheckInFlight = true
@@ -319,7 +329,8 @@ export function MultichainActivityDetail({
     item.source,
     network,
     pendingEvmOrigin,
-    pendingConfidentialActivity
+    pendingConfidentialActivity,
+    pendingZcashReceive
   ])
   const { assetMetadata, chainMetadata, evmChainIds } = useMemo(
     () =>

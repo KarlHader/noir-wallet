@@ -39,8 +39,9 @@ function externalReceivesAwaitingConfirmation(transactions: Transaction[]): Tran
   return transactions.filter(tx => {
     const hash = normalizeTxHash(tx.txHash)
     return (
-      isTransparentReceive(tx) &&
-      (tx.id.startsWith('rpc_treceive_') || tx.id.startsWith('wasm_')) &&
+      tx.type === 'receive' &&
+      (tx.id.startsWith('wasm_') ||
+        (tx.id.startsWith('rpc_treceive_') && isTransparentReceive(tx))) &&
       (tx.status === 'confirming' || tx.status === 'pending') &&
       (tx.requiredConfirmations == null || tx.requiredConfirmations === required) &&
       /^[0-9a-f]{64}$/.test(hash) &&
@@ -500,10 +501,11 @@ export function mergeTransactionsWithWasmHistory(
             ...transaction,
             timestamp: transaction.timestamp > 0 ? transaction.timestamp : current.timestamp,
             to: transaction.to || (current.type === transaction.type ? current.to : ''),
-            // A delayed scan does not supersede an already confirmed transparent receipt.
-            ...(isTransparentReceive(current) &&
+            ...(current.type === 'receive' &&
+            transaction.type === 'receive' &&
             current.status === 'success' &&
-            transaction.status !== 'success'
+            (transaction.status !== 'success' ||
+              (transaction.confirmations ?? 0) < (current.confirmations ?? 0))
               ? {
                   confirmations: current.confirmations,
                   requiredConfirmations: current.requiredConfirmations

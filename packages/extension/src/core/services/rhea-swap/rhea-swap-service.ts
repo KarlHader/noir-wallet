@@ -35,6 +35,7 @@ import {
   type PrivateQuotePurpose
 } from './rhea-swap-model'
 import { isDeprecatedIntentsToken } from '@/core/services/intents-evm-assets'
+import { isRheaIntentsRoute } from '@/core/transactions/domain/protocol'
 import { readRheaDestinationHash } from './rhea-order-status'
 import { getRheaSwapQuoteDeadline, isRheaSwapQuoteFresh } from './rhea-swap-quote-validity'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
@@ -810,20 +811,28 @@ export class RheaSwapService {
     const record = await this.requireSession(quoteHandle)
     const submission = record.submission
     if (!submission) throw new Error('RHEA Swap has not been submitted')
+    const readByOrder = () =>
+      submission.orderId === null
+        ? Promise.resolve<SwapOrderStatusDataRaw>({ status: 'pending' })
+        : this.client.getOrderStatusRaw(
+            {
+              orderId: submission.orderId,
+              router: submission.router,
+              ...(submission.statusChainId === null ? {} : { chainId: submission.statusChainId })
+            },
+            { signal }
+          )
     let status: SwapOrderStatusDataRaw
     if (submission.recordId !== undefined) {
       status = await this.client.getOrderStatusRaw({ recordId: submission.recordId }, { signal })
     } else if (submission.orderId !== null) {
-      status = await this.client.getOrderStatusRaw(
-        {
-          orderId: submission.orderId,
-          router: submission.router,
-          ...(submission.statusChainId === null ? {} : { chainId: submission.statusChainId })
-        },
-        { signal }
-      )
+      status = await readByOrder()
     } else {
       throw new Error('RHEA Swap has no order status key')
+    }
+    if (isRheaIntentsRoute(submission.router) && status.provider === 'evm_receipt') {
+      status = submission.recordId === undefined ? { status: 'pending' } : await readByOrder()
+      if (status.provider === 'evm_receipt') status = { status: 'pending' }
     }
     return Object.freeze({
       quoteHandle: record.quoteHandle,

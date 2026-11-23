@@ -1138,6 +1138,55 @@ test('cross-chain Withdraw rejects a non-cross-chain build when reading the sign
   )
 })
 
+test('uses the Intents order when the activity record returns only the source receipt', async () => {
+  const sessions = new MemoryRheaSwapQuoteSessionStore()
+  const quoteHandle = 'rhea-quote:intents-source-receipt'
+  const sourceHash = `0x${'ab'.repeat(32)}`
+  const destinationHash = `0x${'cd'.repeat(32)}`
+  const sourceReceipt = { status: 'SUCCESS', provider: 'evm_receipt', toHash: sourceHash }
+  const order = { orderId: 'intents-order', router: 'preswap-nearintents', chainId: '56' }
+  const submission = {
+    recordId: '14992',
+    orderId: order.orderId,
+    router: order.router,
+    statusChainId: order.chainId,
+    sourceHash
+  }
+  const record = { schemaVersion: 1, quoteHandle, submission }
+  await sessions.put(record)
+  let orderStatus = { status: 'PROCESSING' }
+  const service = new RheaSwapService(
+    {
+      async getOrderStatusRaw(request) {
+        if ('recordId' in request) return sourceReceipt
+        expect(request).toEqual(order)
+        return orderStatus
+      }
+    },
+    sessions
+  )
+
+  await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
+    status: 'processing',
+    destinationHash: null
+  })
+  orderStatus = { status: 'SUCCESS', toHash: destinationHash }
+  await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
+    status: 'completed',
+    destinationHash
+  })
+  orderStatus = sourceReceipt
+  await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
+    status: 'pending',
+    destinationHash: null
+  })
+  await sessions.put({ ...record, submission: { ...submission, orderId: null } })
+  await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
+    status: 'pending',
+    destinationHash: null
+  })
+})
+
 test('quote and build remain bound across a session-store reload', async () => {
   const sessions = new MemoryRheaSwapQuoteSessionStore()
   const calls = []
