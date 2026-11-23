@@ -1,5 +1,5 @@
 import { formatFiatAmount, formatTokenPrice, formatTokenQuantity } from '@/lib/number-format'
-import { formatSymbol } from '@/lib/format'
+import { formatShieldSymbol } from '@/lib/format'
 import {
   getNearConfidentialIconChain,
   type NearConfidentialHolding
@@ -29,7 +29,7 @@ export function NearConfidentialHoldingRow({
   readonly onClick?: () => void
 }) {
   const { asset } = entry
-  const symbol = formatSymbol(asset.symbol) || 'Unknown token'
+  const symbol = formatShieldSymbol(asset.symbol) || 'Unknown token'
   const price = entry.priceUsd ? formatTokenPrice(entry.priceUsd, { showSign: true }) : '—'
   const content = (
     <>

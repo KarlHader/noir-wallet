@@ -9,7 +9,13 @@ import type { PreparedSigningCommand } from '@/core/keyring/ports'
 import { buildLedgerNearTransaction } from '@/infrastructure/keyring/multichain/ledger-near-summary'
 
 import type { NearReadRpc } from './near-rpc-types'
+import { NEAR_FT_TRANSFER_GAS as FUNGIBLE_TOKEN_TRANSFER_GAS } from '@/core/chains/near/near-intents-deposit-actions'
+import { nearAccountStorageReserveYocto } from '@/core/chains/near/near-native-reserve'
 import { encodeNearFunctionArgs } from './near-rpc-codecs'
+import {
+  parsePreparedNearIntentsDeposit,
+  type PreparedNearIntentsDeposit
+} from './near-intents-deposit-preparer'
 import {
   parsePreparedNearLendingSupply,
   type PreparedNearLendingSupply
@@ -131,8 +137,7 @@ export type PreparedNearTransfer =
   | PreparedNearNativeTransfer
   | PreparedNearTokenTransfer
   | PreparedNearLendingSupply
-
-const FUNGIBLE_TOKEN_TRANSFER_GAS = 30_000_000_000_000n
+  | PreparedNearIntentsDeposit
 
 function parseUnsigned(value: unknown, maximum: bigint, label: string): bigint {
   if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
@@ -410,6 +415,7 @@ export function parsePreparedNearTransfer(value: unknown): PreparedNearTransfer 
   const record = readRecord(value, 'Prepared NEAR transfer')
   if (record.kind === 'token') return parsePreparedNearTokenTransfer(record)
   if (record.kind === 'lending-supply') return parsePreparedNearLendingSupply(record)
+  if (record.kind === 'intents-deposit') return parsePreparedNearIntentsDeposit(record)
   return parsePreparedNearNativeTransfer(record)
 }
 
@@ -499,9 +505,9 @@ export async function prepareNearNativeTransfer(
     MAXIMUM_U128,
     'NEAR storage amount per byte'
   )
-  const storageReserve = checkedU128(
-    BigInt(sender.storageUsage) * storageAmountPerByte,
-    'NEAR storage reserve'
+  const storageReserve = nearAccountStorageReserveYocto(
+    BigInt(sender.storageUsage),
+    storageAmountPerByte
   )
   const totalRequired = checkedU128(deposit + maximumFee + storageReserve, 'NEAR total debit')
   const balance = parseUnsigned(sender.amountRaw, MAXIMUM_U128, 'NEAR sender balance')
@@ -612,9 +618,9 @@ export async function prepareNearTokenTransfer(
     MAXIMUM_U128,
     'NEAR storage amount per byte'
   )
-  const storageReserve = checkedU128(
-    BigInt(sender.storageUsage) * storageAmountPerByte,
-    'NEAR storage reserve'
+  const storageReserve = nearAccountStorageReserveYocto(
+    BigInt(sender.storageUsage),
+    storageAmountPerByte
   )
   const totalRequired = checkedU128(maximumFee + storageReserve + 1n, 'NEAR total debit')
   if (totalRequired > parseUnsigned(sender.amountRaw, MAXIMUM_U128, 'NEAR sender balance')) {
@@ -728,24 +734,60 @@ export async function assertNearTransferSigningMatchesPrepared(
           action.depositYocto === preparedAction.depositYocto
     if (!matches) throw new Error('NEAR signing summary does not match the prepared transfer')
   }
-  if ('kind' in prepared && prepared.kind === 'token') {
-    const preparedAction = prepared.transaction.actions[0]
-    if (
-      fields.receiverId !== prepared.contractId ||
-      preparedAction.type !== 'functionCall' ||
-      preparedAction.methodName !== 'ft_transfer' ||
-      preparedAction.gas !== FUNGIBLE_TOKEN_TRANSFER_GAS.toString() ||
-      preparedAction.depositYocto !== '1'
-    ) {
-      throw new Error('NEAR signing summary does not match the prepared token transfer')
+  if ('kind' in prepared) {
+    switch (prepared.kind) {
+      case 'token': {
+        const preparedAction = prepared.transaction.actions[0]
+        if (
+          fields.receiverId !== prepared.contractId ||
+          preparedAction.type !== 'functionCall' ||
+          preparedAction.methodName !== 'ft_transfer' ||
+          preparedAction.gas !== FUNGIBLE_TOKEN_TRANSFER_GAS.toString() ||
+          preparedAction.depositYocto !== '1'
+        ) {
+          throw new Error('NEAR signing summary does not match the prepared token transfer')
+        }
+        return
+      }
+      case 'lending-supply':
+        if (fields.receiverId !== prepared.tokenContractId) {
+          throw new Error('NEAR signing summary does not match the prepared Lending Supply')
+        }
+        return
+      case 'intents-deposit':
+        if (
+          fields.receiverId !== prepared.tokenContractId ||
+          prepared.wrapAmountYocto !==
+            prepared.transaction.actions
+              .reduce(
+                (total, action) =>
+                  action.type === 'functionCall' && action.methodName === 'near_deposit'
+                    ? total + BigInt(action.depositYocto)
+                    : total,
+                0n
+              )
+              .toString() ||
+          prepared.storageFeeYocto !==
+            prepared.transaction.actions
+              .reduce(
+                (total, action) =>
+                  action.type === 'functionCall' && action.methodName === 'storage_deposit'
+                    ? total + BigInt(action.depositYocto)
+                    : total,
+                0n
+              )
+              .toString()
+        ) {
+          throw new Error('NEAR signing summary does not match the prepared Intents deposit')
+        }
+        return
+      default: {
+        const unreachable: never = prepared
+        throw new Error(
+          `Unsupported NEAR transfer kind: ${(unreachable as { kind?: string }).kind ?? 'unknown'}`
+        )
+      }
     }
-    return
-  }
-  if ('kind' in prepared && prepared.kind === 'lending-supply') {
-    if (fields.receiverId !== prepared.tokenContractId) {
-      throw new Error('NEAR signing summary does not match the prepared Lending Supply')
-    }
-    return
   }
   const action = fields.actions[0]
   if (action?.kind !== 'transfer' || action.depositYocto !== prepared.depositYocto) {

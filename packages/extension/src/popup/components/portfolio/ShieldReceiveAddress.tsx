@@ -9,7 +9,7 @@ import {
   shouldAutoRefreshExternalShieldDeposit
 } from '@/core/services/confidential-funding/confidential-external-deposit'
 import type { Network } from '@/types'
-import { formatSortAddress, formatSymbol } from '@/lib/format'
+import { formatSortAddress, formatShieldSymbol } from '@/lib/format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { resolveEvmChainIconAlias } from '@/config/icons'
 import { useWalletStore } from '@/store/wallet-store'
@@ -377,7 +377,7 @@ export function ShieldReceiveAddress({
                   {currentRecord ? (
                     <TokenIcon
                       assetId={currentRecord.source.assetId}
-                      symbol={formatSymbol(symbol)}
+                      symbol={formatShieldSymbol(symbol)}
                       icon={asset ? resolveSwapTokenIconUrl(asset.token) : undefined}
                       blockchain={sourceChain ? chainIcon(sourceChain) : undefined}
                       size={40}

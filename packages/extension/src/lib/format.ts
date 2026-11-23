@@ -83,13 +83,13 @@ export function formatChainName(blockchain: string): string {
 }
 
 export function formatSymbol(symbol?: string) {
-  const displaySymbol = symbol?.replace(/\s*\(deprecated\)\s*$/i, '').trim() ?? ''
-  switch (displaySymbol) {
-    case 'wNEAR':
-      return 'NEAR'
-    default:
-      return displaySymbol
-  }
+  return symbol?.replace(/\s*\(deprecated\)\s*$/i, '').trim() ?? ''
+}
+
+/** Shield and Intents abstract balances present wrapped NEAR as NEAR. Chain rows do not. */
+export function formatShieldSymbol(symbol?: string) {
+  const displaySymbol = formatSymbol(symbol)
+  return displaySymbol === 'wNEAR' ? 'NEAR' : displaySymbol
 }
 
 const explorerUrls: Record<string, string> = {

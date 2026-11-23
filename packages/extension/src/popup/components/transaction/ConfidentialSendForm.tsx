@@ -9,7 +9,7 @@ import { getCachedTokens, type SwapToken } from '@/core/services/intents-api'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
-import { formatSymbol } from '@/lib/format'
+import { formatShieldSymbol } from '@/lib/format'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -631,7 +631,7 @@ export function ConfidentialSendForm({
               shieldProvider: 'near-confidential'
             },
             amount: prepared.amount,
-            symbol: formatSymbol(prepared.source.asset.metadata.symbol),
+            symbol: formatShieldSymbol(prepared.source.asset.metadata.symbol),
             from: 'Shield · NEAR Confidential',
             recipient: prepared.review.destinationAddress,
             network: prepared.destination.chain.chain.displayName
@@ -989,7 +989,7 @@ export function ConfidentialSendForm({
           title={`Confirm ${actionLabel}`}
           asset={{
             assetId: prepared.source.asset.asset.id,
-            symbol: formatSymbol(prepared.source.asset.metadata.symbol),
+            symbol: formatShieldSymbol(prepared.source.asset.metadata.symbol),
             icon: prepared.source.asset.metadata.iconUrl,
             blockchain: withdrawChainIconAlias(prepared.source.chain.chain)
           }}
@@ -1003,7 +1003,7 @@ export function ConfidentialSendForm({
               source={{
                 asset: {
                   assetId: prepared.source.asset.asset.id,
-                  symbol: formatSymbol(prepared.source.asset.metadata.symbol),
+                  symbol: formatShieldSymbol(prepared.source.asset.metadata.symbol),
                   icon: prepared.source.asset.metadata.iconUrl,
                   blockchain: withdrawChainIconAlias(prepared.source.chain.chain)
                 },
@@ -1012,7 +1012,7 @@ export function ConfidentialSendForm({
               destination={{
                 asset: {
                   assetId: prepared.destination.asset.asset.id,
-                  symbol: formatSymbol(prepared.destination.asset.metadata.symbol),
+                  symbol: formatShieldSymbol(prepared.destination.asset.metadata.symbol),
                   icon: prepared.destination.asset.metadata.iconUrl,
                   blockchain: withdrawChainIconAlias(prepared.destination.chain.chain)
                 },
@@ -1045,7 +1045,7 @@ export function ConfidentialSendForm({
               content: (
                 <AmountDisplay
                   value={output}
-                  symbol={formatSymbol(prepared.destination.asset.metadata.symbol)}
+                  symbol={formatShieldSymbol(prepared.destination.asset.metadata.symbol)}
                 />
               )
             },
@@ -1054,7 +1054,7 @@ export function ConfidentialSendForm({
               content: (
                 <AmountDisplay
                   value={minimum}
-                  symbol={formatSymbol(prepared.destination.asset.metadata.symbol)}
+                  symbol={formatShieldSymbol(prepared.destination.asset.metadata.symbol)}
                 />
               )
             },
@@ -1079,7 +1079,7 @@ export function ConfidentialSendForm({
                           prepared.review.sourceNetworkFee.raw,
                           prepared.review.sourceNetworkFee.decimals
                         )}
-                        symbol={formatSymbol(prepared.review.sourceNetworkFee.symbol)}
+                        symbol={formatShieldSymbol(prepared.review.sourceNetworkFee.symbol)}
                         profile="fee"
                       />
                     )
@@ -1098,7 +1098,7 @@ export function ConfidentialSendForm({
                 return fee ? (
                   <AmountDisplay
                     value={formatBaseUnitDecimalAmount(fee.raw, fee.decimals)}
-                    symbol={formatSymbol(prepared.source.asset.metadata.symbol)}
+                    symbol={formatShieldSymbol(prepared.source.asset.metadata.symbol)}
                     profile="fee"
                   />
                 ) : (
@@ -1113,7 +1113,7 @@ export function ConfidentialSendForm({
                 changes={reviewDescription.changes}
                 output={{
                   decimals: prepared.destination.asset.metadata.decimals,
-                  symbol: formatSymbol(prepared.destination.asset.metadata.symbol)
+                  symbol: formatShieldSymbol(prepared.destination.asset.metadata.symbol)
                 }}
               />
             ) : undefined
@@ -1147,7 +1147,7 @@ export function ConfidentialSendForm({
               previewFee ? (
                 <AmountDisplay
                   value={formatBaseUnitDecimalAmount(previewFee.raw, previewFee.decimals)}
-                  symbol={formatSymbol(source?.asset.metadata.symbol)}
+                  symbol={formatShieldSymbol(source?.asset.metadata.symbol)}
                   profile="fee"
                 />
               ) : (
@@ -1279,13 +1279,13 @@ export function ConfidentialSendForm({
           },
           asset: {
             assetId: displayedAsset?.asset.id,
-            symbol: displayedAsset ? formatSymbol(displayedAsset.metadata.symbol) : 'Token',
+            symbol: displayedAsset ? formatShieldSymbol(displayedAsset.metadata.symbol) : 'Token',
             icon: displayedAsset?.metadata.iconUrl,
             networkName: source?.chain.chain.displayName ?? '',
             blockchain: source ? withdrawChainIconAlias(source.chain.chain) : undefined,
             onSelectAsset: onOpenSourcePicker,
             disabled: busy,
-            ariaLabel: `Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`
+            ariaLabel: `Select Confidential ${formatShieldSymbol(displayedAsset?.metadata.symbol)} asset`
           },
           balance: {
             value:

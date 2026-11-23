@@ -6,14 +6,16 @@ import {
 } from '@/core/chains/near'
 import { parseAssetId, parseChainId } from '@/core/chains/registry'
 import { parseNearLendingSupplyBinding } from '@/core/chains/near/near-burrow-supply-binding'
+import {
+  NEAR_STORAGE_DEPOSIT_GAS as STORAGE_DEPOSIT_GAS,
+  NEAR_STORAGE_DEPOSIT_YOCTO as STORAGE_DEPOSIT_YOCTO,
+  NEAR_WRAP_DEPOSIT_GAS as WRAP_NEAR_GAS
+} from '@/core/chains/near/near-intents-deposit-actions'
 import { encodeNearFunctionArgs } from './near-rpc-codecs'
 import type { NearTransferTransaction } from './near-transfer-preparer'
 
 const MAXIMUM_U64 = 18_446_744_073_709_551_615n
 const MAXIMUM_U128 = 340_282_366_920_938_463_463_374_607_431_768_211_455n
-const STORAGE_DEPOSIT_YOCTO = 1_250_000_000_000_000_000_000n
-const STORAGE_DEPOSIT_GAS = 50_000_000_000_000n
-const WRAP_NEAR_GAS = 50_000_000_000_000n
 const LENDING_TRANSFER_GAS = 250_000_000_000_000n
 
 export interface PreparedNearLendingSupply {

@@ -5,7 +5,7 @@ import {
   type ShieldTokenPickerItem
 } from '@/popup/services/shield-transfer'
 import { TokenPicker, type TokenPickerAdapter, type TokenSelectionItem } from './TokenPicker'
-import { formatSymbol } from '@/lib/format'
+import { formatShieldSymbol } from '@/lib/format'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from './TokenIcon'
@@ -20,7 +20,7 @@ export function shieldTokenSelectionItem(
     (item.availableRaw === undefined
       ? undefined
       : formatBaseUnitDecimalAmount(item.availableRaw, item.decimals))
-  const symbol = formatSymbol(item.symbol)
+  const symbol = formatShieldSymbol(item.symbol)
   return {
     key: item.key,
     symbol,

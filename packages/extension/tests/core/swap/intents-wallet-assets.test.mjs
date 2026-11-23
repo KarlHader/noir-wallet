@@ -61,7 +61,7 @@ test('maps only mainnet SOL, SPL and NEP-141 protocol assets into the wallet reg
 
   const catalog = createIntentsWalletAssetCatalog([sol, token({}), near], 'mainnet')
   const definitions = catalog.definitions
-  expect(definitions).toHaveLength(3)
+  expect(definitions).toHaveLength(2)
   const chains = createInitialProductChainRegistry('mainnet')
   const registry = createAssetRegistry(chains, [
     ...getBundledInitialProductAssetDefinitions('mainnet'),
@@ -73,7 +73,8 @@ test('maps only mainnet SOL, SPL and NEP-141 protocol assets into the wallet reg
     )
   ).toMatchObject({ source: 'protocol', verification: 'trusted' })
   expect(registry.resolve('near:mainnet/nep141:wrap.near')).toMatchObject({
-    source: 'protocol',
+    metadata: { symbol: 'wNEAR', decimals: 24 },
+    source: 'bundled',
     verification: 'trusted'
   })
   expect(registry.resolve('near:mainnet/nep141:lst.rhealab.near')).toMatchObject({

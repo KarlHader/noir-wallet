@@ -36,11 +36,13 @@ import {
   type SignedPendingNearTransfer
 } from './near-pending-transfer-store'
 import type { NearBroadcastRpc, NearReadRpc } from './near-rpc-types'
+import { prepareNearIntentsDeposit } from './near-intents-deposit-preparer'
 import {
   assertNearTransferSigningMatchesPrepared,
   computeNearTransactionFingerprint,
   prepareNearNativeTransfer,
-  prepareNearTokenTransfer
+  prepareNearTokenTransfer,
+  type PreparedNearTransfer
 } from './near-transfer-preparer'
 import { createNearTransferGraph } from './near-transaction-graph'
 
@@ -94,6 +96,11 @@ export type PrepareNearTransferInput = PrepareNearTransferBaseInput &
   (
     | Readonly<{ readonly assetId: string; readonly amountRaw: string }>
     | Readonly<{ readonly depositYocto: string }>
+    | Readonly<{
+        readonly kind: 'intents-deposit'
+        readonly amountRaw: string
+        readonly memo: string
+      }>
   )
 
 export interface PreparedNearTransferApproval {
@@ -102,6 +109,8 @@ export interface PreparedNearTransferApproval {
   readonly debit: {
     readonly maximumFeeRaw: string
     readonly storageReserveRaw: string
+    readonly wrapAmountRaw?: string
+    readonly storageFeeRaw?: string
   }
 }
 
@@ -147,6 +156,19 @@ function isUnrecoverableSigningError(error: unknown): boolean {
   )
 }
 
+function transferDebit(prepared: PreparedNearTransfer): PreparedNearTransferApproval['debit'] {
+  return Object.freeze({
+    maximumFeeRaw: prepared.maximumFeeYocto,
+    storageReserveRaw: prepared.storageReserveYocto,
+    ...('kind' in prepared && prepared.kind === 'intents-deposit'
+      ? {
+          wrapAmountRaw: prepared.wrapAmountYocto,
+          storageFeeRaw: prepared.storageFeeYocto
+        }
+      : {})
+  })
+}
+
 function pendingSigning(pending: AwaitingApprovalNearTransfer): PreparedSigningCommand {
   return Object.freeze({
     commandId: pending.signingCommandId,
@@ -190,9 +212,30 @@ export class NearTransferOrchestrator {
     this.onMonitoringRequired = options.onMonitoringRequired
   }
 
-  async prepare(input: PrepareNearTransferInput): Promise<PreparedNearTransferApproval> {
-    if (input.chainAccount.identity.kind !== 'account-identifier') {
-      throw new Error('NEAR transfer requires an account-identifier binding')
+  private async prepareTransfer(input: PrepareNearTransferInput): Promise<PreparedNearTransfer> {
+    if ('kind' in input) {
+      const assetId = `${input.chainAccount.scope.chainId}/nep141:wrap.near`
+      const asset = this.assets.resolve(assetId)
+      if (
+        asset.asset.chainId !== input.chainAccount.scope.chainId ||
+        asset.asset.kind !== 'token' ||
+        asset.asset.namespace !== 'nep141' ||
+        asset.asset.reference !== 'wrap.near' ||
+        asset.metadata.symbol !== 'wNEAR'
+      ) {
+        throw new Error('NEAR Intents deposit asset is not wNEAR')
+      }
+      return prepareNearIntentsDeposit({
+        chainId: input.chainAccount.scope.chainId,
+        accountIndex: input.accountIndex,
+        signerId: input.chainAccount.identity.value,
+        publicKey: input.publicKey,
+        depositAddress: input.receiverId,
+        amountRaw: input.amountRaw,
+        memo: input.memo,
+        rpc: this.rpc,
+        signal: input.signal
+      })
     }
     const assetId =
       'assetId' in input ? input.assetId : `${input.chainAccount.scope.chainId}/slip44:397`
@@ -201,30 +244,37 @@ export class NearTransferOrchestrator {
     if (asset.asset.chainId !== input.chainAccount.scope.chainId) {
       throw new Error('NEAR transfer asset does not match its ChainAccount')
     }
-    const prepared =
-      asset.asset.kind === 'native'
-        ? await prepareNearNativeTransfer({
-            chainId: input.chainAccount.scope.chainId,
-            accountIndex: input.accountIndex,
-            signerId: input.chainAccount.identity.value,
-            publicKey: input.publicKey,
-            receiverId: input.receiverId,
-            depositYocto: amountRaw,
-            rpc: this.rpc,
-            signal: input.signal
-          })
-        : await prepareNearTokenTransfer({
-            chainId: input.chainAccount.scope.chainId,
-            accountIndex: input.accountIndex,
-            assetId: asset.asset.id,
-            signerId: input.chainAccount.identity.value,
-            publicKey: input.publicKey,
-            recipientId: input.receiverId,
-            contractId: asset.asset.reference.replace(/%5F/gi, '_'),
-            amountRaw,
-            rpc: this.rpc,
-            signal: input.signal
-          })
+    if (asset.asset.kind === 'native') {
+      return prepareNearNativeTransfer({
+        chainId: input.chainAccount.scope.chainId,
+        accountIndex: input.accountIndex,
+        signerId: input.chainAccount.identity.value,
+        publicKey: input.publicKey,
+        receiverId: input.receiverId,
+        depositYocto: amountRaw,
+        rpc: this.rpc,
+        signal: input.signal
+      })
+    }
+    return prepareNearTokenTransfer({
+      chainId: input.chainAccount.scope.chainId,
+      accountIndex: input.accountIndex,
+      assetId: asset.asset.id,
+      signerId: input.chainAccount.identity.value,
+      publicKey: input.publicKey,
+      recipientId: input.receiverId,
+      contractId: asset.asset.reference.replace(/%5F/gi, '_'),
+      amountRaw,
+      rpc: this.rpc,
+      signal: input.signal
+    })
+  }
+
+  async prepare(input: PrepareNearTransferInput): Promise<PreparedNearTransferApproval> {
+    if (input.chainAccount.identity.kind !== 'account-identifier') {
+      throw new Error('NEAR transfer requires an account-identifier binding')
+    }
+    const prepared = await this.prepareTransfer(input)
     const signingTransaction = Object.freeze({
       chainId: prepared.transaction.chainId,
       accountIndex: prepared.transaction.accountIndex,
@@ -304,10 +354,7 @@ export class NearTransferOrchestrator {
       return Object.freeze({
         graph,
         signing,
-        debit: Object.freeze({
-          maximumFeeRaw: prepared.maximumFeeYocto,
-          storageReserveRaw: prepared.storageReserveYocto
-        })
+        debit: transferDebit(prepared)
       })
     } catch (error) {
       await Promise.all([
@@ -339,10 +386,7 @@ export class NearTransferOrchestrator {
     return Object.freeze({
       graph,
       signing: pendingSigning(pending),
-      debit: Object.freeze({
-        maximumFeeRaw: pending.prepared.maximumFeeYocto,
-        storageReserveRaw: pending.prepared.storageReserveYocto
-      })
+      debit: transferDebit(pending.prepared)
     })
   }
 

@@ -45,6 +45,8 @@ export interface BackgroundNearTransferReview {
   readonly debit: {
     readonly maximumFeeRaw: string
     readonly storageReserveRaw: string
+    readonly wrapAmountRaw?: string
+    readonly storageFeeRaw?: string
   }
   readonly review: {
     readonly chainId: ChainId
@@ -58,11 +60,19 @@ export interface BackgroundNearTransferReview {
   }
 }
 
-interface NearTransferIntent {
-  readonly assetId: string
-  readonly recipient: string
-  readonly amountRaw: string
-}
+type NearTransferIntent =
+  | Readonly<{
+      readonly assetId: string
+      readonly recipient: string
+      readonly amountRaw: string
+    }>
+  | Readonly<{
+      readonly kind: 'intents-deposit'
+      readonly assetId: string
+      readonly recipient: string
+      readonly amountRaw: string
+      readonly memo: string
+    }>
 
 const MAXIMUM_U128 = 340_282_366_920_938_463_463_374_607_431_768_211_455n
 
@@ -75,22 +85,41 @@ function parseIntent(value: unknown): NearTransferIntent {
     throw new Error('Invalid NEAR transfer intent')
   }
   const record = value as Record<string, unknown>
-  const keys = ['assetId', 'recipient', 'amountRaw']
+  const intentsDeposit = record.kind === 'intents-deposit'
+  const keys = intentsDeposit
+    ? ['kind', 'assetId', 'recipient', 'amountRaw', 'memo']
+    : ['assetId', 'recipient', 'amountRaw']
   if (
+    (record.kind !== undefined && record.kind !== 'intents-deposit') ||
     Object.keys(record).length !== keys.length ||
     !keys.every(key => Object.prototype.hasOwnProperty.call(record, key)) ||
     typeof record.assetId !== 'string' ||
     typeof record.recipient !== 'string' ||
     typeof record.amountRaw !== 'string' ||
     !/^[1-9][0-9]*$/.test(record.amountRaw) ||
-    BigInt(record.amountRaw) > MAXIMUM_U128
+    BigInt(record.amountRaw) > MAXIMUM_U128 ||
+    (intentsDeposit &&
+      (typeof record.memo !== 'string' ||
+        record.memo.length === 0 ||
+        record.memo.length > 2048 ||
+        !record.assetId.endsWith('/nep141:wrap.near')))
   ) {
     throw new Error('Invalid NEAR transfer intent')
   }
+  const recipient = parseNearAccountId(record.recipient)
+  if (!intentsDeposit) {
+    return Object.freeze({
+      assetId: record.assetId,
+      recipient,
+      amountRaw: record.amountRaw
+    })
+  }
   return Object.freeze({
+    kind: 'intents-deposit' as const,
     assetId: record.assetId,
-    recipient: parseNearAccountId(record.recipient),
-    amountRaw: record.amountRaw
+    recipient,
+    amountRaw: record.amountRaw,
+    memo: record.memo as string
   })
 }
 
@@ -134,9 +163,16 @@ export class BackgroundNearTransferController {
       }
       return toBackgroundReview(
         await this.options.orchestrator.prepare(
-          intent.assetId === `${context.chainAccount.scope.chainId}/slip44:397`
-            ? { ...base, depositYocto: intent.amountRaw }
-            : { ...base, assetId: intent.assetId, amountRaw: intent.amountRaw }
+          'kind' in intent
+            ? {
+                ...base,
+                kind: 'intents-deposit' as const,
+                amountRaw: intent.amountRaw,
+                memo: intent.memo
+              }
+            : intent.assetId === `${context.chainAccount.scope.chainId}/slip44:397`
+              ? { ...base, depositYocto: intent.amountRaw }
+              : { ...base, assetId: intent.assetId, amountRaw: intent.amountRaw }
         )
       )
     })

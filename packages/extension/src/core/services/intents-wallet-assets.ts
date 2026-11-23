@@ -1,7 +1,10 @@
 import { getNearNetworkConfig, getSolanaNetworkConfig } from '@/config/networks'
 import { WNEAR_NEAR_ASSET } from '@/config/intents'
 import type { Network } from '@/types'
-import type { AssetDefinitionInput } from '@/core/chains/registry'
+import {
+  getBundledInitialProductAssetDefinitions,
+  type AssetDefinitionInput
+} from '@/core/chains/registry'
 import { createMarketAssetId, type MarketAssetId } from '@/core/prices'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
@@ -164,9 +167,16 @@ export function createIntentsWalletAssetCatalog(
   }
 
   const catalogEntries = Object.freeze([...entries.values()])
+  const bundledAssetIds = new Set(
+    getBundledInitialProductAssetDefinitions(network).map(asset => {
+      const reference =
+        asset.namespace === 'nep141' ? asset.reference.replace(/_/g, '%5F') : asset.reference
+      return `${asset.chainId}/${asset.namespace}:${reference}`
+    })
+  )
   const definitions = Object.freeze(
     catalogEntries.flatMap(entry =>
-      entry.kind === 'native'
+      entry.kind === 'native' || bundledAssetIds.has(entry.assetId)
         ? []
         : [
             Object.freeze({

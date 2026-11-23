@@ -58,7 +58,13 @@ export function createNearTransferGraph(input: CreateNearTransferGraphInput): Tr
       input.prepared.kind === 'token' &&
       (primaryAsset.asset.kind !== 'token' ||
         primaryAsset.asset.namespace !== 'nep141' ||
-        primaryAsset.asset.reference.replace(/%5F/gi, '_') !== input.prepared.contractId))
+        primaryAsset.asset.reference.replace(/%5F/gi, '_') !== input.prepared.contractId)) ||
+    ('kind' in input.prepared &&
+      input.prepared.kind === 'intents-deposit' &&
+      (primaryAsset.asset.kind !== 'token' ||
+        primaryAsset.asset.namespace !== 'nep141' ||
+        primaryAsset.asset.reference !== 'wrap.near' ||
+        input.prepared.tokenContractId !== 'wrap.near'))
   ) {
     throw new Error('Invalid NEAR transfer asset definition')
   }

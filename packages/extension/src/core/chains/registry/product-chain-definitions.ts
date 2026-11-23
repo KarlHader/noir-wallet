@@ -348,6 +348,23 @@ export function getBundledInitialProductAssetDefinitions(
       },
       source: 'bundled',
       verification: 'trusted'
-    }
+    },
+    ...(network === 'mainnet'
+      ? [
+          {
+            chainId: 'near:mainnet',
+            namespace: 'nep141',
+            reference: 'wrap.near',
+            kind: 'token' as const,
+            metadata: {
+              name: 'Wrapped NEAR',
+              symbol: 'wNEAR',
+              decimals: 24
+            },
+            source: 'bundled' as const,
+            verification: 'trusted' as const
+          }
+        ]
+      : [])
   ])
 }

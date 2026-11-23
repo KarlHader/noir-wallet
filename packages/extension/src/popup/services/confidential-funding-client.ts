@@ -15,7 +15,7 @@ import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { Network } from '@/types'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { formatBaseUnitAmount } from '@/lib/number-format'
-import { formatSymbol } from '@/lib/format'
+import { formatShieldSymbol } from '@/lib/format'
 import { evmWalletClient } from './evm-wallet-client'
 import { estimateNetworkFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
 
@@ -533,7 +533,7 @@ export async function previewClusterNetworkFeeTiers(
       if (fee)
         previews[tier] = {
           amount: formatBaseUnitAmount(fee.raw, fee.decimals),
-          symbol: formatSymbol(fee.symbol),
+          symbol: formatShieldSymbol(fee.symbol),
           approximate: true
         }
     })

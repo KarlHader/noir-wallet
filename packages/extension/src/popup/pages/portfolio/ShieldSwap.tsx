@@ -8,7 +8,7 @@ import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import { confidentialDestinationFormToken } from '@/popup/services/swap-page-model'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { classifyError } from '@/lib/errors'
-import { formatSortAddress, formatSymbol } from '@/lib/format'
+import { formatSortAddress, formatShieldSymbol } from '@/lib/format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
@@ -613,12 +613,12 @@ function ShieldSwapForm({
       ? {
           operation: 'swap',
           amount: prepared.amount,
-          symbol: formatSymbol(prepared.from.asset.metadata.symbol),
+          symbol: formatShieldSymbol(prepared.from.asset.metadata.symbol),
           receiveAmount: formatBaseUnitDecimalAmount(
             prepared.review.expectedOutputRaw,
             prepared.to.asset.metadata.decimals
           ),
-          receiveSymbol: formatSymbol(prepared.to.asset.metadata.symbol),
+          receiveSymbol: formatShieldSymbol(prepared.to.asset.metadata.symbol),
           network: prepared.request.externalRecipient
             ? 'NEAR Confidential → Zcash'
             : 'NEAR Confidential',
@@ -993,7 +993,7 @@ function ShieldSwapForm({
           title="Confirm Swap"
           asset={{
             assetId: prepared.from.asset.asset.id,
-            symbol: formatSymbol(prepared.from.asset.metadata.symbol),
+            symbol: formatShieldSymbol(prepared.from.asset.metadata.symbol),
             icon: prepared.from.asset.metadata.iconUrl
           }}
           amount={prepared.amount}
@@ -1005,7 +1005,7 @@ function ShieldSwapForm({
               source={{
                 asset: {
                   assetId: prepared.from.asset.asset.id,
-                  symbol: formatSymbol(prepared.from.asset.metadata.symbol),
+                  symbol: formatShieldSymbol(prepared.from.asset.metadata.symbol),
                   icon: prepared.from.asset.metadata.iconUrl
                 },
                 amount: prepared.amount
@@ -1013,7 +1013,7 @@ function ShieldSwapForm({
               destination={{
                 asset: {
                   assetId: prepared.to.asset.asset.id,
-                  symbol: formatSymbol(prepared.to.asset.metadata.symbol),
+                  symbol: formatShieldSymbol(prepared.to.asset.metadata.symbol),
                   icon: prepared.to.asset.metadata.iconUrl
                 },
                 amount: output
@@ -1054,8 +1054,8 @@ function ShieldSwapForm({
               content: (
                 <span className="inline-flex max-w-full flex-col items-end gap-0.5 tabular-nums">
                   <span>
-                    1 {formatSymbol(prepared.from.asset.metadata.symbol)} = {currentRate}{' '}
-                    {formatSymbol(prepared.to.asset.metadata.symbol)}
+                    1 {formatShieldSymbol(prepared.from.asset.metadata.symbol)} = {currentRate}{' '}
+                    {formatShieldSymbol(prepared.to.asset.metadata.symbol)}
                   </span>
                 </span>
               )
@@ -1067,7 +1067,7 @@ function ShieldSwapForm({
               ) : (
                 <AmountDisplay
                   value={minimum}
-                  symbol={formatSymbol(prepared.to.asset.metadata.symbol)}
+                  symbol={formatShieldSymbol(prepared.to.asset.metadata.symbol)}
                 />
               )
             },
@@ -1089,7 +1089,7 @@ function ShieldSwapForm({
                           content: (
                             <AmountDisplay
                               value={feeAmount}
-                              symbol={formatSymbol(prepared.to.asset.metadata.symbol)}
+                              symbol={formatShieldSymbol(prepared.to.asset.metadata.symbol)}
                               profile="fee"
                             />
                           )
@@ -1121,7 +1121,7 @@ function ShieldSwapForm({
                   changes={reviewDescription.changes}
                   output={{
                     decimals: prepared.to.asset.metadata.decimals,
-                    symbol: formatSymbol(prepared.to.asset.metadata.symbol)
+                    symbol: formatShieldSymbol(prepared.to.asset.metadata.symbol)
                   }}
                 />
               )}

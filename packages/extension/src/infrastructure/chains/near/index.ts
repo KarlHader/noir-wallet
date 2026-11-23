@@ -62,6 +62,12 @@ export {
   type PreparedNearLendingSupply
 } from './near-lending-supply-preparer'
 export {
+  parsePreparedNearIntentsDeposit,
+  prepareNearIntentsDeposit,
+  type PreparedNearIntentsDeposit,
+  type PrepareNearIntentsDepositInput
+} from './near-intents-deposit-preparer'
+export {
   createNearTransferGraph,
   type CreateNearTransferGraphInput
 } from './near-transaction-graph'
