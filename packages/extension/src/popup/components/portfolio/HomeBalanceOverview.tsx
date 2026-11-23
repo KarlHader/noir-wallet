@@ -1,5 +1,6 @@
 import { Icon } from '@iconify/react'
 import incognitoWatermark from '@/images/figma-incognito-watermark.svg'
+import shieldProviderMarks from '@/images/figma-shield-provider-marks.svg'
 import { cn } from '@/lib/utils'
 import { formatAssetDomainFiat } from '@/popup/services/asset-domains'
 import type { HomeAssetDomain } from '@/popup/services/home-navigation'
@@ -12,6 +13,7 @@ export function HomeBalanceOverview({
   walletTotal,
   showIncognito,
   hidden,
+  modeSelectionDisabled,
   onToggleHidden,
   onSelect
 }: {
@@ -20,6 +22,7 @@ export function HomeBalanceOverview({
   readonly walletTotal: string | null
   readonly showIncognito: boolean
   readonly hidden: boolean
+  readonly modeSelectionDisabled: boolean
   readonly onToggleHidden: () => void
   readonly onSelect: (domain: 'public' | 'private') => void
 }) {
@@ -58,9 +61,15 @@ export function HomeBalanceOverview({
           {visibilityToggle}
         </div>
         <p className="mt-[3px] text-sm text-wallet-secondary">Shield balance</p>
-        <p className="mt-5 text-sm text-primary">
-          Send / Receive privately via Shield.
-          <span className="block">Nobody can track you.</span>
+        <img
+          src={shieldProviderMarks}
+          alt=""
+          width={156}
+          height={18}
+          className="mx-auto mt-5 block max-w-full"
+        />
+        <p className="mt-2 text-[13px] leading-[17px] text-muted">
+          Your combined balance across privacy providers.
         </p>
       </section>
     )
@@ -92,9 +101,10 @@ export function HomeBalanceOverview({
                 type="button"
                 aria-label={`${label} balance`}
                 aria-pressed={selected}
+                disabled={modeSelectionDisabled}
                 onClick={() => onSelect(mode)}
                 className={cn(
-                  'home-balance-card wallet-interactive absolute flex min-w-0 flex-col overflow-hidden rounded-xl border px-[13px] text-left hover:brightness-110 focus-visible:z-20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+                  'home-balance-card wallet-interactive absolute flex min-w-0 flex-col overflow-hidden rounded-xl border px-[13px] text-left enabled:hover:brightness-110 focus-visible:z-20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
                   selected
                     ? 'top-0 z-10 h-28 w-[61.225%] gap-2 pt-[18px]'
                     : 'top-3.5 h-[84px] w-[42%] gap-2 pt-4',
