@@ -16,6 +16,7 @@ import { partitionVerboseTransactions } from './transparent-history-cache.ts'
 import {
   getRequiredConfirmations,
   mergeTransactionUpdate,
+  mergeZcashReceiveObservation,
   synchronizeInternalTransferConfirmations,
   type ConfirmationTrust,
   type ZcashConfirmation
@@ -79,17 +80,22 @@ export function applyExternalReceiveConfirmations(
   const updated = transactions.map(transaction => {
     if (!eligible.has(transaction)) return transaction
     const confirmations = observed.get(normalizeTxHash(transaction.txHash))
-    if (confirmations == null || confirmations <= (transaction.confirmations ?? 0)) {
+    const status =
+      confirmations != null && confirmations >= requiredConfirmations ? 'success' : 'confirming'
+    if (
+      confirmations == null ||
+      confirmations < (transaction.confirmations ?? 0) ||
+      (confirmations === transaction.confirmations && status === transaction.status)
+    ) {
       return transaction
     }
     changed = true
-    return {
+    return mergeZcashReceiveObservation(transaction, {
       ...transaction,
-      status:
-        confirmations >= requiredConfirmations ? ('success' as const) : ('confirming' as const),
+      status,
       confirmations,
       requiredConfirmations
-    }
+    })
   })
   return changed ? updated : transactions
 }
@@ -490,34 +496,25 @@ export function mergeTransactionsWithWasmHistory(
   const currentById = new Map(refreshedCurrentTransactions.map(tx => [tx.id, tx]))
   const reconciledWasmTransactions = wasmTransactions.map(transaction => {
     const current = currentById.get(transaction.id)
+    if (!current) {
+      return {
+        ...transaction,
+        timestamp: transaction.timestamp > 0 ? transaction.timestamp : Date.now()
+      }
+    }
+    const observation = {
+      ...transaction,
+      timestamp: transaction.timestamp > 0 ? transaction.timestamp : current.timestamp,
+      to: transaction.to || (current.type === transaction.type ? current.to : '')
+    }
+    if (current.type === 'receive' && transaction.type === 'receive') {
+      return mergeZcashReceiveObservation(current, observation)
+    }
     const confirmation: ZcashConfirmation | undefined =
       transaction.status === 'success' && transaction.confirmations != null
         ? { txHash: transaction.txHash, confirmations: transaction.confirmations }
         : undefined
-    return current
-      ? mergeTransactionUpdate(
-          current,
-          {
-            ...transaction,
-            timestamp: transaction.timestamp > 0 ? transaction.timestamp : current.timestamp,
-            to: transaction.to || (current.type === transaction.type ? current.to : ''),
-            ...(current.type === 'receive' &&
-            transaction.type === 'receive' &&
-            current.status === 'success' &&
-            (transaction.status !== 'success' ||
-              (transaction.confirmations ?? 0) < (current.confirmations ?? 0))
-              ? {
-                  confirmations: current.confirmations,
-                  requiredConfirmations: current.requiredConfirmations
-                }
-              : {})
-          },
-          confirmation
-        )
-      : {
-          ...transaction,
-          timestamp: transaction.timestamp > 0 ? transaction.timestamp : Date.now()
-        }
+    return mergeTransactionUpdate(current, observation, confirmation)
   })
   const localHashes = localTxHashSet(refreshedCurrentTransactions)
   const localShieldedSendHashes = localShieldedSendHashSet(refreshedCurrentTransactions)
@@ -561,24 +558,9 @@ export function mergeTransactionsWithTransparentReceives(
   const reconciledReceives = transparentReceives.map(transaction => {
     const existing = existingByHash.get(normalizeTxHash(transaction.txHash))
     if (!existing) return transaction
-    if (
-      (existing.status === 'success' && transaction.status !== 'success') ||
-      (existing.status === 'failed' &&
-        (transaction.status !== 'success' ||
-          !Number.isSafeInteger(transaction.confirmations) ||
-          (transaction.confirmations ?? 0) < getRequiredConfirmations('receive')))
-    ) {
-      return existing
-    }
-    const refreshed = {
-      ...transaction,
-      ...(existing.depositAddress ? { depositAddress: existing.depositAddress } : {})
-    }
-    if (existing.status !== 'failed') return refreshed
-    return mergeTransactionUpdate(
+    return mergeZcashReceiveObservation(
       existing,
-      { ...refreshed, id: existing.id },
-      { txHash: transaction.txHash, confirmations: transaction.confirmations ?? 0 }
+      existing.status === 'failed' ? { ...transaction, id: existing.id } : transaction
     )
   })
   const transparentReceiveHashes = new Set(reconciledReceives.map(tx => normalizeTxHash(tx.txHash)))

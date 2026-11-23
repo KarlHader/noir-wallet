@@ -1138,7 +1138,7 @@ test('cross-chain Withdraw rejects a non-cross-chain build when reading the sign
   )
 })
 
-test('uses the Intents order when the activity record returns only the source receipt', async () => {
+test('prioritizes the persisted Intents order and only falls back to order-level evidence', async () => {
   const sessions = new MemoryRheaSwapQuoteSessionStore()
   const quoteHandle = 'rhea-quote:intents-source-receipt'
   const sourceHash = `0x${'ab'.repeat(32)}`
@@ -1155,11 +1155,17 @@ test('uses the Intents order when the activity record returns only the source re
   const record = { schemaVersion: 1, quoteHandle, submission }
   await sessions.put(record)
   let orderStatus = { status: 'PROCESSING' }
+  let recordStatus = sourceReceipt
+  let recordReads = 0
   const service = new RheaSwapService(
     {
       async getOrderStatusRaw(request) {
-        if ('recordId' in request) return sourceReceipt
+        if ('recordId' in request) {
+          recordReads++
+          return recordStatus
+        }
         expect(request).toEqual(order)
+        if (orderStatus instanceof Error) throw orderStatus
         return orderStatus
       }
     },
@@ -1175,6 +1181,19 @@ test('uses the Intents order when the activity record returns only the source re
     status: 'completed',
     destinationHash
   })
+  expect(recordReads).toBe(0)
+  orderStatus = new Error('Order status unavailable')
+  recordStatus = { status: 'SUCCESS', toHash: sourceHash }
+  await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
+    status: 'pending',
+    destinationHash: null
+  })
+  recordStatus = { status: 'SUCCESS', toHash: destinationHash }
+  await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
+    status: 'completed',
+    destinationHash
+  })
+  recordStatus = sourceReceipt
   orderStatus = sourceReceipt
   await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
     status: 'pending',
@@ -1563,7 +1582,7 @@ test('quote and build remain bound across a session-store reload', async () => {
     destinationHash: `0x${'ab'.repeat(32)}`
   })
   expect(calls.map(([stage]) => stage)).toEqual(['report', 'report', 'status'])
-  expect(calls[2][1]).toEqual({ recordId: '1' })
+  expect(calls[2][1]).toEqual({ orderId: 'order-1', router: 'nearintents' })
   expect(calls[0][1]).toMatchObject({
     from_hash: 'source-hash',
     from_chain: 'zcash',

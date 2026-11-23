@@ -129,6 +129,53 @@ export function mergeTransactionUpdate(
   return { ...transaction, ...updates }
 }
 
+export function mergeZcashReceiveObservation(
+  transaction: Transaction,
+  observation: Transaction
+): Transaction {
+  if (
+    transaction.type !== 'receive' ||
+    observation.type !== 'receive' ||
+    !normalizeTxHash(transaction.txHash) ||
+    normalizeTxHash(transaction.txHash) !== normalizeTxHash(observation.txHash)
+  ) {
+    return observation
+  }
+
+  const requiredConfirmations = getRequiredConfirmations('receive')
+  const confirmations = observation.confirmations ?? 0
+  if (
+    transaction.status === 'failed' &&
+    (observation.status !== 'success' ||
+      !Number.isSafeInteger(confirmations) ||
+      confirmations < requiredConfirmations)
+  ) {
+    return transaction
+  }
+
+  const preserveConfirmation =
+    (transaction.status === 'success' && observation.status !== 'success') ||
+    ((transaction.status === 'success' || transaction.status === 'confirming') &&
+      (observation.status === 'success' || observation.status === 'confirming') &&
+      transaction.requiredConfirmations === observation.requiredConfirmations &&
+      confirmations < (transaction.confirmations ?? 0))
+
+  return mergeTransactionUpdate(
+    transaction,
+    {
+      ...observation,
+      ...(transaction.depositAddress ? { depositAddress: transaction.depositAddress } : {}),
+      ...(preserveConfirmation
+        ? {
+            confirmations: transaction.confirmations,
+            requiredConfirmations: transaction.requiredConfirmations
+          }
+        : {})
+    },
+    observation.status === 'success' ? { txHash: observation.txHash, confirmations } : undefined
+  )
+}
+
 export function synchronizeInternalTransferConfirmations(
   transactions: Transaction[]
 ): Transaction[] {

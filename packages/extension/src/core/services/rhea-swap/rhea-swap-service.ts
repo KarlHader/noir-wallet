@@ -811,29 +811,7 @@ export class RheaSwapService {
     const record = await this.requireSession(quoteHandle)
     const submission = record.submission
     if (!submission) throw new Error('RHEA Swap has not been submitted')
-    const readByOrder = () =>
-      submission.orderId === null
-        ? Promise.resolve<SwapOrderStatusDataRaw>({ status: 'pending' })
-        : this.client.getOrderStatusRaw(
-            {
-              orderId: submission.orderId,
-              router: submission.router,
-              ...(submission.statusChainId === null ? {} : { chainId: submission.statusChainId })
-            },
-            { signal }
-          )
-    let status: SwapOrderStatusDataRaw
-    if (submission.recordId !== undefined) {
-      status = await this.client.getOrderStatusRaw({ recordId: submission.recordId }, { signal })
-    } else if (submission.orderId !== null) {
-      status = await readByOrder()
-    } else {
-      throw new Error('RHEA Swap has no order status key')
-    }
-    if (isRheaIntentsRoute(submission.router) && status.provider === 'evm_receipt') {
-      status = submission.recordId === undefined ? { status: 'pending' } : await readByOrder()
-      if (status.provider === 'evm_receipt') status = { status: 'pending' }
-    }
+    const status = await this.readOrderObservation(submission, signal)
     return Object.freeze({
       quoteHandle: record.quoteHandle,
       orderId: record.submission.orderId,
@@ -841,6 +819,46 @@ export class RheaSwapService {
       status: normalizeOrderStatus(status),
       destinationHash: readRheaDestinationHash(status) ?? null
     })
+  }
+
+  private async readOrderObservation(
+    submission: NonNullable<RheaSwapQuoteSessionRecord['submission']>,
+    signal?: AbortSignal
+  ): Promise<SwapOrderStatusDataRaw> {
+    const { orderId, recordId, router, statusChainId, sourceHash } = submission
+    const intents = isRheaIntentsRoute(router)
+    const readSettlement = (observation: SwapOrderStatusDataRaw) => {
+      if (!intents) return observation
+      if (observation.provider === 'evm_receipt') return undefined
+      if (readRheaDestinationHash(observation)?.toLowerCase() === sourceHash.toLowerCase()) {
+        return undefined
+      }
+      return observation
+    }
+    const orderQuery =
+      orderId === null
+        ? undefined
+        : { orderId, router, ...(statusChainId === null ? {} : { chainId: statusChainId }) }
+    if (orderQuery && (intents || recordId === undefined)) {
+      try {
+        const observation = readSettlement(
+          await this.client.getOrderStatusRaw(orderQuery, { signal })
+        )
+        if (observation) return observation
+      } catch (error) {
+        if (signal?.aborted || recordId === undefined) throw error
+      }
+    }
+    if (recordId !== undefined) {
+      const observation = readSettlement(
+        await this.client.getOrderStatusRaw({ recordId }, { signal })
+      )
+      if (observation) return observation
+    }
+    if (orderQuery === undefined && recordId === undefined) {
+      throw new Error('RHEA Swap has no order status key')
+    }
+    return { status: 'pending' }
   }
 
   async hasRecordedOrder(quoteHandle: string): Promise<boolean> {

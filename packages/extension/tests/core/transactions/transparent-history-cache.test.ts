@@ -324,12 +324,24 @@ test.describe('Transparent history transaction cache', () => {
         { ...transactions[2], status: 'success', confirmations: 41 },
         ...transactions.slice(3)
       ])
-      const merged = mergeTransactionsWithWasmHistory(updated, [staleWasmReceipt], [])
+      const merged = mergeTransactionsWithWasmHistory(
+        updated,
+        [staleWasmReceipt],
+        [receipt(immatureHash)]
+      )
       expect(merged.transactions.find(tx => tx.txHash === matureHash)).toMatchObject({
         status: 'success',
         confirmations: 41,
         requiredConfirmations: 10
       })
+      expect(merged.transactions.find(tx => tx.txHash === immatureHash)).toMatchObject({
+        status: 'confirming',
+        confirmations: 9,
+        requiredConfirmations: 10
+      })
+      expect(
+        applyExternalReceiveConfirmations([{ ...staleWasmReceipt, confirmations: 41 }], observed)[0]
+      ).toMatchObject({ status: 'success', confirmations: 41 })
     } finally {
       globalThis.fetch = originalFetch
     }
