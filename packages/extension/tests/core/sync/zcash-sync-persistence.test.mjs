@@ -24,7 +24,8 @@ function createSync({
   pendingJournal = 0,
   failPersistAt = 0,
   chainTip = 3000,
-  completeWithPendingBalance = false
+  completeWithPendingBalance = false,
+  abortAfterFirstBatch = true
 } = {}) {
   const events = []
   const progressUpdates = []
@@ -54,6 +55,9 @@ function createSync({
     },
     async markRunning() {
       state.job = { status: 'running' }
+    },
+    async checkpoint(_walletId, _network, lastPersistedHeight, batchCount) {
+      state.job = { ...state.job, lastPersistedHeight, batchCount }
     },
     async upsert(_walletId, _network, patch) {
       state.job = { ...state.job, ...patch }
@@ -147,11 +151,11 @@ function createSync({
         state.scannedHeight = 3000
         return null
       }
+      if (state.scannedHeight >= chainTip) return null
       state.pendingJournal += 1
-      const rangeEnd = Math.min(1100, chainTip)
+      const rangeEnd = Math.min(1100, chainTip + 1)
       state.scannedHeight = rangeEnd - 1
-      // The stop arrives after the very first completed journal batch.
-      state.aborted = true
+      state.aborted = abortAfterFirstBatch
       return { rangeStart: 100, rangeEnd, journalSize: 32 }
     },
     async replayJournalEntries(_network, _walletId, options) {
@@ -224,8 +228,20 @@ test('cancelled initial chain reads leave the snapshot and journal intact withou
 
 test('a one-batch scan reports active sync while it runs', async () => {
   const { run, progressUpdates } = createSync({ chainTip: 300 })
-  await run()
+  await run({ priority: 'background' })
   assert.ok(progressUpdates.some(update => update.isSyncing === true))
+})
+
+test('a routine background scan advances the persisted height without showing progress', async () => {
+  const { run, state, progressUpdates } = createSync({
+    snapshot: true,
+    chainTip: 104,
+    abortAfterFirstBatch: false
+  })
+  const result = await run({ priority: 'background' })
+  assert.equal(result.status, 'completed', JSON.stringify(result))
+  assert.equal(state.persistedHeight, 104)
+  assert.equal(progressUpdates.some(update => update.isSyncing === true), false)
 })
 
 test('anchors the first scan and saves its completed journal batch when interrupted', async () => {

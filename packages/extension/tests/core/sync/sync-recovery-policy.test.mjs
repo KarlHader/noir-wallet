@@ -12,6 +12,7 @@ import {
   shouldResumeInterruptedSync
 } from '../../../src/background/passive-sync-policy.ts'
 import { shouldMarkSyncJobInterrupted } from '../../../src/lib/sync-job-store.ts'
+import { WALLET_CONFIG } from '../../../src/config/wallet.ts'
 
 const metadataError = () => new Error('WALLET_SPENDABILITY_INCONSISTENT')
 
@@ -91,10 +92,10 @@ test('locked passive sync needs a snapshot and sufficient chain gap or staleness
     isWalletLocked: true,
     hasPersistedSnapshot: true,
     currentHeight: 100,
-    networkHeight: 105,
+    networkHeight: 100,
     lastSyncTime: 1_000,
     now: 2_000,
-    minBlockGap: 10,
+    minBlockGap: WALLET_CONFIG.SYNC.BACKGROUND_MIN_GAP_BLOCKS,
     maxStaleMs: 10_000
   }
   assert.equal(shouldRequestPeriodicSync(state), false)
@@ -102,23 +103,20 @@ test('locked passive sync needs a snapshot and sufficient chain gap or staleness
     shouldRequestPeriodicSync({ ...state, hasPersistedSnapshot: false, networkHeight: 120 }),
     false
   )
-  assert.equal(shouldRequestPeriodicSync({ ...state, networkHeight: 110 }), true)
+  assert.equal(shouldRequestPeriodicSync({ ...state, networkHeight: 101 }), true)
   assert.equal(shouldRequestPeriodicSync({ ...state, now: 11_001 }), true)
   assert.equal(shouldRequestPeriodicSync({ ...state, hasPendingTransactions: true }), true)
   assert.equal(shouldRequestPeriodicSync({ ...state, isSchedulerRunning: true }), false)
 })
 
 test('passive retry delay is bounded and budgeted jobs do not resume at startup', () => {
-  assert.equal(
-    computePassiveSyncDelayMinutes({
-      baseMinutes: 30,
-      jitterMinutes: 5,
-      maxMinutes: 120,
-      failureCount: 8,
-      randomUnit: 1
-    }),
-    120
-  )
+  const schedule = {
+    baseMinutes: WALLET_CONFIG.SYNC.BACKGROUND_POLL_MINUTES,
+    maxMinutes: WALLET_CONFIG.SYNC.BACKGROUND_POLL_MAX_BACKOFF_MINUTES
+  }
+  assert.equal(computePassiveSyncDelayMinutes({ ...schedule, failureCount: 0 }), 2)
+  assert.equal(computePassiveSyncDelayMinutes({ ...schedule, failureCount: 1 }), 4)
+  assert.equal(computePassiveSyncDelayMinutes({ ...schedule, failureCount: 8 }), 120)
   assert.equal(
     shouldResumeInterruptedSync({
       now: 2_000,

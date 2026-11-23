@@ -640,7 +640,11 @@ export class SyncScheduler {
                 : wallet.accounts[0].id
 
             this.abortNonCurrentSyncs(syncTarget)
-            logger.log('Sync foreground', syncTarget, accountId)
+            logger.log(
+              passiveRun ? 'Sync periodic background' : 'Sync foreground',
+              syncTarget,
+              accountId
+            )
             const status = await this.runSyncForWallet(syncTarget, accountId, passiveRun)
             if (passiveRun) this.onPassiveSyncOutcome?.(status)
           }

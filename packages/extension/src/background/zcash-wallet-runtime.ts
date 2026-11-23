@@ -4656,7 +4656,12 @@ export class BackgroundZcashWalletRuntime {
         }
       }
 
-      if (!isNearChainTip(fullyScannedHeight, latestHeight)) {
+      const isSilentSync =
+        isNearChainTip(fullyScannedHeight, latestHeight) ||
+        (options?.priority === 'background' &&
+          fullyScannedHeight > 0 &&
+          latestHeight - fullyScannedHeight <= WALLET_CONFIG.SYNC.BACKGROUND_SILENT_SYNC_MAX_BLOCKS)
+      if (!isSilentSync) {
         this.updateSyncProgressForWallet(syncWalletId, {
           isSyncing: true,
           syncProgress: 0,
@@ -4701,7 +4706,6 @@ export class BackgroundZcashWalletRuntime {
 
       const isSmallSync =
         totalRange <= getSyncBatchSize(totalRange, syncWalletId === this.currentWalletId)
-      const isSilentSync = isNearChainTip(fullyScannedHeight, latestHeight)
       const showSyncUi = !isSilentSync
 
       if (isSilentSync) {
