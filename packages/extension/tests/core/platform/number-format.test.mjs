@@ -143,7 +143,7 @@ test.describe('Base-unit amount formatting', () => {
   })
   test('keeps arithmetic base-unit conversion separate from grouped display output', () => {
     expect(formatBaseUnitDecimalAmount('1234567890000000000000', 18)).toBe('1234.56789')
-    expect(formatBaseUnitAmount('1234567890000000000000', 18, 4)).toBe('1,234.5678…')
+    expect(formatBaseUnitAmount('1234567890000000000000', 18, 4)).toBe('1,234.5679')
   })
   test('formats base units without converting through JavaScript numbers', () => {
     expect(formatBaseUnitAmount('123456789', 6)).toBe('123.456789')
@@ -152,9 +152,11 @@ test.describe('Base-unit amount formatting', () => {
     )
   })
 
-  test('truncates display precision without rounding spendable values up', () => {
-    expect(formatBaseUnitAmount('123456789', 8, 6)).toBe('1.234567…')
-    expect(formatBaseUnitAmount('1', 18, 6)).toBe('< 0.000001')
+  test('rounds the last displayed digit up when extra precision remains', () => {
+    expect(formatBaseUnitAmount('123456789', 8, 6)).toBe('1.234568')
+    expect(formatBaseUnitAmount('1', 18, 6)).toBe('0.000001')
+    expect(formatBaseUnitAmount('1999999', 6, 5)).toBe('2')
+    expect(formatBaseUnitAmount('1500000', 6, 5)).toBe('1.5')
   })
 
   test('removes insignificant fractional zeroes', () => {

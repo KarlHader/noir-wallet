@@ -26,6 +26,8 @@ export interface BuildNearIntentsDepositActionsInput {
   readonly recipientRegistered: boolean
   /** Omitted for SIMPLE deposits. A provided memo is still attached to ft_transfer. */
   readonly memo?: string
+  /** Omitted means wrap the shortfall. False spends only existing wNEAR. */
+  readonly wrapShortfall?: boolean
 }
 
 export interface NearIntentsDepositAction {
@@ -121,6 +123,9 @@ export function buildNearIntentsDepositActions(
   const memo = input.memo === undefined ? undefined : parseMemo(input.memo)
   const recipientIsSigner = depositAddress === signerId
   const wrapAmount = amount > wrapped ? amount - wrapped : 0n
+  if (input.wrapShortfall === false && wrapAmount > 0n) {
+    throw new Error('wNEAR balance is insufficient')
+  }
   const storageFee = nearIntentsDepositStorageFeeYocto({
     signerRegistered: input.signerRegistered,
     recipientRegistered: input.recipientRegistered,

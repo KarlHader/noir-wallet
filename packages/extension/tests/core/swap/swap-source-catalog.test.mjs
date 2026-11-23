@@ -71,6 +71,31 @@ it('keeps same-chain destinations after selecting Ethereum USDC from a progressi
   assert.deepEqual(current, [ZEC])
 })
 
+it('keeps native NEAR and wNEAR destinations that share the wrap.near asset id', () => {
+  const nativeNear = {
+    ...token('near', 900001, 'NEAR'),
+    assetId: 'nep141:wrap.near',
+    rheaAddress: 'wrap.near',
+    contractAddress: null,
+    isNative: true
+  }
+  const wrappedNear = {
+    ...nativeNear,
+    symbol: 'wNEAR',
+    contractAddress: 'wrap.near',
+    isNative: false
+  }
+
+  assert.deepEqual(getSwapDestinationTokens(nativeNear, [nativeNear, wrappedNear], []), [
+    nativeNear,
+    wrappedNear
+  ])
+  assert.deepEqual(getSwapDestinationTokens(wrappedNear, [wrappedNear, nativeNear], []), [
+    wrappedNear,
+    nativeNear
+  ])
+})
+
 it('retains a same-chain destination found only in the destination catalog', () => {
   const custom = { ...USDC, assetId: 'eip155:1/erc20:0x3333333333333333333333333333333333333333' }
   const destinations = getSwapDestinationTokens(custom, [custom], [ETH])

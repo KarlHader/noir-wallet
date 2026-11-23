@@ -613,14 +613,17 @@ export function resolveLockedWalletSwapSourceToken(input: {
   readonly walletSourceTokens: readonly RheaSwapToken[]
 }): RheaSwapToken | null {
   if (!input.requestedToken) return null
-  const walletSourceIds = new Set(input.walletSourceTokens.map(token => token.assetId))
+  const sourceIdentity = (token: RheaSwapToken) =>
+    `${token.assetId}:${token.rheaAddress}:${token.isNative}`
+  const walletSourceIds = new Set(input.walletSourceTokens.map(sourceIdentity))
   return (
     input.sourceTokens.find(
       token =>
-        walletSourceIds.has(token.assetId) &&
+        walletSourceIds.has(sourceIdentity(token)) &&
         token.assetId === input.requestedToken?.assetId &&
         token.rheaChainId === input.requestedToken.rheaChainId &&
-        token.rheaAddress === input.requestedToken.rheaAddress
+        token.rheaAddress === input.requestedToken.rheaAddress &&
+        token.isNative === input.requestedToken.isNative
     ) ?? null
   )
 }

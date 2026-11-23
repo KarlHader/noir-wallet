@@ -132,9 +132,12 @@ function publicCatalog(chainId = 1) {
 
 function publicCatalogStorage() {
   const responses = new Map()
+  const names = []
   return {
     responses,
-    async open() {
+    names,
+    async open(name) {
+      names.push(name)
       return {
         async match(key) {
           return responses.get(key)?.clone()
@@ -161,6 +164,12 @@ test('shares public RHEA catalogs across callers and Background lifetimes, keepi
   const [a, b] = await Promise.all([first.read(request), first.read(request)])
   expect(a.tokens).toEqual(b.tokens)
   expect(calls).toHaveLength(1)
+  expect(storage.names.length).toBeGreaterThan(0)
+  expect(storage.names.every(name => name === 'noir-public-rhea-token-catalog-v2')).toBe(true)
+  expect([...storage.responses.keys()]).toEqual([
+    'https://api.rhea.finance/noir-public-catalog/v2/from/1'
+  ])
+  expect((await storage.responses.values().next().value.clone().json()).version).toBe(1)
   expect(await first.readFresh(request)).toEqual({
     result: a,
     expiresAt: NOW + RHEA_SWAP_TOKEN_CATALOG_TTL_MS

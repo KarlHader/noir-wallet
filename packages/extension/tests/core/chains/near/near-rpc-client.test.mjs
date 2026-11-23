@@ -297,6 +297,16 @@ test.describe('NEAR JSON-RPC client', () => {
                 execution: 115123062500,
                 send_not_sir: 115123062500,
                 send_sir: 115123062500
+              },
+              function_call_cost: {
+                execution: 780000000000,
+                send_not_sir: 200000000000,
+                send_sir: 200000000000
+              },
+              function_call_cost_per_byte: {
+                execution: 2235934,
+                send_not_sir: 47683715,
+                send_sir: 2235934
               }
             }
           }
@@ -317,6 +327,16 @@ test.describe('NEAR JSON-RPC client', () => {
         executionGas: '115123062500',
         sendNotSirGas: '115123062500',
         sendSirGas: '115123062500'
+      },
+      functionCall: {
+        executionGas: '780000000000',
+        sendNotSirGas: '200000000000',
+        sendSirGas: '200000000000'
+      },
+      functionCallPerByte: {
+        executionGas: '2235934',
+        sendNotSirGas: '47683715',
+        sendSirGas: '2235934'
       }
     })
     expect(state.calls[0].body).toEqual({
@@ -441,6 +461,37 @@ test.describe('NEAR JSON-RPC client', () => {
     )
     await expect(unknown.client.getTransactionStatus(blockHash, 'alice.testnet')).resolves.toEqual({
       status: 'unknown'
+    })
+
+    const rejected = harness(
+      () =>
+        new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            error: {
+              name: 'HANDLER_ERROR',
+              cause: { name: 'INVALID_TRANSACTION' },
+              code: -32000,
+              message: 'Server error',
+              data: {
+                TxExecutionError: {
+                  InvalidTxError: {
+                    NotEnoughBalance: {
+                      signer_id: 'alice.testnet',
+                      balance: '110041690122572998999988',
+                      cost: '1129706865694300000000001'
+                    }
+                  }
+                }
+              }
+            }
+          })
+        )
+    )
+    await expect(rejected.client.broadcastSignedTransactionAndWait('AQ==')).rejects.toMatchObject({
+      code: 'rpc-error',
+      message: 'Not enough NEAR. Available 0.110042 NEAR. Required 1.129707 NEAR.'
     })
 
     const malformed = harness(body =>

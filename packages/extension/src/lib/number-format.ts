@@ -92,11 +92,16 @@ export function formatBaseUnitAmount(
   if (maximumFractionDigits === undefined || fraction.length <= maximumFractionDigits) {
     return groupDecimal(exact)
   }
-  const visibleFraction = fraction.slice(0, maximumFractionDigits)
-  if (whole === '0' && /^0+$/.test(visibleFraction)) {
-    return `< ${minimumAt(maximumFractionDigits)}`
-  }
-  return `${groupDecimal(whole)}.${visibleFraction}…`
+  // A capped display rounds the last kept digit up. The exact fraction has already
+  // dropped trailing zeroes, so any remaining digits are a non-zero remainder.
+  const scale = 10n ** BigInt(maximumFractionDigits)
+  const rounded = BigInt(whole) * scale + BigInt(fraction.slice(0, maximumFractionDigits)) + 1n
+  const nextWhole = (rounded / scale).toString()
+  const nextFraction = (rounded % scale)
+    .toString()
+    .padStart(maximumFractionDigits, '0')
+    .replace(/0+$/, '')
+  return groupDecimal(nextFraction ? `${nextWhole}.${nextFraction}` : nextWhole)
 }
 
 function parseNumericValue(value: NumericValue): Big | null {

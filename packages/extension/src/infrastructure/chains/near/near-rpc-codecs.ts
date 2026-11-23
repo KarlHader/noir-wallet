@@ -268,6 +268,14 @@ export function parseNearNativeTransferCostConfig(
     transfer: parseGasCostComponents(
       actionCreationConfig.transfer_cost,
       'NEAR transfer action cost'
+    ),
+    functionCall: parseGasCostComponents(
+      actionCreationConfig.function_call_cost,
+      'NEAR function call cost'
+    ),
+    functionCallPerByte: parseGasCostComponents(
+      actionCreationConfig.function_call_cost_per_byte,
+      'NEAR function call cost per byte'
     )
   })
 }

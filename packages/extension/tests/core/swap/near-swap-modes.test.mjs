@@ -439,7 +439,33 @@ function createCoordinator(options) {
       async isFungibleTokenAccountRegistered() {
         return options.registered ?? true
       },
-      async broadcastSignedTransaction() {
+      async getAccount(accountId) {
+        return {
+          accountId,
+          amountRaw: '9'.repeat(30),
+          lockedRaw: '0',
+          storageUsage: 0,
+          codeHash: '1'.repeat(32),
+          blockHash: '1'.repeat(32),
+          blockHeight: 1
+        }
+      },
+      async getGasPrice() {
+        return '100000000'
+      },
+      async getNativeTransferCostConfig() {
+        const zero = { executionGas: '0', sendNotSirGas: '0', sendSirGas: '0' }
+        return {
+          chainId: 'mainnet',
+          minGasPurchasePriceRaw: '100000000',
+          storageAmountPerByteRaw: '10000000000000000000',
+          actionReceiptCreation: zero,
+          transfer: zero,
+          functionCall: zero,
+          functionCallPerByte: zero
+        }
+      },
+      async broadcastSignedTransactionAndWait() {
         throw new Error('unexpected broadcast')
       },
       async getTransactionStatus() {

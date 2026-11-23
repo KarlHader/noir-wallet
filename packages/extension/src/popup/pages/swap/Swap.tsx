@@ -238,6 +238,7 @@ import {
   canReverseSwapPair,
   findSwapTokenInCatalog,
   getEnabledSwapChains,
+  isSameSwapTokenRouteIdentity,
   isSwapAssetOnEnabledChain,
   mergeTokenCatalogs
 } from '@/popup/services/swap-catalog-loading'
@@ -2189,11 +2190,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       receiveTargets
     )
     if (resolved) {
-      return (
-        swap.sourceTokens.find(
-          token => token.assetId === resolved.assetId && token.blockchain === resolved.blockchain
-        ) ?? null
-      )
+      return swap.sourceTokens.find(token => token === resolved) ?? null
     }
     const asset = portfolio?.assets.find(candidate => candidate.asset.id === requestedSourceAssetId)
     return asset?.asset.namespace === 'erc20'
@@ -2297,17 +2294,13 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   )
   const lockedSourceMatchesRequest = Boolean(
     !requestedSourceAssetId ||
-    (lockedSourceToken &&
-      swap.tokenIn?.assetId === lockedSourceToken.assetId &&
-      swap.tokenIn.rheaChainId === lockedSourceToken.rheaChainId &&
-      swap.tokenIn.rheaAddress === lockedSourceToken.rheaAddress)
+    (lockedSourceToken && isSameSwapTokenRouteIdentity(swap.tokenIn, lockedSourceToken))
   )
   const lockedDestinationMatchesRequest = Boolean(
     !lockedAssetFlowRequested ||
     (isPrivateFunding
       ? privateFundingDestinationToken &&
-        swap.tokenOut?.rheaChainId === privateFundingDestinationToken.rheaChainId &&
-        swap.tokenOut.rheaAddress === privateFundingDestinationToken.rheaAddress
+        isSameSwapTokenRouteIdentity(swap.tokenOut, privateFundingDestinationToken)
       : crossChainWithdrawRequested
         ? privateTransferDestinationToken &&
           swap.tokenOut?.rheaChainId === privateTransferDestinationToken.rheaChainId &&
@@ -2647,12 +2640,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           swap.sourceTokens.find(token => token.assetId === preferredSwapSourceAssetId) ??
           swap.sourceTokens.find(token => walletSourceIds.has(token.assetId)))
       initializedPrivateFundingScope.current = initializationScope
-      if (
-        sourceToken &&
-        (sourceToken.assetId !== swap.tokenIn?.assetId ||
-          sourceToken.rheaChainId !== swap.tokenIn.rheaChainId ||
-          sourceToken.rheaAddress !== swap.tokenIn.rheaAddress)
-      ) {
+      if (sourceToken && !isSameSwapTokenRouteIdentity(sourceToken, swap.tokenIn)) {
         swap.selectTokenIn(sourceToken, false)
       } else if (requestedSourceAssetId && !sourceToken && swap.tokenIn) {
         swap.clearTokenPairForFlow()
@@ -2662,8 +2650,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       }
       if (
         privateFundingDestinationToken &&
-        (swap.tokenOut?.rheaChainId !== privateFundingDestinationToken.rheaChainId ||
-          swap.tokenOut.rheaAddress !== privateFundingDestinationToken.rheaAddress)
+        !isSameSwapTokenRouteIdentity(swap.tokenOut, privateFundingDestinationToken)
       ) {
         swap.selectTokenOutForFlow(privateFundingDestinationToken)
       } else if (

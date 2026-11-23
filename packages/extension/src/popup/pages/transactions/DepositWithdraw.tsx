@@ -175,6 +175,7 @@ import { NEAR_CONFIDENTIAL_CHAIN_ASSET_ID } from '@/background/confidential-near
 import {
   nearDirectQuoteAsset,
   nearIncognitoWalletSource,
+  nearWrappedClusterAsset,
   resolveNearIncognitoMove
 } from '@/core/chains/near/near-incognito-move'
 import {
@@ -1261,9 +1262,24 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const managedAsset = useMemo(
     () =>
       selected
-        ? resolveShieldManagedAsset(selected.asset, managedAssets, catalogTokens, currentNetwork)
+        ? (resolveShieldManagedAsset(
+            selected.asset,
+            managedAssets,
+            catalogTokens,
+            currentNetwork
+          ) ??
+          (nearPublicPrivate && !receiveEntry
+            ? nearWrappedClusterAsset(
+                {
+                  id: selected.asset.asset.id,
+                  chainId: selected.asset.asset.chainId,
+                  decimals: selected.asset.metadata.decimals
+                },
+                catalogTokens
+              )
+            : null))
         : null,
-    [selected?.asset, managedAssets, catalogTokens, currentNetwork]
+    [selected?.asset, managedAssets, catalogTokens, currentNetwork, nearPublicPrivate, receiveEntry]
   )
   const { available: receiveProviders, selected: receiveProvider } = resolveShieldReceiveProvider({
     nativeZec: receiveZec,

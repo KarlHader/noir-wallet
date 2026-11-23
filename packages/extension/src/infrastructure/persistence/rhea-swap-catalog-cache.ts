@@ -6,7 +6,7 @@ import {
 } from '@/core/services/rhea-swap'
 import { DedupPromise } from '@/lib/async-utils'
 
-const CACHE_NAME = 'noir-public-rhea-token-catalog-v1'
+const CACHE_NAME = 'noir-public-rhea-token-catalog-v2'
 
 interface CatalogRequest {
   readonly direction: 'from' | 'cross-chain-to'
@@ -130,7 +130,7 @@ export class PersistentRheaSwapCatalogCache {
   }
 
   private key(direction: CatalogRequest['direction'], chainId: number): string {
-    return `https://api.rhea.finance/noir-public-catalog/v1/${direction}/${chainId}`
+    return `https://api.rhea.finance/noir-public-catalog/v2/${direction}/${chainId}`
   }
 
   private parseSnapshot(value: unknown, chainId: number): CatalogSnapshot {

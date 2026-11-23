@@ -24,7 +24,7 @@ export {
 } from './near-account-discovery'
 export { attestNearRpcEndpoint } from './near-network-attestation'
 export type { AttestNearRpcEndpointInput } from './near-network-attestation'
-export { createNearRpcClient, NearRpcError } from './near-rpc-client'
+export { createNearRpcClient, formatNearBalanceShortage, NearRpcError } from './near-rpc-client'
 export type {
   NearAccessKeyPermission,
   NearAccessKeySnapshot,

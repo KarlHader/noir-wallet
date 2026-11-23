@@ -237,6 +237,7 @@ test('NEAR Shield deposit preparation requires a 64-hex deposit address', async 
   expect(prepared[0].depositAddress).toBe(nearAccount)
   expect(prepared[0].signerId).toBe(nearAccount)
   expect(prepared[0].chainId).toBe('near:mainnet')
+  expect(prepared[0].wrapShortfall).toBe(true)
   expect(Object.hasOwn(prepared[0], 'memo')).toBe(false)
   await expect(
     adapter.prepareDeposit({ ...base, chainId: 'near:testnet', recipient: nearAccount })
@@ -249,6 +250,7 @@ test('NEAR Shield deposit preparation requires a 64-hex deposit address', async 
   })
   expect(prepared).toHaveLength(2)
   expect(prepared[1].amountRaw).toBe('1')
+  expect(prepared[1].wrapShortfall).toBe(false)
 })
 
 test('NEAR Shield USDT deposit transfers the token contract instead of wrap.near', async () => {
@@ -617,6 +619,148 @@ test('NEAR Incognito cluster preview quotes a same-chain move without an EVM sig
     ).toBe(true)
     expect(state.identityChains.every(chainId => chainId === 'near:mainnet')).toBe(true)
     expect(state.plans).toBe(0)
+  } finally {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+  }
+})
+
+test('NEAR Incognito cluster preview accepts wNEAR and rejects a wNEAR shield deposit', async () => {
+  const wrappedAssetId = 'near:mainnet/nep141:wrap.near'
+  const protocolAssetId = 'nep141:wrap.near'
+  const peaAccount = 'b'.repeat(64)
+  const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.near']
+  const chains = createInitialProductChainRegistry('mainnet')
+  const assets = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions('mainnet'))
+  const now = 1_000_000
+  const state = { quotes: [] }
+  const coordinator = new ConfidentialFundingCoordinator({
+    network: 'mainnet',
+    api: {
+      async quote(input) {
+        state.quotes.push(input)
+        const deadline = new Date(now + 60_000).toISOString()
+        return {
+          correlationId: 'wnear-cluster',
+          quoteRequest: {
+            swapType: 'EXACT_INPUT',
+            confidentiality: 'basic',
+            originAsset: input.originAsset,
+            destinationAsset: input.destinationAsset,
+            amount: input.amountRaw,
+            refundTo: input.refundTo ?? input.signerId,
+            depositType: input.depositType,
+            refundType: input.refundType,
+            recipient: input.recipient,
+            recipientType: input.recipientType,
+            slippageTolerance: input.slippageBps,
+            deadline,
+            dry: input.dry
+          },
+          quote: {
+            amountIn: input.amountRaw,
+            amountOut: input.amountRaw,
+            minAmountOut: input.amountRaw,
+            depositAddress: nearAccount,
+            deadline
+          }
+        }
+      }
+    },
+    store: {
+      async getSession() {
+        return null
+      },
+      async putPlan() {},
+      async listPlans() {
+        return []
+      }
+    },
+    signer: {
+      async resolveIdentity(chainId) {
+        return {
+          address: nearAccount,
+          peaAddress: peaAccount,
+          addressIndex: 0,
+          context: { chainAccount: { scope: { ...scope, chainId } } }
+        }
+      }
+    },
+    repository: new InMemoryTransactionRepository(),
+    assets,
+    evmNetworks: [],
+    assetMappings: Object.freeze([
+      { assetId: 'near:mainnet/slip44:397', protocolAssetId: 'nep141:wrap.near' }
+    ]),
+    now: () => now,
+    nearDeposit: {
+      async resolveAccount() {
+        return {
+          accountIndex: 0,
+          mainAccountId: nearAccount,
+          publicKey: 'ed25519:11111111111111111111111111111111',
+          peaAccountId: peaAccount,
+          walletSource: { kind: 'software' }
+        }
+      },
+      adapter: {
+        kind: 'near',
+        async prepareDeposit() {
+          throw new Error('cluster preview must not prepare a deposit')
+        },
+        async confirmDeposit() {
+          throw new Error('cluster preview must not confirm a deposit')
+        },
+        async cancelDeposit() {}
+      },
+      async broadcastSignedTransaction() {
+        throw new Error('cluster preview must not broadcast')
+      },
+      async getTransactionStatus() {
+        return { status: 'unknown' }
+      }
+    }
+  })
+  const route = {
+    network: 'mainnet',
+    ...scope,
+    operation: 'cluster',
+    sourceDomain: 'public',
+    destinationDomain: 'private',
+    source: {
+      chainId: 'near:mainnet',
+      chainName: 'near',
+      assetId: wrappedAssetId,
+      protocolAssetId,
+      amountRaw: '1000'
+    },
+    destination: {
+      chainId: 'near:mainnet',
+      chainName: 'near',
+      assetId: wrappedAssetId,
+      protocolAssetId
+    },
+    slippageBps: 50
+  }
+  try {
+    await expect(
+      coordinator.preview({
+        ...route,
+        operation: 'deposit',
+        destinationDomain: 'shield'
+      })
+    ).rejects.toThrow('Confidential funding request is invalid')
+    expect(state.quotes).toEqual([])
+
+    const preview = await coordinator.preview(route)
+    expect(preview).toEqual({
+      amountOutRaw: '1000',
+      minimumOutputRaw: '1000',
+      expiresAt: now + 60_000
+    })
+    expect(state.quotes.length).toBeGreaterThan(0)
+    expect(state.quotes.every(quote => quote.originAsset === protocolAssetId)).toBe(true)
+    expect(state.quotes[0].originAsset).toBe('nep141:wrap.near')
   } finally {
     globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
   }

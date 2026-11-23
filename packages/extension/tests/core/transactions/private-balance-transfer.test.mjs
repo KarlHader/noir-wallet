@@ -275,6 +275,27 @@ test('builds a NEAR Incognito deposit review on the same swap confirmation route
   ).toThrow('Invalid NEAR source asset route')
 })
 
+test('builds a wNEAR Incognito deposit review when both assets are the wrapped wallet id', () => {
+  const assetId = 'near:mainnet/nep141:wrap.near'
+  const reviewPath = buildNearPrivateDepositReviewPath({
+    sourceAssetId: assetId,
+    destinationAssetId: assetId,
+    amount: '0.5',
+    maximum: false
+  })
+  const reviewRoute = new URL(reviewPath, 'https://wallet.test')
+  expect(reviewRoute.pathname).toBe('/swap')
+  expect(Object.fromEntries(reviewRoute.searchParams)).toEqual({
+    source: assetId,
+    destinationAsset: assetId,
+    destinationChain: 'near',
+    privateDestination: '1',
+    balanceTransfer: '1',
+    amount: '0.5',
+    review: '1'
+  })
+})
+
 test('offers an unfunded registered USDC destination without trusting matching token symbols', () => {
   const usdc = (chainId, reference, decimals) => {
     const row = nativeDepositAsset(chainId)

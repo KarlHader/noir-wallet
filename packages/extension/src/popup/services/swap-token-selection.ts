@@ -284,7 +284,13 @@ export function getSwapDestinationTokens<T extends SwapToken>(
       ]
     : [...sourceTokens, ...crossChainTokens]
   return [
-    ...new Map(eligible.map(token => [`${token.blockchain}:${token.assetId}`, token])).values()
+    ...new Map(
+      eligible.map(token => [
+        // Native NEAR and wNEAR share assetId. SwapToken does not declare isNative.
+        `${token.blockchain}:${token.assetId}:${'isNative' in token && token.isNative ? 'native' : ''}`,
+        token
+      ])
+    ).values()
   ]
 }
 
