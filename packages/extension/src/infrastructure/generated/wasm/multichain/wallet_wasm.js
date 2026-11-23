@@ -56,6 +56,46 @@ export class WalletEngine {
      * @param {number} request_id
      * @returns {any}
      */
+    confirmDashMessage(session_id, request_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.walletengine_confirmDashMessage(retptr, this.__wbg_ptr, session_id, request_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {number} request_id
+     * @returns {any}
+     */
+    confirmDashPsbt(session_id, request_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.walletengine_confirmDashPsbt(retptr, this.__wbg_ptr, session_id, request_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {number} request_id
+     * @returns {any}
+     */
     confirmEvmPersonalMessage(session_id, request_id) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
@@ -334,6 +374,57 @@ export class WalletEngine {
     /**
      * @param {number} session_id
      * @param {string} chain_id
+     * @param {number} account_index
+     * @param {boolean} change
+     * @param {number} address_index
+     * @returns {any}
+     */
+    deriveDashAccount(session_id, chain_id, account_index, change, address_index) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.walletengine_deriveDashAccount(retptr, this.__wbg_ptr, session_id, ptr0, len0, account_index, change, address_index);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} chain_id
+     * @param {number} account_index
+     * @param {boolean} change
+     * @param {number} start_address_index
+     * @param {number} count
+     * @returns {any}
+     */
+    deriveDashAccounts(session_id, chain_id, account_index, change, start_address_index, count) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.walletengine_deriveDashAccounts(retptr, this.__wbg_ptr, session_id, ptr0, len0, account_index, change, start_address_index, count);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} chain_id
      * @param {number} address_index
      * @returns {any}
      */
@@ -585,6 +676,60 @@ export class WalletEngine {
     /**
      * @param {number} session_id
      * @param {string} chain_id
+     * @param {number} account_index
+     * @param {boolean} change
+     * @param {number} address_index
+     * @param {Uint8Array} message
+     * @returns {any}
+     */
+    prepareDashMessage(session_id, chain_id, account_index, change, address_index, message) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(message, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.walletengine_prepareDashMessage(retptr, this.__wbg_ptr, session_id, ptr0, len0, account_index, change, address_index, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} chain_id
+     * @param {number} account_index
+     * @param {string} psbt_base64
+     * @returns {any}
+     */
+    prepareDashPsbt(session_id, chain_id, account_index, psbt_base64) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(psbt_base64, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.walletengine_prepareDashPsbt(retptr, this.__wbg_ptr, session_id, ptr0, len0, account_index, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} chain_id
      * @param {number} address_index
      * @param {Uint8Array} message
      * @returns {any}
@@ -701,6 +846,58 @@ export class WalletEngine {
     /**
      * @param {number} session_id
      * @param {string} pea_request
+     * @param {string} chain_id
+     * @param {Uint8Array} message
+     * @returns {any}
+     */
+    preparePeaBitcoinMessage(session_id, pea_request, chain_id, message) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(message, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.walletengine_preparePeaBitcoinMessage(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} pea_request
+     * @param {string} chain_id
+     * @param {string} psbt_base64
+     * @returns {any}
+     */
+    preparePeaBitcoinPsbt(session_id, pea_request, chain_id, psbt_base64) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(psbt_base64, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.walletengine_preparePeaBitcoinPsbt(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} pea_request
      * @param {Uint8Array} message
      * @returns {any}
      */
@@ -760,6 +957,147 @@ export class WalletEngine {
             const ptr1 = passStringToWasm0(typed_data_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len1 = WASM_VECTOR_LEN;
             wasm.walletengine_preparePeaEvmTypedData(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} pea_request
+     * @param {any} request
+     * @returns {any}
+     */
+    preparePeaNearMessage(session_id, pea_request, request) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.walletengine_preparePeaNearMessage(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), addHeapObject(request));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} pea_request
+     * @param {any} request
+     * @returns {any}
+     */
+    preparePeaNearTransaction(session_id, pea_request, request) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.walletengine_preparePeaNearTransaction(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), addHeapObject(request));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} pea_request
+     * @param {string} execution_chain_id
+     * @param {Uint8Array} message
+     * @returns {any}
+     */
+    preparePeaSolanaMessage(session_id, pea_request, execution_chain_id, message) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(execution_chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(message, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.walletengine_preparePeaSolanaMessage(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} pea_request
+     * @param {string} execution_chain_id
+     * @param {string} transaction_base64
+     * @returns {any}
+     */
+    preparePeaSolanaTransaction(session_id, pea_request, execution_chain_id, transaction_base64) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(execution_chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(transaction_base64, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.walletengine_preparePeaSolanaTransaction(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} pea_request
+     * @param {string} chain_id
+     * @param {Uint8Array} message
+     * @returns {any}
+     */
+    preparePeaTronMessage(session_id, pea_request, chain_id, message) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(message, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.walletengine_preparePeaTronMessage(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {number} session_id
+     * @param {string} pea_request
+     * @param {any} request
+     * @returns {any}
+     */
+    preparePeaTronTransaction(session_id, pea_request, request) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.walletengine_preparePeaTronTransaction(retptr, this.__wbg_ptr, session_id, addHeapObject(pea_request), addHeapObject(request));
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -938,6 +1276,36 @@ export class WalletEngine {
             const ptr3 = passStringToWasm0(signature, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len3 = WASM_VECTOR_LEN;
             wasm.walletengine_verifyBitcoinMessage(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 !== 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {string} chain_id
+     * @param {string} address
+     * @param {Uint8Array} message
+     * @param {string} signature_base64
+     * @returns {boolean}
+     */
+    verifyDashMessage(chain_id, address, message, signature_base64) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chain_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(address, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passArray8ToWasm0(message, wasm.__wbindgen_export);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(signature_base64, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len3 = WASM_VECTOR_LEN;
+            wasm.walletengine_verifyDashMessage(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -1135,6 +1503,10 @@ function __wbg_get_imports() {
             const ret = getObject(arg0)[arg1 >>> 0];
             return addHeapObject(ret);
         },
+        __wbg_get_78f252d074a84d0b: function() { return handleError(function (arg0, arg1) {
+            const ret = Reflect.get(getObject(arg0), getObject(arg1));
+            return addHeapObject(ret);
+        }, arguments); },
         __wbg_get_c7eb1f358a7654df: function() { return handleError(function (arg0, arg1) {
             const ret = Reflect.get(getObject(arg0), getObject(arg1));
             return addHeapObject(ret);
@@ -1188,6 +1560,10 @@ function __wbg_get_imports() {
         __wbg_iterator_6f722e4a93058b71: function() {
             const ret = Symbol.iterator;
             return addHeapObject(ret);
+        },
+        __wbg_length_02c64e687322fa34: function(arg0) {
+            const ret = getObject(arg0).length;
+            return ret;
         },
         __wbg_length_1f0964f4a5e2c6d8: function(arg0) {
             const ret = getObject(arg0).length;

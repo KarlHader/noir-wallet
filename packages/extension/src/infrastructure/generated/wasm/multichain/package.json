@@ -3,7 +3,7 @@
   "type": "module",
   "description": "Security-sensitive multichain wallet core for WebAssembly",
   "version": "0.1.0",
-  "license": "SEE LICENSE IN ../../LICENSE",
+  "license": "BUSL-1.1",
   "files": [
     "wallet_wasm_bg.wasm",
     "wallet_wasm.js",

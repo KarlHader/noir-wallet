@@ -2,38 +2,38 @@
   "schemaVersion": 2,
   "engine": "multichain",
   "packageVersion": "0.1.0",
-  "abiVersion": "wallet-engine-cbd8ffb-v5",
-  "sourceCommit": "cbd8ffbb192d67a3bd19eb5a4dcc38669f5e4f7a",
+  "abiVersion": "wallet-engine-7a6dfb7-v1",
+  "sourceCommit": "7a6dfb7e0ed44bf632d3610e75b2c64f4d71143d",
   "artifacts": [
     {
       "path": "package.json",
       "role": "metadata",
-      "bytes": 384,
-      "sha256": "59f0f89d6c40a42af5650dc0129d634777916c0e77731fbac604e8162cbc8ad5"
+      "bytes": 364,
+      "sha256": "7ad0cda3b285f6bb96224d7a8844797aecffea030bfff4276884e91b7bd81ebd"
     },
     {
       "path": "wallet_wasm.d.ts",
       "role": "types",
-      "bytes": 11292,
-      "sha256": "397dfbeb64db823602783c8ad85c65db98c7026f0473978f719abb04f48a151b"
+      "bytes": 15010,
+      "sha256": "bccf110711c505f6c38a6c185749f04d912075cd9566c034a0dd211164884918"
     },
     {
       "path": "wallet_wasm.js",
       "role": "loader",
-      "bytes": 62215,
-      "sha256": "de6045b3d1e098655d71c3d90826783dd70f0e5899a08e4e8b2ee7d97f54748d"
+      "bytes": 78659,
+      "sha256": "b92fef9ef76919d20c80ad8c244bbbc12585efee79bf894d08fc8c06b27d0a44"
     },
     {
       "path": "wallet_wasm_bg.wasm",
       "role": "binary",
-      "bytes": 1703890,
-      "sha256": "c79a1fb1107a79984798972aa1e89d253221f2a8202258103190b3f777f0e783"
+      "bytes": 2429601,
+      "sha256": "b9359e8c35aa7191698d76ac84d1654a9f8e69b441a26caf83d09588e69e032c"
     },
     {
       "path": "wallet_wasm_bg.wasm.d.ts",
       "role": "binary-types",
-      "bytes": 6299,
-      "sha256": "e500f00d62eb88ca930803351f44f81da397af8efb1182224f86463e61b728cc"
+      "bytes": 8362,
+      "sha256": "49032dfdbeb9eccfdd6542005538bcaab0aa9af8a027e0b15f14cd8d2582a608"
     }
   ],
   "sourceRepository": "https://github.com/NoirWallet/multichain-wallet-wasm.git",
@@ -41,7 +41,7 @@
     "rustToolchain": "1.96.1",
     "wasmPack": "0.14.0",
     "wasmBindgen": "0.2.126",
-    "llvm": "22.1.4",
+    "llvm": "22.1.8",
     "target": "web"
   },
   "capabilities": [
