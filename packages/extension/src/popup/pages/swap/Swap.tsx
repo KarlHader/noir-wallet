@@ -741,8 +741,22 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     () => resolveSharedSwapPair(savedTokenSelection, enabledSwapChains),
     [savedTokenSelection, enabledSwapChains]
   )
-  const activeSharedPair =
-    useSharedSwapPair && swapPreferencesHydrated && swapPreferenceScope ? sharedSwapPair : undefined
+  const activeSharedPair = useMemo(() => {
+    if (!useSharedSwapPair || !swapPreferencesHydrated || !swapPreferenceScope) return undefined
+    if (
+      !shieldSwapSelected &&
+      sharedSwapPair.tokenInId &&
+      isSameSwapAsset(sharedSwapPair.tokenInId, sharedSwapPair.tokenOutId)
+    )
+      return { ...sharedSwapPair, tokenOutId: null, tokenOutSymbol: undefined }
+    return sharedSwapPair
+  }, [
+    useSharedSwapPair,
+    swapPreferencesHydrated,
+    swapPreferenceScope,
+    shieldSwapSelected,
+    sharedSwapPair
+  ])
   const defaultShieldZecSource: ShieldSwapZecSourceKind =
     nativeZecShieldAvailable &&
     nativeZecConfidentialAvailable &&
@@ -2511,12 +2525,23 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   )
   const isDestinationEligible = useCallback(
     (token: RheaSwapToken, source: RheaSwapToken | null) =>
+      (!ordinarySwapRequested ||
+        shieldNativeZecSwap ||
+        !isZecToken(token) ||
+        (hasManagedZcashDestination && !isZecToken(source))) &&
       (!privateDestinationSelectionRequested || isConfidentialSwapDestinationSupported(token)) &&
       (!privateSwapRequested ||
         ((isZecToken(token) ? !isZecToken(source) : /^[1-9]\d*$/.test(token.rheaChainId)) &&
           (supportsPrivateDestination(token, 'main') ||
             supportsPrivateDestination(token, 'private')))),
-    [privateDestinationSelectionRequested, privateSwapRequested, supportsPrivateDestination]
+    [
+      ordinarySwapRequested,
+      shieldNativeZecSwap,
+      hasManagedZcashDestination,
+      privateDestinationSelectionRequested,
+      privateSwapRequested,
+      supportsPrivateDestination
+    ]
   )
   const pairSourceTokens = privateSwapRequested ? privateSwapSourceTokens : swap.sourceTokens
   const pairWalletSources = privateSwapRequested
@@ -3506,7 +3531,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       !resolvedRefundAddress ||
       !nativeZecConfidentialAvailable ||
       !nativeZecShieldAvailable ||
-      zcashAmountError ||
       currentNetwork !== 'mainnet'
     )
       return null
@@ -3558,7 +3582,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     resolvedRefundAddress,
     nativeZecConfidentialAvailable,
     nativeZecShieldAvailable,
-    zcashAmountError,
     currentNetwork,
     portfolio,
     nativeIntentsManagedAssets,
@@ -7406,10 +7429,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         tokenInSymbol={
           activeSharedPair?.tokenInSymbol ??
           findSavedSwapToken(swap.sourceTokens, activeSharedPair?.tokenInId)?.symbol
-        }
-        tokenOutSymbol={
-          activeSharedPair?.tokenOutSymbol ??
-          findSavedSwapToken(swap.destinationTokens, activeSharedPair?.tokenOutId)?.symbol
         }
         isZecSource={swap.isZecSource}
         isZecDestination={isZecDestination && !shieldNativeZecSwap}

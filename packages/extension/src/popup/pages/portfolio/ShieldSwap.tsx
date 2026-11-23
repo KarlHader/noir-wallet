@@ -1083,22 +1083,26 @@ function ShieldSwapForm({
             },
             ...(showReviewMore
               ? [
-                  {
-                    label: 'Fee',
-                    content: (
-                      <>
-                        {(feePercent > 0 || feeAmount === null) && `${feePercent}%`}
-                        {feePercent > 0 && feeAmount !== null && ' + '}
-                        {feeAmount !== null && (
-                          <AmountDisplay
-                            value={feeAmount}
-                            symbol={formatSymbol(prepared.to.asset.metadata.symbol)}
-                            profile="fee"
-                          />
-                        )}
-                      </>
-                    )
-                  },
+                  ...(feePercent > 0 || feeAmount !== null
+                    ? [
+                        {
+                          label: 'Fee',
+                          content: (
+                            <>
+                              {feePercent > 0 && `${feePercent}%`}
+                              {feePercent > 0 && feeAmount !== null && ' + '}
+                              {feeAmount !== null && (
+                                <AmountDisplay
+                                  value={feeAmount}
+                                  symbol={formatSymbol(prepared.to.asset.metadata.symbol)}
+                                  profile="fee"
+                                />
+                              )}
+                            </>
+                          )
+                        }
+                      ]
+                    : []),
                   {
                     label: 'Slippage',
                     content: `${(prepared.request.slippageBps / 100).toString()}%`
