@@ -509,6 +509,10 @@ html[data-surface='side-panel'] #root {
   flex-shrink: 0;
 }
 
+[data-slot='dialog-scroll']:has(> [data-activity-detail-id]) {
+  @apply -me-6 pe-6;
+}
+
 * {
   scrollbar-color: transparent transparent;
   scrollbar-width: thin;

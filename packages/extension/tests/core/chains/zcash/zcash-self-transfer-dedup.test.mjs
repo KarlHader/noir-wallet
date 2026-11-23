@@ -68,3 +68,42 @@ test('preserves the transparent receive side of an Unshield transaction', () => 
     receivedSide
   ])
 })
+
+test('only projects a Public ZEC credit for an owned transparent recipient', () => {
+  const chainId = ZCASH_CHAIN_IDS.mainnet
+  const amount = { assetId: `${chainId}/slip44:133`, amountRaw: '90000' }
+  const publicReceipts = address => {
+    const source = {
+      id: 'tx:confidential:send',
+      source: 'wallet-v2',
+      scope: { keyDomainId: 'wallet:activity', accountId: 'account:activity' },
+      kind: 'withdraw',
+      status: 'final',
+      snapshot: {
+        direction: 'outgoing',
+        shield: { operation: 'withdraw', sourceDomain: 'shield', destinationDomain: 'public' },
+        recipient: { chainId, address },
+        counterAmount: amount
+      },
+      segments: [
+        {
+          id: 'destination',
+          role: 'destination',
+          status: 'final',
+          target: { kind: 'onchain', chainId },
+          evidence: { transactionHash: 'a'.repeat(64), settledAmount: amount }
+        }
+      ]
+    }
+    return filterActivityItems({
+      items: [source],
+      domain: 'public',
+      selectedChainIds: [chainId],
+      executionAddressModes: new Map([[`${chainId}:${address}`, 'Public']])
+    })
+  }
+  expect(publicReceipts('u1wallet')).toEqual([])
+  expect(publicReceipts('t1wallet')).toMatchObject([
+    { kind: 'receive', snapshot: { primaryAmount: amount } }
+  ])
+})

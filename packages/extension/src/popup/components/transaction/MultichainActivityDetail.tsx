@@ -613,7 +613,13 @@ export function MultichainActivityDetail({
                 </>
               ) : (
                 <AccountDomainBadge
-                  domain={visibleItem.accountMode === 'private' ? 'private' : 'public'}
+                  domain={
+                    visibleItem.assetDomains?.includes('shield')
+                      ? 'shield'
+                      : visibleItem.accountMode === 'private'
+                        ? 'private'
+                        : 'public'
+                  }
                 />
               )}
             </span>

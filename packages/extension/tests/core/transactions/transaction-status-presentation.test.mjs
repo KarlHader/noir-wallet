@@ -125,7 +125,7 @@ test('Intents Activity identifies the observed cross-chain stage', () => {
     label: 'Cross-chain processing'
   })
   expect(getActivityProgressSteps(otherRouter, chainId => chainId).map(step => step.label)).toEqual(
-    ['Origin transaction', 'Cross-chain', 'Destination transaction']
+    ['Origin transaction', 'Crosschain', 'Destination transaction']
   )
 })
 

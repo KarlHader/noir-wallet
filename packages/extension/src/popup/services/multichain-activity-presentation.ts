@@ -654,7 +654,7 @@ function getActivitySegmentLabel(segment: ActivitySegment, item?: ActivityItem):
       return isSignedOrderOrigin(segment) ? 'Order submitted' : 'Origin transaction'
     case 'relay': {
       if (segment.target.kind !== 'onchain' && isInternalSwapProvider(segment.target.provider)) {
-        return 'Cross-chain'
+        return 'Crosschain'
       }
       return isIntentsRelaySegment(segment, item) ? 'Intents processing' : 'Cross-chain'
     }
@@ -735,6 +735,7 @@ export function getActivityDetailTitle(
 
 function isConfidentialFundingActivity(item: ActivityItem): boolean {
   return (
+    item.kind !== 'receive' &&
     !item.snapshot?.shield &&
     item.segments.some(
       segment =>

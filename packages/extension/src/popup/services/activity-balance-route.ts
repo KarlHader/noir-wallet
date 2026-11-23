@@ -4,7 +4,9 @@ import {
   type ActivityBalanceDomain
 } from '@/core/activity/activity-balance-domains'
 import { parseAssetId } from '@/core/chains/registry'
+import { ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import type { TransactionAssetAmount } from '@/core/transactions/domain'
+import { supportsZcashMemo } from '@/lib/zcash-memo'
 
 export type ActivityExecutionAddressModes = ReadonlyMap<string, 'Public' | 'Confidential'>
 export {
@@ -134,6 +136,14 @@ export function projectActivityReceipts(
     )
       continue
     const shield = snapshot.shield
+    if (
+      shield &&
+      domain === 'public' &&
+      (recipient.chainId === ZCASH_CHAIN_IDS.mainnet ||
+        recipient.chainId === ZCASH_CHAIN_IDS.testnet) &&
+      supportsZcashMemo(recipient.address)
+    )
+      continue
     const settlement = shield ? undefined : resolveOwnedActivitySettlement(item, modes)
     const ownedMode = getActivityAddressMode(modes, recipient.chainId, recipient.address)
     const recipientIsOwned =
@@ -180,20 +190,32 @@ export function projectActivityReceipts(
         if (receipts.has(key)) continue
         receipts.add(key)
       }
+      const fundingAccount =
+        shieldCredit && shield?.operation === 'deposit'
+          ? item.segments.find(segment => segment.role === 'relay')?.target
+          : undefined
+      const sender =
+        fundingAccount?.kind === 'protocol' &&
+        fundingAccount.provider === 'Confidential Intents' &&
+        fundingAccount.account &&
+        snapshot.sender
+          ? { chainId: snapshot.sender.chainId, address: fundingAccount.account }
+          : undefined
       projected.push({
         id: `receive:${segment.id}`,
         source: item.source,
         scope: item.scope,
         kind: 'receive',
         ...(domain === 'private' ? { accountMode: 'private' as const } : {}),
-        ...(domain === 'shield' && !shieldCredit ? { assetDomains: ['shield'] as const } : {}),
+        ...(domain === 'shield' ? { assetDomains: ['shield'] as const } : {}),
         status: 'final',
         completeness: 'complete',
         snapshot: {
           schemaVersion: 1,
           direction: 'incoming',
           primaryAmount: { assetId: amount.assetId, amountRaw: amount.amountRaw },
-          recipient
+          ...(sender ? { sender } : {}),
+          ...(shieldCredit ? {} : { recipient })
         },
         segments: [
           {

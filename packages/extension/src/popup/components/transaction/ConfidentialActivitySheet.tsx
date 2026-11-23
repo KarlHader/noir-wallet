@@ -291,6 +291,7 @@ export function ConfidentialActivityView({
                   ? 'Transaction Failed'
                   : progressTitle
         }
+        onClose={!inDialog && display?.operation === 'swap' ? onDone : undefined}
         footer={
           <div className="space-y-2">
             {scopedActivity && (

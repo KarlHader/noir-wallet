@@ -1,10 +1,16 @@
 import { cn } from '@/lib/utils'
+import { resolveEvmChainIconAlias } from '@/config/icons'
 import type { ActivityItem } from '@/core/activity'
 import { TokenIcon } from '../tokens/TokenIcon'
 import {
   hasMatchingActivityTokenIcons,
   type ActivitySwapPresentation
 } from '@/popup/services/multichain-activity-presentation'
+
+function evmAssetChain(assetId?: string): string | undefined {
+  const network = /^(?:eip155|rhea):([1-9]\d*)\//.exec(assetId ?? '')?.[1]
+  return network ? resolveEvmChainIconAlias(`eip155:${network}`) : undefined
+}
 
 export function ActivityRouteTokenIcons({
   item,
@@ -18,7 +24,10 @@ export function ActivityRouteTokenIcons({
   const exchange = item.snapshot?.shield
     ? item.snapshot.shield.operation === 'swap'
     : item.kind === 'swap' && item.snapshot?.protocol?.userAction !== 'transfer'
-  const singleAsset = !exchange || hasMatchingActivityTokenIcons(route)
+  const sourceChain = size === 'detail' ? evmAssetChain(route.source?.assetId) : undefined
+  const destinationChain = size === 'detail' ? evmAssetChain(route.destination?.assetId) : undefined
+  const singleAsset =
+    !exchange || (sourceChain === destinationChain && hasMatchingActivityTokenIcons(route))
   const primaryAsset =
     !exchange && route.isExternalDeposit
       ? (route.destination ?? route.source)
@@ -36,6 +45,7 @@ export function ActivityRouteTokenIcons({
         assetId={primaryAsset?.assetId}
         symbol={primaryAsset?.symbol ?? 'Asset'}
         icon={primaryAsset?.iconUrl}
+        blockchain={primaryAsset === route.destination ? destinationChain : sourceChain}
         size={iconSize}
         className="absolute left-0 top-0"
       />
@@ -44,6 +54,7 @@ export function ActivityRouteTokenIcons({
           assetId={route.destination?.assetId}
           symbol={route.destination?.symbol ?? 'Asset'}
           icon={route.destination?.iconUrl}
+          blockchain={destinationChain}
           size={iconSize}
           className={cn(
             'absolute top-0 rounded-full ring-2 ring-background',
