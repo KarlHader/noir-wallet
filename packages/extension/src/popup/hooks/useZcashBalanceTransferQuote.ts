@@ -24,12 +24,14 @@ export function useZcashBalanceTransferQuote({
   scope,
   amount,
   available,
+  slippageBps,
   reviewing,
   confirmationInFlight
 }: {
   readonly scope: ZcashTransferQuoteScope | null
   readonly amount: string
   readonly available: string
+  readonly slippageBps: number
   readonly reviewing: boolean
   readonly confirmationInFlight: RefObject<boolean>
 }) {
@@ -48,7 +50,8 @@ export function useZcashBalanceTransferQuote({
           scope.accountId,
           scope.fundingSource,
           scope.refundAddress,
-          amount
+          amount,
+          slippageBps
         ])
       : null
   const key = reviewScope ? JSON.stringify([reviewScope, retryCount]) : null
@@ -106,7 +109,7 @@ export function useZcashBalanceTransferQuote({
         refundAddress,
         recipientType: 'CONFIDENTIAL_INTENTS',
         fundingSource,
-        slippageBps: 50
+        slippageBps
       })
         .then(review => {
           preparedQuoteId = review.quoteId

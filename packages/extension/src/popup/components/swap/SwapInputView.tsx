@@ -142,8 +142,6 @@ interface SwapInputViewProps {
   onSwitchTokens: () => void
   onRetryTokenCatalog: () => void
   onRetryQuote?: () => void
-  onOpenSlippageSetting: () => void
-  showSlippageSetting?: boolean
   onGetQuote: () => void
 }
 
@@ -636,8 +634,6 @@ export function SwapInputView({
   onSwitchTokens,
   onRetryTokenCatalog,
   onRetryQuote,
-  onOpenSlippageSetting,
-  showSlippageSetting = true,
   onGetQuote
 }: SwapInputViewProps) {
   const [showRefundAddress, setShowRefundAddress] = useState(false)
@@ -853,33 +849,8 @@ export function SwapInputView({
           </div>
         )}
 
-        {!hasQuoteDetails && showSlippageSetting !== false && (
-          <button
-            type="button"
-            onClick={onOpenSlippageSetting}
-            className="mt-2 flex w-full items-center justify-end gap-1 text-xs font-medium leading-4 text-muted hover:text-foreground"
-            aria-label={`Set slippage, currently ${slippage}%`}
-          >
-            Slippage {slippage}%
-            <Icon icon="lucide:chevron-down" width={12} height={12} />
-          </button>
-        )}
-
         {hasQuoteDetails && !showProviderCard && (
           <div className="mt-3 space-y-2 rounded-lg border border-white/15 px-2.5 py-2.5 text-xs font-medium leading-4">
-            {showSlippageSetting && (
-              <div className="flex min-w-0 items-center justify-between gap-2">
-                <span className="text-muted">Slippage</span>
-                <button
-                  type="button"
-                  onClick={onOpenSlippageSetting}
-                  className="flex shrink-0 items-center gap-1 hover:text-primary"
-                  aria-label={`Set slippage, currently ${slippage}%`}
-                >
-                  {slippage}% <Icon icon="lucide:chevron-down" width={12} height={12} />
-                </button>
-              </div>
-            )}
             {providerName && !showProviderCard && (
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <span className="text-muted">Provider</span>

@@ -754,6 +754,8 @@ export class ConfidentialFundingCoordinator {
     const chain = parseChainId(input.source.chainId)
     const isZcash = chain.id === getZcashChainId(this.options.network)
     const asset = this.options.assets.get(input.source.assetId)
+    const minimumMode = input.source.amountRaw === undefined
+    const slippageBps = input.slippageBps === undefined ? (minimumMode ? 0 : 50) : input.slippageBps
     if (
       input.network !== this.options.network ||
       (!isZcash && chain.namespace !== 'eip155') ||
@@ -761,6 +763,9 @@ export class ConfidentialFundingCoordinator {
       !asset ||
       !this.hasExternalDepositAsset(input.source) ||
       (input.source.amountRaw !== undefined && !isPositiveRaw(input.source.amountRaw)) ||
+      !Number.isSafeInteger(slippageBps) ||
+      slippageBps < 0 ||
+      slippageBps > 10_000 ||
       !isBoundedLabel(input.source.chainName) ||
       !isBoundedLabel(input.keyDomainId, 512) ||
       !isBoundedLabel(input.accountId, 512) ||
@@ -826,6 +831,7 @@ export class ConfidentialFundingCoordinator {
           : existing.amountMode === 'minimum' ||
             existing.source.amountRaw !== input.source.amountRaw) ||
         existing.refundAddress !== input.refundAddress ||
+        existing.slippageBps !== slippageBps ||
         existing.signerId !== identity.address
       ) {
         throw new Error('External Shield deposit request ID was reused with different details')
@@ -845,13 +851,13 @@ export class ConfidentialFundingCoordinator {
       }
       return existing
     }
-    const minimumMode = input.source.amountRaw === undefined
     setStage('quote')
     const quote = minimumMode
       ? await this.options.api.quoteFlexibleDeposit({
           originAsset: input.source.protocolAssetId,
           signerId: identity.address,
-          refundTo: input.refundAddress
+          refundTo: input.refundAddress,
+          slippageBps
         })
       : await this.options.api.quote({
           referral: NOIR_RECEIVE_REFERRAL,
@@ -864,7 +870,7 @@ export class ConfidentialFundingCoordinator {
           depositType: 'ORIGIN_CHAIN',
           refundType: 'ORIGIN_CHAIN',
           recipientType: 'CONFIDENTIAL_INTENTS',
-          slippageBps: 50,
+          slippageBps,
           dry: false
         })
     const amountRaw = minimumMode ? quote.quote.amountIn : input.source.amountRaw!
@@ -878,7 +884,7 @@ export class ConfidentialFundingCoordinator {
       depositType: 'ORIGIN_CHAIN' as const,
       refundType: 'ORIGIN_CHAIN' as const,
       recipientType: 'CONFIDENTIAL_INTENTS' as const,
-      slippageBps: minimumMode ? 0 : 50
+      slippageBps
     }
     if (minimumMode) assertFlexibleExternalDepositQuoteBinding(quote, binding, this.now())
     else assertConfidentialQuoteBinding(quote, binding, this.now())

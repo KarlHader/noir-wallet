@@ -976,11 +976,12 @@ export class ConfidentialFundingApi {
     readonly originAsset: string
     readonly signerId: string
     readonly refundTo: string
+    readonly slippageBps: number
   }): Promise<ConfidentialQuote> {
     const request = {
       dry: true,
       swapType: 'FLEX_INPUT',
-      slippageTolerance: 0,
+      slippageTolerance: input.slippageBps,
       originAsset: input.originAsset,
       depositType: 'ORIGIN_CHAIN',
       destinationAsset: input.originAsset,
@@ -1014,7 +1015,7 @@ export class ConfidentialFundingApi {
           depositType: 'ORIGIN_CHAIN',
           refundType: 'ORIGIN_CHAIN',
           recipientType: 'CONFIDENTIAL_INTENTS',
-          slippageBps: 0
+          slippageBps: input.slippageBps
         },
         Date.now(),
         true
@@ -1044,7 +1045,7 @@ export class ConfidentialFundingApi {
       depositType: 'ORIGIN_CHAIN',
       refundType: 'ORIGIN_CHAIN',
       recipientType: 'CONFIDENTIAL_INTENTS',
-      slippageBps: 0
+      slippageBps: input.slippageBps
     })
     return quote
   }

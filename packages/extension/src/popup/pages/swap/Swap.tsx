@@ -111,7 +111,7 @@ import { transactionFailedBeforeBroadcast } from '@/core/transactions/transactio
 
 import { SwapTokenSelector } from '../../components/swap/SwapTokenSelector'
 import { isBundledWalletAsset } from '@/popup/services/token-display-policy'
-import { SlippageSettingContent, SwapSettingsButton } from '../../components/swap/SlippageSetting'
+import { SwapSettingsButton } from '../../components/swap/SwapSettings'
 import { SwapReviewView } from '../../components/swap/SwapReviewView'
 import { SwapInputView } from '../../components/swap/SwapInputView'
 import { CrossChainSendFormView } from '../../components/transaction/CrossChainSendFormView'
@@ -755,8 +755,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     swapPreferenceScope,
     defaultShieldZecSource
   ])
-  const storedQuoteMode = useSwapPreferences(state => state.quoteMode)
-  const setQuoteMode = useSwapPreferences(state => state.setQuoteMode)
+  const quoteMode = useSwapPreferences(state => state.quoteMode)
   const defaultSwapChainId =
     storageV2Account?.walletSource.kind === 'private-key'
       ? (storageV2Account.networks.find(
@@ -1573,8 +1572,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     searchParams.get('balanceDomain') === 'shield' &&
     searchParams.get('fundingSource') === 'shielded' &&
     !searchParams.has('shieldZecSource')
-  const showSwapSettings = ordinarySwapRequested && !lockedAssetFlowRequested
-  const quoteMode = showSwapSettings && storedQuoteMode === 'fast' ? 'fast' : 'best-price'
   const requestedFundingSource =
     privateSwapRequested && swap.isZecSource
       ? 'shielded'
@@ -6020,35 +6017,16 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     walletSourcesScope
   ])
 
-  const handleOpenSlippageSetting = useCallback(async () => {
-    await openModal({
-      title: showSwapSettings ? 'Swap Settings' : 'Slippage Tolerance',
-      showCloseButton: true,
-      body: (_resolve, close) => (
-        <SlippageSettingContent
-          currentSlippage={swap.slippage}
-          currentQuoteMode={
-            showSwapSettings && !confidentialShieldSwapActive ? quoteMode : undefined
-          }
-          onSave={(newSlippage, newQuoteMode) => {
-            reviewAfterQuoteRefresh.current = null
-            if (swap.slippage !== newSlippage || (newQuoteMode && newQuoteMode !== quoteMode)) {
-              quoteRequestSequence.current += 1
-              setQuoteResult(null)
-              setRheaReview(null)
-              setLiveQuoteKey(null)
-              setQuoteReceivedAt(null)
-              swap.setAmountOut('')
-              swap.setDepositAddress('')
-            }
-            swap.setSlippage(newSlippage)
-            if (newQuoteMode) setQuoteMode(newQuoteMode)
-            close()
-          }}
-        />
-      )
-    })
-  }, [showSwapSettings, confidentialShieldSwapActive, quoteMode, setQuoteMode, swap])
+  const invalidateQuoteForSettings = () => {
+    reviewAfterQuoteRefresh.current = null
+    quoteRequestSequence.current += 1
+    setQuoteResult(null)
+    setRheaReview(null)
+    setLiveQuoteKey(null)
+    setQuoteReceivedAt(null)
+    swap.setAmountOut('')
+    swap.setDepositAddress('')
+  }
 
   const handleSelectProviderRoute = async (routeIndex: number) => {
     if (
@@ -7213,7 +7191,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           canGetQuote={canGetQuote && !bitcoinMaximumLoading}
           actionLoading={isPreparingReview || feeLoading || bitcoinMaximumLoading}
           providerName={activeQuote?.router}
-          slippage={swap.slippage}
           onAmountChange={value => {
             reviewAfterQuoteRefresh.current = null
             setMaxSelected(false)
@@ -7245,7 +7222,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                     }
                   : undefined
           }
-          onOpenSlippage={handleOpenSlippageSetting}
           onReview={() => void reviewLiveQuote()}
         />
       )
@@ -7488,8 +7464,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 }
               : undefined
         }
-        onOpenSlippageSetting={handleOpenSlippageSetting}
-        showSlippageSetting={!showSwapSettings}
         onGetQuote={() => {
           void reviewLiveQuote()
         }}
@@ -7671,10 +7645,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             }
             {...(viewStep === 'approval-pending' ? {} : getHeaderProps())}
             rightContent={
-              ordinarySwapInput && showSwapSettings ? (
+              viewStep === 'input' ? (
                 <SwapSettingsButton
-                  disabled={swapControlsDisabled}
-                  onClick={() => void handleOpenSlippageSetting()}
+                  disabled={swapControlsDisabled || crossChainDraftPending}
+                  onChange={invalidateQuoteForSettings}
                 />
               ) : undefined
             }

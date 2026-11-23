@@ -362,8 +362,7 @@ function parseExternalDeposit(value: unknown): ExternalShieldDeposit {
     value.quote.quoteRequest.swapType !==
       (value.amountMode === 'minimum' ? 'FLEX_INPUT' : 'EXACT_INPUT') ||
     (value.amountMode === 'minimum' &&
-      (value.slippageBps !== 0 ||
-        value.quote.quoteRequest.dry !== false ||
+      (value.quote.quoteRequest.dry !== false ||
         !isRawAmount(value.quote.quote.minAmountIn, true) ||
         BigInt(value.quote.quote.minAmountIn as string) > BigInt(value.amountRaw))) ||
     value.quote.quoteRequest.confidentiality !== 'basic' ||

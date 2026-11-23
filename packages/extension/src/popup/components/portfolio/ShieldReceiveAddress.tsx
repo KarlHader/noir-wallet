@@ -51,6 +51,7 @@ export interface ShieldReceiveAddressProps {
   readonly accountCatalog: AccountNetworksCatalogView | null
   readonly asset: { assetId: string; token: SwapToken; chain: ChainDefinition } | null
   readonly zcashAddress?: string
+  readonly slippageBps: number
   readonly enabled: boolean
 }
 
@@ -78,6 +79,7 @@ export function ShieldReceiveAddress({
   accountCatalog,
   asset,
   zcashAddress,
+  slippageBps,
   enabled
 }: ShieldReceiveAddressProps) {
   const walletId = account?.walletId ?? ''
@@ -87,7 +89,7 @@ export function ShieldReceiveAddress({
   scopeRef.current = scope
   const mounted = useRef(false)
   const busyRef = useRef(false)
-  const requestIdRef = useRef<string | null>(null)
+  const pendingRequest = useRef<{ id: string; slippageBps: number } | null>(null)
   const refreshInFlight = useRef(new Map<string, Promise<ExternalShieldDeposit>>())
   const pollDelay = useRef(20_000)
   const { copyToClipboard, showToast, isCopied } = useCopyToClipboard()
@@ -114,7 +116,7 @@ export function ShieldReceiveAddress({
     setError(null)
     setCheckError(null)
     setChecked(false)
-    requestIdRef.current = null
+    pendingRequest.current = null
   }, [scope])
 
   const currentRecord =
@@ -222,8 +224,11 @@ export function ShieldReceiveAddress({
     }
     const requestScope = scope
     const requestWallet = useWalletStore.getState()
-    const requestId = requestIdRef.current ?? crypto.randomUUID()
-    requestIdRef.current = requestId
+    const requestId =
+      pendingRequest.current?.slippageBps === slippageBps
+        ? pendingRequest.current.id
+        : crypto.randomUUID()
+    pendingRequest.current = { id: requestId, slippageBps }
     busyRef.current = true
     setBusy(true)
     try {
@@ -238,6 +243,7 @@ export function ShieldReceiveAddress({
           protocolAssetId: asset.token.assetId
         },
         refundAddress: refundAddress.trim(),
+        slippageBps,
         requestId
       })
       const currentWallet = useWalletStore.getState()
@@ -252,13 +258,14 @@ export function ShieldReceiveAddress({
       if (
         !sameScope(created, network, walletId, accountId) ||
         created.source.assetId !== sourceAssetId ||
-        created.source.protocolAssetId !== asset.token.assetId
+        created.source.protocolAssetId !== asset.token.assetId ||
+        created.slippageBps !== slippageBps
       )
         throw new Error('Receiving address scope mismatch')
       setRecord(created)
       setNow(Date.now())
       setOpen(true)
-      requestIdRef.current = null
+      pendingRequest.current = null
     } catch (cause) {
       if (mounted.current && scopeRef.current === requestScope)
         setError(externalShieldDepositFailureMessage(cause))
@@ -558,7 +565,7 @@ export function ShieldReceiveAddress({
                         setRecord(null)
                         setOpen(false)
                         setError(null)
-                        requestIdRef.current = null
+                        pendingRequest.current = null
                       }}
                       className="wallet-interactive text-sm text-primary hover:underline"
                     >

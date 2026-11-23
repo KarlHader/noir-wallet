@@ -307,6 +307,8 @@ export function useZcashTransfer({
         Boolean(moveUnavailableReason)
       : !selfMove || Boolean(moveUnavailableReason))
   const { sendTransaction } = useTransaction()
+  const slippage = useSwapPreferences(state => state.slippage)
+  const quoteMode = useSwapPreferences(state => state.quoteMode)
   const sourceBalance = getFundingBalance(balance, fundingSource)
   const {
     quote: moveQuote,
@@ -339,6 +341,7 @@ export function useZcashTransfer({
         : null,
     amount,
     available: sourceBalance.available,
+    slippageBps: Math.round(slippage * 100),
     reviewing: showReview,
     confirmationInFlight
   })
@@ -379,8 +382,6 @@ export function useZcashTransfer({
     !getFundingSourceUnavailableReason(currentWallet?.keySource, 'transparent')
   const sendPrivately = privateSendAvailable && privateSendScope === privacyScope
   const usesBufferedMaximum = isConfidentialMove || sendPrivately
-  const slippage = useSwapPreferences(state => state.slippage)
-  const setSlippage = useSwapPreferences(state => state.setSlippage)
   const cachedAssetPrices = useCachedAssetPrices(currentNetwork, active && usesBufferedMaximum)
   const memoUnsupported = Boolean(!isSelfMove && !sendPrivately && memo && !recipientSupportsMemo)
   const {
@@ -397,7 +398,8 @@ export function useZcashTransfer({
     amount,
     available: sourceBalance.available,
     feeTier,
-    slippage
+    slippage,
+    quoteMode
   })
   useEffect(() => {
     if (isSelfMove || !currentWalletId || !currentAccountId) return
@@ -1168,7 +1170,6 @@ export function useZcashTransfer({
     ],
     route: {
       confidential: isConfidentialMove || sendPrivately,
-      slippage: sendPrivately ? { value: slippage, onChange: setSlippage } : undefined,
       feeControl: sendPrivately ? null : feeControl,
       allowFeeFallback: !feeRequired,
       routeCost: privateRoute

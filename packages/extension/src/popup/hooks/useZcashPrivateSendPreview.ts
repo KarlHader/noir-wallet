@@ -6,7 +6,7 @@ import { isPublicPrivateSendRecipient } from '@/popup/services/evm-send-validati
 import { buildZcashPublicPrivateSendPreviewRequest } from '@/popup/services/public-private-send-preview'
 import { rheaSwapClient, getRheaSwapErrorMessage } from '@/popup/services/rhea-swap-client'
 import { isRheaSwapQuoteFresh, getRheaSwapQuoteDeadline } from '@/popup/services/swap-page-model'
-import type { RheaSwapQuoteView } from '@/core/services/rhea-swap'
+import type { RheaSwapQuoteMode, RheaSwapQuoteView } from '@/core/services/rhea-swap'
 
 export function useZcashPrivateSendPreview({
   enabled,
@@ -16,7 +16,8 @@ export function useZcashPrivateSendPreview({
   amount,
   available,
   feeTier,
-  slippage
+  slippage,
+  quoteMode
 }: {
   readonly enabled: boolean
   readonly scopeKey: string
@@ -26,6 +27,7 @@ export function useZcashPrivateSendPreview({
   readonly available: string
   readonly feeTier: FeeTier
   readonly slippage: number
+  readonly quoteMode: RheaSwapQuoteMode
 }) {
   const [preview, setPreview] = useState<{
     key: string
@@ -40,7 +42,7 @@ export function useZcashPrivateSendPreview({
     isPublicPrivateSendRecipient(ZEC_ZCASH_ASSET, recipient) &&
     safeBig(amount || '0').gt(0) &&
     safeBig(amount || '0').lte(available)
-      ? JSON.stringify([scopeKey, sender, recipient, amount, feeTier, slippage])
+      ? JSON.stringify([scopeKey, sender, recipient, amount, feeTier, slippage, quoteMode])
       : null
   const currentKey = useRef(key)
   currentKey.current = key
@@ -66,6 +68,7 @@ export function useZcashPrivateSendPreview({
             destinationTokens: destination.tokens,
             amount,
             slippage,
+            quoteMode,
             sender,
             recipient
           })

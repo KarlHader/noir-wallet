@@ -376,6 +376,7 @@ it('binds the Public to Private preview to its account, quote inputs and fee con
     amount: '0.5',
     amountRaw: '500000',
     slippage: 1,
+    quoteMode: 'fast',
     feeSelectionKey: 'standard',
     sourceToken: token,
     destinationToken: token
@@ -384,6 +385,7 @@ it('binds the Public to Private preview to its account, quote inputs and fee con
   assert.equal(preview.key, createPublicPrivateSendPreviewKey(input))
   assert.equal(preview.request.confidentiality, 'basic')
   assert.equal(preview.request.amountIn, '500000')
+  assert.equal(preview.request.quoteMode, 'fast')
   for (const changed of [
     { walletId: 'wallet-b' },
     { accountId: 'account-b' },
@@ -395,6 +397,7 @@ it('binds the Public to Private preview to its account, quote inputs and fee con
     { recipient: `0x${'3'.repeat(40)}` },
     { amount: '0.6', amountRaw: '600000' },
     { slippage: 2 },
+    { quoteMode: 'best-price' },
     { feeSelectionKey: 'fast' }
   ]) {
     assert.notEqual(createPublicPrivateSendPreviewKey({ ...input, ...changed }), preview.key)

@@ -1,6 +1,6 @@
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import type { PortfolioReadModel } from '@/core/portfolio'
-import type { RheaSwapToken } from '@/core/services/rhea-swap'
+import type { RheaSwapQuoteMode, RheaSwapToken } from '@/core/services/rhea-swap'
 import { getSendRouteCostFromAmounts } from './send-route-cost'
 import { preferWalletEvmQuoteToken } from './token-address-discovery'
 import {
@@ -71,6 +71,7 @@ export function buildZcashPublicPrivateSendPreviewRequest(input: {
   readonly sender: string
   readonly recipient: string
   readonly slippage: number
+  readonly quoteMode: RheaSwapQuoteMode
 }): ReturnType<typeof buildLiveSwapQuoteRequest> {
   const tokenIn = input.sourceTokens.find(
     token => token.assetId === ZEC_ZCASH_ASSET && token.blockchain === 'zec'
@@ -84,6 +85,7 @@ export function buildZcashPublicPrivateSendPreviewRequest(input: {
     tokenOut,
     amountIn: input.amount,
     slippage: input.slippage,
+    quoteMode: input.quoteMode,
     refundAddress: input.sender,
     recipientAddress: input.recipient,
     confidentiality: 'basic',
@@ -106,6 +108,7 @@ interface PublicPrivateSendPreviewIdentity {
   readonly recipient: string
   readonly amountRaw: string
   readonly slippage: number
+  readonly quoteMode: RheaSwapQuoteMode
   readonly feeSelectionKey: string
 }
 
@@ -143,6 +146,7 @@ export function createPublicPrivateSendPreviewKey(
     input.recipient,
     input.amountRaw,
     input.slippage,
+    input.quoteMode,
     input.feeSelectionKey
   ])
 }
@@ -171,6 +175,7 @@ export function buildPublicPrivateSendPreviewRequest(
     tokenOut: input.destinationToken,
     amountIn: input.amount,
     slippage: input.slippage,
+    quoteMode: input.quoteMode,
     refundAddress: input.sender,
     recipientAddress: input.recipient,
     confidentiality: 'basic',

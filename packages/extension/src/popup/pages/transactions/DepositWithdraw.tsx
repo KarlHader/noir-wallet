@@ -24,6 +24,8 @@ import { getSwapQuoteFailureMessage } from '@/popup/services/swap-quote-error-me
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useSettingsStore } from '@/store/settings-store'
+import { useSwapPreferences } from '@/store/swap-store'
+import { SwapSettingsButton } from '@/popup/components/swap/SwapSettings'
 import { useNavigate } from '@/popup/provider/Router'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
@@ -413,6 +415,8 @@ function NativeZcashReceiveForm({
 
 function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean }) {
   const [params] = useSearchParams()
+  const slippageBps = useSwapPreferences(state => Math.round(state.slippage * 100))
+  const quoteMode = useSwapPreferences(state => state.quoteMode)
   const location = useLocation()
   const routerNavigate = useRouterNavigate()
   const walletMode =
@@ -1354,7 +1358,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       amountRaw,
       asset: selected!.asset,
       chain: selected!.chain,
-      managed: managedAsset!
+      managed: managedAsset!,
+      slippageBps
     })
   const maxAmount =
     selected && maximumRaw !== null
@@ -1397,7 +1402,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     }
   }, [selected, currentAmount])
   const directRecipient = crossChainPrivateTransfer ? targetAddress : source?.recipient
-  const methodEstimateKey = `${routeKey}:${estimateAmountRaw ?? ''}:${source?.sender}:${directRecipient}:${source?.executionMode}:${retry}`
+  const methodEstimateKey = `${routeKey}:${estimateAmountRaw ?? ''}:${source?.sender}:${directRecipient}:${source?.executionMode}:${slippageBps}:${retry}`
   const canEstimateMethods = Boolean(
     draftScope === scopeKey &&
     (clusterPair || crossChainPrivateTransfer) &&
@@ -1409,7 +1414,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   )
   const directEstimate = useBalanceTransferEstimate({
     enabled: canEstimateMethods && methodAvailable,
-    requestKey: methodEstimateKey,
+    requestKey: `${methodEstimateKey}:${quoteMode}`,
     estimate: signal =>
       estimateDirectTransfer({
         asset: selected!.asset,
@@ -1422,6 +1427,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         sender: source!.sender,
         recipient: directRecipient!,
         executionMode: source!.executionMode,
+        slippageBps,
+        quoteMode,
         signal
       })
   })
@@ -1503,7 +1510,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     }
   }, [method, clusterUnavailable, directUnavailable, clusterQuoted, directQuoted])
   const shieldReviewKeyForFee = (feeSelection: EvmFeeSelection) =>
-    `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${JSON.stringify(feeSelection)}`
+    `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${slippageBps}:${JSON.stringify(feeSelection)}`
   const shieldReviewKey = shieldReviewKeyForFee(evmMoveFee)
   const latestShieldReviewKey = useRef(shieldReviewKey)
   latestShieldReviewKey.current = shieldReviewKey
@@ -1768,6 +1775,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         asset: selected.asset,
         chain: selected.chain,
         managed: managedAsset,
+        slippageBps,
         ...(from === 'shield' ? {} : { feeSelection }),
         ...(from === 'shield' && destination ? { destination } : {}),
         dedupKey
@@ -2255,6 +2263,13 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           showBack
           onBack={goBack}
           backDisabled={nativeReceive && nativeReceiveState.busy}
+          rightContent={
+            !receiveEntry || receiveProvider === 'near-confidential' ? (
+              <SwapSettingsButton
+                disabled={preparingShield || confirmingShield || nativeReceiveState.busy}
+              />
+            ) : undefined
+          }
         />
       )}
       {nativeRetryPath ? (
@@ -2282,6 +2297,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
               accountCatalog={catalog}
               asset={externalAsset}
               zcashAddress={zcashReceiveAddress}
+              slippageBps={slippageBps}
               enabled={Boolean(effective && receiveProvider)}
             />
           </div>

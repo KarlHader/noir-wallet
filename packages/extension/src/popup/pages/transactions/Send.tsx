@@ -91,6 +91,7 @@ import {
   type CrossChainSendDraft
 } from '@/popup/services/cross-chain-send-assets'
 import { CrossChainSendAdapter } from '../swap/Swap'
+import { SwapSettingsButton } from '@/popup/components/swap/SwapSettings'
 import {
   hydrateEvmSendDestinationCatalogs,
   readEvmSendDestinationSupport
@@ -569,6 +570,7 @@ function ZcashSendForm({
           }
           showBack
           onBack={transfer.available ? transfer.leaveSend : undefined}
+          rightContent={<SwapSettingsButton disabled={funding.disabled} />}
         />
       )}
       {transfer.available ? (
@@ -1677,6 +1679,11 @@ function SendAssetFlow() {
           }
           showBack
           backDisabled={shieldBusy || zcashBusy}
+          rightContent={
+            !sourcePicker && !showPublicAssetPicker ? (
+              <SwapSettingsButton disabled={shieldBusy || zcashBusy} />
+            ) : undefined
+          }
           onBack={
             sourcePicker
               ? () => setSourcePicker(null)

@@ -1,5 +1,5 @@
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
-import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
+import { resolveRheaPrivateTransferToken, type RheaSwapQuoteMode } from '@/core/services/rhea-swap'
 import { preferWalletEvmQuoteToken, toWalletEvmQuoteToken } from './token-address-discovery'
 import type { ConfidentialFundingPreview } from '@/core/services/confidential-funding'
 import {
@@ -70,6 +70,8 @@ export async function estimateDirectTransfer(input: {
   readonly sender: string
   readonly recipient: string
   readonly executionMode: 'main' | 'private'
+  readonly slippageBps: number
+  readonly quoteMode: RheaSwapQuoteMode
   readonly signal: AbortSignal
 }): Promise<BalanceTransferEstimate> {
   const match = /^eip155:([1-9][0-9]*)$/.exec(input.chain.chain.id)
@@ -106,7 +108,8 @@ export async function estimateDirectTransfer(input: {
       amountIn: input.amountRaw,
       sender: input.sender,
       recipient: input.recipient,
-      slippageBps: 100,
+      slippageBps: input.slippageBps,
+      quoteMode: input.quoteMode,
       confidentiality: 'basic'
     },
     input.executionMode === 'private'

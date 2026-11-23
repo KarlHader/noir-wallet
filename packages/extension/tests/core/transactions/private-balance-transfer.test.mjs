@@ -404,6 +404,8 @@ test('quotes both cross-chain transfer directions and rejects a same-chain build
       sender,
       recipient,
       executionMode: 'main',
+      slippageBps: 125,
+      quoteMode: 'fast',
       signal: new AbortController().signal
     }
     await expect(estimateDirectTransfer(input)).resolves.toMatchObject({ routeFeeRaw: null })
@@ -415,6 +417,8 @@ test('quotes both cross-chain transfer directions and rejects a same-chain build
       amountIn,
       sender,
       recipient,
+      slippageBps: 125,
+      quoteMode: 'fast',
       confidentiality: 'basic'
     })
     purpose = 'private-cross-chain-withdraw'
@@ -826,13 +830,15 @@ test('binds a Shield ETH Move to the selected EVM destination asset', () => {
     amountRaw: '1000000000000000000',
     asset: source.asset,
     chain: source.chain,
-    managed: source.managed
+    managed: source.managed,
+    slippageBps: 125
   }
   expect(
     buildShieldTransferRequest({ ...input, destination, dedupKey: 'move:attempt-1' })
   ).toMatchObject({
     operation: 'withdraw',
     dedupKey: 'move:attempt-1',
+    slippageBps: 125,
     sourceDomain: 'shield',
     destinationDomain: 'private',
     source: {
@@ -1049,6 +1055,7 @@ test('lists official cross-network USDC destinations from the managed catalog', 
       asset: source.asset,
       chain: source.chain,
       managed: source.managed,
+      slippageBps: 50,
       destination
     })
   ).toMatchObject({
