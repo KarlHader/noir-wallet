@@ -176,7 +176,7 @@ export function TokenIcon({
       {showChainBadge && blockchain && (
         <ChainIcon
           chain={blockchain}
-          className="absolute -bottom-0.5 -right-0.5 w-[45%] h-[45%] rounded-full border border-black bg-white"
+          className="absolute -bottom-0.5 -right-0.5 size-[45%] bg-background ring-1 ring-background"
         />
       )}
 
