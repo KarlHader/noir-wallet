@@ -2208,37 +2208,34 @@ const backgroundNetworkServicesReady = multichainStartupReady
     throw error
   })
 
-async function scheduleNextBalanceSyncAlarm(
-  probeFailed: boolean,
-  preserveFailureCount = false
-): Promise<void> {
+async function ensureBalanceSyncAlarm(probeFailed?: boolean): Promise<void> {
   const stored = await chrome.storage.session.get(BALANCE_SYNC_SCHEDULE_STATE_KEY)
   const previous = Number(stored[BALANCE_SYNC_SCHEDULE_STATE_KEY]?.failureCount ?? 0)
-  const failureCount = probeFailed ? Math.min(previous + 1, 8) : preserveFailureCount ? previous : 0
-  const delayInMinutes = computePassiveSyncDelayMinutes({
+  let failureCount = previous
+  if (probeFailed === true) failureCount = Math.min(previous + 1, 8)
+  if (probeFailed === false) failureCount = 0
+  const periodInMinutes = computePassiveSyncDelayMinutes({
     baseMinutes: WALLET_CONFIG.SYNC.BACKGROUND_POLL_MINUTES,
-    jitterMinutes: WALLET_CONFIG.SYNC.BACKGROUND_POLL_JITTER_MINUTES,
     maxMinutes: WALLET_CONFIG.SYNC.BACKGROUND_POLL_MAX_BACKOFF_MINUTES,
-    failureCount,
-    randomUnit: Math.random()
+    failureCount
   })
-  await chrome.storage.session.set({ [BALANCE_SYNC_SCHEDULE_STATE_KEY]: { failureCount } })
-  await chrome.alarms.clear(BALANCE_SYNC_ALARM)
-  chrome.alarms.create(BALANCE_SYNC_ALARM, { delayInMinutes })
+  if (failureCount !== previous) {
+    await chrome.storage.session.set({ [BALANCE_SYNC_SCHEDULE_STATE_KEY]: { failureCount } })
+  }
+  const existing = await chrome.alarms.get(BALANCE_SYNC_ALARM)
+  if (existing?.periodInMinutes !== periodInMinutes) {
+    await chrome.alarms.create(BALANCE_SYNC_ALARM, {
+      delayInMinutes: periodInMinutes,
+      periodInMinutes
+    })
+  }
 }
 
 syncScheduler.onPassiveSyncOutcome = status => {
-  void scheduleNextBalanceSyncAlarm(status === 'failed' || status === 'skipped').catch(error => {
+  if (status === 'aborted' || status === 'skipped') return
+  void ensureBalanceSyncAlarm(status === 'failed').catch(error => {
     console.warn('[Background] Failed to schedule next balance sync after scan:', error)
   })
-}
-
-async function ensureBalanceSyncAlarm(): Promise<void> {
-  const existing = await chrome.alarms.get(BALANCE_SYNC_ALARM)
-  if (existing && existing.periodInMinutes === undefined && existing.scheduledTime > Date.now()) {
-    return
-  }
-  await scheduleNextBalanceSyncAlarm(false)
 }
 
 ensureBalanceSyncAlarm().catch(error => {
@@ -2366,7 +2363,7 @@ async function checkOffscreenHealth(): Promise<void> {
   }
 }
 
-async function requestPeriodicBalanceSync(): Promise<'scheduled' | 'skipped' | 'probe-failed'> {
+async function requestPeriodicBalanceSync(): Promise<'scheduled' | 'idle' | 'skipped' | 'probe-failed'> {
   if (syncScheduler.isRunning()) return 'skipped'
   await Promise.all([rehydrateWalletStore(), useAccountDataStore.persist.rehydrate()])
   const { currentWalletId, currentNetwork } = useWalletStore.getState()
@@ -2414,24 +2411,19 @@ async function requestPeriodicBalanceSync(): Promise<'scheduled' | 'skipped' | '
       maxStaleMs: WALLET_CONFIG.SYNC.BACKGROUND_MAX_STALE_MS
     })
   ) {
-    return 'skipped'
+    return networkHeight !== null ? 'idle' : 'skipped'
   }
 
   return syncScheduler.requestPassiveSync(0) ? 'scheduled' : 'skipped'
 }
 
 async function handlePeriodicBalanceSyncAlarm(): Promise<void> {
-  let probeFailed = false
-  let syncScheduled = false
-  try {
-    const result = await requestPeriodicBalanceSync()
-    probeFailed = result === 'probe-failed'
-    syncScheduled = result === 'scheduled'
-  } catch (error) {
-    probeFailed = true
+  const result = await requestPeriodicBalanceSync().catch(error => {
     console.warn('[Background] Periodic balance sync request failed:', error)
-  } finally {
-    await scheduleNextBalanceSyncAlarm(probeFailed, syncScheduled).catch(error => {
+    return 'probe-failed' as const
+  })
+  if (result === 'idle' || result === 'probe-failed') {
+    await ensureBalanceSyncAlarm(result === 'probe-failed').catch(error => {
       console.warn('[Background] Failed to schedule next balance sync probe:', error)
     })
   }

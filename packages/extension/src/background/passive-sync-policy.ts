@@ -21,10 +21,8 @@ export interface PeriodicSyncActivityState {
 
 export interface PassiveSyncDelayOptions {
   baseMinutes: number
-  jitterMinutes: number
   maxMinutes: number
   failureCount: number
-  randomUnit: number
 }
 
 export interface InterruptedSyncResumeState {
@@ -52,10 +50,7 @@ export function shouldRequestPeriodicSync(state: PeriodicSyncActivityState): boo
 
 export function computePassiveSyncDelayMinutes(options: PassiveSyncDelayOptions): number {
   const multiplier = 2 ** Math.max(0, Math.floor(options.failureCount))
-  const base = Math.min(options.maxMinutes, options.baseMinutes * multiplier)
-  const random = Math.min(1, Math.max(0, options.randomUnit))
-  const jitter = (random * 2 - 1) * Math.max(0, options.jitterMinutes)
-  return Math.max(1, Math.min(options.maxMinutes, base + jitter))
+  return Math.max(1, Math.min(options.maxMinutes, options.baseMinutes * multiplier))
 }
 
 export function shouldResumeInterruptedSync(state: InterruptedSyncResumeState): boolean {
