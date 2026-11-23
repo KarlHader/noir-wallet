@@ -51,6 +51,18 @@ export interface IndexedDbTransactionRepositoryOptions {
   readonly databaseName?: string
 }
 
+let observeCommit:
+  | ((
+      network: typeof DEFAULT_NETWORK,
+      graph: TransactionGraph,
+      previous?: TransactionGraph
+    ) => void)
+  | undefined
+
+export function observeTransactionGraphCommits(listener: typeof observeCommit): void {
+  observeCommit = listener
+}
+
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result)
@@ -168,6 +180,7 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
       )
     )
     if (result.status === 'created') {
+      if (this.databaseName === TRANSACTION_V2_DATABASE.name) observeCommit?.(network, result.graph)
       try {
         await notifyCreatedTransactionPortfolio(network, result.graph)
       } catch {
@@ -357,6 +370,8 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
       )
     )
     if (result.status === 'applied' && result.graph && previousGraph) {
+      if (this.databaseName === TRANSACTION_V2_DATABASE.name)
+        observeCommit?.(network, result.graph, previousGraph)
       try {
         await notifyAppliedTransactionPortfolio(
           network,

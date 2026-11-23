@@ -12,6 +12,7 @@ import { openTokenManager } from './token-manager-window'
 import { handleEvmWalletChoiceMessage } from './evm-wallet-choice'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import {
+  isAccountChainEnabled,
   isAccountNetworkEnabled,
   parseSelectedChainIds,
   parseSelectedNetworkFamilies
@@ -61,12 +62,23 @@ import { transactionMonitor } from './transaction-monitor'
 import { zcashTxMonitor, computeExpiryHeight } from './zcash-tx-monitor'
 import { formatLogError } from '@/lib/log-format'
 import { logger } from '@/lib/logger'
+import { syncJobStore } from '@/lib/sync-job-store'
 import { toHardwarePcztError } from '@/core/zcash/hardware-pczt'
 import { formatHardwareSigningError } from '@/lib/hardware-signing-error'
 import { appendDiagnosticLog, exportDiagnosticLogs } from '@/lib/diagnostic-log-store'
 import { parseDiagnosticLogDraft, sanitizeDiagnosticMessage } from '@/lib/diagnostic-log'
 import { logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
-import { hasWalletDb, loadTransactions, mutateTransactions } from '@/lib/indexed-db'
+import {
+  hasWalletDb,
+  loadTransactions,
+  mutateTransactions,
+  observeLegacyTransactionCommits
+} from '@/lib/indexed-db'
+import { isExternalActivityReceipt } from '@/core/activity/activity-notification'
+import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
+import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
+import { observeTransactionGraphCommits } from '@/infrastructure/persistence/repositories/indexed-db-transaction-repository'
+import { ACTIVITY_RECEIPTS_ALARM, ActivityNotifications } from './activity-notifications'
 import {
   useWalletStore,
   prepareWalletStoreForUse,
@@ -104,7 +116,12 @@ import type { TransactionStatusUpdatedMessage } from '@/types/transaction-messag
 import { initializeExtensionUpdates, refreshExtensionUpdateNotice } from './extension-update'
 import type { SendTransactionParams, TransactionType, Network } from '@/types'
 import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
-import { buildAccountKey, type AccountScope } from '@/core/wallet/account-scope'
+import {
+  buildAccountKey,
+  isAccountScopeForNetwork,
+  resolveAccountScope,
+  type AccountScope
+} from '@/core/wallet/account-scope'
 import {
   applyZeroIndexerOptionsToActiveWorker,
   forwardKeyringRpcToOffscreen,
@@ -166,7 +183,10 @@ import {
 import { createBackgroundEvmPortfolioCoordinator } from './evm-portfolio'
 import { createBackgroundPortfolioCoordinator } from './portfolio'
 import { createBackgroundActivityCoordinator } from './activity'
-import { refreshZcashReceiveConfirmations } from './zcash-receive-confirmations'
+import {
+  discoverZcashTransparentReceipts,
+  refreshZcashReceiveConfirmations
+} from './zcash-receive-confirmations'
 import {
   observeActivityReceipts,
   observePortfolioBalances,
@@ -419,10 +439,7 @@ import {
   type IntentsProtocolAssetPriceMapping
 } from '@/core/services/intents-wallet-assets'
 
-import {
-  getActionFailureNotificationCopy,
-  TRANSACTION_PENDING_MESSAGE
-} from '@/lib/transaction-status-copy'
+import { TRANSACTION_PENDING_MESSAGE } from '@/lib/transaction-status-copy'
 import {
   applyExtensionDisplayMode,
   enqueueExtensionDisplayModeUpdate,
@@ -504,6 +521,95 @@ subscribeTransactionPortfolioInvalidations(async ({ scope, chainIds }) => {
   }
 })
 let activityCoordinator!: ReturnType<typeof createBackgroundActivityCoordinator>
+const activityStorageRepository = new IndexedDbStorageV2Repository()
+const activityNotifications = new ActivityNotifications({
+  activeScope: async () => {
+    if (networkRestartRequired) return null
+    const active = (await readActiveStorageV2Snapshot(activityStorageRepository))?.manifest
+      .activeAccount
+    return active ? { ...active, network: DEFAULT_NETWORK } : null
+  },
+  hasUnlockSession: () =>
+    walletLockCleanupPending ? Promise.resolve(false) : credentialSession.hasUnlockSession(),
+  assetMetadata: assetId =>
+    userEvmAssetRecords.find(asset => asset.assetId === assetId)?.metadata ??
+    detectedEvmAssetRecords.find(asset => asset.assetId === assetId)?.metadata,
+  readActivity: async (refresh, scope) => {
+    if (!refresh)
+      return activityCoordinator.readActive({ accountMode: 'all', includeSupplemental: false })
+    await rehydrateWalletStore()
+    const { network, keyDomainId, accountId } = scope
+    const account = useWalletStore.getState().getAccount(keyDomainId, accountId)
+    const snapshot = await readActiveStorageV2Snapshot(activityStorageRepository)
+    const storedChains = (snapshot?.chainAccounts ?? [])
+      .filter(
+        chain => chain.scope.keyDomainId === keyDomainId && chain.scope.accountId === accountId
+      )
+      .map(chain => chain.scope.chainId)
+    const customEvm = resolveEvmNetworkCatalog(network, getActiveChainEndpointSettings()).filter(
+      chain => chain.source === 'custom'
+    )
+    const chainIds = createBuildFeatureGatedChainRegistry(
+      createInitialProductChainRegistry(network, customEvm)
+    )
+      .list()
+      .filter(chain => {
+        if (account && !isAccountChainEnabled(account, network, chain.family, chain.id))
+          return false
+        return (
+          storedChains.includes(chain.id) ||
+          (chain.family === 'evm' && storedChains.some(id => id.startsWith('eip155:'))) ||
+          (chain.family === 'zcash' && Boolean(account))
+        )
+      })
+      .map(chain => chain.id)
+    const zcashChainId = getZcashChainId(network)
+    if (account && chainIds.some(chainId => chainId === zcashChainId)) {
+      const [transparentRead, syncJob] = await Promise.all([
+        discoverZcashTransparentReceipts(network, keyDomainId, account).catch(() => false),
+        syncJobStore.get(keyDomainId, network).catch(() => null)
+      ])
+      if (transparentRead) activityNotifications.historyRead(scope, zcashChainId)
+      if (syncJob?.status === 'completed') {
+        activityNotifications.historyRead(scope, zcashChainId, 'shield')
+      }
+    }
+    const activity = await activityCoordinator.readActive({ accountMode: 'all', chainIds })
+    if (!activity) return null
+    const enabled = new Set(chainIds)
+    return {
+      ...activity,
+      items: activity.items.filter(
+        item =>
+          !isExternalActivityReceipt(item) ||
+          item.segments.some(
+            segment => segment.target.kind === 'onchain' && enabled.has(segment.target.chainId)
+          )
+      )
+    }
+  }
+})
+
+observeTransactionGraphCommits((network, graph, previous) => {
+  void activityNotifications.observeGraph(network, graph, previous).catch(() => {})
+})
+observeLegacyTransactionCommits((accountKey, previous, current) => {
+  const scope = resolveAccountScope({ accountKey }, useWalletStore.getState().wallets)
+  if (!scope || !isAccountScopeForNetwork(scope, DEFAULT_NETWORK)) return
+  void Promise.resolve()
+    .then(() =>
+      activityNotifications.observeZcash(
+        {
+          network: DEFAULT_NETWORK,
+          keyDomainId: parseKeyDomainId(scope.walletId),
+          accountId: parseAccountId(scope.accountId)
+        },
+        previous,
+        current
+      )
+    )
+    .catch(() => {})
+})
 let assetPriceService = createBackgroundAssetPriceService()
 setObservationPriceReader(() => assetPriceService.readCached())
 let assetPriceRefreshTail: Promise<void> = Promise.resolve()
@@ -1292,7 +1398,12 @@ async function reloadMultichainRuntime(
       }
     }
   )
-  activityCoordinator = createBackgroundActivityCoordinator(bitcoinRpcUrl, settings)
+  activityCoordinator = createBackgroundActivityCoordinator(
+    bitcoinRpcUrl,
+    settings,
+    (scope, chainId, mode) =>
+      activityNotifications.historyRead({ ...scope, network: DEFAULT_NETWORK }, chainId, mode)
+  )
   additionalReceiveTargetsCoordinator =
     createBackgroundAdditionalReceiveTargetsCoordinator(customEvmNetworks)
   accountNetworksCoordinator = createBackgroundAccountNetworksCoordinator(
@@ -2354,6 +2465,10 @@ function getZcashAccountScopes(): AccountScope[] {
 // ============================================
 
 registerEvmDAppSendQueueNotification()
+chrome.notifications.onClicked.addListener(id => {
+  void activityNotifications.open(id).catch(() => {})
+})
+void multichainStartupReady.then(() => activityNotifications.initialize()).catch(() => {})
 
 chrome.runtime.onInstalled.addListener(details => {
   if (details.reason === 'install') {
@@ -2571,6 +2686,16 @@ chrome.alarms.onAlarm.addListener(alarm => {
       }
       if (alarm.name === BALANCE_SYNC_ALARM) {
         void handlePeriodicBalanceSyncAlarm()
+      }
+      if (alarm.name === ACTIVITY_RECEIPTS_ALARM) {
+        void multichainStartupReady
+          .then(() => activityNotifications.refreshReceipts())
+          .catch(error => {
+            console.warn(
+              '[Activity] Receipt check failed:',
+              error instanceof Error ? error.name : 'UnknownError'
+            )
+          })
       }
       if (alarm.name === SYNC_KEEPALIVE_ALARM) {
         if (syncScheduler.isRunning()) {
@@ -6833,7 +6958,12 @@ function handleWalletUnlock(password: string): Promise<any> {
     const result = await accountContextTransition.runActiveOperation(() =>
       performWalletUnlock(password)
     )
-    if (result?.success) await walletCleanupCoordinator.resumePendingCleanup()
+    if (result?.success) {
+      await walletCleanupCoordinator.resumePendingCleanup()
+      void multichainStartupReady
+        .then(() => activityNotifications.refreshReceipts())
+        .catch(() => {})
+    }
     return result
   })
 }
@@ -7196,6 +7326,7 @@ async function handleAccountSwitched({
     await multichainSessionDAppHandler?.notifyAllSessionsChanged().catch(() => {})
   }
   await chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
+  void multichainStartupReady.then(() => activityNotifications.refreshReceipts()).catch(() => {})
 }
 
 /**
@@ -8149,15 +8280,5 @@ async function handleBackgroundZcashTx(params: {
         error: userMessage
       })
       .catch(() => {})
-
-    // Chrome notification for failure
-    const notification = getActionFailureNotificationCopy(actionLabel, userMessage)
-    chrome.notifications.create(`zcash-tx-fail-${Date.now()}`, {
-      type: 'basic',
-      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-      title: notification.title,
-      message: notification.message,
-      priority: 1
-    })
   }
 }

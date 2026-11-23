@@ -28,7 +28,6 @@ import {
   type IntentsProgressEntry,
   type IntentsProgressInput
 } from '@/lib/intents-progress'
-import { getIntentsStatusCopy } from '@/lib/transaction-status-copy'
 import {
   markNativeZecIntentsSwapTerminal,
   readNativeZecIntentsSwapMetadata,
@@ -499,34 +498,6 @@ export class TransactionMonitor {
     this.notifyProgressUpdated(pendingTx.accountKey)
 
     this.notifyCompletion(pendingTx, status)
-
-    const actionName = pendingTx.actionName || 'Transaction'
-    const statusCopy = getIntentsStatusCopy(status.status, {
-      actionName,
-      hasDestinationTxHash: !!status.swapDetails?.destinationChainTxHashes?.[0]?.hash,
-      waitsForZcashConfirmations
-    })
-    if (!statusCopy.notification) return
-
-    try {
-      chrome.notifications.create(
-        `tx-${pendingTx.depositAddress}-${Date.now()}`,
-        {
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: statusCopy.notification.title,
-          message: statusCopy.notification.message,
-          priority: 1
-        },
-        () => {
-          if (chrome.runtime.lastError) {
-            console.error('[TransactionMonitor] Notification error:', chrome.runtime.lastError)
-          }
-        }
-      )
-    } catch (error) {
-      console.error('[TransactionMonitor] Failed to create notification:', error)
-    }
   }
 
   private async handleStale(pendingTx: PendingTransaction): Promise<void> {

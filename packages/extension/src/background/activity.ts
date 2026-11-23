@@ -259,7 +259,8 @@ function solanaSignature(item: ActivityItem): string | null {
 
 export function createBackgroundActivityCoordinator(
   bitcoinCustomRpcUrl?: string,
-  endpointSettings?: ChainEndpointSettings
+  endpointSettings?: ChainEndpointSettings,
+  onHistoryRead?: (scope: ActivityScope, chainId: string, mode?: 'main' | 'private') => void
 ): ActivityCoordinator {
   const storageRepository = new IndexedDbStorageV2Repository()
   const peaSigner = new EvmMultichainSigningClient({ credentials: credentialSession })
@@ -325,6 +326,7 @@ export function createBackgroundActivityCoordinator(
           .slice(0, BITCOIN_ACTIVITY_HISTORY_LIMITS.addresses)
           .map(observation => observation.derived.address)
       })
+      onHistoryRead?.(scope, bitcoinNetwork.chainId)
       return mergeBoundedActivityItems(fallbackItems, fresh)
     } catch (error) {
       logger.warn(
@@ -471,6 +473,14 @@ export function createBackgroundActivityCoordinator(
         )
       )
     }
+    if (onHistoryRead && historyPageCount === 1) {
+      const records = await listEvmHistoryCacheByScope(scope).catch(() => [])
+      for (const record of records) {
+        if (!chainIds.has(record.chainId) || record.successfulSyncAt === null) continue
+        const selected = selectedAddresses.find(entry => entry.address === record.address)
+        if (selected) onHistoryRead(scope, record.chainId, selected.accountMode)
+      }
+    }
     const supportedItems = items.flatMap(item => {
       const supported = filterTrackedEvmTokenActivity(item, trackedEvmTokenAssetIds)
       return supported ? [supported] : []
@@ -509,6 +519,7 @@ export function createBackgroundActivityCoordinator(
       const mode = record.address === account.main ? 'main' : 'private'
       if (mode === 'private' && !account.privateAvailable) continue
       if (accountMode !== 'all' && mode !== accountMode) continue
+      if (record.successfulSyncAt !== null) onHistoryRead?.(scope, record.chainId, mode)
       if (record.hasMore) {
         hasMoreByChainId.add(record.chainId)
         hasMoreKeys.add(`${record.chainId}:${record.address}`)
@@ -556,6 +567,7 @@ export function createBackgroundActivityCoordinator(
         knownFinalizedSignatures: finalizedSignatures,
         ...(untilSignature === undefined ? {} : { untilSignature })
       })
+      onHistoryRead?.(scope, solanaNetwork.chainId)
       return mergeBoundedActivityItems(fallbackItems, fresh)
     } catch (error) {
       logger.warn(
@@ -576,6 +588,7 @@ export function createBackgroundActivityCoordinator(
     if (!address) return Object.freeze([])
     try {
       const fresh = await nearHistory.readAddressActivity({ scope, address })
+      onHistoryRead?.(scope, nearNetwork.chainId)
       return mergeBoundedActivityItems(fallbackItems, fresh)
     } catch (error) {
       logger.warn(

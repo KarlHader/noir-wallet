@@ -63,6 +63,7 @@ import {
   clearSwapApprovalContinuationsForAccount
 } from './swap-approval-continuation'
 import { ChromeEvmDAppPrivateTransferStore } from './evm-dapp-private-transfer'
+import { clearActivityNotifications } from './activity-notifications'
 import { WalletMetadataCoordinator } from '@/infrastructure/keyring/wallet-metadata-coordinator'
 import { pendingRequestsManager } from './pending-requests'
 import {
@@ -760,6 +761,14 @@ export class WalletCleanupCoordinator {
           deleteIndexedDbBitcoinInputReservations(),
           deleteHistoryCache(),
           this.activityHistoryCache.clear(),
+          ...wallets.flatMap(wallet =>
+            wallet.accounts.map(account =>
+              clearActivityNotifications({
+                keyDomainId: parseKeyDomainId(wallet.id),
+                accountId: parseAccountId(account.id)
+              })
+            )
+          ),
           dappExecutionModeCoordinator.clear(),
           clearAllSwapApprovalContinuations(),
           new ChromeConfidentialFundingStore().clearAllWalletData(),
@@ -809,6 +818,7 @@ export class WalletCleanupCoordinator {
       confidentialFundingStore.deleteSessionsByAccountScope(walletId, accountId),
       chrome.storage.local.remove(LEGACY_LENDING_MARKET_CACHE_STORAGE_KEY),
       this.activityHistoryCache.deleteByScope(scope),
+      clearActivityNotifications(scope),
       dappExecutionModeCoordinator.removeAccount(walletId, accountId),
       clearSwapApprovalContinuationsForAccount(walletId, accountId),
       new ChromeEvmDAppPrivateTransferStore().clearForAccount(walletId, accountId)
