@@ -146,6 +146,7 @@ import { credentialSession } from './credential-session'
 import { generateCanonicalMnemonic } from '@/infrastructure/keyring/multichain/canonical-mnemonic-generator'
 import {
   getFullZcashRecoveryBirthdayHeight,
+  getRetainedZcashHardwareBirthdayHeight,
   getSafeNewWalletBirthdayHeight,
   isValidZcashBirthdayHeight,
   selectCachedChainTipHeight
@@ -786,7 +787,10 @@ export class BackgroundZcashWalletRuntime {
           seedFingerprintHex: credential.hw.seedFingerprintHex,
           accountHdIndex: account.derivationIndex,
           keySource: this.store.getWallet(walletId)?.keySource === 'ledger' ? 'ledger' : 'keystone',
-          birthdayHeight: account.birthdayHeight || undefined
+          birthdayHeight: getRetainedZcashHardwareBirthdayHeight(
+            account.birthdayHeight,
+            this.network
+          )
         })
       } else {
         await core.createAccount(

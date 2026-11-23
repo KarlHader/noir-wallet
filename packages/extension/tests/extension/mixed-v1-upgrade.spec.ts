@@ -149,7 +149,7 @@ async function seedMixedV1Profile(page: Page): Promise<void> {
                     name: 'Keystone Account',
                     addresses: input.hardwareAddresses,
                     derivationIndex: 0,
-                    birthdayHeight: 2_000_000,
+                    birthdayHeight: 0,
                     isPinned: false,
                     isHidden: false
                   }
@@ -249,7 +249,7 @@ async function inspectV2(page: Page) {
   })
 }
 
-test('migrates mixed retained software and Keystone Wallets through real MV3', async () => {
+test('migrates mixed retained Wallets with an unknown Keystone birthday through real MV3', async () => {
   test.setTimeout(300_000)
   const userDataDir = await mkdtemp(path.join(tmpdir(), 'noir-v1-mixed-upgrade-'))
   let context: BrowserContext | undefined
