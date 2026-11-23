@@ -1,16 +1,16 @@
 # Confidential DeFi Development and Troubleshooting
 
-This guide covers local setup, data sources, recovery, and diagnosis for mnemonic and imported EVM private-key accounts using a Global PEA, Confidential balances, internal transfers, Confidential Send/Swap, and dApp Confidential asset transfers. Hardware accounts and private keys imported for other chain families do not support Confidential execution. The shared account capability is defined in `packages/extension/src/core/chains/evm/execution-capability.ts`; funding boundaries are enforced in `packages/extension/src/core/services/confidential-funding/` and the routes named below.
+This guide covers local setup, data sources, recovery, and diagnosis for mnemonic and imported EVM private-key accounts using a Global PEA, Confidential balances, internal transfers, Confidential Send/Swap, and dApp Confidential asset transfers. Hardware accounts do not support Confidential execution. A software NEAR account, or an imported NEAR key at account index 0, can sign a NEAR-to-NEAR confidential route with that NEAR account using NEP-413 when `chain.near` is enabled. That session is stored separately from the EVM erc191 session. The shared account capability is defined in `packages/extension/src/core/chains/evm/execution-capability.ts`; funding boundaries are enforced in `packages/extension/src/core/services/confidential-funding/` and the routes named below.
 
 ## 1. Account and Balance Model
 
-| Concept                                 | Meaning                                                                                                                                          |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Main                                    | Public EVM account. It signs Confidential login and Intents requests. Deposits can be funded by Main or Global PEA.                              |
-| Confidential                            | NEAR Intents abstract balance associated with the Main signer. It is not an on-chain address and cannot directly sign an EVM transaction.        |
-| Global PEA                              | EVM execution address controlled by an independent WASM child key. It holds on-chain assets and Gas and executes dApp and protocol transactions. |
-| Displayed Private and Shield balances   | Private shows Global PEA on-chain assets; Shield shows the Confidential abstract balance separately.                                             |
-| Directly spendable Confidential balance | Only the Global PEA's `privateOnchainRaw`.                                                                                                       |
+| Concept                                 | Meaning                                                                                                                                                                             |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main                                    | Public EVM account. It signs EVM Confidential login and Intents requests. A NEAR-to-NEAR route uses the current NEAR account instead. Deposits can be funded by Main or Global PEA. |
+| Confidential                            | NEAR Intents abstract balance associated with the Main signer. It is not an on-chain address and cannot directly sign an EVM transaction.                                           |
+| Global PEA                              | EVM execution address controlled by an independent WASM child key. It holds on-chain assets and Gas and executes dApp and protocol transactions.                                    |
+| Displayed Private and Shield balances   | Private shows Global PEA on-chain assets; Shield shows the Confidential abstract balance separately.                                                                                |
+| Directly spendable Confidential balance | Only the Global PEA's `privateOnchainRaw`.                                                                                                                                          |
 
 The UI separates Public / Private usage modes from Public / Shield / Private asset categories. Internal names such as `private`, `PrivateExecution`, and `privateOnchainRaw` do not make abstract balances spendable from the PEA.
 

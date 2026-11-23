@@ -62,13 +62,16 @@ function selectZcashDomainBalanceRaw(
   return balance.shieldedRaw ?? null
 }
 
+function nearDomainSplitReady(balance: PortfolioBalanceView): boolean {
+  return balance.privateOnchainRaw !== undefined && balance.confidentialRaw !== undefined
+}
+
 function selectNearDomainBalanceRaw(
   balance: PortfolioBalanceView,
   domain: Exclude<PortfolioDomain, 'all'>
 ): string | null {
-  // Cached rows from before the Main/PEA split only stored totalRaw. Until a
-  // refresh, that whole balance stays on the public domain.
-  if (balance.mainRaw === undefined && balance.privateRaw === undefined) {
+  // A row without both PEA and confidential parts is still one public balance.
+  if (!nearDomainSplitReady(balance)) {
     return domain === 'public' ? balance.totalRaw : '0'
   }
   return selectEvmDomainBalanceRaw(balance, domain)
@@ -129,8 +132,12 @@ export function selectAssetDetailDomainRaw(
       return {
         all,
         public: publicRaw,
-        shield: selectDomainBalanceRaw(asset, 'shield'),
-        private: selectDomainBalanceRaw(asset, 'private')
+        shield: nearDomainSplitReady(asset.balance)
+          ? selectDomainBalanceRaw(asset, 'shield')
+          : null,
+        private: nearDomainSplitReady(asset.balance)
+          ? selectDomainBalanceRaw(asset, 'private')
+          : null
       }
     case 'bitcoin':
     case 'solana':
@@ -161,7 +168,8 @@ export function selectAssetDetailDomains(
       }
       return domains
     case 'near':
-      domains.push('shield', 'private')
+      if (raw.shield !== null) domains.push('shield')
+      if (raw.private !== null) domains.push('private')
       return domains
     case 'bitcoin':
     case 'solana':
