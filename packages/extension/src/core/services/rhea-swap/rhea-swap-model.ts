@@ -793,9 +793,9 @@ export function toRheaSwapProtocolRequest(value: RheaSwapQuoteRequest): QuoteReq
     tokenIn: toRheaSwapProtocolAsset(value.tokenIn),
     tokenOut: toRheaSwapProtocolAsset(value.tokenOut),
     extensions: Object.freeze({ referral: NOIR_SWAP_REFERRAL }),
-    quoteWaitingTimeMs: fast ? 1_500 : 6_000,
-    sameChainTimeoutMs: fast ? 500 : 1_500,
-    crossChainTimeoutMs: fast ? 1_500 : 6_000
+    quoteWaitingTimeMs: fast ? 2_000 : 6_000,
+    sameChainTimeoutMs: fast ? 1_000 : 1_500,
+    crossChainTimeoutMs: fast ? 2_000 : 6_000
   })
 }
 

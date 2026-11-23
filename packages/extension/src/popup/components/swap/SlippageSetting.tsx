@@ -58,8 +58,8 @@ export function SlippageSettingContent({
           <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Request mode">
             {(
               [
-                ['fast', 'Fast', 'Faster quote response'],
-                ['best-price', 'Best Price', 'Wait longer for a better quote']
+                ['best-price', 'Best Price', 'Wait longer for a better quote'],
+                ['fast', 'Fast', 'Faster quote response']
               ] as const
             ).map(([mode, label, description]) => (
               <button
