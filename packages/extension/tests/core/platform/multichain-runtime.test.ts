@@ -322,14 +322,24 @@ function expectedVaultPassword(password: string): string {
 test.describe('Multichain Worker runtime boundaries', () => {
   test('accepts only the WASM hex vault representation', () => {
     expect(parseRawEncryptedVault(VAULT)).toEqual(VAULT)
-    expect(() => parseRawEncryptedVault({ ...VAULT, salt: 'EREREREREREREREREREREQ==' })).toThrow()
-    expect(() => parseRawEncryptedVault({ ...VAULT, nonce: 'AA'.repeat(24) })).toThrow()
-    expect(() =>
+    expect(
       parseRawEncryptedVault({
         ...VAULT,
-        kdfParams: { ...VAULT.kdfParams, iterations: 3 }
-      })
-    ).toThrow()
+        kdfParams: { memoryKib: 64 * 1024, iterations: 3, parallelism: 1 }
+      }).kdfParams
+    ).toEqual({ memoryKib: 64 * 1024, iterations: 3, parallelism: 1 })
+    expect(() => parseRawEncryptedVault({ ...VAULT, salt: 'EREREREREREREREREREREREQ==' })).toThrow()
+    expect(() => parseRawEncryptedVault({ ...VAULT, nonce: 'AA'.repeat(24) })).toThrow()
+    for (const kdfParams of [
+      { memoryKib: 19 * 1024, iterations: 3, parallelism: 1 },
+      { memoryKib: 64 * 1024, iterations: 2, parallelism: 1 },
+      { memoryKib: 64 * 1024, iterations: 3, parallelism: 2 },
+      { memoryKib: 19 * 1024, iterations: 2, parallelism: 2 }
+    ]) {
+      expect(() => parseRawEncryptedVault({ ...VAULT, kdfParams })).toThrow(
+        /KDF parameters do not match/
+      )
+    }
   })
 
   test('round-trips binary payloads through the Chrome JSON message codec', () => {

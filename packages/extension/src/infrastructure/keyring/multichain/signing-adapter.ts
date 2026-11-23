@@ -454,6 +454,54 @@ function requireRawSummary(value: unknown, keys: readonly string[], label: strin
   return summary
 }
 
+function accessListsMatch(
+  left: readonly EvmAccessListItem[],
+  right: readonly EvmAccessListItem[]
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((item, index) => {
+      const other = right[index]
+      return (
+        other !== undefined &&
+        evmAddressesMatch(item.address, other.address) &&
+        item.storageKeys.length === other.storageKeys.length &&
+        item.storageKeys.every((key, keyIndex) => key === other.storageKeys[keyIndex])
+      )
+    })
+  )
+}
+
+function evmTransactionsMatch(left: EvmTransaction, right: EvmTransaction): boolean {
+  if (
+    left.type !== right.type ||
+    left.chainId !== right.chainId ||
+    left.nonce !== right.nonce ||
+    left.gasLimit !== right.gasLimit ||
+    !evmAddressesMatch(left.to, right.to) ||
+    left.value !== right.value ||
+    left.input !== right.input
+  ) {
+    return false
+  }
+  if (left.type === 'legacy') {
+    return right.type === 'legacy' && left.gasPrice === right.gasPrice
+  }
+  if (left.type === 'eip2930') {
+    return (
+      right.type === 'eip2930' &&
+      left.gasPrice === right.gasPrice &&
+      accessListsMatch(left.accessList, right.accessList)
+    )
+  }
+  return (
+    right.type === 'eip1559' &&
+    left.maxFeePerGas === right.maxFeePerGas &&
+    left.maxPriorityFeePerGas === right.maxPriorityFeePerGas &&
+    accessListsMatch(left.accessList, right.accessList)
+  )
+}
+
 async function adaptEvmTransaction(
   raw: unknown,
   payload: Extract<
@@ -468,9 +516,18 @@ async function adaptEvmTransaction(
   assertExactKeys(
     prepared.value,
     ['requestId', 'account', 'signingHash', 'summary'],
-    [],
+    ['transaction'],
     'PreparedEvmTransaction'
   )
+  // Engine 7a6dfb7 echoes the reviewed transaction. Older responses omit it.
+  // A present echo must match the reviewed input; an absent field stays valid.
+  if (prepared.value.transaction !== undefined) {
+    if (
+      !evmTransactionsMatch(parseEvmTransaction(prepared.value.transaction), payload.transaction)
+    ) {
+      throw new Error('Prepared EVM transaction does not match its input')
+    }
+  }
   const account =
     payload.kind === 'pea-evm-transaction'
       ? parseRawPeaExecutionAccount(prepared.value.account, payload.chainId, payload.addressIndex)

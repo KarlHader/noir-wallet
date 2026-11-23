@@ -110,4 +110,161 @@ test.describe('EVM signing adapter address binding', () => {
 
     expect(adapted.account).toMatchObject({ derivationScheme: 'imported', derivationPath: 'm' })
   })
+
+  test('accepts the canonical transaction echoed by the current engine', async () => {
+    const adapted = await adaptPreparedSigning(
+      {
+        ...rawPrepared(checksumContract),
+        transaction: { ...transaction, to: checksumContract }
+      },
+      payload,
+      'signing-command:echo',
+      1_800_000_000_000
+    )
+
+    expect(adapted.prepared.summary).toMatchObject({
+      schema: 'evm.transaction.v1',
+      fields: {
+        to: lowercaseContract,
+        valueWei: '0',
+        methodSelector: '0xa9059cbb'
+      }
+    })
+  })
+
+  test('rejects an echoed transaction that diverges from the reviewed input', async () => {
+    const mismatches = [
+      { value: '1' },
+      { nonce: '1' },
+      { gasLimit: '21000' },
+      { maxFeePerGas: '6000000000' },
+      { maxPriorityFeePerGas: '2000000000' },
+      { input: `0xa9059cbb${'0'.repeat(64)}${'2'.padStart(64, '0')}` },
+      { chainId: '80094' },
+      {
+        accessList: [
+          {
+            address: checksumContract,
+            storageKeys: [`0x${'11'.repeat(32)}`]
+          }
+        ]
+      }
+    ]
+    for (const change of mismatches) {
+      await expect(
+        adaptPreparedSigning(
+          {
+            ...rawPrepared(),
+            transaction: { ...transaction, to: checksumContract, ...change }
+          },
+          payload,
+          'signing-command:echo-mismatch',
+          1_800_000_000_000
+        )
+      ).rejects.toThrow(/does not match its input/)
+    }
+
+    await expect(
+      adaptPreparedSigning(
+        {
+          ...rawPrepared(),
+          transaction: {
+            type: 'eip2930',
+            chainId: transaction.chainId,
+            nonce: transaction.nonce,
+            gasPrice: '5000000000',
+            gasLimit: transaction.gasLimit,
+            to: checksumContract,
+            value: transaction.value,
+            input: transaction.input,
+            accessList: transaction.accessList
+          }
+        },
+        payload,
+        'signing-command:echo-type',
+        1_800_000_000_000
+      )
+    ).rejects.toThrow(/does not match its input/)
+  })
+
+  test('rejects an unexpected field beside the optional echoed transaction', async () => {
+    await expect(
+      adaptPreparedSigning(
+        { ...rawPrepared(), unexpected: true },
+        payload,
+        'signing-command:extra',
+        1_800_000_000_000
+      )
+    ).rejects.toThrow(/unknown field/)
+  })
+})
+
+test.describe('PEA EVM signing adapter transaction echo', () => {
+  const peaAccount = {
+    address: '0x27B25a8B03F9b80bB7c8Ea8bBa3F826Da0C0C530',
+    publicKey: '0x03b4d06703b1d2eabf4adc7aa44289d6ea55d954c6099a3befbff7b3781b297708',
+    curve: 'secp256k1',
+    derivationScheme: 'pea_v1',
+    parent: { addressIndex: 0 },
+    executionChainId: 'eip155:1',
+    accountId: 'eip155:1:0x27B25a8B03F9b80bB7c8Ea8bBa3F826Da0C0C530'
+  }
+  const peaPayload = {
+    kind: 'pea-evm-transaction',
+    chainId: 'eip155:1',
+    addressIndex: 0,
+    transaction
+  }
+
+  function peaPrepared(echoedTransaction) {
+    const prepared = rawPrepared(checksumContract)
+    return {
+      ...prepared,
+      account: peaAccount,
+      summary: { ...prepared.summary, from: peaAccount.address },
+      ...(echoedTransaction === undefined ? {} : { transaction: echoedTransaction })
+    }
+  }
+
+  test('accepts a missing or matching echoed PEA EVM transaction', async () => {
+    const omitted = await adaptPreparedSigning(
+      peaPrepared(),
+      peaPayload,
+      'signing-command:pea-omit',
+      1_800_000_000_000
+    )
+    const echoed = await adaptPreparedSigning(
+      peaPrepared({ ...transaction, to: checksumContract }),
+      peaPayload,
+      'signing-command:pea-echo',
+      1_800_000_000_000
+    )
+
+    for (const adapted of [omitted, echoed]) {
+      expect(adapted.prepared.summary).toMatchObject({
+        schema: 'evm.transaction.v1',
+        fields: { from: peaAccount.address, to: lowercaseContract, valueWei: '0' }
+      })
+    }
+  })
+
+  test('rejects an echoed PEA EVM transaction that diverges from the reviewed input', async () => {
+    await expect(
+      adaptPreparedSigning(
+        peaPrepared({
+          ...transaction,
+          to: checksumContract,
+          accessList: [
+            {
+              address: '0x0000000000000000000000000000000000000001',
+              storageKeys: []
+            }
+          ]
+        }),
+        peaPayload,
+        'signing-command:pea-mismatch',
+        1_800_000_000_000
+      )
+    ).rejects.toThrow(/does not match its input/)
+  })
 })

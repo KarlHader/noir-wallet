@@ -293,7 +293,12 @@ export function parseRawEncryptedVault(value: unknown): RawEncryptedVault {
   const memoryKib = readSafeInteger(params.memoryKib, 'EncryptedVault.kdfParams.memoryKib')
   const iterations = readSafeInteger(params.iterations, 'EncryptedVault.kdfParams.iterations')
   const parallelism = readSafeInteger(params.parallelism, 'EncryptedVault.kdfParams.parallelism')
-  if (memoryKib !== 19 * 1024 || iterations !== 2 || parallelism !== 1) {
+  // Engine 7a6dfb7 writes 64 MiB and 3 iterations. Vaults from the previous
+  // engine used 19 MiB and 2 iterations and must still unlock.
+  const pinnedKdf =
+    (memoryKib === 64 * 1024 && iterations === 3 && parallelism === 1) ||
+    (memoryKib === 19 * 1024 && iterations === 2 && parallelism === 1)
+  if (!pinnedKdf) {
     throw new Error('EncryptedVault KDF parameters do not match the pinned ABI')
   }
   return Object.freeze({
