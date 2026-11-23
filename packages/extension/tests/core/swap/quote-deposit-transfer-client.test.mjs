@@ -713,7 +713,7 @@ test.describe('quote deposit transfer client', () => {
         ]
       ])
       source.asset.balance.availableRaw = '100'
-      await expect(client.estimateMaximum(input)).rejects.toThrow('does not cover')
+      await expect(client.estimateMaximum(input)).rejects.toThrow('Insufficient ETH balance')
       expect(calls.at(-1)[0].calldata).toBe(transaction.data)
       await expect(
         client.estimateMaximum({ ...input, evmTransaction: { ...transaction, chainId: 56 } })

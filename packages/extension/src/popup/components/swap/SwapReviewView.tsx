@@ -2,7 +2,12 @@ import { Icon } from '@iconify/react'
 import { useState, type ReactNode } from 'react'
 import { Button } from '../ui/button'
 import type { SwapToken } from '@/core/services/intents-api'
-import { formatChainName, formatSortAddress, formatSymbol } from '@/lib/format'
+import {
+  formatChainName,
+  formatInsufficientBalance,
+  formatSortAddress,
+  formatSymbol
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
   formatAmount,
@@ -96,6 +101,7 @@ interface SwapReviewViewProps {
   confirmLabel?: string
   /** Selected amount exceeds spendable balance once the fee delta is applied. */
   insufficient?: boolean
+  insufficientSymbol?: string
   actionStatus?: ReactNode
 }
 
@@ -148,6 +154,7 @@ export function SwapReviewView({
   signingActionLabel = 'Sign Swap Order',
   confirmLabel = 'Confirm Swap',
   insufficient,
+  insufficientSymbol = tokenIn.symbol,
   actionStatus
 }: SwapReviewViewProps) {
   const [showMore, setShowMore] = useState(false)
@@ -467,7 +474,7 @@ export function SwapReviewView({
           <TransactionNotice
             className="mt-3"
             tone="warning"
-            message="Amount exceeds balance at this fee. Lower the amount or switch fee tier."
+            message={formatInsufficientBalance(insufficientSymbol)}
           />
         ) : null}
       </div>

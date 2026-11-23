@@ -1183,7 +1183,7 @@ function ShieldSwapForm({
             error || (needsNewQuote && !refreshingReview) ? (
               <TransactionNotice
                 className="mt-3"
-                message={error ?? 'Quote expired.'}
+                message={error ? classifyError(error).userMessage : 'Quote expired.'}
                 tone={error ? 'error' : 'muted'}
               />
             ) : undefined
@@ -1322,7 +1322,10 @@ function ShieldSwapForm({
           <TransactionNotice
             className="mt-3"
             tone={error ? 'error' : 'warning'}
-            message={classifyError(error || balanceError).userMessage}
+            message={
+              classifyError(error || balanceError, { source: from?.asset.metadata.symbol })
+                .userMessage
+            }
             onRetry={balanceError && !error ? () => void refreshBalances() : undefined}
             retrying={connecting}
           />
@@ -1344,7 +1347,10 @@ function ShieldSwapForm({
           <TransactionNotice
             className="mt-3"
             tone={previewNotice ? 'muted' : 'warning'}
-            message={previewNotice ?? classifyError(previewError).userMessage}
+            message={
+              previewNotice ??
+              classifyError(previewError, { source: from?.asset.metadata.symbol }).userMessage
+            }
             onRetry={
               noSharedRoute
                 ? undefined

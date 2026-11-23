@@ -292,8 +292,6 @@ export function TransactionReviewView({
           </div>
         )}
 
-        {notice}
-
         <div className={figma ? '' : 'rounded-xl border border-border/60 bg-card/60 px-4'}>
           {rows.map((row, index) => (
             <div
@@ -327,6 +325,7 @@ export function TransactionReviewView({
         </div>
 
         {afterRows}
+        {notice}
         {error}
       </div>
 

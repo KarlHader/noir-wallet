@@ -3,6 +3,7 @@ import { useEffect, useRef, type ComponentProps } from 'react'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
+import { formatInsufficientBalance } from '@/lib/format'
 import { formatPortfolioNetworkName } from '@/popup/services/portfolio-format'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
@@ -115,8 +116,9 @@ function getEvmSendFields(state: EvmSendTransferState): SendFormAdapter {
         onSelect: canSelectNetwork ? state.openDestinationNetworks : undefined
       },
       onSelectRecipient: () => void state.handleSelectRecipient(),
-      feedback: recipientInvalid && (
+      notice: recipientInvalid && (
         <TransactionNotice
+          id="evm-send-recipient-error"
           tone={state.canMoveRecipient && state.recipientPolicyError ? 'warning' : 'error'}
           message={state.recipientPolicyError ?? 'Enter a valid non-zero EVM address.'}
           onRetry={
@@ -435,7 +437,7 @@ function EvmSendRouteDetails({
         />
       ) : insufficient ? (
         <TransactionNotice
-          message={`Insufficient ${asset.metadata.symbol} balance.`}
+          message={formatInsufficientBalance(asset.metadata.symbol)}
           tone="warning"
         />
       ) : sendPrivately && !privatePreviewLoading && privatePreviewError ? (

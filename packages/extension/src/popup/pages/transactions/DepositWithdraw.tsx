@@ -370,7 +370,11 @@ function NativeZcashReceiveForm({
     onStateChange
   })
   const { action } = transfer
-  const notice = transfer.depositErrors.find(Boolean) ?? transfer.balanceError
+  const { route, sync } = transfer
+  const notice =
+    transfer.depositErrors.find(Boolean) ??
+    transfer.balanceError ??
+    (!route.maximumError && !route.error && !sync.progress ? sync.error : null)
   if (!transfer.available) {
     return (
       <div className="flex flex-1 items-center justify-center px-5">
@@ -390,15 +394,12 @@ function NativeZcashReceiveForm({
             max={transfer.maximum}
           />
           {accounts}
+          <ZcashTransferRoute route={route} showNotice={!notice} />
           {notice && <TransactionNotice {...notice} />}
-          <ZcashTransferRoute route={transfer.route} showNotice={!notice} />
         </div>
       </div>
       <div className="page-footer">
-        <ZcashTransferSyncStatus
-          sync={transfer.sync}
-          showError={!notice && !transfer.route.maximumError && !transfer.route.error}
-        />
+        <ZcashTransferSyncStatus sync={sync} />
         <Button
           size="wallet"
           disabled={action.disabled}
@@ -1376,7 +1377,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           amount: currentAmount,
           decimals: selected.asset.metadata.decimals,
           availableRaw: available.amountRaw,
-          sourceLabel: source.sourceLabel
+          symbol: selected.asset.metadata.symbol
         })
       : null
   const shieldAmountState =
@@ -1385,7 +1386,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           amount: currentAmount,
           decimals: selected.asset.metadata.decimals,
           availableRaw: shieldAvailable.amountRaw,
-          sourceLabel: domainLabel(from)
+          symbol: selected.asset.metadata.symbol
         })
       : null
   const amountError = fundingRoute ? shieldAmountState?.error : amountState?.error
@@ -1809,14 +1810,14 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     } catch (error) {
       if (scopeStillCurrent()) {
         const message = error instanceof Error ? error.message : ''
-        const classifiedMessage = classifyError(error).userMessage
+        const classifiedMessage = classifyError(error, {
+          source: selected.asset.metadata.symbol,
+          fee: nativeFeeAsset?.metadata.symbol
+        }).userMessage
         const userMessage =
           message === 'Gas limit is below the estimated gas required'
             ? 'Gas limit is below the estimated gas required. Edit the network fee and try again.'
-            : classifiedMessage === 'Insufficient native balance for the amount and network fee.' &&
-                nativeFeeAsset
-              ? `Insufficient ${formatSymbol(nativeFeeAsset.metadata.symbol)} balance for the amount and network fee.`
-              : classifiedMessage
+            : classifiedMessage
         setShieldError(userMessage)
         if (replacingReview) throw new Error(userMessage)
       }
@@ -2400,29 +2401,6 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                 No transferable assets
               </p>
             )}
-            {loadState === 'error' && !portfolio ? (
-              <TransactionNotice
-                className="mt-2"
-                message="Assets could not be loaded."
-                onRetry={() => void refreshPortfolio(true, { forceDiscovery: true })}
-              />
-            ) : shieldPair && shieldConnection === 'required' && !shieldConnecting ? (
-              <TransactionNotice
-                className="mt-2"
-                message={shieldError ?? 'Shield balance unavailable.'}
-                onRetry={() => void refreshShield(shieldNeedsAuthorization)}
-              />
-            ) : transferError ? (
-              <TransactionNotice className="mt-2" message={transferError} tone="warning" />
-            ) : shieldError && !activeShieldReview && shieldConnection !== 'required' ? (
-              <TransactionNotice className="mt-2" message={shieldError} />
-            ) : showGenericEstimateError ? (
-              <TransactionNotice
-                className="mt-2"
-                message="Transfer estimate unavailable."
-                onRetry={() => setRetry(value => value + 1)}
-              />
-            ) : null}
             {selected?.chain.chain.family === 'evm' &&
               clusterPair &&
               (clusterAvailable || methodAvailable) && (
@@ -2501,6 +2479,29 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   />
                 </div>
               )}
+            {loadState === 'error' && !portfolio ? (
+              <TransactionNotice
+                className="mt-2"
+                message="Assets could not be loaded."
+                onRetry={() => void refreshPortfolio(true, { forceDiscovery: true })}
+              />
+            ) : shieldPair && shieldConnection === 'required' && !shieldConnecting ? (
+              <TransactionNotice
+                className="mt-2"
+                message={shieldError ?? 'Shield balance unavailable.'}
+                onRetry={() => void refreshShield(shieldNeedsAuthorization)}
+              />
+            ) : transferError ? (
+              <TransactionNotice className="mt-2" message={transferError} tone="warning" />
+            ) : shieldError && !activeShieldReview && shieldConnection !== 'required' ? (
+              <TransactionNotice className="mt-2" message={shieldError} />
+            ) : showGenericEstimateError ? (
+              <TransactionNotice
+                className="mt-2"
+                message="Transfer estimate unavailable."
+                onRetry={() => setRetry(value => value + 1)}
+              />
+            ) : null}
           </div>
           <div className="page-footer">
             <Button

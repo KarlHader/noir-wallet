@@ -526,6 +526,10 @@ function ZcashSendForm({
   const showAmountError = !recipientError && Boolean(transfer.amountError)
   const showMemoError = !recipientError && !showAmountError && memoError
   const showRouteNotices = !recipientError && !showAmountError && !memoError
+  const balanceOrSyncNotice = showRouteNotices
+    ? (transfer.balanceError ??
+      (!route.maximumError && !route.error && !transfer.sync.progress ? transfer.sync.error : null))
+    : null
   if (!active) return null
 
   const selectRecipient = async () => {
@@ -594,20 +598,18 @@ function ZcashSendForm({
                 onSelect: canSelectDestination ? () => setDestinationPickerOpen(true) : undefined,
                 disabled: funding.disabled
               },
+              notice: recipientError && (
+                <TransactionNotice
+                  id="zcash-send-recipient-error"
+                  message={recipientError}
+                  onRetry={
+                    recipient.znsInput && recipient.zns.retryable ? recipient.zns.retry : undefined
+                  }
+                  retrying={recipient.zns.loading}
+                />
+              ),
               feedback: (
                 <>
-                  {recipientError && (
-                    <TransactionNotice
-                      className="mt-1.5"
-                      message={recipientError}
-                      onRetry={
-                        recipient.znsInput && recipient.zns.retryable
-                          ? recipient.zns.retry
-                          : undefined
-                      }
-                      retrying={recipient.zns.loading}
-                    />
-                  )}
                   {recipient.zns.loading && (
                     <p className="text-muted text-xs mt-1.5 px-1 flex items-center gap-1.5">
                       <Icon
@@ -632,7 +634,7 @@ function ZcashSendForm({
               testId: 'zcash-amount-card',
               ariaLabel: 'ZEC amount',
               ...transfer.amountField,
-              error: showAmountError ? transfer.amountError : undefined
+              describedBy: showAmountError ? 'zcash-amount-card-error' : undefined
             },
             asset: {
               symbol: 'ZEC',
@@ -646,20 +648,12 @@ function ZcashSendForm({
           }}
           footer={
             <>
-              <ZcashTransferSyncStatus
-                sync={transfer.sync}
-                showError={
-                  showRouteNotices && !transfer.balanceError && !route.maximumError && !route.error
-                }
-              />
+              <ZcashTransferSyncStatus sync={transfer.sync} />
               <SendFormActions {...action} privacy={transfer.privacy} />
             </>
           }
         >
           <div className="flex flex-col gap-4">
-            {showRouteNotices && transfer.balanceError && (
-              <TransactionNotice {...transfer.balanceError} />
-            )}
             {!transfer.privacy?.checked && (
               <div className="order-4">
                 <div className="mb-1.5 flex items-center justify-between px-1">
@@ -687,14 +681,6 @@ function ZcashSendForm({
                   rows={2}
                   className="w-full resize-none rounded-xl border border-border/60 bg-card/50 px-4 py-3 text-sm placeholder:text-muted/50 focus:border-primary/50 focus:outline-none disabled:opacity-40"
                 />
-                {showMemoError && (
-                  <TransactionNotice
-                    id="zcash-send-memo-error"
-                    tone="warning"
-                    className="mt-1"
-                    message="This recipient cannot receive a memo."
-                  />
-                )}
                 {memoField.value && (
                   <p className="mt-1 px-1 text-right text-xs text-muted">
                     {memoField.byteLength}/512 bytes
@@ -716,6 +702,23 @@ function ZcashSendForm({
               route={route}
               showNotice={showRouteNotices && !transfer.balanceError}
             />
+            {showAmountError ? (
+              <TransactionNotice
+                id="zcash-amount-card-error"
+                className="order-6"
+                tone="warning"
+                message={transfer.amountError}
+              />
+            ) : showMemoError ? (
+              <TransactionNotice
+                id="zcash-send-memo-error"
+                className="order-6"
+                tone="warning"
+                message="This recipient cannot receive a memo."
+              />
+            ) : balanceOrSyncNotice ? (
+              <TransactionNotice className="order-6" {...balanceOrSyncNotice} />
+            ) : null}
           </div>
         </SendFormSlot>
       ) : (

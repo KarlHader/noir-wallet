@@ -53,7 +53,7 @@ export function InlineError({
       <span
         ref={textRef}
         className={cn(
-          'min-w-0 flex-1',
+          'min-w-0 flex-1 text-left',
           isText && !expanded ? 'truncate' : 'break-words whitespace-pre-wrap',
           toneClasses[tone]
         )}

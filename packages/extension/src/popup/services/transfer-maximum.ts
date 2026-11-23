@@ -11,6 +11,7 @@ import { rheaSwapClient } from './rhea-swap-client'
 import { EvmWalletClientError } from './evm-wallet-client'
 import { BitcoinWalletClientError } from './bitcoin-wallet-client'
 import { parseDisplayUnitAmount } from '@/lib/number-format'
+import { InsufficientBalanceError } from '@/lib/errors'
 
 const ETH_ROUTE_FALLBACK_RESERVE = '0.0003'
 
@@ -247,7 +248,7 @@ export async function estimateRheaRouteMaximum(
   } = { rhea: rheaSwapClient, transfer: quoteDepositTransferClient }
 ) {
   let probe = BigInt(input.source.asset.balance.availableRaw) / 2n
-  if (probe <= 0n) throw new Error('The source wallet balance does not cover the network fee')
+  if (probe <= 0n) throw new InsufficientBalanceError(input.source.networkFeeAsset.metadata.symbol)
   const assetRef = (token: RheaSwapToken) => ({
     chain: token.rheaChainId,
     address: token.rheaAddress,

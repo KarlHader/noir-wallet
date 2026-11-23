@@ -361,7 +361,7 @@ export function createRheaSwapClient(
         Array.isArray(response) ||
         Reflect.get(response, 'success') !== true
       ) {
-        throw new RheaSwapClientError('RHEA Swap signature could not be cancelled')
+        throw new RheaSwapClientError('Could not cancel the swap signature.')
       }
     },
     prepareSolanaTransaction: async (
@@ -388,7 +388,7 @@ export function createRheaSwapClient(
         Array.isArray(response) ||
         Reflect.get(response, 'success') !== true
       ) {
-        throw new RheaSwapClientError('RHEA Swap Solana transaction could not be cancelled')
+        throw new RheaSwapClientError('Could not cancel the Solana transaction.')
       }
     },
     prepareNearTransactionBatch: async (
@@ -415,7 +415,7 @@ export function createRheaSwapClient(
         Array.isArray(response) ||
         Reflect.get(response, 'success') !== true
       ) {
-        throw new RheaSwapClientError('RHEA Swap NEAR transaction batch could not be cancelled')
+        throw new RheaSwapClientError('Could not cancel the NEAR transactions.')
       }
     },
     recordTransactionSubmission: async (
@@ -453,7 +453,7 @@ export function createRheaSwapClient(
         Array.isArray(response) ||
         Reflect.get(response, 'success') !== true
       ) {
-        throw new RheaSwapClientError('RHEA Swap monitoring could not be started')
+        throw new RheaSwapClientError('Could not start tracking the swap.')
       }
     },
     discard: async (quoteHandle: string): Promise<void> => {
@@ -464,7 +464,7 @@ export function createRheaSwapClient(
         Array.isArray(response) ||
         Reflect.get(response, 'success') !== true
       ) {
-        throw new RheaSwapClientError('RHEA Swap quote could not be discarded')
+        throw new RheaSwapClientError('Could not discard the swap quote.')
       }
     }
   })

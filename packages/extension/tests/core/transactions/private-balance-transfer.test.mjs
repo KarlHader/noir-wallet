@@ -144,7 +144,7 @@ test('validates a bidirectional transfer amount against the selected source bala
       amount: '1.25',
       decimals: 6,
       availableRaw: '2500000',
-      sourceLabel: 'Public'
+      symbol: 'USDC'
     })
   ).toEqual({ amountRaw: '1250000', error: null })
   expect(
@@ -152,9 +152,9 @@ test('validates a bidirectional transfer amount against the selected source bala
       amount: '3',
       decimals: 6,
       availableRaw: '2500000',
-      sourceLabel: 'Incognito'
+      symbol: 'USDC'
     })
-  ).toEqual({ amountRaw: null, error: 'Amount exceeds the Incognito balance' })
+  ).toEqual({ amountRaw: null, error: 'Insufficient USDC balance' })
 })
 
 test('keeps empty and incomplete amounts non-submittable without an error', () => {
@@ -164,7 +164,7 @@ test('keeps empty and incomplete amounts non-submittable without an error', () =
         amount,
         decimals: 6,
         availableRaw: '2500000',
-        sourceLabel: 'Public'
+        symbol: 'USDC'
       })
     ).toEqual({ amountRaw: null, error: null })
   }
@@ -176,7 +176,7 @@ test('rejects excess precision, exponent notation, and oversized input', () => {
       amount: '0.0000001',
       decimals: 6,
       availableRaw: '2500000',
-      sourceLabel: 'Public'
+      symbol: 'USDC'
     }).error
   ).toBe('Enter a valid amount')
   expect(normalizePrivateBalanceTransferInput('1e3')).toBeNull()

@@ -19,12 +19,8 @@ const readSource = path => readFileSync(new URL(path, import.meta.url), 'utf-8')
 
 const walletConfigSource = readSource('../../../src/config/wallet.ts')
 const shieldingSource = readSource('../../../src/core/zcash/shielding.ts')
-const shieldSheetSource = readSource(
-  '../../../src/popup/components/zcash/ShieldConfirmSheet.tsx'
-)
-const shieldBannerSource = readSource(
-  '../../../src/popup/components/zcash/ShieldFundsBanner.tsx'
-)
+const shieldSheetSource = readSource('../../../src/popup/components/zcash/ShieldConfirmSheet.tsx')
+const shieldBannerSource = readSource('../../../src/popup/components/zcash/ShieldFundsBanner.tsx')
 const shieldHookSource = readSource('../../../src/popup/hooks/useShieldFunds.tsx')
 const zcashTransferHookSource = readSource('../../../src/popup/hooks/useZcashTransfer.ts')
 const approvalSource = readSource('../../../src/popup/pages/dapp/Approval.tsx')
@@ -162,7 +158,7 @@ describe('Shielding minimum balance regressions', () => {
     assert.equal(resolveZcashTransparentShieldFundingBalance(balance).available, '0.08')
     assert.equal(
       getZcashTransparentToShieldMoveAmountError('0.09', balance),
-      'Amount exceeds available balance.'
+      'Insufficient ZEC balance'
     )
   })
 

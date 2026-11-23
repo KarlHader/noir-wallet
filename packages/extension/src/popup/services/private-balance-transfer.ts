@@ -1,4 +1,5 @@
 import { parseDisplayUnitAmount } from '@/lib/number-format'
+import { formatInsufficientBalance } from '@/lib/format'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { parseAssetId } from '@/core/chains/registry'
 import { getPrivateCrossChainTransferAssetGroup } from '@/core/chains/cross-chain-asset-group'
@@ -210,15 +211,13 @@ export function resolvePrivateBalanceTransferSource(input: {
         availableRaw: input.mainBalanceRaw,
         sender: input.mainAddress,
         recipient: input.privateAddress,
-        executionMode: 'main' as const,
-        sourceLabel: 'Public' as const
+        executionMode: 'main' as const
       }
     : {
         availableRaw: input.privateBalanceRaw,
         sender: input.privateAddress,
         recipient: input.mainAddress,
-        executionMode: 'private' as const,
-        sourceLabel: 'Incognito' as const
+        executionMode: 'private' as const
       }
 }
 
@@ -231,7 +230,7 @@ export function resolvePrivateBalanceTransferAmount(input: {
   readonly amount: string
   readonly decimals: number
   readonly availableRaw: string
-  readonly sourceLabel: ReturnType<typeof balanceTransferDomainLabel>
+  readonly symbol: string
 }): PrivateBalanceTransferAmountState {
   if (input.amount.length === 0 || input.amount === '.')
     return Object.freeze({ amountRaw: null, error: null })
@@ -243,7 +242,7 @@ export function resolvePrivateBalanceTransferAmount(input: {
     if (BigInt(amountRaw) > BigInt(input.availableRaw)) {
       return Object.freeze({
         amountRaw: null,
-        error: `Amount exceeds the ${input.sourceLabel} balance`
+        error: formatInsufficientBalance(input.symbol)
       })
     }
     return Object.freeze({ amountRaw, error: null })

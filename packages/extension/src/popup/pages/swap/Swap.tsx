@@ -65,6 +65,7 @@ import type {
 import {
   detectAddressType,
   formatChainName,
+  formatInsufficientBalance,
   formatSortAddress,
   formatSymbol,
   getAccountDisplayName,
@@ -188,7 +189,7 @@ import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import { calculatePrivateFundingSourceAmount } from '@/core/transactions/private-funding'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { getUnavailableSwapNetworks } from '@/popup/services/swap-catalog-loading'
-import { classifyError } from '@/lib/errors'
+import { classifyError, InsufficientBalanceError } from '@/lib/errors'
 import { createDebugRequestId, logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
 import { logger } from '@/lib/logger'
 import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wallet-client'
@@ -3017,7 +3018,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     setMaxSelected(false)
     swap.setQuoteError(
       bitcoinMaximum.value?.amountRaw === '0'
-        ? 'Insufficient BTC for the network fee'
+        ? formatInsufficientBalance('BTC')
         : classifyError(bitcoinMaximum.error).userMessage
     )
   }, [
@@ -3161,6 +3162,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     safeBig(swap.amountIn).gt(0) &&
     walletAmountRaw === null
   const preparedFeeUnaffordable = isPreparedSwapFeeUnaffordable(preparedQuoteTransfer)
+  const reviewBalanceSymbol =
+    !hasInsufficientFunds && preparedFeeUnaffordable && preparedQuoteTransfer?.family === 'evm'
+      ? preparedQuoteTransfer.source.networkFeeAsset.metadata.symbol
+      : swap.tokenIn?.symbol
   const liveQuoteRequest = useMemo(() => {
     if (shieldNativeZecSwap) return null
     const candidate = buildLiveSwapQuoteRequest({
@@ -3779,7 +3784,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             !review.execution.target ||
             review.execution.amountRaw !== review.amountIn
           ) {
-            throw new Error('RHEA Swap Zcash build does not match the quoted source amount')
+            throw new Error('Zcash transaction amount differs from the quote. Get a new quote.')
           }
 
           const transferTarget = review.execution.target
@@ -3812,7 +3817,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               .plus(formatBaseUnitDecimalAmount(preparedFeeEstimate.feeZats, ZEC_DECIMALS))
               .gt(zcashFundingBalance.available)
           ) {
-            throw new Error('Insufficient ZEC for the network fee')
+            throw new InsufficientBalanceError('ZEC')
           }
         } else {
           if (!walletOwnedSource) throw new Error('The selected source asset is unavailable')
@@ -3861,7 +3866,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             review.execution.kind === 'bitcoin-transfer'
           ) {
             if (!review.execution.target || review.execution.amountRaw !== review.amountIn) {
-              throw new Error('RHEA Swap Bitcoin build does not match the quoted source amount')
+              throw new Error('Bitcoin transaction amount differs from the quote. Get a new quote.')
             }
             const depositAddress = review.execution.target
             if (maxSelected) {
@@ -3873,7 +3878,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 })
               )
               if (requestSequence !== quoteRequestSequence.current) return
-              if (maximum.amountRaw === '0') throw new Error('Insufficient BTC for the network fee')
+              if (maximum.amountRaw === '0') throw new InsufficientBalanceError('BTC')
               if (BigInt(review.amountIn) > BigInt(maximum.amountRaw)) {
                 bitcoinMaximum.update(maximum)
                 reviewAfterQuoteRefresh.current = null
@@ -4110,7 +4115,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             }
             setRheaSigningReview({ kind: 'near-transaction-batch', review: nearReview })
           } else {
-            throw new Error('This RHEA Swap execution is not supported by the source Wallet')
+            throw new Error('The source wallet does not support this swap route.')
           }
           if (requestSequence !== quoteRequestSequence.current) {
             if (prepared) await quoteDepositTransferClient.reject(prepared).catch(() => {})
@@ -6868,7 +6873,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 <TransactionNotice
                   className="mt-3"
                   tone="warning"
-                  message="Amount exceeds balance at this fee. Lower the amount or switch fee tier."
+                  message={formatInsufficientBalance(reviewBalanceSymbol)}
                 />
               ) : undefined
             }
@@ -6950,6 +6955,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             quoteChanges={quoteChanges}
             transferPreparationError={transferPreparationError}
             insufficientFunds={hasInsufficientFunds || preparedFeeUnaffordable}
+            insufficientSymbol={reviewBalanceSymbol}
             onRefresh={refreshReview}
             onAccept={acceptRheaQuote}
             onRetryPreparation={retryPreparation}
@@ -7094,6 +7100,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                   : 'Sign Swap Order'
           }
           insufficient={hasInsufficientFunds || preparedFeeUnaffordable}
+          insufficientSymbol={reviewBalanceSymbol}
           actionStatus={zcashSyncActionStatus}
         />
       )
@@ -7275,9 +7282,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             swap.destinationTokensLoading && swap.destinationTokens.length === 0
           }
           hasInsufficientFunds={hasInsufficientFunds}
-          insufficientMessage={
-            swap.tokenIn ? `Insufficient ${swap.tokenIn.symbol} balance` : undefined
-          }
           maxLoading={bitcoinMaximumLoading}
           maxDisabled={
             !resolvedRecipientAddress || !walletOwnedSource || safeBig(maximumButtonAmount).lte(0)
@@ -7521,13 +7525,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         }
         actionStatus={zcashSyncActionStatus}
         hasInsufficientFunds={hasInsufficientFunds}
-        insufficientMessage={
-          swap.isZecSource
-            ? zcashAmountErrorCopy
-            : swap.tokenIn
-              ? `Insufficient ${swap.tokenIn.symbol} balance`
-              : undefined
-        }
+        insufficientMessage={zcashAmountErrorCopy}
         walletManagedRefundAddress={resolvedRefundAddress || undefined}
         feeIsApproximate={feeIsApproximate}
         sourceAddress={
@@ -7646,7 +7644,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       ? 'The selected asset is not available for Confidential transfers.'
       : null) ??
     (hasInsufficientFunds && swap.tokenIn && !walletSourcesLoading && lockedAssetFlowReady
-      ? `Insufficient ${swap.tokenIn.symbol} balance`
+      ? formatInsufficientBalance(swap.tokenIn.symbol)
       : null) ??
     swap.quoteError
   const preparingSimplifiedTransfer =
