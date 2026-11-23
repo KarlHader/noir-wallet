@@ -323,14 +323,17 @@ function MethodCard({
         </span>
       </span>
       <span className="mt-2 flex justify-between gap-2">
-        <span className="text-muted">Quote difference</span>
+        <span className="shrink-0 text-muted">Fee</span>
         <span className="min-w-0 break-words text-right">
-          {loading ? <Skeleton className="ml-auto h-4 w-20 max-w-full" /> : fee.routeDifference}
+          {loading ? (
+            <Skeleton className="ml-auto h-4 w-20 max-w-full" />
+          ) : (
+            <>
+              <span className="block">{fee.value}</span>
+              {fee.detail && <span className="block text-muted">{fee.detail}</span>}
+            </>
+          )}
         </span>
-      </span>
-      <span className="mt-2 flex justify-between gap-2">
-        <span className="text-muted">Network fee cap</span>
-        <span className="min-w-0 break-words text-right">{fee.networkFeeCap}</span>
       </span>
     </button>
   )

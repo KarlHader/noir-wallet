@@ -215,7 +215,9 @@ export async function estimateDirectTransfer(input: {
 export function formatBalanceTransferFee(
   estimate: BalanceTransferEstimate | null,
   asset: PortfolioAssetView | null
-): { routeDifference: string; networkFeeCap: string } {
+): { value: string; detail: string | null } {
+  if (!estimate || !asset || estimate.routeFeeRaw === null) return { value: '—', detail: null }
+  const gas = estimate.sourceNetworkFee
   const format = (raw: string, decimals: number, native = false) => {
     const value = BigInt(raw)
     const amount = formatBaseUnitDecimalAmount(value < 0n ? -value : value, decimals)
@@ -224,12 +226,18 @@ export function formatBalanceTransferFee(
       : formatFeeAmount(amount)
     return `${display.startsWith('<') ? '' : '~'}${value < 0n ? '-' : ''}${display}`
   }
-  const gas = estimate?.sourceNetworkFee
+  if (gas && asset.asset.kind === 'native') {
+    const total = BigInt(estimate.routeFeeRaw) + BigInt(gas.raw)
+    return {
+      value: `${format(total.toString(), asset.metadata.decimals, true)} ${asset.metadata.symbol}`,
+      detail: null
+    }
+  }
   return {
-    routeDifference:
-      estimate?.routeFeeRaw != null && asset
-        ? `${format(estimate.routeFeeRaw, asset.metadata.decimals, asset.asset.kind === 'native')} ${asset.metadata.symbol}`
-        : '—',
-    networkFeeCap: gas ? `${formatBaseUnitDecimalAmount(gas.raw, gas.decimals)} ${gas.symbol}` : '—'
+    value:
+      asset.asset.kind === 'native'
+        ? `${format(estimate.routeFeeRaw, asset.metadata.decimals, true)} ${asset.metadata.symbol}`
+        : format(estimate.routeFeeRaw, asset.metadata.decimals),
+    detail: gas ? `${format(gas.raw, gas.decimals, true)} ${gas.symbol}` : null
   }
 }
