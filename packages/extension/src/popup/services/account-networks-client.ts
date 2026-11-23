@@ -218,7 +218,16 @@ function parseNetwork(value: unknown, chains: AddressGatedChainRegistry): Accoun
   let privateExecutionAddress: string | undefined
   if (hasPrivateExecutionAddress) {
     const rawPrivateExecutionAddress = network.privateExecutionAddress
-    if (
+    if (chain.family === 'near') {
+      if (
+        typeof rawPrivateExecutionAddress !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(rawPrivateExecutionAddress) ||
+        addresses.some(address => address.value === rawPrivateExecutionAddress)
+      ) {
+        throw new Error('Invalid Confidential address')
+      }
+      privateExecutionAddress = rawPrivateExecutionAddress
+    } else if (
       chain.family !== 'evm' ||
       typeof rawPrivateExecutionAddress !== 'string' ||
       !/^0x[0-9a-fA-F]{40}$/.test(rawPrivateExecutionAddress) ||
@@ -227,8 +236,9 @@ function parseNetwork(value: unknown, chains: AddressGatedChainRegistry): Accoun
       )
     ) {
       throw new Error('Invalid Confidential address')
+    } else {
+      privateExecutionAddress = rawPrivateExecutionAddress
     }
-    privateExecutionAddress = rawPrivateExecutionAddress
   }
   return Object.freeze({
     chain,

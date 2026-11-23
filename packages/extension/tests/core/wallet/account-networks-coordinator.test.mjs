@@ -602,4 +602,88 @@ test.describe('Account networks coordinator', () => {
       (await multiCoin.readCatalog()).accounts[0].networks.map(network => network.chainId)
     ).toEqual([evmChainId, bitcoinChainId])
   })
+
+  test('stores a NEAR PEA for software and imported index 0 only', async () => {
+    const nearChainId = 'near:testnet'
+    const nearAddress = '11'.repeat(32)
+    const nearPrivate = 'b90b217039eed36162aef24e79ec0be08063210c65eff1a1c3d1af7c11fa8af4'
+    const nearChains = createAddressGatedChainRegistry(createInitialProductChainRegistry('testnet'), [
+      'chain.near'
+    ])
+    const calls = []
+    const nearSnapshot = (source, accountIndex) => ({
+      ...snapshot(),
+      keyDomains: [
+        {
+          ...snapshot().keyDomains[0],
+          source
+        }
+      ],
+      accounts: [{ ...snapshot().accounts[0], accountIndex }],
+      chainAccounts: [
+        {
+          id: 'chain-account:networks:near',
+          scope: { keyDomainId: walletId, accountId, chainId: nearChainId },
+          derivation: { scheme: 'slip10', path: `m/44'/397'/${accountIndex}'` },
+          identity: { kind: 'account-identifier', value: nearAddress },
+          createdAt: 1
+        }
+      ],
+      addresses: [
+        {
+          id: 'address:networks:near',
+          chainAccountId: 'chain-account:networks:near',
+          value: nearAddress,
+          scheme: 'near',
+          purpose: 'identity',
+          rotatable: false,
+          preferredForReceive: true,
+          privacy: 'transparent',
+          walletCompatibility: 'broad'
+        }
+      ]
+    })
+    const read = async (source, accountIndex) => {
+      const coordinator = new AccountNetworksCoordinator({
+        repository: repository(nearSnapshot(source, accountIndex)),
+        chains: nearChains,
+        nearPeaDerivation: {
+          async deriveNearPea(keyDomainId, requestedIndex) {
+            calls.push({ keyDomainId, accountIndex: requestedIndex })
+            return { address: nearPrivate }
+          }
+        }
+      })
+      return (await coordinator.readCatalog()).accounts[0].networks.find(
+        network => network.chainId === nearChainId
+      )
+    }
+
+    expect(
+      (await read({ kind: 'software', mnemonicWordCount: 24 }, 4)).privateExecutionAddress
+    ).toBe(nearPrivate)
+    expect((await read({ kind: 'private-key', chainFamily: 'near' }, 0)).privateExecutionAddress).toBe(
+      nearPrivate
+    )
+    expect(
+      (await read({ kind: 'private-key', chainFamily: 'near' }, 3)).privateExecutionAddress
+    ).toBeUndefined()
+    expect(
+      (
+        await read(
+          {
+            kind: 'hardware',
+            vendor: 'ledger',
+            firmwareProfile: 'near',
+            capabilities: ['near']
+          },
+          0
+        )
+      ).privateExecutionAddress
+    ).toBeUndefined()
+    expect(calls).toEqual([
+      { keyDomainId: walletId, accountIndex: 4 },
+      { keyDomainId: walletId, accountIndex: 0 }
+    ])
+  })
 })

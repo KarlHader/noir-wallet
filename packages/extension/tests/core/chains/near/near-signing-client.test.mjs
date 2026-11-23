@@ -125,3 +125,123 @@ test('rejects a prepared response bound to another chain', async () => {
   })
   await client.destroy()
 })
+
+const peaAddress = 'b90b217039eed36162aef24e79ec0be08063210c65eff1a1c3d1af7c11fa8af4'
+const peaPublicKey = 'ed25519:DTLGYm12WdyTMRtPRtYAhrudpDuQYvTJnfrgq3StWJfV'
+
+test('derives a NEAR PEA and prepares private transaction and message signing', async () => {
+  const calls = []
+  let ledgerCalls = 0
+  const client = new NearMultichainSigningClient({
+    credentials: { getCredentialBinding: async () => binding },
+    ledger: {
+      resolveAccount: async () => {
+        ledgerCalls += 1
+        throw new Error('NEAR private execution cannot use a hardware signer')
+      }
+    },
+    now: () => 1_000,
+    createCommandId: () => 'keyring-command:near-pea',
+    forward: async (_method, forwardedPayload) => {
+      const command = parseKeyringCommand(decodeChromeRuntimeCommand(forwardedPayload.command))
+      calls.push([command.operation, command.payload])
+      if (command.operation === 'account.derive-public') {
+        return createKeyringCommandSuccess(command.commandId, {
+          address: peaAddress,
+          publicKey: peaPublicKey,
+          curve: 'ed25519',
+          derivationScheme: 'pea_v2',
+          parent: { accountIndex: 0 },
+          family: 'near',
+          addressScheme: 'near'
+        })
+      }
+      if (command.payload.kind === 'pea-near-message') {
+        return createKeyringCommandSuccess(command.commandId, {
+          ...preparedValue('signing-command:near:pea-message'),
+          operation: 'message',
+          summary: {
+            schema: 'near.nep413-message.v1',
+            chainId,
+            operation: 'message',
+            review: { level: 'standard', issues: [] },
+            fields: {
+              signerId: signer,
+              publicKey,
+              message: {
+                encoding: 'utf8',
+                value: 'hello',
+                byteLength: 5,
+                sha256: 'ab'.repeat(32)
+              },
+              nonceBase64: Buffer.alloc(32, 7).toString('base64'),
+              recipient: 'alice.near',
+              callbackUrl: null
+            }
+          }
+        })
+      }
+      return createKeyringCommandSuccess(command.commandId, preparedValue('signing-command:near:pea'))
+    }
+  })
+
+  await expect(client.deriveNearPea(keyDomainId, 0)).resolves.toEqual({
+    address: peaAddress,
+    publicKey: peaPublicKey,
+    curve: 'ed25519',
+    derivationScheme: 'pea_v2',
+    parent: { accountIndex: 0 }
+  })
+  const peaTransaction = { ...payload, kind: 'pea-near-transaction' }
+  await expect(client.prepare(keyDomainId, peaTransaction)).resolves.toMatchObject({
+    operation: 'transaction',
+    summary: { schema: 'near.transaction.v1' }
+  })
+  const messageRequest = {
+    chainId,
+    accountIndex: 0,
+    accountId: peaAddress,
+    message: 'hello',
+    recipient: 'alice.near',
+    nonce: 'AQ==',
+    callbackUrl: null,
+    state: null
+  }
+  await expect(
+    client.prepare(keyDomainId, {
+      kind: 'pea-near-message',
+      chainId,
+      accountIndex: 0,
+      request: messageRequest
+    })
+  ).resolves.toMatchObject({ operation: 'message' })
+  expect(ledgerCalls).toBe(0)
+  expect(calls).toEqual([
+    ['account.derive-public', { family: 'near-pea', accountIndex: 0 }],
+    ['signing.prepare', { kind: 'pea-near-transaction', chainId, accountIndex: 0, transaction }],
+    [
+      'signing.prepare',
+      {
+        kind: 'pea-near-message',
+        chainId,
+        accountIndex: 0,
+        request: messageRequest
+      }
+    ]
+  ])
+  await expect(
+    client.confirm(
+      keyDomainId,
+      parseSigningCommandId('signing-command:near:pea'),
+      undefined,
+      undefined,
+      { kind: 'external', request: { encoding: 'base64', value: 'AQ==' } },
+      {
+        payload: peaTransaction,
+        prepared: preparedValue('signing-command:near:pea'),
+        accountId: 'account:near'
+      }
+    )
+  ).rejects.toThrow(/hardware signer/)
+  await client.destroy()
+})

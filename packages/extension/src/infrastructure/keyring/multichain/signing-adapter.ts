@@ -49,6 +49,7 @@ import {
   adaptNearPreparedSigning,
   adaptNearSignedResult,
   parseNearSigningPreparePayload,
+  type NearPeaSigningBinding,
   type NearSigningPreparePayload
 } from './signing-adapter-near'
 import {
@@ -295,7 +296,12 @@ export function parseSigningPreparePayload(value: unknown): ParsedSigningPrepare
   if (record.kind === 'solana-transaction' || record.kind === 'solana-message') {
     return parseSolanaSigningPreparePayload(record)
   }
-  if (record.kind === 'near-transaction' || record.kind === 'near-nep413-message') {
+  if (
+    record.kind === 'near-transaction' ||
+    record.kind === 'pea-near-transaction' ||
+    record.kind === 'near-nep413-message' ||
+    record.kind === 'pea-near-message'
+  ) {
     return parseNearSigningPreparePayload(record)
   }
   const kind = readLiteral(
@@ -1166,7 +1172,8 @@ export async function adaptPreparedSigning(
   signingCommandId: SigningCommandId,
   expiresAt: number,
   bitcoinAccount?: RawDerivedBitcoinAccount,
-  imported = false
+  imported = false,
+  nearPea?: NearPeaSigningBinding
 ): Promise<AdaptedPreparedSigning> {
   switch (payload.kind) {
     case 'evm-transaction':
@@ -1187,8 +1194,10 @@ export async function adaptPreparedSigning(
     case 'solana-message':
       return adaptSolanaPreparedSigning(raw, payload, signingCommandId, expiresAt, imported)
     case 'near-transaction':
+    case 'pea-near-transaction':
     case 'near-nep413-message':
-      return adaptNearPreparedSigning(raw, payload, signingCommandId, expiresAt, imported)
+    case 'pea-near-message':
+      return adaptNearPreparedSigning(raw, payload, signingCommandId, expiresAt, imported, nearPea)
   }
 }
 
@@ -1249,7 +1258,9 @@ export function adaptSignedResult(
       if (account.curve !== 'ed25519') throw new Error('Ed25519 signing account is missing')
       return adaptSolanaSignedResult(kind, raw, account)
     case 'near-transaction':
+    case 'pea-near-transaction':
     case 'near-nep413-message':
+    case 'pea-near-message':
       if (account.curve !== 'ed25519') throw new Error('Ed25519 signing account is missing')
       return adaptNearSignedResult(kind, raw, account)
   }

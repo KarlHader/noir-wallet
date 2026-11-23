@@ -34,6 +34,12 @@ import {
   utf8Bytes
 } from './signing-adapter-common'
 
+export interface NearPeaSigningBinding {
+  readonly expectedAddress: string
+  readonly expectedPublicKey: string
+  readonly mainAddress: string
+}
+
 export type NearSigningPreparePayload =
   | Readonly<{
       kind: 'near-transaction'
@@ -42,7 +48,19 @@ export type NearSigningPreparePayload =
       transaction: UnknownRecord
     }>
   | Readonly<{
+      kind: 'pea-near-transaction'
+      chainId: ChainId
+      accountIndex: number
+      transaction: UnknownRecord
+    }>
+  | Readonly<{
       kind: 'near-nep413-message'
+      chainId: ChainId
+      accountIndex: number
+      request: UnknownRecord
+    }>
+  | Readonly<{
+      kind: 'pea-near-message'
       chainId: ChainId
       accountIndex: number
       request: UnknownRecord
@@ -80,10 +98,10 @@ export function parseNearSigningPreparePayload(value: unknown): NearSigningPrepa
   const record = readRecord(value, 'signing.prepare payload')
   const kind = readLiteral(
     record.kind,
-    ['near-transaction', 'near-nep413-message'],
+    ['near-transaction', 'pea-near-transaction', 'near-nep413-message', 'pea-near-message'],
     'signing.prepare kind'
   )
-  if (kind === 'near-transaction') {
+  if (kind === 'near-transaction' || kind === 'pea-near-transaction') {
     assertExactKeys(record, ['kind', 'chainId', 'accountIndex', 'transaction'], [], 'payload')
     const chainId = readChainId(record.chainId)
     const transaction = readRecord(record.transaction, 'transaction')
@@ -253,12 +271,42 @@ async function nearAction(value: unknown): Promise<NearActionSummary> {
   }
 }
 
+function assertPreparedNearAccount(
+  account: RawDerivedEd25519Account,
+  chainId: string,
+  accountIndex: number,
+  imported: boolean,
+  pea: NearPeaSigningBinding | undefined
+): void {
+  if (!pea) {
+    assertRawEd25519AccountMatches(account, 'near', chainId, accountIndex, imported)
+    return
+  }
+  // The prepared PEA account is an imported ed25519 key. The parent index is bound by
+  // the derived implicit account, which must stay distinct from the main NEAR account.
+  if (
+    account.accountId !== `${chainId}:${account.address}` ||
+    account.addressScheme !== 'near' ||
+    account.derivationScheme !== 'imported' ||
+    account.derivationPath !== 'm' ||
+    account.address !== pea.expectedAddress ||
+    account.publicKey !== pea.expectedPublicKey ||
+    account.address === pea.mainAddress
+  ) {
+    throw new Error('Prepared NEAR PEA signer does not match its parent account')
+  }
+}
+
 async function adaptNearTransaction(
   raw: unknown,
-  payload: Extract<NearSigningPreparePayload, { kind: 'near-transaction' }>,
+  payload: Extract<
+    NearSigningPreparePayload,
+    { kind: 'near-transaction' | 'pea-near-transaction' }
+  >,
   commandId: SigningCommandId,
   expiresAt: number,
-  imported: boolean
+  imported: boolean,
+  pea: NearPeaSigningBinding | undefined
 ): Promise<AdaptedNearPreparedSigning> {
   const prepared = parseRawPreparedValue(raw, 'PreparedNearTransaction')
   assertExactKeys(
@@ -268,7 +316,13 @@ async function adaptNearTransaction(
     'prepared'
   )
   const account = parseRawEd25519Account(prepared.value.account, 'near')
-  assertRawEd25519AccountMatches(account, 'near', payload.chainId, payload.accountIndex, imported)
+  assertPreparedNearAccount(
+    account,
+    payload.chainId,
+    payload.accountIndex,
+    imported,
+    payload.kind === 'pea-near-transaction' ? pea : undefined
+  )
   const rawSummary = readRecord(prepared.value.summary, 'PreparedNearTransaction.summary')
   assertExactKeys(
     rawSummary,
@@ -332,15 +386,22 @@ async function adaptNearTransaction(
 
 async function adaptNearMessage(
   raw: unknown,
-  payload: Extract<NearSigningPreparePayload, { kind: 'near-nep413-message' }>,
+  payload: Extract<NearSigningPreparePayload, { kind: 'near-nep413-message' | 'pea-near-message' }>,
   commandId: SigningCommandId,
   expiresAt: number,
-  imported: boolean
+  imported: boolean,
+  pea: NearPeaSigningBinding | undefined
 ): Promise<AdaptedNearPreparedSigning> {
   const prepared = parseRawPreparedValue(raw, 'PreparedNearMessage')
   assertExactKeys(prepared.value, ['requestId', 'account', 'summary'], [], 'prepared')
   const account = parseRawEd25519Account(prepared.value.account, 'near')
-  assertRawEd25519AccountMatches(account, 'near', payload.chainId, payload.accountIndex, imported)
+  assertPreparedNearAccount(
+    account,
+    payload.chainId,
+    payload.accountIndex,
+    imported,
+    payload.kind === 'pea-near-message' ? pea : undefined
+  )
   const rawSummary = readRecord(prepared.value.summary, 'PreparedNearMessage.summary')
   assertExactKeys(
     rawSummary,
@@ -406,13 +467,19 @@ export async function adaptNearPreparedSigning(
   payload: NearSigningPreparePayload,
   commandId: SigningCommandId,
   expiresAt: number,
-  imported: boolean
+  imported: boolean,
+  pea?: NearPeaSigningBinding
 ): Promise<AdaptedNearPreparedSigning> {
+  if ((payload.kind === 'pea-near-transaction' || payload.kind === 'pea-near-message') && !pea) {
+    throw new Error('NEAR PEA signing binding is missing')
+  }
   switch (payload.kind) {
     case 'near-transaction':
-      return adaptNearTransaction(raw, payload, commandId, expiresAt, imported)
+    case 'pea-near-transaction':
+      return adaptNearTransaction(raw, payload, commandId, expiresAt, imported, pea)
     case 'near-nep413-message':
-      return adaptNearMessage(raw, payload, commandId, expiresAt, imported)
+    case 'pea-near-message':
+      return adaptNearMessage(raw, payload, commandId, expiresAt, imported, pea)
   }
 }
 
@@ -422,7 +489,8 @@ export function adaptNearSignedResult(
   account: RawDerivedEd25519Account
 ): SigningResult {
   switch (kind) {
-    case 'near-transaction': {
+    case 'near-transaction':
+    case 'pea-near-transaction': {
       const signed = parseRawSignedNearTransaction(raw)
       return Object.freeze({
         kind: 'signed-payload',
@@ -430,7 +498,8 @@ export function adaptNearSignedResult(
         transactionId: signed.transactionHash
       })
     }
-    case 'near-nep413-message': {
+    case 'near-nep413-message':
+    case 'pea-near-message': {
       const signed = parseRawSignedNearMessage(raw)
       if (signed.publicKey !== account.publicKey)
         throw new Error('NEAR signed message public key mismatch')

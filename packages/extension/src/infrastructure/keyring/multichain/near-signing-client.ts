@@ -31,6 +31,7 @@ import {
 import type { NearSigningPreparePayload } from './signing-adapter-near'
 import {
   assertExactKeys,
+  parseRawNearPeaAccount,
   readBoolean,
   readLiteral,
   readRecord,
@@ -53,6 +54,18 @@ export type NearMessageSigningPreparePayload = Extract<
   NearSigningPreparePayload,
   { readonly kind: 'near-nep413-message' }
 >
+
+export interface NearPeaAccount {
+  readonly address: string
+  readonly publicKey: string
+  readonly curve: 'ed25519'
+  readonly derivationScheme: 'pea_v2'
+  readonly parent: Readonly<{ readonly accountIndex: number }>
+}
+
+function nearSigningOperation(kind: NearSigningPreparePayload['kind']): 'transaction' | 'message' {
+  return kind === 'near-transaction' || kind === 'pea-near-transaction' ? 'transaction' : 'message'
+}
 
 export interface NearSigningCredentialBindingProvider {
   readonly getCredentialBinding: (
@@ -113,7 +126,7 @@ function parsePreparedNearSigning(
   if (record.chainId !== payload.chainId) {
     throw new Error('Prepared NEAR signing chain does not match the request')
   }
-  const operation = payload.kind === 'near-transaction' ? 'transaction' : 'message'
+  const operation = nearSigningOperation(payload.kind)
   readLiteral(record.operation, [operation], 'NEAR signing operation')
   const fingerprint = readRecord(record.payloadFingerprint, 'NEAR signing payload fingerprint')
   assertExactKeys(fingerprint, ['algorithm', 'digestHex'], [], 'NEAR signing fingerprint')
@@ -218,12 +231,41 @@ export class NearMultichainSigningClient {
     )
   }
 
+  async deriveNearPea(
+    keyDomainId: KeyDomainId,
+    accountIndex: number,
+    signal?: AbortSignal
+  ): Promise<NearPeaAccount> {
+    const binding = await this.options.credentials.getCredentialBinding(keyDomainId)
+    return this.commandClient.execute(
+      {
+        operation: 'account.derive-public',
+        binding,
+        payload: { family: 'near-pea', accountIndex },
+        signal
+      },
+      value => {
+        const account = parseRawNearPeaAccount(value, accountIndex)
+        return Object.freeze({
+          address: account.address,
+          publicKey: account.publicKey,
+          curve: account.curve,
+          derivationScheme: account.derivationScheme,
+          parent: account.parent
+        })
+      }
+    )
+  }
+
   async prepare(
     keyDomainId: KeyDomainId,
     payload: NearSigningPreparePayload,
     signal?: AbortSignal
   ): Promise<PreparedSigningCommand> {
-    if (this.options.ledger) {
+    if (
+      this.options.ledger &&
+      (payload.kind === 'near-transaction' || payload.kind === 'near-nep413-message')
+    ) {
       const account = await this.options.ledger.resolveAccount(
         keyDomainId,
         payload.chainId,
@@ -301,6 +343,9 @@ export class NearMultichainSigningClient {
         this.options.ledger
       ) {
         const { payload, prepared } = resume
+        if (payload.kind === 'pea-near-transaction' || payload.kind === 'pea-near-message') {
+          throw new Error('NEAR private execution cannot use a hardware signer')
+        }
         const account = await this.options.ledger.resolveAccount(
           keyDomainId,
           payload.chainId,

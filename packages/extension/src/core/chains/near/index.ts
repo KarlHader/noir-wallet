@@ -1,3 +1,4 @@
+export { supportsNearPrivateExecution } from './execution-capability'
 export {
   nearImplicitAccountIdFromPublicKey,
   nearPublicKeyFromImplicitAccountId,

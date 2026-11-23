@@ -227,4 +227,42 @@ test.describe('Account networks Popup client', () => {
       createAccountNetworksClient(async () => result(), zcashOnly).getCatalog()
     ).rejects.toMatchObject({ code: 'invalid-response' })
   })
+
+  test('accepts a NEAR confidential address without relaxing the EVM address check', async () => {
+    const nearPrivate = 'b90b217039eed36162aef24e79ec0be08063210c65eff1a1c3d1af7c11fa8af4'
+    const withNearPrivate = result()
+    withNearPrivate.result.accounts[0].networks.find(
+      network => network.chainId === 'near:testnet'
+    ).privateExecutionAddress = nearPrivate
+    const client = createAccountNetworksClient(async () => withNearPrivate, chains)
+    const catalog = await client.getCatalog()
+    expect(
+      catalog.accounts[0].networks.find(network => network.chain.family === 'near')
+        .privateExecutionAddress
+    ).toBe(nearPrivate)
+
+    const invalidNear = [
+      nearPrivate.toUpperCase(),
+      '0xc1d4A6EB60b9c2CFaBcDFEF60C90D04BE174E0f3',
+      nearAddress,
+      `${nearPrivate}aa`
+    ]
+    for (const value of invalidNear) {
+      const response = result()
+      response.result.accounts[0].networks.find(
+        network => network.chainId === 'near:testnet'
+      ).privateExecutionAddress = value
+      await expect(
+        createAccountNetworksClient(async () => response, chains).getCatalog()
+      ).rejects.toMatchObject({ code: 'invalid-response' })
+    }
+
+    const evmAsNear = result()
+    evmAsNear.result.accounts[0].networks.find(
+      network => network.chainId === 'eip155:11155111'
+    ).privateExecutionAddress = nearPrivate
+    await expect(
+      createAccountNetworksClient(async () => evmAsNear, chains).getCatalog()
+    ).rejects.toMatchObject({ code: 'invalid-response' })
+  })
 })

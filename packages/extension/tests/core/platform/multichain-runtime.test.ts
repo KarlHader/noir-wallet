@@ -6,10 +6,14 @@ import {
   encodeChromeRuntimeCommand
 } from '../../../src/infrastructure/keyring/multichain/chrome-runtime-codec'
 import {
+  nearPeaRequestJson,
   parseRawEncryptedVault,
+  parseRawNearPeaAccount,
   parseRawSignedNearMessage,
   type RawWalletEngine
 } from '../../../src/infrastructure/keyring/multichain/raw-wallet-engine'
+import { adaptNearPreparedSigning } from '../../../src/infrastructure/keyring/multichain/signing-adapter-near'
+import { parseSigningCommandId } from '../../../src/core/keyring/ports/signing'
 import { MultichainWorkerRuntime } from '../../../src/infrastructure/keyring/multichain/worker-runtime'
 
 const MNEMONIC =
@@ -67,6 +71,9 @@ const NEAR_ACCOUNT = Object.freeze({
   addressScheme: 'near',
   derivationScheme: 'slip10'
 })
+const NEAR_PEA_ADDRESS = 'b90b217039eed36162aef24e79ec0be08063210c65eff1a1c3d1af7c11fa8af4'
+const NEAR_PEA_PUBLIC_KEY = 'ed25519:DTLGYm12WdyTMRtPRtYAhrudpDuQYvTJnfrgq3StWJfV'
+const NEAR_PEA_REQUEST = '{"version":2,"family":"near","parent":{"accountIndex":0}}'
 const BINDING = Object.freeze({
   kind: 'credential',
   keyDomainId: 'key-domain:test',
@@ -88,6 +95,10 @@ class FakeWalletEngine implements RawWalletEngine {
   nextSessionId = 1
   nextRequestId = 1
   evmAccount: unknown = EVM_ACCOUNT
+  privateKeyScope: { chainFamily: 'eip155' | 'near' | 'solana' | 'bip122' } | null = null
+  nearPeaAddress = NEAR_PEA_ADDRESS
+  nearPeaParentIndex: number | null = null
+  lastNearTransactionHash = 'SysvarC1ock11111111111111111111111111111111'
 
   coreInfo(): unknown {
     return { apiVersion: 2, vaultVersions: [1, 2], capabilities: [] }
@@ -128,10 +139,14 @@ class FakeWalletEngine implements RawWalletEngine {
 
   unlock(_vault: unknown, password: string): unknown {
     this.unlockPasswords.push(password)
+    const imported = (_vault as { version?: unknown }).version === 2
     return {
       sessionId: this.nextSessionId++,
-      ...((_vault as { version?: unknown }).version === 2
-        ? { kind: 'private_key', chainFamily: 'eip155' }
+      ...(imported
+        ? {
+            kind: 'private_key',
+            chainFamily: this.privateKeyScope?.chainFamily ?? 'eip155'
+          }
         : { kind: 'mnemonic' })
     }
   }
@@ -151,6 +166,21 @@ class FakeWalletEngine implements RawWalletEngine {
 
   derivePeaAccount(_sessionId: number, requestJson: string): unknown {
     this.peaRequests.push(requestJson)
+    const request = JSON.parse(requestJson) as {
+      family?: string
+      parent?: { accountIndex?: number }
+    }
+    if (request.family === 'near') {
+      return {
+        address: this.nearPeaAddress,
+        publicKey: NEAR_PEA_PUBLIC_KEY,
+        curve: 'ed25519',
+        derivationScheme: 'pea_v2',
+        parent: { accountIndex: this.nearPeaParentIndex ?? request.parent?.accountIndex },
+        family: 'near',
+        addressScheme: 'near'
+      }
+    }
     return GLOBAL_PEA
   }
 
@@ -159,7 +189,112 @@ class FakeWalletEngine implements RawWalletEngine {
   }
 
   deriveNearAccount(): unknown {
+    if (this.privateKeyScope?.chainFamily === 'near') {
+      return {
+        ...NEAR_ACCOUNT,
+        derivationPath: 'm',
+        derivationScheme: 'imported'
+      }
+    }
     return NEAR_ACCOUNT
+  }
+
+  preparePeaNearTransaction(_sessionId: number, peaRequestJson: string, request: unknown): unknown {
+    this.peaRequests.push(peaRequestJson)
+    const transaction = request as {
+      chainId: string
+      receiverId: string
+      nonce: string
+      blockHash: string
+    }
+    this.lastNearTransactionHash = transaction.blockHash
+    return this.preparedNearTransaction(transaction)
+  }
+
+  preparePeaNearMessage(_sessionId: number, peaRequestJson: string, request: unknown): unknown {
+    this.peaRequests.push(peaRequestJson)
+    const message = request as {
+      chainId: string
+      message: string
+      recipient: string
+      nonce: string
+      callbackUrl: unknown
+      state: unknown
+    }
+    return {
+      requestId: this.nextRequestId++,
+      account: this.nearPeaSigner(message.chainId),
+      summary: {
+        chainId: message.chainId,
+        accountId: this.nearPeaAddress,
+        publicKey: NEAR_PEA_PUBLIC_KEY,
+        signingImplicitAccountId: this.nearPeaAddress,
+        accountKeyBinding: 'implicit',
+        message: message.message,
+        recipient: message.recipient,
+        nonce: message.nonce,
+        callbackUrl: message.callbackUrl,
+        state: message.state,
+        signingHash: `0x${'ab'.repeat(32)}`,
+        requiresFullAccessKey: true
+      }
+    }
+  }
+
+  confirmNearTransaction(): unknown {
+    return {
+      signedTransaction: 'AQ==',
+      transactionHash: this.lastNearTransactionHash,
+      signature: NEAR_PEA_PUBLIC_KEY
+    }
+  }
+
+  confirmNearMessage(): unknown {
+    return {
+      accountId: this.nearPeaAddress,
+      publicKey: NEAR_PEA_PUBLIC_KEY,
+      signature: Buffer.alloc(64, 7).toString('base64'),
+      state: null,
+      signingHash: `0x${'22'.repeat(32)}`
+    }
+  }
+
+  private nearPeaSigner(chainId: string) {
+    return {
+      accountId: `${chainId}:${this.nearPeaAddress}`,
+      address: this.nearPeaAddress,
+      derivationPath: 'm',
+      publicKey: NEAR_PEA_PUBLIC_KEY,
+      curve: 'ed25519',
+      addressScheme: 'near',
+      derivationScheme: 'imported'
+    }
+  }
+
+  private preparedNearTransaction(transaction: {
+    chainId: string
+    receiverId: string
+    nonce: string
+    blockHash: string
+  }) {
+    return {
+      requestId: this.nextRequestId++,
+      transactionHash: transaction.blockHash,
+      account: this.nearPeaSigner(transaction.chainId),
+      summary: {
+        chainId: transaction.chainId,
+        signerId: this.nearPeaAddress,
+        receiverId: transaction.receiverId,
+        signingPublicKey: NEAR_PEA_PUBLIC_KEY,
+        signingImplicitAccountId: this.nearPeaAddress,
+        accountKeyBinding: 'implicit',
+        nonce: transaction.nonce,
+        blockHash: transaction.blockHash,
+        transactionHash: transaction.blockHash,
+        totalDepositYocto: '1',
+        actions: [{ type: 'transfer', depositYocto: '1' }]
+      }
+    }
   }
 
   deriveBitcoinAccount(): never {
@@ -675,5 +810,332 @@ test.describe('Multichain Worker runtime boundaries', () => {
       'SIGNING_COMMAND_EXPIRED'
     )
     expect(engine.rejectedRequests).toEqual([1])
+  })
+
+  test('locks the global NEAR PEA request and accepts only that response shape', () => {
+    expect(nearPeaRequestJson(0)).toBe(NEAR_PEA_REQUEST)
+    expect(nearPeaRequestJson(7)).toBe('{"version":2,"family":"near","parent":{"accountIndex":7}}')
+    expect(JSON.parse(NEAR_PEA_REQUEST)).toEqual({
+      version: 2,
+      family: 'near',
+      parent: { accountIndex: 0 }
+    })
+    expect(Object.keys(JSON.parse(NEAR_PEA_REQUEST)).sort()).toEqual([
+      'family',
+      'parent',
+      'version'
+    ])
+    expect(NEAR_PEA_REQUEST.includes('appId')).toBe(false)
+    expect(NEAR_PEA_REQUEST.includes('chainId')).toBe(false)
+
+    const accepted = {
+      address: NEAR_PEA_ADDRESS,
+      publicKey: NEAR_PEA_PUBLIC_KEY,
+      curve: 'ed25519',
+      derivationScheme: 'pea_v2',
+      parent: { accountIndex: 0 },
+      family: 'near',
+      addressScheme: 'near'
+    }
+    expect(parseRawNearPeaAccount(accepted, 0)).toEqual(accepted)
+    for (const rejected of [
+      { ...accepted, address: NEAR_PEA_ADDRESS.toUpperCase() },
+      { ...accepted, publicKey: NEAR_PEA_ADDRESS },
+      { ...accepted, parent: { accountIndex: 1 } }
+    ]) {
+      expect(() => parseRawNearPeaAccount(rejected, 0)).toThrow(
+        /Derived NEAR PEA account is invalid/
+      )
+    }
+    for (const rejected of [
+      { ...accepted, curve: 'secp256k1' },
+      { ...accepted, derivationScheme: 'pea_v1' },
+      { ...accepted, family: 'solana' },
+      { ...accepted, addressScheme: 'solana' },
+      { ...accepted, appId: 'App.One' },
+      { ...accepted, chainId: 'near:mainnet' }
+    ]) {
+      expect(() => parseRawNearPeaAccount(rejected, 0)).toThrow(/DerivedNearPeaAccount/)
+    }
+  })
+
+  test('derives a global NEAR PEA from the requested parent index', async () => {
+    const engine = new FakeWalletEngine()
+    const runtime = createRuntime(engine)
+    expectSuccess(
+      await runtime.execute(command('credential.unlock', { vault: VAULT, password: 'password' }))
+    )
+    const pea = expectSuccess(
+      await runtime.execute(
+        command('account.derive-public', { family: 'near-pea', accountIndex: 2 })
+      )
+    )
+    expect(pea).toMatchObject({
+      address: NEAR_PEA_ADDRESS,
+      publicKey: NEAR_PEA_PUBLIC_KEY,
+      curve: 'ed25519',
+      derivationScheme: 'pea_v2',
+      family: 'near',
+      addressScheme: 'near',
+      parent: { accountIndex: 2 }
+    })
+    expect(engine.peaRequests).toEqual([
+      '{"version":2,"family":"near","parent":{"accountIndex":2}}'
+    ])
+  })
+
+  test('allows an imported NEAR PEA only at account index 0', async () => {
+    const engine = new FakeWalletEngine()
+    engine.privateKeyScope = { chainFamily: 'near' }
+    const runtime = createRuntime(engine)
+    expectSuccess(
+      await runtime.execute(
+        command('credential.unlock', { vault: PRIVATE_KEY_VAULT, password: 'password' })
+      )
+    )
+    expectFailure(
+      await runtime.execute(
+        command('account.derive-public', { family: 'near-pea', accountIndex: 1 })
+      ),
+      'INVALID_COMMAND'
+    )
+    expect(engine.peaRequests).toEqual([])
+    expectSuccess(
+      await runtime.execute(
+        command('account.derive-public', { family: 'near-pea', accountIndex: 0 })
+      )
+    )
+    expect(engine.peaRequests).toEqual([NEAR_PEA_REQUEST])
+    expectFailure(
+      await runtime.execute(
+        command('signing.prepare', {
+          kind: 'pea-near-transaction',
+          chainId: 'near:testnet',
+          accountIndex: 1,
+          transaction: {
+            chainId: 'near:testnet',
+            accountIndex: 1,
+            signerId: NEAR_PEA_ADDRESS,
+            receiverId: 'alice.near',
+            nonce: '1',
+            blockHash: 'SysvarC1ock11111111111111111111111111111111',
+            actions: [{ type: 'transfer', depositYocto: '1' }]
+          }
+        })
+      ),
+      'INVALID_COMMAND'
+    )
+    expect(engine.peaRequests).toEqual([NEAR_PEA_REQUEST])
+
+    const otherFamily = new FakeWalletEngine()
+    const otherRuntime = createRuntime(otherFamily)
+    expectSuccess(
+      await otherRuntime.execute(
+        command('credential.unlock', { vault: PRIVATE_KEY_VAULT, password: 'password' })
+      )
+    )
+    expectFailure(
+      await otherRuntime.execute(
+        command('account.derive-public', { family: 'near-pea', accountIndex: 0 })
+      ),
+      'UNSUPPORTED_CHAIN'
+    )
+    expect(otherFamily.peaRequests).toEqual([])
+  })
+
+  test('prepares and confirms NEAR PEA transaction and message signing', async () => {
+    const engine = new FakeWalletEngine()
+    const runtime = createRuntime(engine, {
+      createSigningCommandId: () => 'signing-command:near-pea'
+    })
+    expectSuccess(
+      await runtime.execute(command('credential.unlock', { vault: VAULT, password: 'password' }))
+    )
+    const chainId = 'near:testnet'
+    const blockHash = 'SysvarC1ock11111111111111111111111111111111'
+    const transaction = {
+      chainId,
+      accountIndex: 0,
+      signerId: NEAR_PEA_ADDRESS,
+      receiverId: 'alice.near',
+      nonce: '1',
+      blockHash,
+      actions: [{ type: 'transfer', depositYocto: '1' }]
+    }
+    const preparedTransaction = expectSuccess(
+      await runtime.execute(
+        command('signing.prepare', {
+          kind: 'pea-near-transaction',
+          chainId,
+          accountIndex: 0,
+          transaction
+        })
+      )
+    ) as { commandId: string; summary: { fields: { signerId: string; publicKey: string } } }
+    expect(preparedTransaction.summary.fields.signerId).toBe(NEAR_PEA_ADDRESS)
+    expect(preparedTransaction.summary.fields.publicKey).toBe(NEAR_PEA_PUBLIC_KEY)
+    const signedTransaction = expectSuccess(
+      await runtime.execute(
+        command('signing.confirm', { signingCommandId: preparedTransaction.commandId })
+      )
+    )
+    expect(signedTransaction).toMatchObject({
+      kind: 'signed-payload',
+      transactionId: blockHash
+    })
+
+    const nonce = Buffer.alloc(32, 7).toString('base64')
+    const request = {
+      chainId,
+      accountIndex: 0,
+      accountId: NEAR_PEA_ADDRESS,
+      message: 'hello',
+      recipient: 'alice.near',
+      nonce,
+      callbackUrl: null,
+      state: null
+    }
+    const preparedMessage = expectSuccess(
+      await runtime.execute(
+        command('signing.prepare', {
+          kind: 'pea-near-message',
+          chainId,
+          accountIndex: 0,
+          request
+        })
+      )
+    ) as { commandId: string }
+    const signedMessage = expectSuccess(
+      await runtime.execute(
+        command('signing.confirm', { signingCommandId: preparedMessage.commandId })
+      )
+    )
+    expect(signedMessage).toMatchObject({
+      kind: 'signature',
+      publicKey: NEAR_PEA_PUBLIC_KEY,
+      address: NEAR_PEA_ADDRESS
+    })
+    expect(engine.peaRequests).toEqual([
+      NEAR_PEA_REQUEST,
+      NEAR_PEA_REQUEST,
+      NEAR_PEA_REQUEST,
+      NEAR_PEA_REQUEST
+    ])
+
+    expectFailure(
+      await runtime.execute(
+        command('signing.prepare', {
+          kind: 'pea-near-transaction',
+          chainId,
+          accountIndex: 1,
+          transaction: { ...transaction, accountIndex: 0 }
+        })
+      ),
+      'UNSUPPORTED_PAYLOAD'
+    )
+    engine.nearPeaAddress = NEAR_ACCOUNT.address
+    expectFailure(
+      await runtime.execute(
+        command('signing.prepare', {
+          kind: 'pea-near-transaction',
+          chainId,
+          accountIndex: 0,
+          transaction
+        })
+      ),
+      'SIGNER_MISMATCH'
+    )
+    engine.nearPeaAddress = NEAR_PEA_ADDRESS
+    engine.nearPeaParentIndex = 1
+    expectFailure(
+      await runtime.execute(
+        command('signing.prepare', {
+          kind: 'pea-near-transaction',
+          chainId,
+          accountIndex: 0,
+          transaction
+        })
+      ),
+      'INVALID_RESPONSE'
+    )
+  })
+
+  test('rejects a prepared NEAR PEA signer that is not bound to its parent', async () => {
+    const chainId = 'near:testnet'
+    const blockHash = 'SysvarC1ock11111111111111111111111111111111'
+    const payload = {
+      kind: 'pea-near-transaction' as const,
+      chainId: chainId as 'near:testnet',
+      accountIndex: 0,
+      transaction: {
+        chainId,
+        accountIndex: 0,
+        signerId: NEAR_PEA_ADDRESS,
+        receiverId: 'alice.near',
+        nonce: '1',
+        blockHash,
+        actions: [{ type: 'transfer', depositYocto: '1' }]
+      }
+    }
+    const prepared = {
+      requestId: 1,
+      transactionHash: blockHash,
+      account: {
+        accountId: `${chainId}:${NEAR_PEA_ADDRESS}`,
+        address: NEAR_PEA_ADDRESS,
+        derivationPath: 'm',
+        publicKey: NEAR_PEA_PUBLIC_KEY,
+        curve: 'ed25519',
+        addressScheme: 'near',
+        derivationScheme: 'imported'
+      },
+      summary: {
+        chainId,
+        signerId: NEAR_PEA_ADDRESS,
+        receiverId: 'alice.near',
+        signingPublicKey: NEAR_PEA_PUBLIC_KEY,
+        signingImplicitAccountId: NEAR_PEA_ADDRESS,
+        accountKeyBinding: 'implicit',
+        nonce: '1',
+        blockHash,
+        transactionHash: blockHash,
+        totalDepositYocto: '1',
+        actions: [{ type: 'transfer', depositYocto: '1' }]
+      }
+    }
+    const binding = {
+      expectedAddress: NEAR_PEA_ADDRESS,
+      expectedPublicKey: NEAR_PEA_PUBLIC_KEY,
+      mainAddress: NEAR_ACCOUNT.address
+    }
+    const adapted = await adaptNearPreparedSigning(
+      prepared,
+      payload,
+      parseSigningCommandId('signing-command:near-pea'),
+      Date.now() + 60_000,
+      false,
+      binding
+    )
+    expect(adapted.kind).toBe('pea-near-transaction')
+    expect(adapted.prepared.summary.fields.signerId).toBe(NEAR_PEA_ADDRESS)
+    await expect(
+      adaptNearPreparedSigning(
+        prepared,
+        payload,
+        parseSigningCommandId('signing-command:near-pea'),
+        Date.now() + 60_000,
+        false
+      )
+    ).rejects.toThrow(/binding is missing/)
+    await expect(
+      adaptNearPreparedSigning(
+        prepared,
+        payload,
+        parseSigningCommandId('signing-command:near-pea'),
+        Date.now() + 60_000,
+        false,
+        { ...binding, mainAddress: NEAR_PEA_ADDRESS }
+      )
+    ).rejects.toThrow(/parent account/)
   })
 })

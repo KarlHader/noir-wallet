@@ -20,12 +20,14 @@ import {
   type ParsedSigningPreparePayload,
   type PendingSigningKind
 } from './signing-adapter'
+import type { NearPeaSigningBinding } from './signing-adapter-near'
 import {
   assertExactKeys,
   assertRawBitcoinAccountMatches,
   assertRawEd25519AccountMatches,
   assertRawEvmAccountMatches,
   globalPeaRequestJson,
+  nearPeaRequestJson,
   MAX_BIP32_INDEX,
   MAX_UINT64,
   parseRawBitcoinAccount,
@@ -34,6 +36,7 @@ import {
   parseRawEd25519Account,
   parseRawEvmAccount,
   parseRawGlobalPeaAccount,
+  parseRawNearPeaAccount,
   parseRawExportedPrivateKey,
   parseRawSessionInfo,
   RAW_BITCOIN_ADDRESS_TYPES,
@@ -225,6 +228,10 @@ function parseAccountDerivation(value: unknown):
       readonly addressIndex: number
     }
   | {
+      readonly family: 'near-pea'
+      readonly accountIndex: number
+    }
+  | {
       readonly family: 'evm'
       readonly chainId: string
       readonly addressIndex: number
@@ -261,7 +268,7 @@ function parseAccountDerivation(value: unknown):
   const record = readRecord(value, 'account.derive-public payload')
   const family = readLiteral(
     record.family,
-    ['evm', 'pea', 'bitcoin', 'solana', 'near'],
+    ['evm', 'pea', 'near-pea', 'bitcoin', 'solana', 'near'],
     'account family'
   )
   if (family === 'evm') {
@@ -308,6 +315,13 @@ function parseAccountDerivation(value: unknown):
     return Object.freeze({
       family,
       addressIndex: readSafeInteger(record.addressIndex, 'addressIndex', MAX_BIP32_INDEX)
+    })
+  }
+  if (family === 'near-pea') {
+    assertExactKeys(record, ['family', 'accountIndex'], [], 'derive payload')
+    return Object.freeze({
+      family,
+      accountIndex: readSafeInteger(record.accountIndex, 'accountIndex', MAX_BIP32_INDEX)
     })
   }
   const batch = !Object.prototype.hasOwnProperty.call(record, 'addressIndex')
@@ -816,6 +830,13 @@ export class MultichainWorkerRuntime {
     })
   }
 
+  private requireNearPeaParent(session: CredentialSession, accountIndex: number): void {
+    if (session.kind !== 'private_key') return
+    if (session.chainFamily !== 'near') throw new KeyringError('UNSUPPORTED_CHAIN')
+    // Imported NEAR keys have one parent. A nonzero wallet index must not be rewritten to 0.
+    if (accountIndex !== 0) throw new KeyringError('INVALID_COMMAND')
+  }
+
   private derivePublicAccount(command: KeyringCommand) {
     const binding = requireCredentialBinding(command)
     const session = this.requireSession(binding)
@@ -886,6 +907,18 @@ export class MultichainWorkerRuntime {
             globalPeaRequestJson(derivation.addressIndex)
           ),
         value => parseRawGlobalPeaAccount(value, derivation.addressIndex)
+      )
+    }
+    if (derivation.family === 'near-pea') {
+      this.requireNearPeaParent(session, derivation.accountIndex)
+      return callRaw(
+        command,
+        () =>
+          this.engine.derivePeaAccount(
+            session.rawSessionId,
+            nearPeaRequestJson(derivation.accountIndex)
+          ),
+        value => parseRawNearPeaAccount(value, derivation.accountIndex)
       )
     }
     if (derivation.batch) {
@@ -970,6 +1003,48 @@ export class MultichainWorkerRuntime {
     if (this.pending.has(signingCommandId)) throw new KeyringError('SIGNING_COMMAND_CONFLICT')
     const expiresAt = this.now() + this.signingTtlMs
     if (!Number.isSafeInteger(expiresAt)) throw new KeyringError('INTERNAL_ERROR')
+
+    let nearPeaBinding: NearPeaSigningBinding | undefined
+    if (payload.kind === 'pea-near-transaction' || payload.kind === 'pea-near-message') {
+      this.requireNearPeaParent(session, payload.accountIndex)
+      const pea = callRaw(
+        command,
+        () =>
+          this.engine.derivePeaAccount(
+            session.rawSessionId,
+            nearPeaRequestJson(payload.accountIndex)
+          ),
+        value => parseRawNearPeaAccount(value, payload.accountIndex)
+      )
+      const main = callRaw(
+        command,
+        () =>
+          this.engine.deriveNearAccount(
+            session.rawSessionId,
+            payload.chainId,
+            payload.accountIndex
+          ),
+        value => {
+          const account = parseRawEd25519Account(value, 'near')
+          assertRawEd25519AccountMatches(
+            account,
+            'near',
+            payload.chainId,
+            payload.accountIndex,
+            session.kind === 'private_key'
+          )
+          return account
+        }
+      )
+      if (pea.address === main.address || pea.parent.accountIndex !== payload.accountIndex) {
+        throw new KeyringError('SIGNER_MISMATCH')
+      }
+      nearPeaBinding = Object.freeze({
+        expectedAddress: pea.address,
+        expectedPublicKey: pea.publicKey,
+        mainAddress: main.address
+      })
+    }
 
     let raw: unknown
     let bitcoinAccount: RawDerivedBitcoinAccount | undefined
@@ -1062,6 +1137,18 @@ export class MultichainWorkerRuntime {
           payload.accountIndex,
           payload.message
         )
+      } else if (payload.kind === 'pea-near-transaction') {
+        raw = this.engine.preparePeaNearTransaction(
+          session.rawSessionId,
+          nearPeaRequestJson(payload.accountIndex),
+          payload.transaction
+        )
+      } else if (payload.kind === 'pea-near-message') {
+        raw = this.engine.preparePeaNearMessage(
+          session.rawSessionId,
+          nearPeaRequestJson(payload.accountIndex),
+          payload.request
+        )
       } else if (payload.kind === 'near-transaction') {
         raw = this.engine.prepareNearTransaction(session.rawSessionId, payload.transaction)
       } else if (payload.kind === 'near-nep413-message') {
@@ -1088,7 +1175,8 @@ export class MultichainWorkerRuntime {
         signingCommandId,
         expiresAt,
         bitcoinAccount,
-        session.kind === 'private_key'
+        session.kind === 'private_key',
+        nearPeaBinding
       )
     } catch {
       this.rejectRawRequest(session.rawSessionId, raw)
@@ -1159,9 +1247,11 @@ export class MultichainWorkerRuntime {
           raw = this.engine.confirmSolanaMessage(pending.rawSessionId, pending.rawRequestId)
           break
         case 'near-transaction':
+        case 'pea-near-transaction':
           raw = this.engine.confirmNearTransaction(pending.rawSessionId, pending.rawRequestId)
           break
         case 'near-nep413-message':
+        case 'pea-near-message':
           raw = this.engine.confirmNearMessage(pending.rawSessionId, pending.rawRequestId)
           break
       }
