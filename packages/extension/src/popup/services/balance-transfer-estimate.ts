@@ -1,4 +1,9 @@
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
+import {
+  NEAR_DIRECT_RHEA_TOKEN_LIST_CHAIN_ID,
+  nearDirectCatalogToken,
+  nearDirectQuoteAsset
+} from '@/core/chains/near/near-incognito-move'
 import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
 import { preferWalletEvmQuoteToken } from './token-address-discovery'
 import type { ConfidentialFundingPreview } from '@/core/services/confidential-funding'
@@ -71,6 +76,7 @@ export async function estimateDirectTransfer(input: {
   readonly executionMode: 'main' | 'private'
   readonly signal: AbortSignal
 }): Promise<BalanceTransferEstimate> {
+  if (input.chain.chain.family === 'near') return estimateNearDirectTransfer(input)
   const match = /^eip155:([1-9][0-9]*)$/.exec(input.chain.chain.id)
   if (!match) throw new Error('This network does not support the transfer')
   const catalog = await rheaSwapClient
@@ -161,6 +167,53 @@ export async function estimateDirectTransfer(input: {
     } catch {
       input.signal.throwIfAborted()
       return result
+    }
+  } finally {
+    await rheaSwapClient.discard(quote.quoteHandle).catch(() => {})
+  }
+}
+
+async function estimateNearDirectTransfer(
+  input: Parameters<typeof estimateDirectTransfer>[0]
+): Promise<BalanceTransferEstimate> {
+  if (input.chain.chain.id !== 'near:mainnet') {
+    throw new Error('This network does not support the transfer')
+  }
+  const quoteAsset = nearDirectQuoteAsset(input.asset.asset)
+  if (!quoteAsset) throw new Error('This asset is unavailable for the transfer')
+  const catalog = await rheaSwapClient
+    .listTokens({ direction: 'from', tokenListChainIds: [NEAR_DIRECT_RHEA_TOKEN_LIST_CHAIN_ID] })
+    .catch(() => null)
+  input.signal.throwIfAborted()
+  const token = nearDirectCatalogToken(catalog?.tokens ?? [], quoteAsset)
+  if (!token) throw new Error('This asset is unavailable for the transfer')
+  const asset = {
+    chain: token.rheaChainId,
+    address: token.rheaAddress,
+    symbol: token.symbol,
+    decimals: token.decimals,
+    isNative: token.isNative
+  }
+  const quote = await rheaSwapClient.quote(
+    {
+      fromChain: token.rheaChainId,
+      toChain: token.rheaChainId,
+      tokenIn: asset,
+      tokenOut: asset,
+      amountIn: input.amountRaw,
+      sender: input.sender,
+      recipient: input.recipient,
+      slippageBps: 100,
+      confidentiality: 'basic'
+    },
+    input.executionMode === 'private' ? 'private-transfer' : 'confidential-funding'
+  )
+  try {
+    input.signal.throwIfAborted()
+    return {
+      expiresAt: Math.min(quote.expiresAt ?? Infinity, Date.now() + 30_000),
+      routeFeeRaw: routeFee(input.amountRaw, quote.estimatedOut),
+      time: formatTransferTime(undefined, DIRECT_MAXIMUM_MINUTES)
     }
   } finally {
     await rheaSwapClient.discard(quote.quoteHandle).catch(() => {})

@@ -186,6 +186,7 @@ import {
   readRheaZcashTransferDeadline
 } from './rhea-swap'
 import { getSafeRheaSwapRuntimeErrorMessage } from '@/core/services/rhea-swap/rhea-swap-error'
+import { isNearIncognitoQuoteSender } from '@/core/chains/near/near-incognito-move'
 import {
   assertPrivateQuoteRoute,
   RHEA_SWAP_CHAIN_CATALOG,
@@ -4331,6 +4332,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   `eip155:${request.fromChain}`,
                   catalog.accounts
                 ) === 'confidential'
+              const nearPrivateSender = isNearIncognitoQuoteSender(request, account ?? null)
               const purpose = message.purpose as PrivateQuotePurpose | undefined
               const requestedZcashFundingSource = message.zcashFundingSource
               if (
@@ -4348,7 +4350,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 purpose === 'public-cross-chain-send' ||
                 purpose === 'confidential-funding'
               ) {
-                if (privateSender) throw new Error('Swap source mode changed.')
+                if (privateSender || nearPrivateSender) throw new Error('Swap source mode changed.')
                 const scope = {
                   walletId: account?.walletId ?? '',
                   accountId: account?.accountId ?? '',
@@ -4377,7 +4379,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               }
               if (!purpose) throw new Error('Swap quote requires a reviewed route.')
               const privateZcashSource = purpose === 'private-swap' && request.fromChain === 'zcash'
-              if (!privateSender && !privateZcashSource) {
+              if (!privateSender && !privateZcashSource && !nearPrivateSender) {
                 throw new Error('Private quote needs a reviewed route.')
               }
               const scope = {

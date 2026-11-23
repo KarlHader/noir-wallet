@@ -34,7 +34,10 @@ import {
   NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
   NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
 } from '@/background/confidential-near-quote'
-import { nearConfidentialPortfolioAssetId } from '@/core/chains/near/near-portfolio-assets'
+import {
+  decodeNearContractId,
+  nearConfidentialPortfolioAssetId
+} from '@/core/chains/near/near-portfolio-assets'
 import type { TransferDomain } from './private-balance-transfer'
 import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
 import { formatIntentsConfirmationTime } from './confirmation-time-format'
@@ -466,6 +469,27 @@ export function resolveShieldManagedAsset(
       blockchain: token.blockchain
     })
   }
+  if (
+    nearShieldEnabled() &&
+    asset.asset.chainId === 'near:mainnet' &&
+    asset.asset.kind === 'token'
+  ) {
+    const protocolAssetId = `nep141:${decodeNearContractId(asset.asset.reference)}`
+    if (nearConfidentialPortfolioAssetId(protocolAssetId) !== asset.asset.id) return null
+    const token = tokens.find(
+      item =>
+        item.assetId === protocolAssetId &&
+        item.decimals === asset.metadata.decimals &&
+        !isDeprecatedIntentsToken(item)
+    )
+    if (!token) return null
+    return Object.freeze({
+      assetId: asset.asset.id,
+      chainId: asset.asset.chainId,
+      protocolAssetId,
+      blockchain: token.blockchain
+    })
+  }
   if (asset.asset.kind !== 'native' || !asset.asset.chainId.startsWith('eip155:')) return null
   const chains = createInitialProductChainRegistry(network)
   const registry = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions(network))
@@ -821,13 +845,21 @@ export function buildShieldTransferRequest(
     managed: input.managed
   }
   const destination = input.destination ?? source
+  const nearCluster =
+    input.method === 'cluster' &&
+    input.chain.chain.family === 'near' &&
+    input.network === 'mainnet' &&
+    nearShieldEnabled() &&
+    (input.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID ||
+      nearConfidentialPortfolioAssetId(input.managed.protocolAssetId) === input.asset.asset.id)
   if (
     !(input.method === 'cluster'
       ? isClusterTransferRoute(input.from, input.to)
       : isShieldTransferRoute(input.from, input.to)) ||
-    (input.method === 'cluster' && input.chain.chain.family !== 'evm') ||
+    (input.method === 'cluster' && input.chain.chain.family !== 'evm' && !nearCluster) ||
     (input.chain.chain.family !== 'evm' && input.chain.chain.family !== 'near') ||
     (input.chain.chain.family === 'near' &&
+      !nearCluster &&
       input.managed.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) ||
     input.managed.assetId !== input.asset.asset.id ||
     input.managed.chainId !== input.chain.chain.id ||
@@ -863,7 +895,9 @@ export function buildShieldTransferRequest(
     source: Object.freeze({ ...sourceRoute, amountRaw: input.amountRaw }),
     destination: destinationRoute,
     slippageBps: 50,
-    ...(input.from === 'shield' || !input.feeSelection ? {} : { feeSelection: input.feeSelection }),
+    ...(input.from === 'shield' || input.chain.chain.family === 'near' || !input.feeSelection
+      ? {}
+      : { feeSelection: input.feeSelection }),
     ...(input.dedupKey ? { dedupKey: input.dedupKey } : {})
   })
 }

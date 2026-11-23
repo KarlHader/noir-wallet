@@ -151,9 +151,7 @@ test('uses the wallet-owned NEAR leaf for Main and Incognito execution', () => {
     refundAddress: MAIN
   }
   expect(selectWalletOwnedQuoteAssetExecution(owned, 'main')?.asset.balance.availableRaw).toBe('40')
-  expect(
-    selectWalletOwnedQuoteAssetExecution(owned, 'private', PEA)?.refundAddress
-  ).toBe(PEA)
+  expect(selectWalletOwnedQuoteAssetExecution(owned, 'private', PEA)?.refundAddress).toBe(PEA)
   expect(portfolio.assets[0].asset.id).toBe('near:mainnet/slip44:397')
   expect(targets.targets[0].address).toBe(MAIN)
   expect(token.assetId).toBe('nep141:wrap.near')
@@ -231,7 +229,13 @@ test('accepts an Incognito NEAR destination at the persisted PEA', () => {
     true
   )
   expect(
-    isPrivateSwapDestinationSupported(token, portfolio, targets, new Map([['near:mainnet', MAIN]]), 'private')
+    isPrivateSwapDestinationSupported(
+      token,
+      portfolio,
+      targets,
+      new Map([['near:mainnet', MAIN]]),
+      'private'
+    )
   ).toBe(false)
 })
 
@@ -296,9 +300,11 @@ test('rejects a public NEAR sender instead of falling through to the public rout
       rejectPublic
     )
   ).not.toThrow()
-  expect(createInitialProductChainRegistry('mainnet').list().some(chain => chain.family === 'near')).toBe(
-    true
-  )
+  expect(
+    createInitialProductChainRegistry('mainnet')
+      .list()
+      .some(chain => chain.family === 'near')
+  ).toBe(true)
 })
 
 test('builds the PEA request without an app or chain id', () => {
@@ -379,7 +385,10 @@ function createCoordinator(options) {
       async reportSubmission() {
         throw new Error('unexpected report')
       },
-      async discard() {}
+      async discard() {},
+      async readPreparedBuild() {
+        return { request: {}, fromChain: 'near', toChain: 'near', raw: {}, execution: {} }
+      }
     },
     signer: {
       async prepare(_keyDomainId, payload) {
@@ -648,9 +657,9 @@ test('lists Shield NEAR nep141 assets from confidential balances when the chain 
       'nep141:token.near',
       'nep141:wrap.near'
     ])
-    expect(listed.find(item => item.managed.protocolAssetId === 'nep141:wrap.near')?.asset.asset.id).toBe(
-      'near:mainnet/slip44:397'
-    )
+    expect(
+      listed.find(item => item.managed.protocolAssetId === 'nep141:wrap.near')?.asset.asset.id
+    ).toBe('near:mainnet/slip44:397')
     expect(
       listed.find(item => item.managed.protocolAssetId === 'nep141:token.near')?.asset.balance
         .confidentialRaw

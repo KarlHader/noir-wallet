@@ -133,11 +133,13 @@ import {
   balanceTransferLabel,
   fixedTransferSide,
   normalizePrivateBalanceTransferInput,
+  getNearMoveChainIds,
   getPrivateTransferChainIds,
   getTransferDomainBalanceRaw,
   resolvePrivateBalanceTransferAmount,
   resolvePrivateBalanceTransferSource,
   resolveBalanceTransferIntent,
+  selectBalanceTransferMethod,
   selectDefaultTransferAssetId,
   type PrivateBalanceTransferDirection,
   type TransferDomain
@@ -163,6 +165,17 @@ import {
   shieldTransferPreferenceKey,
   type ShieldTransferPreference
 } from '@/popup/services/shield-transfer-preference'
+import { NEAR_CONFIDENTIAL_CHAIN_ASSET_ID } from '@/background/confidential-near-quote'
+import {
+  nearDirectQuoteAsset,
+  nearIncognitoWalletSource,
+  resolveNearIncognitoMove
+} from '@/core/chains/near/near-incognito-move'
+import {
+  cancelNearDirectMove,
+  confirmNearDirectMove,
+  prepareNearDirectMove
+} from '@/popup/services/near-incognito-move'
 
 type TransferAsset = { asset: PortfolioAssetView; chain: PortfolioChainView }
 type TransferPickerRow =
@@ -515,6 +528,14 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const actionLabel = balanceTransferLabel(intent ?? (to === 'public' ? 'withdraw' : 'deposit'))
   const [amount, setAmount] = useState(initialDraft.amount)
   const [method, setMethod] = useState<'cluster' | 'directly'>(initialDraft.method)
+  const [preparingNearDirect, setPreparingNearDirect] = useState(false)
+  const [nearDirectPrepared, setNearDirectPrepared] = useState<{
+    key: string
+    quoteHandle: string
+    payloadFingerprint: string
+  } | null>(null)
+  const nearDirectPreparedRef = useRef(nearDirectPrepared)
+  nearDirectPreparedRef.current = nearDirectPrepared
   const [evmMoveFee, setEvmMoveFee] = useState<EvmFeeSelection>({
     kind: 'tier',
     tier: 'standard'
@@ -752,6 +773,19 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     () => getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet'),
     [activeAccount, currentNetwork]
   )
+  const nearMoveChainIds = useMemo(
+    () =>
+      getNearMoveChainIds({
+        account: activeAccount,
+        mainnet: currentNetwork === 'mainnet',
+        enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
+      }),
+    [activeAccount, currentNetwork]
+  )
+  const moveChainIds = useMemo(
+    () => [...eligibleChainIds, ...nearMoveChainIds],
+    [eligibleChainIds, nearMoveChainIds]
+  )
   const currentShieldBalances = useMemo(
     () => shieldBalances ?? shieldPortfolioBalances(portfolio),
     [shieldBalances, portfolio]
@@ -761,11 +795,15 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     const chains = new Map(portfolio.chains.map(chain => [chain.chain.id, chain]))
     const publicAssets = portfolio.assets.flatMap(asset => {
       const chain = chains.get(asset.asset.chainId)
-      return chain?.chain.family === 'evm' &&
+      const evm =
+        chain?.chain.family === 'evm' &&
         eligibleChainIds.includes(chain.chain.id) &&
         chain.chain.capabilities.transaction.status === 'available'
-        ? [{ asset, chain }]
-        : []
+      const near =
+        chain?.chain.family === 'near' &&
+        nearMoveChainIds.includes(chain.chain.id) &&
+        chain.chain.capabilities.transaction.status === 'available'
+      return evm || near ? [{ asset, chain }] : []
     })
     const shieldAssets = listShieldFundingAssets(
       portfolio,
@@ -781,8 +819,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       ...publicAssets,
       ...fallbackAssets
         .filter(
-          item =>
-            eligibleChainIds.includes(item.chain.chain.id) && !existing.has(item.asset.asset.id)
+          item => moveChainIds.includes(item.chain.chain.id) && !existing.has(item.asset.asset.id)
         )
         .map(({ asset, chain }) => ({ asset, chain }))
     ]
@@ -793,6 +830,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     catalogTokens,
     currentNetwork,
     eligibleChainIds,
+    nearMoveChainIds,
+    moveChainIds,
     shieldEntry
   ])
   const defaultAssetId = useMemo(
@@ -807,12 +846,19 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
             network: currentNetwork,
             shieldBalances: currentShieldBalances
           })
-        : selectDefaultTransferAssetId({ assets, from, to, eligibleChainIds }),
+        : selectDefaultTransferAssetId({
+            assets,
+            from,
+            to,
+            eligibleChainIds,
+            nearChainIds: nearMoveChainIds
+          }),
     [
       assets,
       from,
       to,
       eligibleChainIds,
+      nearMoveChainIds,
       shieldEntry,
       managedAssets,
       catalogTokens,
@@ -945,7 +991,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     selectedAssetId &&
     (!requestedChain ||
       (requestedChain.status === 'ready' &&
-        (!eligibleChainIds.includes(requestedChain.chain.id) ||
+        (!moveChainIds.includes(requestedChain.chain.id) ||
           requestedChain.chain.capabilities.transaction.status !== 'available' ||
           !requestedAssetKnown)))
   )
@@ -1044,7 +1090,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const mainAddress =
     accountNetwork?.addresses.find(address => address.preferredForReceive)?.value ?? ''
   const privateAddress = accountNetwork?.privateExecutionAddress ?? ''
-  const eligible = Boolean(selected && eligibleChainIds.includes(selected.chain.chain.id))
+  const eligible = Boolean(selected && moveChainIds.includes(selected.chain.chain.id))
   const direction: PrivateBalanceTransferDirection =
     from === 'private' ? 'private-to-main' : 'main-to-private'
   const publicRaw = selected ? getTransferDomainBalanceRaw(selected.asset, 'public') : null
@@ -1067,6 +1113,35 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           formatSymbol(nativeFeeAsset.metadata.symbol)
         )
       : null
+  const supportedPair =
+    (from === 'public' && to === 'private') || (from === 'private' && to === 'public')
+  const nearPublicPrivate = Boolean(
+    selected?.chain.chain.family === 'near' &&
+    nearMoveChainIds.includes(selected.chain.chain.id) &&
+    supportedPair
+  )
+  const nearMove = nearPublicPrivate
+    ? resolveNearIncognitoMove({
+        network: currentNetwork,
+        enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__,
+        method,
+        from,
+        to,
+        mainAccountId: mainAddress,
+        peaAccountId: privateAddress || null,
+        accountIndex: activeAccount?.accountIndex ?? 0,
+        walletSource: activeAccount
+          ? nearIncognitoWalletSource({
+              kind: activeAccount.walletSource.kind,
+              chainFamily:
+                activeAccount.walletSource.kind === 'private-key'
+                  ? activeAccount.walletSource.chainFamily
+                  : undefined,
+              accountIndex: activeAccount.accountIndex
+            })
+          : null
+      })
+    : null
   const source =
     selected?.chain.chain.family === 'evm'
       ? resolvePrivateBalanceTransferSource({
@@ -1076,12 +1151,25 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           mainAddress,
           privateAddress
         })
-      : null
-  const supportedPair =
-    (from === 'public' && to === 'private') || (from === 'private' && to === 'public')
+      : nearMove?.ok
+        ? {
+            availableRaw: (from === 'private' ? privateRaw : publicRaw) ?? '0',
+            sender: nearMove.sender,
+            recipient: nearMove.recipient,
+            executionMode: nearMove.executionMode,
+            sourceLabel: (from === 'private' ? 'Incognito' : 'Public') as 'Public' | 'Incognito'
+          }
+        : null
   const shieldPair =
-    !externalReceive && isShieldTransferRoute(from, to) && selected?.chain.chain.family === 'evm'
-  const clusterPair = isClusterTransferRoute(from, to) && selected?.chain.chain.family === 'evm'
+    !externalReceive &&
+    isShieldTransferRoute(from, to) &&
+    (selected?.chain.chain.family === 'evm' ||
+      (selected?.chain.chain.family === 'near' &&
+        nearMoveChainIds.includes(selected.chain.chain.id) &&
+        selected.asset.asset.id === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID))
+  const clusterPair =
+    isClusterTransferRoute(from, to) &&
+    (selected?.chain.chain.family === 'evm' || nearPublicPrivate)
   const clusterSelected = method === 'cluster' && clusterPair
   const fundingRoute = Boolean(shieldPair || clusterSelected)
   const fundingReady = !shieldPair || shieldConnection === 'connected'
@@ -1283,10 +1371,11 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       : sourceRaw
   const routeKey = `${scopeKey}:${selected?.asset.asset.id ?? ''}:${from}:${to}:${destination?.asset.asset.id ?? ''}`
   const routeState =
-    selected?.chain.chain.family === 'evm' &&
-    eligible &&
-    supportedPair &&
-    toWalletEvmQuoteToken(selected.asset)
+    (selected?.chain.chain.family === 'evm' &&
+      eligible &&
+      supportedPair &&
+      toWalletEvmQuoteToken(selected.asset)) ||
+    (nearPublicPrivate && nearDirectQuoteAsset(selected!.asset.asset))
       ? 'supported'
       : 'unsupported'
   const methodAvailable = supportedPair && routeState === 'supported'
@@ -1335,7 +1424,10 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       chain: selected!.chain,
       managed: managedAsset!
     })
-  const exactClusterMaximum = clusterSelected && selected?.asset.asset.kind === 'native'
+  const exactClusterMaximum =
+    clusterSelected &&
+    selected?.asset.asset.kind === 'native' &&
+    selected.chain.chain.family === 'evm'
   const clusterMax = useBalanceTransferEstimate({
     enabled: Boolean(
       maxSelected && exactClusterMaximum && shieldAvailable && managedAsset && effective && eligible
@@ -1471,6 +1563,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     !clusterEstimate.loading &&
     !directEstimate.loading
   const transferError =
+    (nearMove && !nearMove.ok ? nearMove.error : null) ??
     clusterMax.errorMessage ??
     amountError ??
     quoteMinimumError ??
@@ -1490,14 +1583,25 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     setMethod('cluster')
   }, [clusterPair, clusterAvailable, clusterUnavailable, method])
   useEffect(() => {
-    if (method === 'cluster' && clusterUnavailable && directQuoted) {
-      userPickedMethod.current = false
-      setMethod('directly')
-    } else if (method === 'directly' && directUnavailable && clusterQuoted) {
-      userPickedMethod.current = false
-      setMethod('cluster')
-    }
-  }, [method, clusterUnavailable, directUnavailable, clusterQuoted, directQuoted])
+    const next = selectBalanceTransferMethod({
+      family: selected?.chain.chain.family ?? 'evm',
+      method,
+      clusterUnavailable,
+      directUnavailable,
+      clusterQuoted,
+      directQuoted
+    })
+    if (next === method) return
+    userPickedMethod.current = false
+    setMethod(next)
+  }, [
+    selected?.chain.chain.family,
+    method,
+    clusterUnavailable,
+    directUnavailable,
+    clusterQuoted,
+    directQuoted
+  ])
   const shieldReviewKeyForFee = (feeSelection: EvmFeeSelection) =>
     `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${JSON.stringify(feeSelection)}`
   const shieldReviewKey = shieldReviewKeyForFee(evmMoveFee)
@@ -1563,7 +1667,82 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     setPickerAccountId(effective?.accountId ?? null)
     setDomainPicker(side)
   }
+  const nearDirectKey = `${methodEstimateKey}:${method}`
+  const nearDirectKeyRef = useRef(nearDirectKey)
+  nearDirectKeyRef.current = nearDirectKey
+  useEffect(() => {
+    if (!nearDirectPrepared || nearDirectPrepared.key === nearDirectKey) return
+    void cancelNearDirectMove(nearDirectPrepared.quoteHandle)
+    setNearDirectPrepared(null)
+  }, [nearDirectKey, nearDirectPrepared])
+  useEffect(
+    () => () => {
+      const prepared = nearDirectPreparedRef.current
+      if (prepared) void cancelNearDirectMove(prepared.quoteHandle)
+    },
+    []
+  )
+  const startNearDirect = async () => {
+    if (
+      !canReview ||
+      !selected ||
+      !nearMove?.ok ||
+      !source ||
+      !amountState?.amountRaw ||
+      preparingNearDirect ||
+      !scopeStillCurrent()
+    )
+      return
+    setPreparingNearDirect(true)
+    setShieldError(null)
+    try {
+      const prepared = await prepareNearDirectMove({
+        chainId: selected.chain.chain.id,
+        assetId: selected.asset.asset.id,
+        asset: selected.asset.asset,
+        amountRaw: amountState.amountRaw,
+        sender: source.sender,
+        recipient: source.recipient,
+        executionMode: source.executionMode
+      })
+      if (!scopeStillCurrent() || nearDirectKeyRef.current !== nearDirectKey) {
+        await cancelNearDirectMove(prepared.quoteHandle)
+        return
+      }
+      setNearDirectPrepared({ key: nearDirectKey, ...prepared })
+    } catch (error) {
+      if (scopeStillCurrent()) {
+        setShieldError(error instanceof Error ? error.message : 'NEAR Move is unavailable.')
+      }
+    } finally {
+      if (mounted.current) setPreparingNearDirect(false)
+    }
+  }
+  const confirmNearDirect = async () => {
+    const prepared = nearDirectPrepared
+    if (!prepared || prepared.key !== nearDirectKey || !scopeStillCurrent()) return
+    setPreparingNearDirect(true)
+    setShieldError(null)
+    try {
+      await confirmNearDirectMove(prepared.quoteHandle, prepared.payloadFingerprint)
+      if (!scopeStillCurrent()) return
+      setNearDirectPrepared(null)
+      const activityDomain = fixedSide === 'to' ? to : fixedSide === 'from' ? from : walletMode
+      navigate(homeActivityPath(activityDomain))
+    } catch (error) {
+      if (scopeStillCurrent()) {
+        setShieldError(error instanceof Error ? error.message : 'NEAR Move is unavailable.')
+        setNearDirectPrepared(null)
+      }
+    } finally {
+      if (mounted.current) setPreparingNearDirect(false)
+    }
+  }
   const review = () => {
+    if (nearPublicPrivate) {
+      void startNearDirect()
+      return
+    }
     if (!canReview || !selected || !mainAddress) return
     const wallet = useWalletStore.getState()
     if (
@@ -2378,7 +2557,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                 {transferError}
               </p>
             )}
-            {selected?.chain.chain.family === 'evm' &&
+            {(selected?.chain.chain.family === 'evm' || nearPublicPrivate) &&
               clusterPair &&
               (clusterAvailable || methodAvailable) && (
                 <div
@@ -2400,7 +2579,10 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                       disabled={clusterUnavailable}
                       estimate={clusterEstimate.value}
                       loading={canEstimateMethods && clusterEstimate.loading}
-                      fee={formatBalanceTransferFee(clusterEstimateWithFee, selected.asset)}
+                      fee={formatBalanceTransferFee(
+                        clusterEstimateWithFee,
+                        selected?.asset ?? null
+                      )}
                       onClick={() => {
                         userPickedMethod.current = true
                         setMethod('cluster')
@@ -2416,7 +2598,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                       disabled={directUnavailable}
                       estimate={directEstimate.value}
                       loading={canEstimateMethods && methodAvailable && directEstimate.loading}
-                      fee={formatBalanceTransferFee(directEstimate.value, selected.asset)}
+                      fee={formatBalanceTransferFee(directEstimate.value, selected?.asset ?? null)}
                       onClick={() => {
                         userPickedMethod.current = true
                         setMethod('directly')
@@ -2484,9 +2666,16 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
             <Button
               size="wallet"
               className="w-full"
-              disabled={fundingRoute ? !canReviewShield || preparingShield : !canReview}
+              disabled={
+                fundingRoute
+                  ? !canReviewShield || preparingShield
+                  : nearDirectPrepared
+                    ? preparingNearDirect
+                    : !canReview || preparingNearDirect
+              }
               isLoading={
                 preparingShield ||
+                preparingNearDirect ||
                 (shieldPair &&
                   (shieldConnecting ||
                     shieldConnection === 'checking' ||
@@ -2496,9 +2685,19 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   (clusterSelected || method === 'directly') &&
                   selectedEstimate.loading)
               }
-              onClick={fundingRoute ? () => void prepareShield() : review}
+              onClick={
+                fundingRoute
+                  ? () => void prepareShield()
+                  : nearDirectPrepared
+                    ? () => void confirmNearDirect()
+                    : review
+              }
             >
-              {clusterSelected ? `Review ${actionLabel}` : actionLabel}
+              {nearDirectPrepared
+                ? `Confirm ${actionLabel}`
+                : clusterSelected
+                  ? `Review ${actionLabel}`
+                  : actionLabel}
             </Button>
           </div>
         </>

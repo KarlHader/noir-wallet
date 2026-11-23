@@ -20,6 +20,12 @@ import {
   type ExternalShieldDepositFailureStage
 } from '@/core/services/confidential-funding/confidential-external-deposit'
 import { isAddress } from 'viem'
+import {
+  acceptNearDirectDeposit,
+  planNearIncognitoCluster,
+  NEAR_MOVE_UNAVAILABLE,
+  type NearIncognitoClusterPlan
+} from '@/core/chains/near/near-incognito-move'
 import { getEvmNetworkConfig } from '@/config/networks'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { isValidExternalRecipient } from './confidential-funding-recipient'
@@ -281,15 +287,20 @@ function withdrawalReferral(
 
 type ClusterFundingInput = Extract<PrepareConfidentialFundingInput, { operation: 'cluster' }>
 
-function clusterDepositBinding(input: ClusterFundingInput, identity: ConfidentialSigningIdentity) {
+function clusterDepositBinding(
+  input: ClusterFundingInput,
+  identity: ConfidentialSigningIdentity,
+  near: NearIncognitoClusterPlan | null
+) {
   return {
     originAsset: input.source.protocolAssetId,
     destinationAsset: input.source.protocolAssetId,
     amountRaw: input.source.amountRaw,
-    signerId: identity.address,
+    signerId: near?.signerId ?? identity.address,
     refundTo:
-      input.sourceDomain === 'private' ? identity.peaAddress.toLowerCase() : identity.address,
-    recipient: identity.address,
+      near?.refundTo ??
+      (input.sourceDomain === 'private' ? identity.peaAddress.toLowerCase() : identity.address),
+    recipient: near?.signerId ?? identity.address,
     depositType: 'ORIGIN_CHAIN' as const,
     refundType: 'ORIGIN_CHAIN' as const,
     recipientType: 'CONFIDENTIAL_INTENTS' as const,
@@ -1712,17 +1723,54 @@ export class ConfidentialFundingCoordinator {
     })
   }
 
+  private async nearClusterPlan(
+    input: ClusterFundingInput,
+    identity: ConfidentialSigningIdentity
+  ): Promise<NearIncognitoClusterPlan | null> {
+    if (parseChainId(input.source.chainId).namespace !== 'near') return null
+    if (input.source.chainId !== input.destination.chainId) throw new Error(NEAR_MOVE_UNAVAILABLE)
+    let account: NearConfidentialAccount
+    try {
+      account = await this.requireNearAccount(identity)
+    } catch (error) {
+      if (error instanceof Error && error.message === 'NEAR Shield deposit is unavailable') {
+        throw new Error(NEAR_MOVE_UNAVAILABLE)
+      }
+      throw error
+    }
+    const planned = planNearIncognitoCluster({
+      network: input.network,
+      enabledFlags: readEnabledChainFeatureFlags(),
+      from: input.sourceDomain,
+      to: input.destinationDomain,
+      evmSignerId: identity.address,
+      mainAccountId: account.mainAccountId,
+      peaAccountId: account.peaAccountId,
+      accountIndex: account.accountIndex,
+      walletSource: account.walletSource ?? null,
+      originAsset: input.source.protocolAssetId,
+      destinationAsset: input.destination.protocolAssetId,
+      amountRaw: input.source.amountRaw,
+      slippageBps: input.slippageBps,
+      implicitAccountOnChain: false
+    })
+    if (!planned.ok) throw new Error(planned.error)
+    return planned
+  }
+
   private async previewCluster(
     input: ClusterFundingInput,
     sourceIdentity: ConfidentialSigningIdentity,
     destinationIdentity: ConfidentialSigningIdentity,
     sourceSigningChain: ChainId
   ): Promise<ConfidentialFundingPreview> {
+    const near = await this.nearClusterPlan(input, sourceIdentity)
     const destinationAddress =
-      input.destinationDomain === 'private'
+      near?.withdrawRecipient ??
+      (input.destinationDomain === 'private'
         ? destinationIdentity.peaAddress
-        : destinationIdentity.address
-    const depositBinding = clusterDepositBinding(input, sourceIdentity)
+        : destinationIdentity.address)
+    const depositBinding = clusterDepositBinding(input, sourceIdentity, near)
     const depositQuote =
       input.sourceDomain === 'shield'
         ? undefined
@@ -1736,7 +1784,7 @@ export class ConfidentialFundingCoordinator {
       sourceAsset: input.source.protocolAssetId,
       destinationAsset: input.destination.protocolAssetId,
       spendRaw: depositQuote?.quote.amountOut ?? input.source.amountRaw,
-      signerId: sourceIdentity.address,
+      signerId: near?.signerId ?? sourceIdentity.address,
       recipient: destinationAddress,
       slippageBps: input.slippageBps
     })
@@ -1777,6 +1825,7 @@ export class ConfidentialFundingCoordinator {
     chainId: ChainId
   ): Promise<NonNullable<ConfidentialFundingReview['sourceNetworkFee']> | null> {
     if (input.sourceDomain === 'shield') return null
+    if (parseChainId(input.source.chainId).namespace === 'near') return null
     const feeAsset = this.options.assets.list(chainId).find(entry => entry.asset.kind === 'native')
     if (!feeAsset) return null
     try {
@@ -1820,7 +1869,8 @@ export class ConfidentialFundingCoordinator {
     identity: ConfidentialSigningIdentity,
     mode: 'prefetch' | 'review'
   ): Promise<ConfidentialQuote> {
-    const binding = clusterDepositBinding(input, identity)
+    const near = await this.nearClusterPlan(input, identity)
+    const binding = clusterDepositBinding(input, identity, near)
     const referral = NOIR_RECEIVE_REFERRAL
     const key = await fingerprintConfidentialValue({
       network: input.network,
@@ -1836,12 +1886,21 @@ export class ConfidentialFundingCoordinator {
     })
     const validate = (quote: ConfidentialQuote) => {
       this.assertQuoteBinding(quote, binding)
-      if (
-        quote.quoteRequest.dry !== false ||
+      if (quote.quoteRequest.dry !== false) {
+        throw new Error('Confidential deposit quote has no destination')
+      }
+      if (parseChainId(input.source.chainId).namespace === 'near') {
+        const accepted = acceptNearDirectDeposit({
+          depositAddress: quote.quote.depositAddress,
+          depositMemo: quote.quote.depositMemo
+        })
+        if (!accepted.ok) throw new Error(accepted.error)
+      } else if (
         !isAddress(quote.quote.depositAddress) ||
         /^0x0{40}$/i.test(quote.quote.depositAddress)
-      )
+      ) {
         throw new Error('Confidential deposit quote has no destination')
+      }
       return quote
     }
     const fetchQuote = () => this.quoteBound({ ...binding, referral, dry: false }).then(validate)
@@ -2388,14 +2447,17 @@ export class ConfidentialFundingCoordinator {
         baseline
       )
     }
+    const near = await this.nearClusterPlan(input, sourceIdentity)
     const sourceAddress =
-      input.sourceDomain === 'private'
+      near?.sourceAddress ??
+      (input.sourceDomain === 'private'
         ? sourceIdentity.peaAddress.toLowerCase()
-        : sourceIdentity.address
+        : sourceIdentity.address)
     const destinationAddress =
-      input.destinationDomain === 'private'
+      near?.destinationAddress ??
+      (input.destinationDomain === 'private'
         ? destinationIdentity.peaAddress
-        : destinationIdentity.address
+        : destinationIdentity.address)
     const depositQuote = requiresDeposit
       ? await this.clusterDepositQuote(input, sourceIdentity, 'review')
       : undefined
@@ -2404,7 +2466,7 @@ export class ConfidentialFundingCoordinator {
       sourceAsset: input.source.protocolAssetId,
       destinationAsset: input.destination.protocolAssetId,
       spendRaw,
-      signerId: sourceIdentity.address,
+      signerId: near?.signerId ?? sourceIdentity.address,
       recipient: destinationAddress,
       slippageBps: input.slippageBps
     })

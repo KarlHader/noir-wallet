@@ -1,4 +1,5 @@
 import { createInitialProductChainRegistry } from '@/core/chains/registry'
+import { assertNearIncognitoDirectQuote } from '@/core/chains/near/near-incognito-move'
 import type { QuoteRequest } from './rhea-swap-protocol'
 import type { PrivateQuotePurpose, PrivateSwapAccountRoute } from './rhea-swap-model'
 
@@ -44,6 +45,10 @@ export function assertNearPrivateQuoteRoute(
 ): void {
   if (purpose === 'wallet-swap' || purpose === 'public-cross-chain-send') {
     assertCurrentPublicRoute(request, account, purpose, scope)
+    return
+  }
+  if (purpose === 'confidential-funding' || purpose === 'private-transfer') {
+    assertNearIncognitoDirectQuote(request, account, purpose, scope)
     return
   }
   if (purpose !== 'private-swap' && purpose !== 'private-cross-chain-send') {

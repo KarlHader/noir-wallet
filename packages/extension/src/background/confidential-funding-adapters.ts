@@ -66,6 +66,14 @@ export interface NearConfidentialAccount {
   readonly mainAccountId: string
   readonly publicKey: string
   readonly peaAccountId: string | null
+  readonly walletSource?:
+    | Readonly<{ kind: 'software' }>
+    | Readonly<{
+        kind: 'private-key'
+        chainFamily: 'eip155' | 'bip122' | 'solana' | 'near'
+        accountIndex: number
+      }>
+    | Readonly<{ kind: 'hardware' }>
 }
 
 export interface NearConfidentialDepositSigning {

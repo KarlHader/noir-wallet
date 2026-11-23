@@ -21,6 +21,7 @@ import {
   prependRheaSwapNearWrap
 } from '@/core/services/rhea-swap/rhea-swap-near-wrap'
 import { NEAR_INCOGNITO_UNFUNDED_ERROR } from '@/core/services/rhea-swap/rhea-swap-near-private-route'
+import { acceptNearDirectDeposit } from '@/core/chains/near/near-incognito-move'
 import {
   createRheaSwapSignedBatchGraph,
   parseRheaSwapTransactionBinding,
@@ -294,7 +295,11 @@ export class ChromeSessionRheaSwapNearStore implements RheaSwapNearPendingStore 
 export interface RheaSwapNearCoordinatorOptions {
   readonly service: Pick<
     RheaSwapService,
-    'readNearTransactionBatchPlan' | 'recordTransactionSubmission' | 'reportSubmission' | 'discard'
+    | 'readNearTransactionBatchPlan'
+    | 'readPreparedBuild'
+    | 'recordTransactionSubmission'
+    | 'reportSubmission'
+    | 'discard'
   >
   readonly signer: Pick<NearMultichainSigningClient, 'prepare' | 'confirm' | 'cancel'>
   readonly rpc: Pick<
@@ -333,6 +338,26 @@ export class RheaSwapNearCoordinator {
     bindingValue: unknown
   ): Promise<RheaSwapNearTransactionBatchReview> {
     const plan = await this.options.service.readNearTransactionBatchPlan(quoteHandle)
+    const build = await this.options.service.readPreparedBuild(quoteHandle)
+    if (
+      build.request?.confidentiality === 'basic' &&
+      build.fromChain === 'near' &&
+      build.toChain === 'near'
+    ) {
+      const rawDeposit =
+        build.raw.deposit && typeof build.raw.deposit === 'object'
+          ? (build.raw.deposit as { memo?: unknown; depositMemo?: unknown })
+          : undefined
+      const text = (value: unknown) => (typeof value === 'string' ? value : undefined)
+      const executionAddress =
+        'depositAddress' in build.execution ? build.execution.depositAddress : undefined
+      const accepted = acceptNearDirectDeposit({
+        depositAddress: build.deposit?.depositAddress ?? executionAddress,
+        memo: text(rawDeposit?.memo) ?? text(build.raw.memo),
+        depositMemo: text(rawDeposit?.depositMemo) ?? text(build.raw.depositMemo)
+      })
+      if (!accepted.ok) throw new Error(accepted.error)
+    }
     const binding = parseRheaSwapTransactionBinding(bindingValue)
     const identity = await this.resolveSigningIdentity(binding.sender)
     const { context, sender } = identity

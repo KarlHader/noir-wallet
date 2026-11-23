@@ -67,10 +67,14 @@ function createNearShieldDeposit(
     identity: ConfidentialSigningIdentity
   ): Promise<NearConfidentialAccount> => {
     const context = await loadActiveNearTransferContext(storage, 'near:mainnet')
+    const source = context?.keyDomainSource
+    const importedNearKey =
+      source?.kind === 'private-key' && source.chainFamily === 'near' && context?.accountIndex === 0
     if (
       !context ||
+      !source ||
       context.chainAccount.identity.kind !== 'account-identifier' ||
-      context.keyDomainSource.kind !== 'software' ||
+      (source.kind !== 'software' && !importedNearKey) ||
       context.chainAccount.scope.keyDomainId !== identity.context.chainAccount.scope.keyDomainId ||
       context.chainAccount.scope.accountId !== identity.context.chainAccount.scope.accountId
     ) {
@@ -88,7 +92,15 @@ function createNearShieldDeposit(
       accountIndex: context.accountIndex,
       mainAccountId: context.chainAccount.identity.value,
       publicKey: context.publicKey,
-      peaAccountId
+      peaAccountId,
+      walletSource:
+        source.kind === 'software'
+          ? { kind: 'software' }
+          : {
+              kind: 'private-key',
+              chainFamily: 'near',
+              accountIndex: context.accountIndex
+            }
     }
   }
   const signing: NearConfidentialDepositSigning = {

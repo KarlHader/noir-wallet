@@ -1,8 +1,15 @@
 import { parseDisplayUnitAmount } from '@/lib/number-format'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import {
+  getNearMoveChainIds,
+  readNearMoveDomainRaw,
+  selectBalanceTransferMethod
+} from '@/core/chains/near/near-incognito-move'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import type { AccountNetworksView } from './account-networks-client'
 import { getAssetDomainRaw, type AssetDomain } from './asset-domains'
+
+export { getNearMoveChainIds, selectBalanceTransferMethod }
 
 export type PrivateBalanceTransferDirection = 'main-to-private' | 'private-to-main'
 
@@ -30,6 +37,9 @@ export function getTransferDomainBalanceRaw(
   asset: PortfolioAssetView,
   domain: TransferDomain
 ): string | null {
+  if (asset.asset.chainId.startsWith('near:')) {
+    return readNearMoveDomainRaw(asset.balance, domain)
+  }
   if (
     domain === 'shield' &&
     asset.asset.chainId.startsWith('eip155:') &&
@@ -86,15 +96,20 @@ export function selectDefaultTransferAssetId(input: {
   readonly from: TransferDomain
   readonly to: TransferDomain
   readonly eligibleChainIds: readonly string[]
+  readonly nearChainIds?: readonly string[]
 }): string | null {
   const funded = (item: (typeof input.assets)[number]) => {
     const raw = getTransferDomainBalanceRaw(item.asset, input.from)
     return raw !== null && BigInt(raw) > 0n
   }
-  const eligible = input.assets.filter(
-    item =>
-      item.chain.chain.family === 'evm' && input.eligibleChainIds.includes(item.chain.chain.id)
-  )
+  const nearChainIds = input.nearChainIds ?? []
+  const eligible = input.assets.filter(item => {
+    if (item.chain.chain.family === 'evm') {
+      return input.eligibleChainIds.includes(item.chain.chain.id)
+    }
+    if (item.chain.chain.family === 'near') return nearChainIds.includes(item.chain.chain.id)
+    return false
+  })
   return (eligible.find(funded) ?? eligible[0])?.asset.asset.id ?? null
 }
 
@@ -104,7 +119,13 @@ export function resolvePrivateBalanceTransferSource(input: {
   readonly privateBalanceRaw: string
   readonly mainAddress: string
   readonly privateAddress: string
-}) {
+}): Readonly<{
+  availableRaw: string
+  sender: string
+  recipient: string
+  executionMode: 'main' | 'private'
+  sourceLabel: 'Public' | 'Incognito'
+}> {
   return input.direction === 'main-to-private'
     ? {
         availableRaw: input.mainBalanceRaw,

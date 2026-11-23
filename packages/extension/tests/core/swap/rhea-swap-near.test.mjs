@@ -143,6 +143,9 @@ function createHarness(overrides = {}) {
     async discard() {
       calls.push('discard')
     },
+    async readPreparedBuild() {
+      return { request: {}, fromChain: 'near', toChain: 'near', raw: {}, execution: {} }
+    },
     ...overrides.service
   }
   const signer = {
