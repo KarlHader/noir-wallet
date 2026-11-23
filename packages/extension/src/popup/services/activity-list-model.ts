@@ -70,6 +70,7 @@ export function filterActivityItems(input: {
   readonly status?: ActivityStatusFilter
   readonly accountMode?: 'main' | 'private'
   readonly confidentialIntentsOnly?: boolean
+  readonly includeAllConfidentialChains?: boolean
   readonly shieldProvider?: 'near-confidential' | 'zcash-shield'
   readonly executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
 }): readonly ActivityItem[] {
@@ -152,14 +153,13 @@ export function filterActivityItems(input: {
       crossModeMove
     return (
       providerMatches &&
-      (!input.confidentialIntentsOnly ||
-        item.segments.some(
-          segment =>
-            segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents'
-        )) &&
+      (!input.confidentialIntentsOnly || hasConfidentialIntentsSegment) &&
       (!!settlementMatches ||
         (chainId !== undefined &&
           (input.confidentialIntentsOnly ||
+            (input.includeAllConfidentialChains &&
+              input.domain === 'shield' &&
+              hasConfidentialIntentsSegment) ||
             (input.shieldProvider === 'zcash-shield'
               ? ZCASH_CHAIN_IDS.has(chainId)
               : selectedChainIdSet.has(chainId))) &&

@@ -452,9 +452,14 @@ export function isHardwareSignRequestFresh(
   return request.createdAt <= now && now - request.createdAt <= HARDWARE_SIGN_REQUEST_TTL_MS
 }
 
-export function openHardwareConnectTab(vendor?: HardwareConnectVendor): void {
+export function openHardwareConnectTab(
+  vendor?: HardwareConnectVendor,
+  ledgerTarget?: Readonly<{ walletId: string; accountId: string }>
+): void {
+  const route = hardwareConnectRoute(vendor)
+  const query = vendor === 'ledger' && ledgerTarget ? `?${new URLSearchParams(ledgerTarget)}` : ''
   chrome.tabs
-    .create({ url: chrome.runtime.getURL(`index.html#${hardwareConnectRoute(vendor)}`) })
+    .create({ url: chrome.runtime.getURL(`index.html#${route}${query}`) })
     .catch(console.error)
 }
 

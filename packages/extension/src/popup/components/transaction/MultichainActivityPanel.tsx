@@ -252,6 +252,12 @@ export function MultichainActivityPanel({
     [availableChainIds, filteredChainId, persistedChainSelection]
   )
   const selectedChainKey = selectedChainIds.join(',')
+  const includeAllConfidentialChains =
+    allExecutionModes &&
+    filterDomain === 'shield' &&
+    !filterAssetId &&
+    !filteredChainId &&
+    selectedChainIds.length === availableChainIds.length
   const providerChainIds = useMemo(
     () =>
       shieldProvider === 'zcash-shield'
@@ -442,6 +448,7 @@ export function MultichainActivityPanel({
         domain: filterDomain,
         status: showStatusFilter ? statusFilter : undefined,
         confidentialIntentsOnly,
+        includeAllConfidentialChains,
         shieldProvider,
         accountMode: filterAssetId || allExecutionModes ? undefined : accountMode,
         executionAddressModes
@@ -450,6 +457,7 @@ export function MultichainActivityPanel({
       accountMode,
       allExecutionModes,
       confidentialIntentsOnly,
+      includeAllConfidentialChains,
       shieldProvider,
       executionAddressModes,
       filterAssetId,

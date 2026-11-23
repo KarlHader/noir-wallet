@@ -843,7 +843,7 @@ test.describe('confidential funding persisted recovery', () => {
           destinationFundingSource: 'transparent'
         }
       )
-    ).toEqual({ label: 'Withdraw', side: 'source' })
+    ).toEqual({ label: 'Swap', side: 'none' })
     expect(getActivityAction(activity, { viewedDomain: 'public' })).toEqual({
       label: 'Receive',
       side: 'destination'

@@ -94,6 +94,21 @@ test.describe('Multichain Activity presentation', () => {
       label: 'Withdraw',
       side: 'source'
     })
+    const externalSend = {
+      ...item,
+      snapshot: {
+        ...item.snapshot,
+        direction: 'outgoing',
+        shield: { ...item.snapshot.shield, destinationDomain: 'public' },
+        recipient: { chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d', address: 't1recipient' }
+      }
+    }
+    for (const shieldProvider of [undefined, 'near-confidential']) {
+      expect(getActivityAction(externalSend, { viewedDomain: 'shield', shieldProvider })).toEqual({
+        label: 'Send',
+        side: 'source'
+      })
+    }
     expect(
       getActivityAction(
         {
@@ -144,7 +159,7 @@ test.describe('Multichain Activity presentation', () => {
     }
     expect(
       getActivityAction(nativeSwap, { viewedDomain: 'shield', shieldProvider: 'near-confidential' })
-    ).toEqual({ label: 'Withdraw', side: 'source' })
+    ).toEqual({ label: 'Swap', side: 'none' })
     expect(
       getActivityAction(nativeSwap, { viewedDomain: 'shield', shieldProvider: 'zcash-shield' })
     ).toEqual({ label: 'Deposit', side: 'destination' })
@@ -169,7 +184,7 @@ test.describe('Multichain Activity presentation', () => {
         { viewedDomain: 'shield', shieldProvider: 'near-confidential' },
         shieldedDestination
       )
-    ).toEqual({ label: 'Withdraw', side: 'source' })
+    ).toEqual({ label: 'Swap', side: 'none' })
     expect(
       getActivityAction(
         nativeZecRecipient,

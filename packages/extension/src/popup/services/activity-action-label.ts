@@ -70,6 +70,14 @@ export function getActivityAction(
   const direction = item.snapshot?.direction
   const sourceAssetId = route?.source?.assetId ?? item.snapshot?.primaryAmount?.assetId
   const destinationAssetId = route?.destination?.assetId ?? item.snapshot?.counterAmount?.assetId
+  if (
+    shield?.operation === 'withdraw' &&
+    shield.sourceDomain === 'shield' &&
+    direction === 'outgoing' &&
+    item.snapshot?.recipient !== undefined
+  ) {
+    return { label: 'Send', side: 'source' }
+  }
 
   if (
     item.kind === 'swap' &&
@@ -89,10 +97,16 @@ export function getActivityAction(
     return { label: 'Swap', side: 'none' }
 
   if (source === 'shield' && destination === 'shield') {
+    const isConfidentialSource =
+      shield?.sourceDomain === 'shield' &&
+      item.source === 'wallet-v2' &&
+      item.id.startsWith('tx:confidential:')
     const sourceProvider =
       route?.sourceFundingSource === 'shielded'
         ? 'zcash-shield'
-        : shieldProviderForAsset(item, sourceAssetId)
+        : isConfidentialSource
+          ? 'near-confidential'
+          : shieldProviderForAsset(item, sourceAssetId)
     const destinationProvider =
       route?.destinationFundingSource === 'shielded'
         ? 'zcash-shield'
@@ -101,7 +115,9 @@ export function getActivityAction(
           : shieldProviderForAsset(item, destinationAssetId)
     if (perspective.shieldProvider && sourceProvider !== destinationProvider) {
       if (perspective.shieldProvider === sourceProvider)
-        return { label: 'Withdraw', side: 'source' }
+        return shield?.operation === 'swap'
+          ? { label: 'Swap', side: 'none' }
+          : { label: 'Withdraw', side: 'source' }
       if (perspective.shieldProvider === destinationProvider)
         return { label: 'Deposit', side: 'destination' }
     }
@@ -113,7 +129,8 @@ export function getActivityAction(
   if (source && destination && source !== destination) {
     if (
       shield?.operation === 'swap' &&
-      !perspective.shieldProvider &&
+      (!perspective.shieldProvider ||
+        (source === 'shield' && perspective.shieldProvider === 'near-confidential')) &&
       (!viewed || viewed === 'shield')
     )
       return { label: 'Swap', side: 'none' }
