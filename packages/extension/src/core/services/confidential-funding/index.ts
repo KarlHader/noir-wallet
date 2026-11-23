@@ -21,6 +21,7 @@ export {
   type ConfidentialFundingPreview,
   type ConfidentialFundingProgress,
   type ConfidentialFundingReview,
+  type ConfidentialErc191SignedPayload,
   type ConfidentialQuote,
   type ConfidentialQuoteBinding,
   type ConfidentialSignedPayload,

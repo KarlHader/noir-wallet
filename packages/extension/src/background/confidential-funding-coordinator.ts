@@ -80,7 +80,6 @@ import {
 } from '@/core/transactions/domain'
 import type { TransactionRepository } from '@/ports/repositories'
 import {
-  buildEvmTransfer,
   broadcastSignedEvmTransaction,
   createConfiguredEvmRpcClient,
   createEvmTransactionSegmentEvent,
@@ -104,6 +103,11 @@ import {
   type ConfidentialPrivateOrder,
   type ConfidentialStatus
 } from './confidential-funding-api'
+import {
+  EvmConfidentialDepositAdapter,
+  isEvmConfidentialDepositIdentity,
+  type ConfidentialDepositAdapter
+} from './confidential-funding-adapters'
 import {
   ConfidentialFundingSigner,
   type ConfidentialSigningIdentity
@@ -572,6 +576,7 @@ export class ConfidentialFundingCoordinator {
     DedupPromise<readonly ConfidentialBalance[]>
   >()
   private readonly rpcByChain = new Map<string, EvmTransactionRpc & EvmBroadcastRpc>()
+  private readonly evmDepositAdapter: ConfidentialDepositAdapter
   private readonly clusterDepositPrefetches = new Map<
     string,
     { expiresAt: number; quote: Promise<ConfidentialQuote> }
@@ -641,6 +646,18 @@ export class ConfidentialFundingCoordinator {
     for (const network of options.evmNetworks) {
       this.rpcByChain.set(network.chainId, createConfiguredEvmRpcClient(options.network, network))
     }
+    this.evmDepositAdapter = new EvmConfidentialDepositAdapter(
+      options.signer,
+      options.assets,
+      chainId => this.requireRpc(chainId)
+    )
+  }
+
+  private depositAdapter(identity: ConfidentialSigningIdentity): ConfidentialDepositAdapter {
+    if (!isEvmConfidentialDepositIdentity(identity)) {
+      throw new Error('Confidential funding requires an EVM signing chain')
+    }
+    return this.evmDepositAdapter
   }
 
   getPortfolioAssetDefinitions(model: PortfolioReadModel | null): readonly AssetDefinitionInput[] {
@@ -1732,8 +1749,8 @@ export class ConfidentialFundingCoordinator {
       plan => plan.phase === 'prepared' && plan.approvalExpiresAt <= this.now()
     )) {
       if (expired.preparedDeposit) {
-        await this.options.signer
-          .cancelTransaction({
+        await this.depositAdapter(sourceIdentity)
+          .cancelDeposit({
             identity: sourceIdentity,
             commandId: expired.preparedDeposit.commandId
           })
@@ -1782,8 +1799,8 @@ export class ConfidentialFundingCoordinator {
 
     for (const unsigned of sourcePlans.filter(plan => plan.phase === 'prepared')) {
       if (unsigned.preparedDeposit) {
-        await this.options.signer
-          .cancelTransaction({
+        await this.depositAdapter(sourceIdentity)
+          .cancelDeposit({
             identity: sourceIdentity,
             commandId: unsigned.preparedDeposit.commandId
           })
@@ -1859,25 +1876,15 @@ export class ConfidentialFundingCoordinator {
       slippageBps: input.slippageBps
     })
 
-    const prepared = await buildEvmTransfer({
-      chainId: input.source.chainId,
-      chainAccount: sourceIdentity.context.chainAccount,
-      assets: this.options.assets,
-      intent: {
-        assetId: input.source.assetId,
-        recipient: depositQuote.quote.depositAddress,
-        amountRaw: input.source.amountRaw
-      },
-      rpc: this.requireRpc(input.source.chainId),
-      ...(input.feeSelection ? { feeSelection: input.feeSelection } : { feeTier: input.feeTier })
-    })
-    const signing = await this.options.signer.prepareTransaction({
+    const preparedDeposit: ConfidentialFundingPlan['preparedDeposit'] = await this.depositAdapter(
+      sourceIdentity
+    ).prepareDeposit({
       identity: sourceIdentity,
-      prepared
-    })
-    const preparedDeposit: ConfidentialFundingPlan['preparedDeposit'] = Object.freeze({
-      ...signing,
-      preparedTransfer: prepared
+      chainId: input.source.chainId,
+      assetId: input.source.assetId,
+      recipient: depositQuote.quote.depositAddress,
+      amountRaw: input.source.amountRaw,
+      ...(input.feeSelection ? { feeSelection: input.feeSelection } : { feeTier: input.feeTier })
     })
 
     const planId = this.createId()
@@ -1968,8 +1975,8 @@ export class ConfidentialFundingCoordinator {
         !this.confirmingByPlan.has(plan.planId)
     )) {
       if (expired.preparedDeposit) {
-        await this.options.signer
-          .cancelTransaction({
+        await this.depositAdapter(sourceIdentity)
+          .cancelDeposit({
             identity: sourceIdentity,
             commandId: expired.preparedDeposit.commandId
           })
@@ -2064,40 +2071,19 @@ export class ConfidentialFundingCoordinator {
       throw new Error('Shield swap quote has no active destination')
     }
 
-    const prepared = isDeposit
-      ? await buildEvmTransfer({
+    const preparedDeposit = isDeposit
+      ? await this.depositAdapter(sourceIdentity).prepareDeposit({
+          identity: sourceIdentity,
           chainId: parseChainId(input.source.chainId).id,
-          chainAccount: sourceIdentity.context.chainAccount,
-          ...(input.sourceDomain === 'private'
-            ? {
-                executionAccount: {
-                  kind: 'pea' as const,
-                  address: sourceIdentity.peaAddress,
-                  addressIndex: sourceIdentity.addressIndex
-                }
-              }
-            : {}),
-          assets: this.options.assets,
-          intent: {
-            assetId: input.source.assetId,
-            recipient: quote.quote.depositAddress,
-            amountRaw: input.source.amountRaw
-          },
-          rpc: this.requireRpc(input.source.chainId),
+          assetId: input.source.assetId,
+          recipient: quote.quote.depositAddress,
+          amountRaw: input.source.amountRaw,
+          sourceDomain: input.sourceDomain === 'private' ? 'private' : 'public',
           ...(input.feeSelection
             ? { feeSelection: input.feeSelection }
             : { feeTier: input.feeTier })
         })
-      : null
-    const signing = prepared
-      ? await this.options.signer.prepareTransaction({
-          identity: sourceIdentity,
-          prepared,
-          sourceDomain: input.sourceDomain === 'private' ? 'private' : 'public'
-        })
-      : null
-    const preparedDeposit =
-      prepared && signing ? Object.freeze({ ...signing, preparedTransfer: prepared }) : undefined
+      : undefined
     const createdAt = this.now()
     const planId = this.createId()
     const approvalExpiresAt = Math.min(
@@ -2233,40 +2219,19 @@ export class ConfidentialFundingCoordinator {
       recipient: destinationAddress,
       slippageBps: input.slippageBps
     })
-    const prepared = depositQuote
-      ? await buildEvmTransfer({
+    const preparedDeposit = depositQuote
+      ? await this.depositAdapter(sourceIdentity).prepareDeposit({
+          identity: sourceIdentity,
           chainId: parseChainId(input.source.chainId).id,
-          chainAccount: sourceIdentity.context.chainAccount,
-          ...(input.sourceDomain === 'private'
-            ? {
-                executionAccount: {
-                  kind: 'pea' as const,
-                  address: sourceIdentity.peaAddress,
-                  addressIndex: sourceIdentity.addressIndex
-                }
-              }
-            : {}),
-          assets: this.options.assets,
-          intent: {
-            assetId: input.source.assetId,
-            recipient: depositQuote.quote.depositAddress,
-            amountRaw: input.source.amountRaw
-          },
-          rpc: this.requireRpc(input.source.chainId),
+          assetId: input.source.assetId,
+          recipient: depositQuote.quote.depositAddress,
+          amountRaw: input.source.amountRaw,
+          sourceDomain: input.sourceDomain as 'public' | 'private',
           ...(input.feeSelection
             ? { feeSelection: input.feeSelection }
             : { feeTier: input.feeTier })
         })
-      : null
-    const signing = prepared
-      ? await this.options.signer.prepareTransaction({
-          identity: sourceIdentity,
-          prepared,
-          sourceDomain: input.sourceDomain as 'public' | 'private'
-        })
-      : null
-    const preparedDeposit =
-      prepared && signing ? Object.freeze({ ...signing, preparedTransfer: prepared }) : undefined
+      : undefined
     const createdAt = this.now()
     const planId = this.createId()
     const expectedOutputRaw = previews.quotes
@@ -2470,8 +2435,8 @@ export class ConfidentialFundingCoordinator {
       } catch (error) {
         if (definitiveHistoryAuthRejection(error)) {
           if (plan.preparedDeposit) {
-            await this.options.signer
-              .cancelTransaction({ identity, commandId: plan.preparedDeposit.commandId })
+            await this.depositAdapter(identity)
+              .cancelDeposit({ identity, commandId: plan.preparedDeposit.commandId })
               .catch(() => {})
           }
           await this.updatePlan(plan, { phase: 'failed', errorStatus: 'HISTORY_AUTH_REJECTED' })
@@ -2522,9 +2487,9 @@ export class ConfidentialFundingCoordinator {
       return plan
     }
     if (!plan.preparedDeposit) throw new Error('Confidential funding deposit was not prepared')
-    let signed: Awaited<ReturnType<ConfidentialFundingSigner['confirmTransaction']>>
+    let signed: Awaited<ReturnType<ConfidentialDepositAdapter['confirmDeposit']>>
     try {
-      signed = await this.options.signer.confirmTransaction({
+      signed = await this.depositAdapter(identity).confirmDeposit({
         identity,
         commandId: plan.preparedDeposit.commandId,
         preparedTransfer: plan.preparedDeposit.preparedTransfer,
@@ -2828,8 +2793,8 @@ export class ConfidentialFundingCoordinator {
       }
       if (plan.preparedDeposit) {
         const identity = await this.requirePlanIdentity(plan)
-        await this.options.signer
-          .cancelTransaction({ identity, commandId: plan.preparedDeposit.commandId })
+        await this.depositAdapter(identity)
+          .cancelDeposit({ identity, commandId: plan.preparedDeposit.commandId })
           .catch(() => {})
       }
       await this.options.store.deletePlan(planId)
@@ -2958,8 +2923,8 @@ export class ConfidentialFundingCoordinator {
       if (this.confirmingByPlan.has(planId)) return plan
       const identity = await this.requirePlanIdentity(plan).catch(() => null)
       if (identity && plan.preparedDeposit) {
-        await this.options.signer
-          .cancelTransaction({
+        await this.depositAdapter(identity)
+          .cancelDeposit({
             identity,
             commandId: plan.preparedDeposit.commandId
           })

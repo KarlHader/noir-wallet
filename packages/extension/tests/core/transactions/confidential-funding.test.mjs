@@ -1,7 +1,9 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
+import { isEvmConfidentialDepositIdentity } from '../../../src/background/confidential-funding-adapters.ts'
 import { ConfidentialFundingApi } from '../../../src/background/confidential-funding-api.ts'
 import { ConfidentialFundingCoordinator } from '../../../src/background/confidential-funding-coordinator.ts'
+import { ConfidentialFundingSigner } from '../../../src/background/confidential-funding-signer.ts'
 import { createBackgroundConfidentialFundingCoordinator } from '../../../src/background/confidential-funding.ts'
 import { userEvmAssetToDefinition } from '../../../src/core/chains/user-assets/user-evm-asset.ts'
 import { getActiveChainEndpointSettings } from '../../../src/core/chains/chain-endpoint-settings.ts'
@@ -92,7 +94,9 @@ test('passive Confidential balance reads skip identity setup without a session',
 
   session = usableSession
   identityAccountId = 'account:other'
-  await expect(coordinator.refreshBalances(scope, false)).rejects.toThrow('Active Wallet Account changed')
+  await expect(coordinator.refreshBalances(scope, false)).rejects.toThrow(
+    'Active Wallet Account changed'
+  )
   expect(balanceReads).toBe(0)
 
   identityAccountId = scope.accountId
@@ -437,7 +441,9 @@ test.describe('confidential funding safety rules', () => {
         async withExternalDepositScope(_scope, operation) {
           const previous = metadataLockTail
           let release
-          metadataLockTail = new Promise(resolve => { release = resolve })
+          metadataLockTail = new Promise(resolve => {
+            release = resolve
+          })
           await previous
           metadataLockHeld = true
           let result
@@ -1448,6 +1454,12 @@ test.describe('confidential funding safety rules', () => {
     expect(() =>
       assertConfidentialIntentBinding({
         ...input,
+        intent: { standard: 'nep413', payload: input.intent.payload }
+      })
+    ).toThrow('ERC-191')
+    expect(() =>
+      assertConfidentialIntentBinding({
+        ...input,
         signerId: '0x3333333333333333333333333333333333333333'
       })
     ).toThrow('approved signer')
@@ -1773,4 +1785,75 @@ test.describe('confidential funding safety rules', () => {
       globalThis.fetch = originalFetch
     }
   })
+})
+
+test('EVM confidential auth still signs only ERC-191 and cannot fund without a software identity', async () => {
+  const idleClient = {
+    async deriveGlobalPea() {
+      throw new Error('PEA derivation should not run')
+    }
+  }
+  const missingIdentities = [
+    async () => null,
+    async () => ({ keyDomainSource: { kind: 'hardware' } }),
+    async () => ({ keyDomainSource: { kind: 'private-key', chainFamily: 'near' } })
+  ]
+  for (const loadContext of missingIdentities) {
+    const signer = new ConfidentialFundingSigner(idleClient, loadContext)
+    await expect(signer.resolveIdentity('eip155:1')).rejects.toThrow(
+      'Confidential funding requires an active software EVM Account'
+    )
+  }
+
+  expect(isEvmConfidentialDepositIdentity({ kind: 'evm' })).toBe(true)
+  expect(isEvmConfidentialDepositIdentity({})).toBe(true)
+  expect(isEvmConfidentialDepositIdentity({ kind: 'near' })).toBe(false)
+  expect(isEvmConfidentialDepositIdentity({ kind: 'near-ledger' })).toBe(false)
+
+  const address = '0x1111111111111111111111111111111111111111'
+  const peaAddress = '0x2222222222222222222222222222222222222222'
+  const chainId = 'eip155:1'
+  let preparedPayload = null
+  const signer = new ConfidentialFundingSigner(
+    {
+      async deriveGlobalPea() {
+        return { address: peaAddress }
+      },
+      async prepare(_keyDomainId, payload) {
+        preparedPayload = payload
+        return {
+          execution: { kind: 'internal' },
+          operation: 'message',
+          expiresAt: Date.now() + 60_000,
+          summary: { review: { level: 'review' } },
+          commandId: 'command-erc191'
+        }
+      },
+      async confirm() {
+        return {
+          kind: 'signature',
+          signature: { encoding: 'hex', value: `0x${'11'.repeat(64)}00` },
+          address
+        }
+      },
+      async cancel() {}
+    },
+    async () => ({
+      keyDomainSource: { kind: 'software' },
+      chainAccount: {
+        scope: { keyDomainId: 'wallet:one', accountId: 'account:one', chainId },
+        derivation: { scheme: 'bip44', path: "m/44'/60'/0'/0/0" },
+        identity: { kind: 'account-identifier', value: address }
+      }
+    })
+  )
+  const identity = await signer.resolveIdentity(chainId)
+  expect(identity.kind).toBe('evm')
+  expect(identity.address).toBe(address)
+  expect(identity.peaAddress).toBe(peaAddress)
+  const signed = await signer.signMessage({ identity, chainId, payload: 'auth-payload' })
+  expect(preparedPayload.kind).toBe('evm-personal-message')
+  expect(new TextDecoder().decode(preparedPayload.message)).toBe('auth-payload')
+  expect(signed).toMatchObject({ standard: 'erc191', payload: 'auth-payload' })
+  expect(signed.signature.startsWith('secp256k1:')).toBe(true)
 })

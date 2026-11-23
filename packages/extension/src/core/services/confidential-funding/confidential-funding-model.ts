@@ -22,11 +22,19 @@ export type ConfidentialFundingPhase =
   | 'cancelled'
   | 'needs-auth'
 
-export type ConfidentialSignedPayload = Readonly<{
+export type ConfidentialErc191SignedPayload = Readonly<{
   standard: 'erc191'
   payload: string
   signature: string
 }>
+
+type ConfidentialSignedPayloadByStandard = {
+  readonly erc191: ConfidentialErc191SignedPayload
+}
+
+// Discriminant is `standard`. Add a member here to extend the signed payload union.
+export type ConfidentialSignedPayload =
+  ConfidentialSignedPayloadByStandard[keyof ConfidentialSignedPayloadByStandard]
 
 export interface ConfidentialQuote {
   readonly correlationId: string

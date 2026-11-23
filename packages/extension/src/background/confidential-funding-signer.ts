@@ -47,14 +47,47 @@ function normalizeSignature(value: string): string {
   return `secp256k1:${encodeBase58(bytes)}`
 }
 
+export type ConfidentialAuthIdentityKind = 'evm'
+
 export interface ConfidentialSigningIdentity {
+  readonly kind: ConfidentialAuthIdentityKind
   readonly context: ActiveEvmPortfolioContext
   readonly address: string
   readonly addressIndex: number
   readonly peaAddress: string
 }
 
-export class ConfidentialFundingSigner {
+export interface ConfidentialAuthSigner {
+  readonly kind: 'evm'
+  resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity>
+  signMessage(input: {
+    readonly identity: ConfidentialSigningIdentity
+    readonly chainId: ChainId
+    readonly payload: string
+  }): Promise<ConfidentialSignedPayload>
+}
+
+async function assertCurrentEvmIdentity(
+  resolveIdentity: (chainId: ChainId) => Promise<ConfidentialSigningIdentity>,
+  identity: ConfidentialSigningIdentity,
+  chainId: ChainId
+): Promise<void> {
+  const current = await resolveIdentity(chainId)
+  if (
+    current.context.chainAccount.scope.keyDomainId !==
+      identity.context.chainAccount.scope.keyDomainId ||
+    current.context.chainAccount.scope.accountId !==
+      identity.context.chainAccount.scope.accountId ||
+    current.address !== identity.address ||
+    current.peaAddress.toLowerCase() !== identity.peaAddress.toLowerCase() ||
+    current.addressIndex !== identity.addressIndex
+  )
+    throw new Error('Active Wallet Account changed before confidential signing')
+}
+
+export class EvmConfidentialAuthSigner implements ConfidentialAuthSigner {
+  readonly kind = 'evm' as const
+
   constructor(
     private readonly signer: EvmMultichainSigningClient,
     private readonly loadContext: (chainId: ChainId) => Promise<ActiveEvmPortfolioContext | null>,
@@ -67,17 +100,7 @@ export class ConfidentialFundingSigner {
     identity: ConfidentialSigningIdentity,
     chainId: ChainId
   ): Promise<void> {
-    const current = await this.resolveIdentity(chainId)
-    if (
-      current.context.chainAccount.scope.keyDomainId !==
-        identity.context.chainAccount.scope.keyDomainId ||
-      current.context.chainAccount.scope.accountId !==
-        identity.context.chainAccount.scope.accountId ||
-      current.address !== identity.address ||
-      current.peaAddress.toLowerCase() !== identity.peaAddress.toLowerCase() ||
-      current.addressIndex !== identity.addressIndex
-    )
-      throw new Error('Active Wallet Account changed before confidential signing')
+    await assertCurrentEvmIdentity(chainId => this.resolveIdentity(chainId), identity, chainId)
   }
 
   async resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
@@ -94,6 +117,7 @@ export class ConfidentialFundingSigner {
       throw new Error('Confidential address must be distinct from the Main address')
     }
     return Object.freeze({
+      kind: 'evm' as const,
       context,
       address: binding.address.toLowerCase(),
       addressIndex: binding.addressIndex,
@@ -152,6 +176,40 @@ export class ConfidentialFundingSigner {
         }
       }
     })
+  }
+}
+
+export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
+  readonly kind = 'evm' as const
+  private readonly evmAuth: EvmConfidentialAuthSigner
+
+  constructor(
+    private readonly signer: EvmMultichainSigningClient,
+    loadContext: (chainId: ChainId) => Promise<ActiveEvmPortfolioContext | null>,
+    private readonly runActiveOperation: <T>(
+      operation: () => Promise<T>
+    ) => Promise<T> = operation => operation()
+  ) {
+    this.evmAuth = new EvmConfidentialAuthSigner(signer, loadContext, runActiveOperation)
+  }
+
+  private async assertCurrentIdentity(
+    identity: ConfidentialSigningIdentity,
+    chainId: ChainId
+  ): Promise<void> {
+    await assertCurrentEvmIdentity(chainId => this.resolveIdentity(chainId), identity, chainId)
+  }
+
+  resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
+    return this.evmAuth.resolveIdentity(chainId)
+  }
+
+  signMessage(input: {
+    readonly identity: ConfidentialSigningIdentity
+    readonly chainId: ChainId
+    readonly payload: string
+  }): Promise<ConfidentialSignedPayload> {
+    return this.evmAuth.signMessage(input)
   }
 
   async prepareTransaction(input: {
