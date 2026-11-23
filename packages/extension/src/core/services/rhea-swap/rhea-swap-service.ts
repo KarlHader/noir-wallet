@@ -839,22 +839,48 @@ export class RheaSwapService {
       orderId === null
         ? undefined
         : { orderId, router, ...(statusChainId === null ? {} : { chainId: statusChainId }) }
+    let incompleteOrder: SwapOrderStatusDataRaw | undefined
     if (orderQuery && (intents || recordId === undefined)) {
       try {
         const observation = readSettlement(
           await this.client.getOrderStatusRaw(orderQuery, { signal })
         )
-        if (observation) return observation
+        if (observation) {
+          const status = normalizeOrderStatus(observation)
+          if (
+            !intents ||
+            recordId === undefined ||
+            status === 'failed' ||
+            status === 'refunded' ||
+            status === 'expired' ||
+            (status === 'completed' && readRheaDestinationHash(observation))
+          ) {
+            return observation
+          }
+          incompleteOrder = observation
+        }
       } catch (error) {
         if (signal?.aborted || recordId === undefined) throw error
       }
     }
     if (recordId !== undefined) {
-      const observation = readSettlement(
-        await this.client.getOrderStatusRaw({ recordId }, { signal })
-      )
-      if (observation) return observation
+      try {
+        const observation = readSettlement(
+          await this.client.getOrderStatusRaw({ recordId }, { signal })
+        )
+        if (
+          observation &&
+          (!incompleteOrder ||
+            (normalizeOrderStatus(observation) === 'completed' &&
+              readRheaDestinationHash(observation)))
+        ) {
+          return observation
+        }
+      } catch (error) {
+        if (signal?.aborted || !incompleteOrder) throw error
+      }
     }
+    if (incompleteOrder) return incompleteOrder
     if (orderQuery === undefined && recordId === undefined) {
       throw new Error('RHEA Swap has no order status key')
     }

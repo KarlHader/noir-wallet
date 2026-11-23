@@ -1176,12 +1176,21 @@ test('prioritizes the persisted Intents order and only falls back to order-level
     status: 'processing',
     destinationHash: null
   })
+  recordStatus = { status: 'SUCCESS', toHash: destinationHash }
+  for (const status of ['PROCESSING', 'SUCCESS']) {
+    orderStatus = { status }
+    await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
+      status: 'completed',
+      destinationHash
+    })
+  }
+  expect(recordReads).toBe(3)
   orderStatus = { status: 'SUCCESS', toHash: destinationHash }
   await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
     status: 'completed',
     destinationHash
   })
-  expect(recordReads).toBe(0)
+  expect(recordReads).toBe(3)
   orderStatus = new Error('Order status unavailable')
   recordStatus = { status: 'SUCCESS', toHash: sourceHash }
   await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
