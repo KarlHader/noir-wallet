@@ -17,6 +17,7 @@ export interface PortfolioSnapshotScope {
   readonly walletId: string
   readonly accountId: string
   readonly endpointRuntimeKey: string
+  readonly detailAssetId?: string
 }
 
 export interface PortfolioSnapshot {
@@ -42,15 +43,26 @@ const entries = new Map<string, Entry>()
 let listenerInstalled = false
 
 export function portfolioSnapshotKey(scope: PortfolioSnapshotScope): string {
-  return JSON.stringify([scope.network, scope.walletId, scope.accountId, scope.endpointRuntimeKey])
+  const account = [scope.network, scope.walletId, scope.accountId, scope.endpointRuntimeKey]
+  return JSON.stringify(scope.detailAssetId ? [...account, scope.detailAssetId] : account)
 }
 
 function getEntry(key: string, scope?: PortfolioSnapshotScope): Entry | undefined {
   const existing = entries.get(key)
   if (existing || !scope) return existing
+  const sharedSnapshot = scope.detailAssetId
+    ? entries.get(portfolioSnapshotKey({ ...scope, detailAssetId: undefined }))?.snapshot
+    : undefined
+  if (scope.detailAssetId) {
+    for (const [entryKey, entry] of entries) {
+      if (entry.scope.detailAssetId && entry.listeners.size === 0) entries.delete(entryKey)
+    }
+  }
   const entry: Entry = {
     scope,
-    snapshot: { model: null, status: 'loading', settled: false },
+    snapshot: sharedSnapshot?.model?.assets.some(row => row.asset.id === scope.detailAssetId)
+      ? sharedSnapshot
+      : { model: null, status: 'loading', settled: false },
     listeners: new Set(),
     refreshes: new Map()
   }

@@ -4083,8 +4083,18 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           .catch(() => {})
       }
       const policy = await readTokenDisplayPolicy()
+      const detailAssetId =
+        message.action === 'read' &&
+        typeof message.expectedWalletId === 'string' &&
+        typeof message.expectedAccountId === 'string' &&
+        typeof message.detailAssetId === 'string'
+          ? parseAssetId(message.detailAssetId).id
+          : undefined
+      if (detailAssetId && !(await expectedScopeMatches())) {
+        throw new Error('Portfolio Account changed')
+      }
       return {
-        model: model ? applyTokenDisplayPolicy(model, policy) : null,
+        model: model ? applyTokenDisplayPolicy(model, policy, detailAssetId) : null,
         userAssets: userEvmAssetRecords,
         detectedAssets: detectedEvmAssetRecords,
         protocolAssets: Object.freeze([

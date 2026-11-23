@@ -96,6 +96,14 @@ export function AssetDetail() {
   const sendOriginPath = `${location.pathname}${location.search}`
   const [searchParams] = useSearchParams()
   const requestedAssetId = searchParams.get('assetId')
+  const requestedAsset = useMemo(() => {
+    if (!requestedAssetId) return null
+    try {
+      return parseAssetId(requestedAssetId)
+    } catch {
+      return null
+    }
+  }, [requestedAssetId])
   const { goBack, navigate } = useNavigate()
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
@@ -131,7 +139,9 @@ export function AssetDetail() {
     scopeKey: portfolioScopeKey,
     refresh,
     refreshSource
-  } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId)
+  } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId, {
+    detailAssetId: requestedAsset?.id
+  })
   const [settledConfidentialScope, setSettledConfidentialScope] = useState<string | null>(null)
   const [prices, setPrices] = useState<AssetPriceReadModel | null>(null)
   const [priceStatus, setPriceStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -211,14 +221,7 @@ export function AssetDetail() {
   }, [requestedAssetId])
 
   const visibleModel = model
-  const requestedChainId = useMemo(() => {
-    if (!requestedAssetId) return null
-    try {
-      return parseAssetId(requestedAssetId).chainId
-    } catch {
-      return null
-    }
-  }, [requestedAssetId])
+  const requestedChainId = requestedAsset?.chainId ?? null
   const requestedChainEnabled =
     requestedChainId !== null &&
     storageV2Account?.walletId === effectiveWalletId &&

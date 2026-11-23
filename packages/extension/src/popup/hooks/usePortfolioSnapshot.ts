@@ -19,6 +19,7 @@ export function usePortfolioSnapshot(
     readonly enabled?: boolean
     readonly autoRefresh?: boolean
     readonly refreshConfidential?: boolean
+    readonly detailAssetId?: string
   } = {}
 ) {
   const network = useWalletStore(state => state.currentNetwork)
@@ -29,7 +30,9 @@ export function usePortfolioSnapshot(
   const autoRefresh = options.autoRefresh !== false
   const refreshConfidential = options.refreshConfidential !== false
   const scope =
-    enabled && walletId && accountId ? { network, walletId, accountId, endpointRuntimeKey } : null
+    enabled && walletId && accountId
+      ? { network, walletId, accountId, endpointRuntimeKey, detailAssetId: options.detailAssetId }
+      : null
   const key = scope ? portfolioSnapshotKey(scope) : ''
   const subscribe = useCallback(
     (listener: () => void) => subscribePortfolioSnapshot(key, listener),

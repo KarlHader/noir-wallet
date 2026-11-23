@@ -156,6 +156,7 @@ export interface EvmWalletClient {
       readonly refreshConfidential?: boolean
       readonly chainIds?: readonly string[]
       readonly automatic?: boolean
+      readonly detailAssetId?: string
       readonly expectedWalletId?: string
       readonly expectedAccountId?: string
     }
@@ -927,6 +928,7 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         readonly refreshConfidential?: boolean
         readonly chainIds?: readonly string[]
         readonly automatic?: boolean
+        readonly detailAssetId?: string
         readonly expectedWalletId?: string
         readonly expectedAccountId?: string
       } = {}
@@ -954,6 +956,7 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
           : { refreshConfidential: options.refreshConfidential }),
         ...(chainIds === undefined ? {} : { chainIds }),
         ...(options.automatic === undefined ? {} : { automatic: options.automatic }),
+        ...(options.detailAssetId === undefined ? {} : { detailAssetId: options.detailAssetId }),
         ...(options.expectedWalletId === undefined
           ? {}
           : { expectedWalletId: options.expectedWalletId }),

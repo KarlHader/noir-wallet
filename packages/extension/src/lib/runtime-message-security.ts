@@ -780,6 +780,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       refreshConfidential: isBoolean,
       automatic: isBoolean,
       chainIds: isChainIdArray,
+      detailAssetId: isShortString,
       expectedWalletId: isShortString,
       expectedAccountId: isShortString
     }
