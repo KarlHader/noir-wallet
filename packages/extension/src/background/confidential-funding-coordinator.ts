@@ -122,7 +122,10 @@ import {
 } from './confidential-funding-adapters'
 import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
 import { readEnabledChainFeatureFlags } from '@/config/enabled-chain-feature-flags'
-import { nearConfidentialPortfolioAssetId } from '@/core/chains/near/near-portfolio-assets'
+import {
+  isNearWrappedProtocolAsset,
+  nearConfidentialPortfolioAssetId
+} from '@/core/chains/near/near-portfolio-assets'
 import {
   assertNearConfidentialDepositAddress,
   isNearChainConfidentialProtocolAsset,
@@ -716,9 +719,17 @@ function nearCatalogProtocolMapped(assetId: string, protocolAssetId: string): bo
   )
 }
 
-function nearConfidentialProtocolAccepted(assetId: string, protocolAssetId: string): boolean {
+function nearConfidentialProtocolAccepted(
+  assetId: string,
+  protocolAssetId: string,
+  operation?: string
+): boolean {
   if (protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) {
-    return nearConfidentialPortfolioAssetId(protocolAssetId) === assetId
+    // Native NEAR and wNEAR share nep141:wrap.near. wNEAR is a cluster move only.
+    return (
+      nearConfidentialPortfolioAssetId(protocolAssetId) === assetId ||
+      (operation === 'cluster' && isNearWrappedProtocolAsset(assetId, protocolAssetId))
+    )
   }
   return nearCatalogProtocolMapped(assetId, protocolAssetId)
 }
@@ -1010,11 +1021,19 @@ export class ConfidentialFundingCoordinator {
     )
   }
 
-  private hasConfidentialProtocolMapping(assetId: string, protocolAssetId: string): boolean {
+  private hasConfidentialProtocolMapping(
+    assetId: string,
+    protocolAssetId: string,
+    operation?: string
+  ): boolean {
     return (
       this.options.assetMappings.some(
         mapping => mapping.assetId === assetId && mapping.protocolAssetId === protocolAssetId
-      ) || nearCatalogProtocolMapped(assetId, protocolAssetId)
+      ) ||
+      nearCatalogProtocolMapped(assetId, protocolAssetId) ||
+      (operation === 'cluster' &&
+        readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG) &&
+        isNearWrappedProtocolAsset(assetId, protocolAssetId))
     )
   }
 
@@ -1029,7 +1048,7 @@ export class ConfidentialFundingCoordinator {
         registered !== undefined &&
         token.blockchain === route.chainName &&
         token.decimals === registered.metadata.decimals &&
-        this.hasConfidentialProtocolMapping(route.assetId, route.protocolAssetId)
+        this.hasConfidentialProtocolMapping(route.assetId, route.protocolAssetId, input.operation)
       )
     })
   }
@@ -3874,10 +3893,15 @@ export class ConfidentialFundingCoordinator {
       parseAssetId(value.destination.assetId).chainId !== destinationChain.id ||
       !this.options.assets.get(value.source.assetId) ||
       !this.options.assets.get(value.destination.assetId) ||
-      !this.hasConfidentialProtocolMapping(value.source.assetId, value.source.protocolAssetId) ||
+      !this.hasConfidentialProtocolMapping(
+        value.source.assetId,
+        value.source.protocolAssetId,
+        value.operation
+      ) ||
       !this.hasConfidentialProtocolMapping(
         value.destination.assetId,
-        value.destination.protocolAssetId
+        value.destination.protocolAssetId,
+        value.operation
       ) ||
       !isPositiveRaw(value.source.amountRaw) ||
       !value.source.protocolAssetId ||
@@ -3899,11 +3923,16 @@ export class ConfidentialFundingCoordinator {
             value.network
           ))) ||
       (sourceIsNear &&
-        !nearConfidentialProtocolAccepted(value.source.assetId, value.source.protocolAssetId)) ||
+        !nearConfidentialProtocolAccepted(
+          value.source.assetId,
+          value.source.protocolAssetId,
+          value.operation
+        )) ||
       (destinationIsNear &&
         !nearConfidentialProtocolAccepted(
           value.destination.assetId,
-          value.destination.protocolAssetId
+          value.destination.protocolAssetId,
+          value.operation
         ))
     ) {
       throw new Error('Confidential funding request is invalid')

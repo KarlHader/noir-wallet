@@ -226,8 +226,11 @@ export class RheaSwapService {
           : token
       )
     }
+    // One row per chain address. A second native NEAR row would share wrap.near with
+    // wNEAR and make the persisted NEAR catalog fail to parse, hiding its balances.
+    const catalogTokens = [...unique.values()]
     return Object.freeze({
-      tokens: Object.freeze([...unique.values()]),
+      tokens: Object.freeze(catalogTokens),
       failedChainIds: Object.freeze(failedChainIds.sort((left, right) => left - right))
     })
   }

@@ -26,6 +26,55 @@ function token() {
   }
 }
 
+test('shows native NEAR in the from catalog without storing a second wrap.near row', async () => {
+  let sends = 0
+  const wrap = {
+    assetId: 'nep141:wrap.near',
+    blockchain: 'near',
+    contractAddress: 'wrap.near',
+    decimals: 24,
+    icon: null,
+    price: 5,
+    priceUpdatedAt: '2026-09-02T00:00:00.000Z',
+    symbol: 'wNEAR',
+    rheaChainId: 'near',
+    tokenListChainId: 900001,
+    rheaAddress: 'wrap.near',
+    isNative: false,
+    sources: ['nearintents']
+  }
+  const usdt = {
+    ...wrap,
+    assetId: 'nep141:usdt.tether-token.near',
+    contractAddress: 'usdt.tether-token.near',
+    decimals: 6,
+    symbol: 'USDT',
+    rheaAddress: 'usdt.tether-token.near',
+    price: 1
+  }
+  const client = createRheaSwapClient(async () => {
+    sends += 1
+    return { result: { tokens: [usdt, wrap], failedChainIds: [] } }
+  })
+  const request = { direction: 'from', tokenListChainIds: [900001] }
+  const listed = await client.listTokens(request)
+  expect(listed.tokens.map(token => [token.symbol, token.isNative])).toEqual([
+    ['USDT', false],
+    ['NEAR', true],
+    ['wNEAR', false]
+  ])
+  expect(sends).toBe(1)
+  const cached = await client.listTokens(request)
+  expect(cached.tokens.map(token => token.symbol)).toEqual(['USDT', 'NEAR', 'wNEAR'])
+  expect(sends).toBe(1)
+  const destination = await client.listTokens({
+    direction: 'cross-chain-to',
+    tokenListChainIds: [900001]
+  })
+  expect(destination.tokens.map(token => token.symbol)).toEqual(['USDT', 'wNEAR'])
+  expect(sends).toBe(2)
+})
+
 test('shows the useful minimum from RHEA quote and swap errors', () => {
   expect(
     getRheaSwapErrorMessage(new RheaSwapClientError('RHEA Swap returned an invalid response'))

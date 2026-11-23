@@ -9,7 +9,11 @@ import {
 import { getZcashChainId } from '../../../src/core/chains/registry/index.ts'
 import { parseTrustedExtensionRuntimeMessage } from '../../../src/lib/runtime-message-security.ts'
 import { readRheaDestinationHash } from '../../../src/core/services/rhea-swap/rhea-order-status.ts'
-import { parseRheaSwapReviewView } from '../../../src/core/services/rhea-swap/rhea-swap-runtime.ts'
+import {
+  parseRheaSwapCatalogResult,
+  parseRheaSwapReviewView
+} from '../../../src/core/services/rhea-swap/rhea-swap-runtime.ts'
+import { withNearNativeCatalogToken } from '../../../src/core/services/rhea-swap/rhea-swap-near-wrap.ts'
 import {
   MemoryRheaSwapQuoteSessionStore,
   RHEA_SWAP_CHAIN_CATALOG,
@@ -944,6 +948,103 @@ test('catalog loading deduplicates native EVM address aliases after canonicaliza
     assetId: 'nep141:bnb.omdep.near',
     rheaAddress: '0x0000000000000000000000000000000000000000'
   })
+})
+
+test('persists one NEAR wrap row and derives native NEAR only as a from view', async () => {
+  const wrapRow = {
+    chain: 'near',
+    address: 'wrap.near',
+    symbol: 'wNEAR',
+    decimals: 24,
+    tokenListChainId: 900001,
+    blockchain: 'near',
+    assetId: 'nep141:wrap.near',
+    contractAddress: 'wrap.near',
+    coinType: null,
+    name: 'Wrapped NEAR',
+    logoURI: null,
+    price: '5',
+    priceUpdatedAt: null,
+    sources: ['nearintents'],
+    raw: { address: 'wrap.near', assetId: 'nep141:wrap.near' }
+  }
+  const serviceFor = rows =>
+    new RheaSwapService(
+      {
+        async getFromTokens() {
+          return rows
+        },
+        async getCrossChainToTokens() {
+          return rows
+        }
+      },
+      new MemoryRheaSwapQuoteSessionStore()
+    )
+  const persisted = await serviceFor([wrapRow]).listTokens({
+    direction: 'from',
+    tokenListChainIds: [900001]
+  })
+  expect(persisted.tokens).toHaveLength(1)
+  expect(persisted.tokens[0]).toMatchObject({
+    assetId: 'nep141:wrap.near',
+    rheaAddress: 'wrap.near',
+    isNative: false,
+    contractAddress: 'wrap.near',
+    symbol: 'wNEAR',
+    decimals: 24,
+    price: 5,
+    sources: ['nearintents'],
+    tokenListChainId: 900001,
+    rheaChainId: 'near'
+  })
+  expect(parseRheaSwapCatalogResult(persisted).tokens).toHaveLength(1)
+  const presented = withNearNativeCatalogToken(persisted.tokens)
+  expect(presented).toHaveLength(2)
+  expect(presented[0]).toMatchObject({
+    assetId: 'nep141:wrap.near',
+    rheaAddress: 'wrap.near',
+    isNative: true,
+    contractAddress: null,
+    symbol: 'NEAR',
+    decimals: 24,
+    price: 5,
+    sources: ['nearintents'],
+    tokenListChainId: 900001,
+    rheaChainId: 'near'
+  })
+  expect(presented[1]).toBe(persisted.tokens[0])
+  expect(() =>
+    parseRheaSwapCatalogResult({ tokens: presented, failedChainIds: [] })
+  ).toThrow('RHEA Swap catalog contains duplicates')
+
+  const destination = await serviceFor([wrapRow]).listTokens({
+    direction: 'cross-chain-to',
+    tokenListChainIds: [900001]
+  })
+  expect(destination.tokens).toHaveLength(1)
+  expect(destination.tokens[0]).toMatchObject({
+    isNative: false,
+    symbol: 'wNEAR',
+    contractAddress: 'wrap.near',
+    rheaAddress: 'wrap.near'
+  })
+
+  const existing = await serviceFor([
+    wrapRow,
+    { ...wrapRow, symbol: 'NEAR', isNative: true, contractAddress: null }
+  ]).listTokens({ direction: 'from', tokenListChainIds: [900001] })
+  expect(existing.tokens).toHaveLength(2)
+  expect(existing.tokens.map(token => [token.symbol, token.isNative])).toEqual([
+    ['wNEAR', false],
+    ['NEAR', true]
+  ])
+
+  const coarse = await serviceFor([{ ...wrapRow, decimals: 18 }]).listTokens({
+    direction: 'from',
+    tokenListChainIds: [900001]
+  })
+  expect(coarse.tokens).toHaveLength(1)
+  expect(coarse.tokens[0].isNative).toBe(false)
 })
 
 test('prepared BNB swaps accept native address aliases while binding the custom ERC-20 contract', async () => {

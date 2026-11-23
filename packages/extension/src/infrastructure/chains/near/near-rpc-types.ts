@@ -78,6 +78,8 @@ export interface NearNativeTransferCostConfig {
   readonly storageAmountPerByteRaw: string
   readonly actionReceiptCreation: NearGasCostComponents
   readonly transfer: NearGasCostComponents
+  readonly functionCall: NearGasCostComponents
+  readonly functionCallPerByte: NearGasCostComponents
 }
 
 export interface NearFungibleTokenBalanceSnapshot {

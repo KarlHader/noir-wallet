@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { expect } from '@playwright/test'
 
 import { RheaSwapNearCoordinator } from '../../../src/background/rhea-swap-near.ts'
+import { NearRpcError } from '../../../src/infrastructure/chains/near/near-rpc-client.ts'
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 
@@ -67,10 +68,24 @@ function plan() {
       {
         signerId: sender,
         receiverId: 'recipient.near',
-        actions: [{ type: 'Transfer', params: { deposit: '2' } }]
+        actions: [
+          {
+            type: 'FunctionCall',
+            params: {
+              methodName: 'ft_transfer',
+              args: { receiver_id: 'recipient.near', amount: '2' },
+              gas: '30000000000000',
+              deposit: '1'
+            }
+          }
+        ]
       }
     ]
   }
+}
+
+function accountScope() {
+  return { keyDomainId: 'wallet:near', accountId: 'account:near' }
 }
 
 function activeContext() {
@@ -215,10 +230,33 @@ function createHarness(overrides = {}) {
       calls.push('wrapped-registration')
       return true
     },
-    async broadcastSignedTransaction(transaction) {
+    async getAccount(accountId) {
+      calls.push('native-balance')
+      return {
+        accountId,
+        amountRaw: '9'.repeat(30),
+        lockedRaw: '0',
+        storageUsage: 0,
+        codeHash: '1'.repeat(32),
+        blockHash: '1'.repeat(32),
+        blockHeight: 1
+      }
+    },
+    async getGasPrice() {
+      calls.push('gas-price')
+      return '100000000'
+    },
+    async getNativeTransferCostConfig() {
+      calls.push('protocol-costs')
+      return nearCostConfig()
+    },
+    async broadcastSignedTransactionAndWait(transaction) {
       const index = transaction === 'AQ==' ? 0 : 1
       calls.push(`broadcast:${index}`)
-      return sourceHashes[index]
+      return {
+        transaction: { hash: sourceHashes[index] },
+        status: { SuccessValue: '' }
+      }
     },
     async getTransactionStatus() {
       calls.push('status')
@@ -278,11 +316,14 @@ test('recovers a partially broadcast signed batch without signing again after ex
   let allowSecondBroadcast = false
   const harness = createHarness({
     rpc: {
-      async broadcastSignedTransaction(transaction) {
+      async broadcastSignedTransactionAndWait(transaction) {
         const index = transaction === 'AQ==' ? 0 : 1
         harness.calls.push(`broadcast:${index}`)
         if (index === 1 && !allowSecondBroadcast) throw new Error('response unavailable')
-        return sourceHashes[index]
+        return {
+          transaction: { hash: sourceHashes[index] },
+          status: { SuccessValue: '' }
+        }
       }
     }
   })
@@ -290,6 +331,7 @@ test('recovers a partially broadcast signed batch without signing again after ex
   await expect(
     harness.coordinator.confirm(binding().quoteHandle, review.payloadFingerprint)
   ).rejects.toThrow(/transaction 2 is signed and waiting to broadcast/)
+  expect(harness.calls.filter(call => call.startsWith('record:'))).toHaveLength(0)
 
   const [pending] = await harness.store.list()
   expect(pending.signedTransactions).toHaveLength(2)
@@ -306,6 +348,114 @@ test('recovers a partially broadcast signed batch without signing again after ex
   expect(harness.calls.filter(call => call.startsWith('confirm:'))).toHaveLength(2)
   expect(harness.calls.filter(call => call === 'read-plan')).toHaveLength(2)
   expect(harness.calls.filter(call => call === 'broadcast:0')).toHaveLength(1)
+  expect(harness.calls.filter(call => call.startsWith('broadcast:'))).toEqual([
+    'broadcast:0',
+    'broadcast:1',
+    'broadcast:1'
+  ])
+  expect(harness.calls.indexOf('broadcast:1')).toBeLessThan(
+    harness.calls.lastIndexOf(`record:${sourceHashes[1]}`)
+  )
+})
+
+test('does not report a NEAR swap when a commit has no execution result', async () => {
+  const harness = createHarness({
+    rpc: {
+      async broadcastSignedTransactionAndWait(transaction) {
+        const index = transaction === 'AQ==' ? 0 : 1
+        harness.calls.push(`broadcast:${index}`)
+        return { transaction: { hash: sourceHashes[index] }, status: {} }
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding().quoteHandle, binding())
+  await expect(
+    harness.coordinator.confirm(binding().quoteHandle, review.payloadFingerprint)
+  ).rejects.toThrow(/did not execute/)
+
+  expect(harness.calls.filter(call => call.startsWith('broadcast:'))).toEqual(['broadcast:0'])
+  expect(harness.calls.filter(call => call.startsWith('record:'))).toHaveLength(0)
+  expect(harness.store.values.size).toBe(0)
+  const graph = await harness.repository.get(accountScope(), 'tx:rhea-near:stable-near-1')
+  expect(graph.root.status).toBe('failed')
+  expect(graph.segments.filter(segment => segment.role === 'origin')).toMatchObject([
+    { status: 'failed', failure: { code: 'invalid' } },
+    { status: 'signed' }
+  ])
+})
+
+test('stops the batch when a committed NEAR transaction fails', async () => {
+  const harness = createHarness({
+    rpc: {
+      async broadcastSignedTransactionAndWait(transaction) {
+        const index = transaction === 'AQ==' ? 0 : 1
+        harness.calls.push(`broadcast:${index}`)
+        if (index === 0) {
+          return { transaction: { hash: sourceHashes[index] }, status: { SuccessValue: '' } }
+        }
+        return {
+          transaction: { hash: sourceHashes[index] },
+          status: {
+            Failure: {
+              ActionError: {
+                kind: { FunctionCallError: { ExecutionError: 'Smart contract panicked' } }
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding().quoteHandle, binding())
+  await expect(
+    harness.coordinator.confirm(binding().quoteHandle, review.payloadFingerprint)
+  ).rejects.toThrow(/Smart contract panicked/)
+
+  expect(harness.calls.filter(call => call.startsWith('broadcast:'))).toEqual([
+    'broadcast:0',
+    'broadcast:1'
+  ])
+  expect(harness.calls.filter(call => call.startsWith('record:'))).toHaveLength(0)
+  expect(harness.store.values.size).toBe(0)
+  const graph = await harness.repository.get(accountScope(), 'tx:rhea-near:stable-near-1')
+  expect(graph.root.status).toBe('failed')
+  expect(graph.segments.filter(segment => segment.role === 'origin')).toMatchObject([
+    { status: 'broadcast', evidence: { transactionHash: sourceHashes[0] } },
+    {
+      status: 'failed',
+      failure: { code: 'reverted' },
+      evidence: { transactionHash: sourceHashes[1] }
+    }
+  ])
+})
+
+test('stops the batch when NEAR rejects the first signed transaction', async () => {
+  const harness = createHarness({
+    rpc: {
+      async broadcastSignedTransactionAndWait() {
+        harness.calls.push('broadcast:0')
+        throw new NearRpcError('rpc-error', 'NEAR RPC request failed')
+      },
+      async getTransactionStatus() {
+        harness.calls.push('status')
+        return { status: 'unknown' }
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding().quoteHandle, binding())
+  await expect(
+    harness.coordinator.confirm(binding().quoteHandle, review.payloadFingerprint)
+  ).rejects.toThrow('NEAR RPC request failed')
+
+  expect(harness.calls.filter(call => call.startsWith('broadcast:'))).toEqual(['broadcast:0'])
+  expect(harness.calls.filter(call => call.startsWith('record:'))).toHaveLength(0)
+  expect(harness.store.values.size).toBe(0)
+  const graph = await harness.repository.get(accountScope(), 'tx:rhea-near:stable-near-1')
+  expect(graph.segments.filter(segment => segment.role === 'origin')[0]).toMatchObject({
+    status: 'failed',
+    failure: { code: 'invalid' },
+    evidence: { transactionHash: sourceHashes[0] }
+  })
 })
 
 test('cancels every unsigned NEAR command and discards the quote', async () => {
@@ -419,20 +569,140 @@ test('native NEAR prepends the wrapped shortfall and registration deposit before
   ])
 })
 
-test('explicit wrap.near input wraps only its missing amount', async () => {
+test('explicit wrap.near input does not prepend near_deposit', async () => {
+  let balanceReads = 0
   const harness = createHarness({
     rpc: {
       async getFungibleTokenBalance() {
+        balanceReads += 1
         return { contractId: 'wrap.near', accountId: sender, amountRaw: '400' }
       }
     }
   })
   const review = await harness.coordinator.prepare(binding().quoteHandle, binding())
-  expect(review.summaries).toHaveLength(3)
-  expect(harness.preparedTransactions[0]).toMatchObject({
-    receiverId: 'wrap.near',
-    actions: [{ methodName: 'near_deposit', gas: '50000000000000', depositYocto: '600' }]
+  expect(review.summaries).toHaveLength(2)
+  expect(harness.preparedTransactions.map(transaction => transaction.receiverId)).toEqual([
+    'router.near',
+    'recipient.near'
+  ])
+  expect(
+    harness.preparedTransactions.some(transaction =>
+      transaction.actions.some(action => action.methodName === 'near_deposit')
+    )
+  ).toBe(false)
+  expect(balanceReads).toBe(1)
+  expect(harness.preparedTransactions[1].actions[0]).toMatchObject({
+    methodName: 'ft_transfer',
+    depositYocto: '1'
   })
+})
+
+test('wNEAR drops native funding and keeps the fungible transfer at one yocto', async () => {
+  const funded = plan()
+  funded.transactions = [
+    {
+      signerId: sender,
+      receiverId: 'wrap.near',
+      actions: [
+        {
+          type: 'FunctionCall',
+          params: {
+            methodName: 'storage_deposit',
+            args: { account_id: 'intents.near', registration_only: true },
+            gas: '50000000000000',
+            deposit: '1250000000000000000000'
+          }
+        },
+        {
+          type: 'FunctionCall',
+          params: {
+            methodName: 'near_deposit',
+            args: {},
+            gas: '50000000000000',
+            deposit: '1129706865694300000000000'
+          }
+        },
+        {
+          type: 'FunctionCall',
+          params: {
+            methodName: 'ft_transfer',
+            args: { receiver_id: 'intents.near', amount: '1000' },
+            gas: '30000000000000',
+            deposit: '1129706865694300000000001'
+          }
+        }
+      ]
+    },
+    {
+      signerId: sender,
+      receiverId: 'someone.near',
+      actions: [{ type: 'Transfer', params: { deposit: '1129706865694300000000000' } }]
+    }
+  ]
+  const harness = createHarness({
+    service: {
+      async readNearTransactionBatchPlan() {
+        return funded
+      }
+    }
+  })
+  await harness.coordinator.prepare(binding().quoteHandle, binding())
+  expect(harness.preparedTransactions).toHaveLength(1)
+  expect(harness.preparedTransactions[0].receiverId).toBe('wrap.near')
+  expect(harness.preparedTransactions[0].actions.map(action => action.methodName)).toEqual([
+    'storage_deposit',
+    'ft_transfer'
+  ])
+  expect(harness.preparedTransactions[0].actions[0].depositYocto).toBe('1250000000000000000000')
+  expect(harness.preparedTransactions[0].actions[1].depositYocto).toBe('1')
+  expect(harness.calls).not.toContain('broadcast:0')
+})
+
+test('wNEAR fails before signing when the fungible balance cannot cover the transfer', async () => {
+  const funded = plan()
+  funded.transactions[1].actions[0].params.deposit = '5000'
+  funded.transactions[1].actions[0].params.args.amount = '1001'
+  const harness = createHarness({
+    rpc: {
+      async getFungibleTokenBalance() {
+        harness.calls.push('wrapped-balance')
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '1000' }
+      }
+    },
+    service: {
+      async readNearTransactionBatchPlan() {
+        return funded
+      }
+    }
+  })
+  await expect(harness.coordinator.prepare(binding().quoteHandle, binding())).rejects.toThrow(
+    'wNEAR balance is insufficient'
+  )
+  expect(harness.calls).not.toContain('prepare:0')
+  expect(harness.calls).not.toContain('broadcast:0')
+})
+
+test('reports the NEAR balance rejection and does not submit the swap', async () => {
+  const harness = createHarness({
+    rpc: {
+      async broadcastSignedTransactionAndWait() {
+        harness.calls.push('broadcast:0')
+        throw new NearRpcError(
+          'rpc-error',
+          'Not enough NEAR. Available 0.110042 NEAR. Required 1.129707 NEAR.'
+        )
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding().quoteHandle, binding())
+  await expect(
+    harness.coordinator.confirm(binding().quoteHandle, review.payloadFingerprint)
+  ).rejects.toThrow('Not enough NEAR. Available 0.110042 NEAR. Required 1.129707 NEAR.')
+  expect(harness.calls.filter(call => call.startsWith('record:'))).toHaveLength(0)
+  expect(harness.calls.filter(call => call.startsWith('broadcast:'))).toEqual(['broadcast:0'])
+  expect(harness.store.values.size).toBe(0)
+  const graph = await harness.repository.get(accountScope(), 'tx:rhea-near:stable-near-1')
+  expect(graph.root.status).toBe('failed')
 })
 
 test('unrelated NEAR FT skips wNEAR funding and mismatched wrap bindings fail before signing', async () => {
@@ -520,10 +790,13 @@ test('native NEAR records the final swap hash after broadcasting the wrap', asyn
       async getFungibleTokenBalance() {
         return { contractId: 'wrap.near', accountId: sender, amountRaw: '0' }
       },
-      async broadcastSignedTransaction(transaction) {
+      async broadcastSignedTransactionAndWait(transaction) {
         const index = payloads.indexOf(transaction)
         harness.calls.push(`broadcast:${index}`)
-        return hashes[index]
+        return {
+          transaction: { hash: hashes[index] },
+          status: { SuccessValue: '' }
+        }
       }
     }
   })
@@ -558,6 +831,130 @@ test('native NEAR uses sufficient existing wNEAR without another deposit', async
     'router.near',
     'recipient.near'
   ])
+})
+
+function nearActionCost(gas = '0') {
+  return { executionGas: gas, sendNotSirGas: gas, sendSirGas: gas }
+}
+
+function nearCostConfig(minGasPurchasePriceRaw = '100000000') {
+  return {
+    chainId: 'mainnet',
+    minGasPurchasePriceRaw,
+    storageAmountPerByteRaw: '10000000000000000000',
+    actionReceiptCreation: nearActionCost(),
+    transfer: nearActionCost(),
+    functionCall: nearActionCost(),
+    functionCallPerByte: nearActionCost()
+  }
+}
+
+function nearAccount(accountId, amountRaw) {
+  return {
+    accountId,
+    amountRaw,
+    lockedRaw: '0',
+    storageUsage: 0,
+    codeHash: '1'.repeat(32),
+    blockHash: '1'.repeat(32),
+    blockHeight: 1
+  }
+}
+
+test('native NEAR does not wrap when the minimum gas price makes the batch unaffordable', async () => {
+  const balanceBetweenSpotAndMinimum = '20000000000000000000000'
+  const unaffordableRpc = {
+    async getFungibleTokenBalance() {
+      return { contractId: 'wrap.near', accountId: sender, amountRaw: '0' }
+    },
+    async isFungibleTokenAccountRegistered() {
+      return false
+    },
+    async getGasPrice() {
+      return '100000000'
+    },
+    async getNativeTransferCostConfig() {
+      return nearCostConfig('1000000000')
+    },
+    async getAccount(accountId) {
+      return nearAccount(accountId, balanceBetweenSpotAndMinimum)
+    }
+  }
+  const prepareHarness = createHarness({ rpc: unaffordableRpc })
+  await expect(
+    prepareHarness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+  ).rejects.toThrow(/^Not enough NEAR\. Available .+ NEAR\. Required .+ NEAR\.$/)
+  expect(prepareHarness.calls).not.toContain('prepare:0')
+  expect(prepareHarness.calls.filter(call => call.startsWith('broadcast:'))).toEqual([])
+  expect(prepareHarness.store.values.size).toBe(0)
+
+  let amountRaw = '9'.repeat(30)
+  const confirmHarness = createHarness({
+    rpc: {
+      ...unaffordableRpc,
+      async getAccount(accountId) {
+        return nearAccount(accountId, amountRaw)
+      }
+    }
+  })
+  const review = await confirmHarness.coordinator.prepare(
+    binding(true).quoteHandle,
+    binding(true)
+  )
+  expect(confirmHarness.preparedTransactions[0].actions[0].methodName).toBe('near_deposit')
+  amountRaw = balanceBetweenSpotAndMinimum
+  await expect(
+    confirmHarness.coordinator.confirm(binding(true).quoteHandle, review.payloadFingerprint)
+  ).rejects.toThrow(/^Not enough NEAR\. Available .+ NEAR\. Required .+ NEAR\.$/)
+  expect(confirmHarness.calls.filter(call => call.startsWith('broadcast:'))).toEqual([])
+  expect(confirmHarness.store.values.size).toBe(0)
+})
+
+test('native NEAR fails before signing when the account cannot pay the wrap', async () => {
+  const harness = createHarness({
+    rpc: {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '0' }
+      },
+      async isFungibleTokenAccountRegistered() {
+        return false
+      },
+      async getAccount(accountId) {
+        return nearAccount(accountId, '1')
+      }
+    }
+  })
+  await expect(
+    harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+  ).rejects.toThrow(/^Not enough NEAR\. Available .+ NEAR\. Required .+ NEAR\.$/)
+  expect(harness.calls).not.toContain('prepare:0')
+  expect(harness.calls.filter(call => call.startsWith('broadcast:'))).toEqual([])
+  expect(harness.store.values.size).toBe(0)
+})
+
+test('native NEAR does not broadcast a signed wrap after the balance drops', async () => {
+  let amountRaw = '9'.repeat(30)
+  const harness = createHarness({
+    rpc: {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '0' }
+      },
+      async isFungibleTokenAccountRegistered() {
+        return false
+      },
+      async getAccount(accountId) {
+        return nearAccount(accountId, amountRaw)
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+  expect(harness.preparedTransactions[0].actions[0].methodName).toBe('near_deposit')
+  amountRaw = '1'
+  await expect(
+    harness.coordinator.confirm(binding(true).quoteHandle, review.payloadFingerprint)
+  ).rejects.toThrow(/^Not enough NEAR\. Available .+ NEAR\. Required .+ NEAR\.$/)
+  expect(harness.calls.filter(call => call.startsWith('broadcast:'))).toEqual([])
+  expect(harness.store.values.size).toBe(0)
 })
 
 test('native NEAR accepts a sufficient first backend wrap without duplicating it', async () => {

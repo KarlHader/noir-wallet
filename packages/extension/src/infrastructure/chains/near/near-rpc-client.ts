@@ -1,6 +1,7 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/config/extension'
 import { getNearNetworkConfigs } from '@/config/networks'
 import { readBoundedResponseText } from '@/lib/fetch-utils'
+import { formatBaseUnitAmount } from '@/lib/number-format'
 import { parseChainId } from '@/core/chains/registry'
 
 import {
@@ -117,6 +118,48 @@ function containsRpcCause(value: unknown, expected: string, depth = 0): boolean 
   return Object.values(value).some(candidate => containsRpcCause(candidate, expected, depth + 1))
 }
 
+const NEAR_YOCTO_DECIMALS = 24
+const NEAR_BALANCE_FRACTION_DIGITS = 6
+
+export function formatNearBalanceShortage(balanceYocto: string, requiredYocto: string): string {
+  const available = formatBaseUnitAmount(
+    balanceYocto,
+    NEAR_YOCTO_DECIMALS,
+    NEAR_BALANCE_FRACTION_DIGITS
+  )
+  const required = formatBaseUnitAmount(
+    requiredYocto,
+    NEAR_YOCTO_DECIMALS,
+    NEAR_BALANCE_FRACTION_DIGITS
+  )
+  return `Not enough NEAR. Available ${available} NEAR. Required ${required} NEAR.`
+}
+
+function readNotEnoughBalance(
+  value: unknown,
+  depth = 0
+): Readonly<{ balance: string; cost: string }> | null {
+  if (depth > 6 || !isRecord(value)) return null
+  const direct = value.NotEnoughBalance
+  if (isRecord(direct)) {
+    const { balance, cost } = direct
+    if (
+      typeof balance === 'string' &&
+      typeof cost === 'string' &&
+      /^(?:0|[1-9][0-9]{0,38})$/.test(balance) &&
+      /^(?:0|[1-9][0-9]{0,38})$/.test(cost)
+    ) {
+      return Object.freeze({ balance, cost })
+    }
+    return null
+  }
+  for (const candidate of Object.values(value)) {
+    const found = readNotEnoughBalance(candidate, depth + 1)
+    if (found) return found
+  }
+  return null
+}
+
 function parseRpcError(value: unknown): NearRpcError {
   if (
     !isRecord(value) ||
@@ -143,6 +186,15 @@ function parseRpcError(value: unknown): NearRpcError {
   }
   if (containsRpcCause(value, 'UNKNOWN_TRANSACTION')) {
     return new NearRpcError('transaction-not-found', 'NEAR transaction was not found')
+  }
+  if (containsRpcCause(value, 'INVALID_TRANSACTION')) {
+    const shortage = readNotEnoughBalance(value)
+    return new NearRpcError(
+      'rpc-error',
+      shortage
+        ? formatNearBalanceShortage(shortage.balance, shortage.cost)
+        : 'NEAR transaction was rejected: INVALID_TRANSACTION'
+    )
   }
   return new NearRpcError(
     value.code === 429 || value.code === -32_005 ? 'rate-limited' : 'rpc-error',

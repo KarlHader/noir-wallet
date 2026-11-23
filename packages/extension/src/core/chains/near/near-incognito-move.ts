@@ -1,4 +1,5 @@
 import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import { isDeprecatedIntentsToken } from '@/core/services/intents-evm-assets'
 import type { Network } from '@/types'
 import {
   supportsNearPrivateExecution,
@@ -9,6 +10,8 @@ import {
   decodeNearContractId,
   NEAR_MAINNET_CHAIN_ID,
   NEAR_MAINNET_NATIVE_ASSET_ID,
+  NEAR_MAINNET_WRAPPED_ASSET_ID,
+  NEAR_WRAPPED_PROTOCOL_ASSET_ID,
   nearConfidentialPortfolioAssetId
 } from './near-portfolio-assets'
 
@@ -22,7 +25,7 @@ export const NEAR_MOVE_DEPOSIT_ADDRESS = 'The quote did not include a usable NEA
 const NEAR_IMPLICIT_ACCOUNT = /^[0-9a-f]{64}$/
 const NO_FUNDING_TRANSFERS: readonly [] = []
 const NEAR_DIRECT_TOKEN_LIST_CHAIN_ID = 900001
-const NATIVE_QUOTE_PROTOCOL_ASSET_ID = 'nep141:wrap.near'
+const NATIVE_QUOTE_PROTOCOL_ASSET_ID = NEAR_WRAPPED_PROTOCOL_ASSET_ID
 const NATIVE_QUOTE_ADDRESS = 'wrap.near'
 
 export type NearIncognitoMoveMethod = 'cluster' | 'directly'
@@ -135,38 +138,91 @@ export function nearDirectQuoteAsset(asset: {
   readonly chainId: string
   readonly kind: string
   readonly reference?: string
-}): Readonly<{ protocolAssetId: string; address: string }> | null {
+}): Readonly<{ protocolAssetId: string; address: string; native: boolean }> | null {
   if (asset.chainId !== NEAR_MAINNET_CHAIN_ID) return null
   if (asset.kind === 'native' || asset.id === NEAR_MAINNET_NATIVE_ASSET_ID) {
     return Object.freeze({
       protocolAssetId: NATIVE_QUOTE_PROTOCOL_ASSET_ID,
-      address: NATIVE_QUOTE_ADDRESS
+      address: NATIVE_QUOTE_ADDRESS,
+      native: true
     })
   }
   if (asset.kind !== 'token' || !asset.reference) return null
-  const protocolAssetId = `nep141:${decodeNearContractId(asset.reference)}`
+  const contractId = decodeNearContractId(asset.reference)
+  const protocolAssetId = `nep141:${contractId}`
+  // nearConfidentialPortfolioAssetId maps wrap.near onto native NEAR, so wNEAR must match its own id.
+  if (contractId === 'wrap.near') {
+    if (asset.id !== NEAR_MAINNET_WRAPPED_ASSET_ID) return null
+    return Object.freeze({
+      protocolAssetId: NATIVE_QUOTE_PROTOCOL_ASSET_ID,
+      address: NATIVE_QUOTE_ADDRESS,
+      native: false
+    })
+  }
   if (nearConfidentialPortfolioAssetId(protocolAssetId) !== asset.id) return null
-  return Object.freeze({ protocolAssetId, address: protocolAssetId.slice('nep141:'.length) })
+  return Object.freeze({
+    protocolAssetId,
+    address: protocolAssetId.slice('nep141:'.length),
+    native: false
+  })
 }
 
 export const NEAR_DIRECT_RHEA_TOKEN_LIST_CHAIN_ID = NEAR_DIRECT_TOKEN_LIST_CHAIN_ID
 
 export function nearDirectCatalogToken<
-  T extends { readonly assetId: string; readonly rheaAddress: string; readonly rheaChainId: string }
+  T extends {
+    readonly assetId: string
+    readonly rheaAddress: string
+    readonly rheaChainId: string
+    readonly isNative?: boolean
+  }
 >(
   tokens: readonly T[],
-  quoteAsset: Readonly<{ protocolAssetId: string; address: string }>
+  quoteAsset: Readonly<{ protocolAssetId: string; address: string; native?: boolean }>
 ): T | null {
-  return (
-    tokens.find(
-      token =>
-        token.rheaChainId === 'near' &&
-        (token.assetId === quoteAsset.protocolAssetId ||
-          token.rheaAddress === quoteAsset.address ||
-          (quoteAsset.address === NATIVE_QUOTE_ADDRESS &&
-            (token.rheaAddress === 'near' || token.assetId === NATIVE_QUOTE_PROTOCOL_ASSET_ID)))
-    ) ?? null
+  let first: T | undefined
+  for (const token of tokens) {
+    const matches =
+      token.rheaChainId === 'near' &&
+      (token.assetId === quoteAsset.protocolAssetId ||
+        token.rheaAddress === quoteAsset.address ||
+        (quoteAsset.address === NATIVE_QUOTE_ADDRESS &&
+          (token.rheaAddress === 'near' || token.assetId === NATIVE_QUOTE_PROTOCOL_ASSET_ID)))
+    if (!matches) continue
+    if (first === undefined) first = token
+    if (token.isNative === quoteAsset.native) return token
+  }
+  return first ?? null
+}
+
+export function nearWrappedClusterAsset(
+  asset: Readonly<{ id: string; chainId: string; decimals: number }>,
+  tokens: readonly Readonly<{
+    assetId: string
+    blockchain: string
+    decimals: number
+    symbol?: string
+  }>[]
+): Readonly<{
+  assetId: string
+  chainId: string
+  protocolAssetId: string
+  blockchain: string
+}> | null {
+  if (asset.id !== NEAR_MAINNET_WRAPPED_ASSET_ID || asset.decimals !== 24) return null
+  const token = tokens.find(
+    item =>
+      item.assetId === NEAR_WRAPPED_PROTOCOL_ASSET_ID &&
+      item.decimals === 24 &&
+      !isDeprecatedIntentsToken(item)
   )
+  if (!token) return null
+  return Object.freeze({
+    assetId: asset.id,
+    chainId: asset.chainId,
+    protocolAssetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+    blockchain: token.blockchain
+  })
 }
 
 function canonicalNearAccount(value: string): string | null {

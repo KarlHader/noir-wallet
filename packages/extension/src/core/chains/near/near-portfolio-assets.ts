@@ -26,6 +26,16 @@ export function nearFungibleAssetId(chainId: string, contractId: string): string
   return `${chainId}/nep141:${encodeNearContractReference(contractId)}`
 }
 
+export const NEAR_WRAPPED_PROTOCOL_ASSET_ID = 'nep141:wrap.near'
+export const NEAR_MAINNET_WRAPPED_ASSET_ID = nearFungibleAssetId(NEAR_MAINNET_CHAIN_ID, 'wrap.near')
+
+/** On-chain wNEAR uses the same Intents asset as native NEAR. */
+export function isNearWrappedProtocolAsset(assetId: string, protocolAssetId: string): boolean {
+  return (
+    assetId === NEAR_MAINNET_WRAPPED_ASSET_ID && protocolAssetId === NEAR_WRAPPED_PROTOCOL_ASSET_ID
+  )
+}
+
 export function isNearFungibleContractId(contractId: string): boolean {
   return (
     contractId.length >= 2 &&

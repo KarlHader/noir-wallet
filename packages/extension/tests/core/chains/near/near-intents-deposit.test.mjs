@@ -30,6 +30,7 @@ import {
   ChromeSessionNearPendingTransferStore,
   NearTransferOrchestrator,
   computeNearTransactionFingerprint,
+  formatNearBalanceShortage,
   parsePreparedNearConfidentialFungibleDeposit,
   parsePreparedNearTransfer,
   prepareNearConfidentialFungibleDeposit,
@@ -120,6 +121,34 @@ test('builds one wrap.near transaction and wraps only the shortfall', () => {
   expect(sameAccount.nativeAttachedYocto).toBe(
     NEAR_STORAGE_DEPOSIT_YOCTO + NEAR_FT_TRANSFER_DEPOSIT_YOCTO
   )
+})
+
+test('wNEAR deposit spends existing wNEAR and refuses a native shortfall', () => {
+  const enough = plan({
+    amountYocto: oneNear,
+    wrappedBalanceYocto: 2n * oneNear,
+    wrapShortfall: false,
+    signerRegistered: false,
+    recipientRegistered: false
+  })
+  expect(enough.wrapAmountYocto).toBe(0n)
+  expect(enough.actions.map(action => action.methodName)).toEqual([
+    'storage_deposit',
+    'storage_deposit',
+    'ft_transfer'
+  ])
+  expect(enough.actions.some(action => action.methodName === 'near_deposit')).toBe(false)
+  expect(enough.nativeAttachedYocto).toBe(
+    2n * NEAR_STORAGE_DEPOSIT_YOCTO + NEAR_FT_TRANSFER_DEPOSIT_YOCTO
+  )
+
+  expect(() =>
+    plan({
+      amountYocto: 3n * oneNear,
+      wrappedBalanceYocto: oneNear,
+      wrapShortfall: false
+    })
+  ).toThrow('wNEAR balance is insufficient')
 })
 
 test('keeps the intents maximum inside spendable native NEAR plus existing wNEAR', () => {
@@ -342,6 +371,8 @@ test('prepares an exact-max intents deposit from wNEAR and native shortfall', as
     `registered:wrap.near:${depositAddress}`
   ])
   expect(parsePreparedNearTransfer(prepared)).toEqual(prepared)
+  const overAmount = amount + 1n
+  const overRequired = maximumFee + reserve + (overAmount - wrapped) + NEAR_FT_TRANSFER_DEPOSIT_YOCTO
   await expect(
     prepareNearIntentsDeposit({
       chainId,
@@ -349,11 +380,14 @@ test('prepares an exact-max intents deposit from wNEAR and native shortfall', as
       signerId,
       publicKey,
       depositAddress,
-      amountRaw: (amount + 1n).toString(),
+      amountRaw: overAmount.toString(),
       memo,
       rpc: rpc({ ...state, calls: [] })
     })
-  ).rejects.toMatchObject({ code: 'insufficient-funds' })
+  ).rejects.toMatchObject({
+    code: 'insufficient-funds',
+    message: formatNearBalanceShortage(balance.toString(), overRequired.toString())
+  })
 })
 
 test('registers both parties before wrapping the shortfall', async () => {
@@ -384,6 +418,42 @@ test('registers both parties before wrapping the shortfall', async () => {
   expect(decodedArgs(prepared.transaction.actions[0]).account_id).toBe(signerId)
   expect(decodedArgs(prepared.transaction.actions[2]).account_id).toBe(depositAddress)
   expect(prepared.transaction.actions[1].depositYocto).toBe((2n * oneNear).toString())
+
+  const covered = {
+    calls: [],
+    balance: (20n * oneNear).toString(),
+    wrapped: (5n * oneNear).toString(),
+    registered: new Map([
+      [signerId, true],
+      [depositAddress, true]
+    ])
+  }
+  const wnear = await prepareNearIntentsDeposit({
+    chainId,
+    accountIndex: 0,
+    signerId,
+    publicKey,
+    depositAddress,
+    amountRaw: (3n * oneNear).toString(),
+    wrapShortfall: false,
+    rpc: rpc(covered)
+  })
+  expect(wnear.wrapAmountYocto).toBe('0')
+  expect(wnear.transaction.actions.map(action => action.methodName)).toEqual(['ft_transfer'])
+  expect(wnear.transaction.actions.some(action => action.methodName === 'near_deposit')).toBe(false)
+  await expect(
+    prepareNearIntentsDeposit({
+      chainId,
+      accountIndex: 0,
+      signerId,
+      publicKey,
+      depositAddress,
+      amountRaw: (6n * oneNear).toString(),
+      wrapShortfall: false,
+      rpc: rpc({ ...covered, calls: [] })
+    })
+  ).rejects.toThrow('wNEAR balance is insufficient')
+
   await expect(
     prepareNearIntentsDeposit({
       chainId: 'near:testnet',

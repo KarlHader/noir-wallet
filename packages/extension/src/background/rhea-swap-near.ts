@@ -3,6 +3,8 @@ import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-setting
 import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import { parseAccountId } from '@/core/accounts/domain'
 import {
+  NEAR_MAINNET_NATIVE_ASSET_ID,
+  NEAR_MAINNET_WRAPPED_ASSET_ID,
   nearPublicKeyFromImplicitAccountId,
   parseNearAccountId,
   parseNearBase58,
@@ -18,7 +20,10 @@ import type {
 } from '@/core/services/rhea-swap'
 import {
   isNearWrapSwapSource,
-  prependRheaSwapNearWrap
+  nearSwapNativeRequiredYocto,
+  prependRheaSwapNearWrap,
+  spendRheaSwapWrappedNear,
+  type NearWrapTransaction
 } from '@/core/services/rhea-swap/rhea-swap-near-wrap'
 import { NEAR_INCOGNITO_UNFUNDED_ERROR } from '@/core/services/rhea-swap/rhea-swap-near-private-route'
 import { acceptNearDirectDeposit } from '@/core/chains/near/near-incognito-move'
@@ -30,14 +35,17 @@ import {
   parseTransactionSegmentId,
   type RheaSwapTransactionBinding,
   type TransactionAccountScope,
+  type TransactionFailureCode,
   type TransactionGraph,
   type TransactionSegmentId
 } from '@/core/transactions/domain'
 import {
   createConfiguredNearRpcClient,
-  type NearBroadcastRpc,
+  formatNearBalanceShortage,
+  NearRpcError,
   type NearReadRpc
 } from '@/infrastructure/chains/near'
+import type { NearCommitBroadcastRpc } from '@/infrastructure/chains/near/near-rpc-types'
 import type { NearMultichainSigningClient } from '@/infrastructure/keyring/multichain/near-signing-client'
 import { NearMultichainSigningClient as NearSigner } from '@/infrastructure/keyring/multichain/near-signing-client'
 import {
@@ -55,6 +63,71 @@ import { RHEA_SWAP_TRANSACTION_MONITOR_ALARM } from './rhea-swap-transaction-mon
 const STORAGE_PREFIX = 'rhea_swap_near:'
 const MAXIMUM_U64 = 18_446_744_073_709_551_615n
 const MAXIMUM_SIGNED_TRANSACTION_BYTES = 256 * 1024
+const RETRYABLE_NEAR_BROADCAST_CODES = new Set([
+  'timeout',
+  'network-unavailable',
+  'rate-limited',
+  'cancelled'
+])
+
+class NearSwapCommitError extends Error {
+  readonly failureCode: Extract<TransactionFailureCode, 'invalid' | 'reverted'>
+
+  constructor(
+    message: string,
+    failureCode: Extract<TransactionFailureCode, 'invalid' | 'reverted'>
+  ) {
+    super(message)
+    this.name = 'NearSwapCommitError'
+    this.failureCode = failureCode
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function boundedNearFailure(value: unknown): string {
+  let text = 'unreadable'
+  try {
+    text = typeof value === 'string' ? value : JSON.stringify(value)
+  } catch {
+    text = 'unreadable'
+  }
+  const compact = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim()
+  return compact.length > 240 ? `${compact.slice(0, 240)}…` : compact
+}
+
+function assertNearCommitSucceeded(
+  result: Readonly<Record<string, unknown>>,
+  sourceHash: string
+): void {
+  const transaction = result.transaction
+  const hash = isRecord(transaction) && typeof transaction.hash === 'string' ? transaction.hash : ''
+  if (hash !== sourceHash) {
+    throw new NearSwapCommitError(
+      'RHEA Swap NEAR committed transaction hash does not match',
+      'invalid'
+    )
+  }
+  const status = result.status
+  if (!isRecord(status)) {
+    throw new NearSwapCommitError('RHEA Swap NEAR transaction did not execute', 'invalid')
+  }
+  if (typeof status.SuccessValue === 'string' && Object.keys(status).length === 1) return
+  if ('Failure' in status) {
+    throw new NearSwapCommitError(
+      `RHEA Swap NEAR transaction failed: ${boundedNearFailure(status.Failure)}`,
+      'reverted'
+    )
+  }
+  throw new NearSwapCommitError('RHEA Swap NEAR transaction did not execute', 'invalid')
+}
+
+function isRetryableNearBroadcastError(error: unknown): boolean {
+  if (error instanceof NearRpcError) return RETRYABLE_NEAR_BROADCAST_CODES.has(error.code)
+  return !(error instanceof NearSwapCommitError)
+}
 
 type PendingNearCommand = Readonly<{
   commandId: SigningCommandId
@@ -306,11 +379,14 @@ export interface RheaSwapNearCoordinatorOptions {
     NearReadRpc,
     | 'assertExpectedChain'
     | 'getAccessKey'
+    | 'getAccount'
+    | 'getGasPrice'
+    | 'getNativeTransferCostConfig'
     | 'getTransactionStatus'
     | 'getFungibleTokenBalance'
     | 'isFungibleTokenAccountRegistered'
   > &
-    Pick<NearBroadcastRpc, 'broadcastSignedTransaction'>
+    Pick<NearCommitBroadcastRpc, 'broadcastSignedTransactionAndWait'>
   readonly pending: RheaSwapNearPendingStore
   readonly repository: Pick<TransactionRepository, 'create' | 'get' | 'applySegmentEvent'>
   readonly loadContext: () => Promise<ActiveNearTransferContext | null>
@@ -381,27 +457,22 @@ export class RheaSwapNearCoordinator {
         plan.tokenIn
       )
     ) {
-      const [balance, registered] = await Promise.all([
-        this.options.rpc.getFungibleTokenBalance('wrap.near', sender),
-        this.options.rpc.isFungibleTokenAccountRegistered('wrap.near', sender)
-      ])
+      requests = await this.nativeNearWrapBatch(plan, sender, identity.kind, originalRequests)
+      await this.assertNativeNearBalance(sender, requests)
+    } else if (binding.origin.assetId === NEAR_MAINNET_WRAPPED_ASSET_ID) {
+      const balance = await this.options.rpc.getFungibleTokenBalance('wrap.near', sender)
       if (
         balance.contractId !== 'wrap.near' ||
         balance.accountId !== sender ||
-        typeof registered !== 'boolean'
+        !/^(?:0|[1-9][0-9]*)$/.test(balance.amountRaw)
       ) {
         throw new Error('RHEA Swap NEAR wrapped balance does not match the signer')
       }
-      // A missing PEA registration is not a reason to move funds from Main or to guess storage.
-      if (identity.kind === 'pea-near-transaction' && registered !== true) {
-        throw new Error(NEAR_INCOGNITO_UNFUNDED_ERROR)
+      const spent = spendRheaSwapWrappedNear(originalRequests)
+      if (BigInt(balance.amountRaw) < spent.amountRaw) {
+        throw new Error('wNEAR balance is insufficient')
       }
-      requests = prependRheaSwapNearWrap({
-        transactions: originalRequests,
-        amountIn: plan.amountIn,
-        wrappedBalanceRaw: balance.amountRaw,
-        registered
-      })
+      requests = spent.transactions
     }
     const accessKey = await this.options.rpc.getAccessKey(sender, identity.publicKey)
     if (!accessKey || accessKey.permission.kind !== 'full-access') {
@@ -535,7 +606,7 @@ export class RheaSwapNearCoordinator {
     fingerprint: string
   ): Promise<RheaSwapSignedOrderResult> {
     let pending = await this.requirePending(quoteHandle, fingerprint)
-    const { context, sender } = await this.resolveSigningIdentity(pending.sender)
+    const { context, sender, kind } = await this.resolveSigningIdentity(pending.sender)
     if (
       sender !== pending.sender ||
       context.chainAccount.scope.chainId !== pending.chainId ||
@@ -543,6 +614,41 @@ export class RheaSwapNearCoordinator {
       context.chainAccount.scope.accountId !== pending.scope.accountId
     ) {
       throw new Error('The active Account changed before RHEA Swap signing')
+    }
+    if (pending.binding.origin.assetId === NEAR_MAINNET_NATIVE_ASSET_ID) {
+      const transactionId = parseTransactionId(`tx:rhea-near:${pending.graphSuffix}`)
+      const existing = await this.options.repository.get(pending.scope, transactionId)
+      const wrapAlreadyBroadcast = existing?.segments.some(
+        segment =>
+          segment.role === 'origin' &&
+          (segment.status === 'broadcast' ||
+            segment.status === 'confirming' ||
+            segment.status === 'final')
+      )
+      if (!wrapAlreadyBroadcast) {
+        try {
+          const plan = await this.options.service.readNearTransactionBatchPlan(quoteHandle)
+          this.assertBinding(plan, pending.binding, sender, pending.chainId)
+          const requests = await this.nativeNearWrapBatch(
+            plan,
+            sender,
+            kind,
+            parseNearDAppTransactionBatch([
+              {
+                transactions: plan.transactions.map(transaction => ({
+                  ...(transaction.signerId === null ? {} : { signerId: transaction.signerId }),
+                  receiverId: transaction.receiverId,
+                  actions: transaction.actions
+                }))
+              }
+            ])
+          )
+          await this.assertNativeNearBalance(sender, requests)
+        } catch (error) {
+          await this.options.pending.delete(quoteHandle)
+          throw error
+        }
+      }
     }
     if (pending.signedTransactions.length < pending.commands.length) {
       const plan = await this.options.service.readNearTransactionBatchPlan(quoteHandle)
@@ -609,22 +715,25 @@ export class RheaSwapNearCoordinator {
         }
         continue
       }
-      let accepted = false
-      try {
-        accepted =
-          (await this.options.rpc.broadcastSignedTransaction(signed.transaction)) ===
-          signed.sourceHash
-      } catch {
-        const observed = await this.options.rpc
-          .getTransactionStatus(signed.sourceHash, sender)
-          .catch(() => null)
-        accepted = observed !== null && observed.status !== 'unknown'
-      }
-      if (!accepted) {
-        await this.options.scheduleMonitoring().catch(() => {})
-        throw new Error(
-          `RHEA Swap NEAR transaction ${index + 1} is signed and waiting to broadcast`
+      if (origin.status === 'failed') {
+        await this.options.pending.delete(quoteHandle)
+        throw new NearSwapCommitError(
+          'RHEA Swap NEAR transaction failed on chain',
+          origin.failure?.code === 'reverted' ? 'reverted' : 'invalid'
         )
+      }
+      try {
+        await this.commitIncludedTransaction(signed.transaction, signed.sourceHash, sender)
+      } catch (error) {
+        if (!(error instanceof NearSwapCommitError)) {
+          await this.options.scheduleMonitoring().catch(() => {})
+          throw new Error(
+            `RHEA Swap NEAR transaction ${index + 1} is signed and waiting to broadcast`
+          )
+        }
+        graph = await this.applyFailure(graph, originId, signed.sourceHash, error.failureCode)
+        await this.options.pending.delete(quoteHandle)
+        throw error
       }
       graph = await this.applyBroadcast(graph, originId, signed.sourceHash)
     }
@@ -815,6 +924,131 @@ export class RheaSwapNearCoordinator {
       throw new Error('RHEA Swap NEAR transaction ID conflicts with an existing record')
     }
     return created.graph
+  }
+
+  private async nativeNearWrapBatch(
+    plan: RheaSwapNearTransactionBatchPlan,
+    sender: string,
+    kind: 'near-transaction' | 'pea-near-transaction',
+    transactions: readonly NearWrapTransaction[]
+  ): Promise<readonly NearWrapTransaction[]> {
+    const [balance, registered] = await Promise.all([
+      this.options.rpc.getFungibleTokenBalance('wrap.near', sender),
+      this.options.rpc.isFungibleTokenAccountRegistered('wrap.near', sender)
+    ])
+    if (
+      balance.contractId !== 'wrap.near' ||
+      balance.accountId !== sender ||
+      typeof registered !== 'boolean'
+    ) {
+      throw new Error('RHEA Swap NEAR wrapped balance does not match the signer')
+    }
+    // A missing PEA registration is not a reason to move funds from Main or to guess storage.
+    if (kind === 'pea-near-transaction' && registered !== true) {
+      throw new Error(NEAR_INCOGNITO_UNFUNDED_ERROR)
+    }
+    return prependRheaSwapNearWrap({
+      transactions,
+      amountIn: plan.amountIn,
+      wrappedBalanceRaw: balance.amountRaw,
+      registered
+    })
+  }
+
+  private async assertNativeNearBalance(
+    sender: string,
+    requests: readonly NearWrapTransaction[]
+  ): Promise<void> {
+    const [account, gasPrice, costs] = await Promise.all([
+      this.options.rpc.getAccount(sender),
+      this.options.rpc.getGasPrice(),
+      this.options.rpc.getNativeTransferCostConfig()
+    ])
+    if (
+      !account ||
+      account.accountId !== sender ||
+      !/^(?:0|[1-9][0-9]*)$/.test(account.amountRaw) ||
+      !/^(?:0|[1-9][0-9]*)$/.test(gasPrice) ||
+      !/^(?:0|[1-9][0-9]*)$/.test(costs.minGasPurchasePriceRaw)
+    ) {
+      throw new Error('RHEA Swap NEAR account balance is unavailable')
+    }
+    const spot = BigInt(gasPrice)
+    const minimum = BigInt(costs.minGasPurchasePriceRaw)
+    const required = nearSwapNativeRequiredYocto(
+      requests,
+      spot > minimum ? spot : minimum,
+      sender,
+      costs
+    )
+    if (BigInt(account.amountRaw) < required) {
+      throw new Error(formatNearBalanceShortage(account.amountRaw, required.toString()))
+    }
+  }
+
+  private async commitIncludedTransaction(
+    transaction: string,
+    sourceHash: string,
+    sender: string
+  ): Promise<void> {
+    try {
+      const result = await this.options.rpc.broadcastSignedTransactionAndWait(transaction)
+      assertNearCommitSucceeded(result, sourceHash)
+    } catch (error) {
+      if (error instanceof NearSwapCommitError) throw error
+      const observed = await this.options.rpc
+        .getTransactionStatus(sourceHash, sender)
+        .catch(() => null)
+      if (observed?.status === 'final') return
+      if (observed?.status === 'failed') {
+        throw new NearSwapCommitError('RHEA Swap NEAR transaction failed on chain', 'reverted')
+      }
+      if (!isRetryableNearBroadcastError(error)) {
+        throw new NearSwapCommitError(
+          error instanceof Error && error.message.length > 0
+            ? error.message
+            : 'RHEA Swap NEAR transaction was rejected',
+          'invalid'
+        )
+      }
+      throw error
+    }
+  }
+
+  private async applyFailure(
+    graph: TransactionGraph,
+    originId: TransactionSegmentId,
+    sourceHash: string,
+    failureCode: Extract<TransactionFailureCode, 'invalid' | 'reverted'>
+  ): Promise<TransactionGraph> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current =
+        attempt === 0 ? graph : await this.options.repository.get(graph.root.scope, graph.root.id)
+      const origin = current?.segments.find(segment => segment.id === originId)
+      if (!current || !origin) throw new Error('RHEA Swap NEAR graph was not found')
+      if (origin.status === 'failed') return current
+      const observedAt = this.now()
+      const result = await this.options.repository.applySegmentEvent({
+        scope: current.root.scope,
+        transactionId: current.root.id,
+        segmentId: origin.id,
+        event: Object.freeze({
+          id: parseTransactionEventId(`event:rhea-near:failed:${this.createId()}`),
+          status: 'failed',
+          cause: 'failure',
+          observedAt,
+          evidence: Object.freeze({ transactionHash: sourceHash, requiredConfirmations: 1 }),
+          failure: Object.freeze({ code: failureCode, occurredAt: observedAt })
+        }),
+        expectedRootRevision: current.root.revision,
+        expectedSegmentRevision: origin.revision
+      })
+      if (result.status === 'applied' && result.graph) return result.graph
+      if (result.status !== 'revision-conflict') {
+        throw new Error('RHEA Swap NEAR failure evidence could not be persisted')
+      }
+    }
+    throw new Error('RHEA Swap NEAR failure evidence conflicted during persistence')
   }
 
   private async applyBroadcast(

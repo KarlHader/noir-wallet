@@ -4,10 +4,19 @@ import { expect } from '@playwright/test'
 import { nearPeaRequestJson } from '../../../src/infrastructure/keyring/multichain/raw-wallet-engine.ts'
 import { assertNearPrivateQuoteRoute } from '../../../src/core/services/rhea-swap/rhea-swap-near-private-route.ts'
 import {
+  isNearWrappedProtocolAsset,
+  NEAR_MAINNET_NATIVE_ASSET_ID,
+  NEAR_MAINNET_WRAPPED_ASSET_ID,
+  NEAR_WRAPPED_PROTOCOL_ASSET_ID
+} from '../../../src/core/chains/near/near-portfolio-assets.ts'
+import {
   acceptNearDirectDeposit,
   getNearMoveChainIds,
+  nearDirectCatalogToken,
+  nearDirectQuoteAsset,
   nearIncognitoMoveExposed,
   nearIncognitoPeaRequestJson,
+  nearWrappedClusterAsset,
   planNearIncognitoCluster,
   resolveNearIncognitoMove,
   selectBalanceTransferMethod,
@@ -244,4 +253,135 @@ test('private NEAR source uses the v2 PEA request without an app or chain id', (
   })
   expect(imported.ok).toBe(false)
   if (!imported.ok) expect(imported.method).toBe('directly')
+})
+
+test('direct quotes keep native NEAR and wNEAR distinct from other NEP-141 assets', () => {
+  expect(
+    nearDirectQuoteAsset({
+      id: NEAR_MAINNET_NATIVE_ASSET_ID,
+      chainId: 'near:mainnet',
+      kind: 'native'
+    })
+  ).toEqual({
+    protocolAssetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+    address: 'wrap.near',
+    native: true
+  })
+  expect(
+    nearDirectQuoteAsset({
+      id: NEAR_MAINNET_WRAPPED_ASSET_ID,
+      chainId: 'near:mainnet',
+      kind: 'token',
+      reference: 'wrap.near'
+    })
+  ).toEqual({
+    protocolAssetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+    address: 'wrap.near',
+    native: false
+  })
+  expect(
+    nearDirectQuoteAsset({
+      id: 'near:mainnet/nep141:other.near',
+      chainId: 'near:mainnet',
+      kind: 'token',
+      reference: 'wrap.near'
+    })
+  ).toBeNull()
+  expect(
+    nearDirectQuoteAsset({
+      id: 'near:mainnet/nep141:usdt.tether-token.near',
+      chainId: 'near:mainnet',
+      kind: 'token',
+      reference: 'usdt.tether-token.near'
+    })
+  ).toEqual({
+    protocolAssetId: 'nep141:usdt.tether-token.near',
+    address: 'usdt.tether-token.near',
+    native: false
+  })
+  expect(
+    isNearWrappedProtocolAsset(NEAR_MAINNET_WRAPPED_ASSET_ID, NEAR_WRAPPED_PROTOCOL_ASSET_ID)
+  ).toBe(true)
+  expect(
+    isNearWrappedProtocolAsset(NEAR_MAINNET_NATIVE_ASSET_ID, NEAR_WRAPPED_PROTOCOL_ASSET_ID)
+  ).toBe(false)
+})
+
+test('direct catalog selection prefers the native flag that matches the quote', () => {
+  const wrapped = {
+    assetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+    rheaAddress: 'wrap.near',
+    rheaChainId: 'near',
+    isNative: false,
+    symbol: 'wNEAR'
+  }
+  const native = {
+    assetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+    rheaAddress: 'wrap.near',
+    rheaChainId: 'near',
+    isNative: true,
+    symbol: 'NEAR'
+  }
+  const quote = nativeFlag => ({
+    protocolAssetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+    address: 'wrap.near',
+    native: nativeFlag
+  })
+  expect(nearDirectCatalogToken([wrapped, native], quote(true))).toBe(native)
+  expect(nearDirectCatalogToken([native, wrapped], quote(false))).toBe(wrapped)
+  expect(nearDirectCatalogToken([wrapped], quote(true))).toBe(wrapped)
+  const unlabeled = [
+    { assetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID, rheaAddress: 'wrap.near', rheaChainId: 'near' },
+    {
+      assetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+      rheaAddress: 'wrap.near',
+      rheaChainId: 'near',
+      symbol: 'second'
+    }
+  ]
+  expect(nearDirectCatalogToken(unlabeled, quote(false))).toBe(unlabeled[0])
+})
+
+test('cluster mapping accepts on-chain wNEAR and rejects native NEAR and USDT', () => {
+  const tokens = [
+    {
+      assetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+      blockchain: 'near',
+      decimals: 24,
+      symbol: 'wNEAR'
+    }
+  ]
+  expect(
+    nearWrappedClusterAsset(
+      { id: NEAR_MAINNET_WRAPPED_ASSET_ID, chainId: 'near:mainnet', decimals: 24 },
+      tokens
+    )
+  ).toEqual({
+    assetId: NEAR_MAINNET_WRAPPED_ASSET_ID,
+    chainId: 'near:mainnet',
+    protocolAssetId: NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+    blockchain: 'near'
+  })
+  expect(
+    nearWrappedClusterAsset(
+      { id: NEAR_MAINNET_NATIVE_ASSET_ID, chainId: 'near:mainnet', decimals: 24 },
+      tokens
+    )
+  ).toBeNull()
+  expect(
+    nearWrappedClusterAsset(
+      {
+        id: 'near:mainnet/nep141:usdt.tether-token.near',
+        chainId: 'near:mainnet',
+        decimals: 6
+      },
+      tokens
+    )
+  ).toBeNull()
+  expect(
+    nearWrappedClusterAsset(
+      { id: NEAR_MAINNET_WRAPPED_ASSET_ID, chainId: 'near:mainnet', decimals: 24 },
+      [{ ...tokens[0], symbol: 'wNEAR (DEPRECATED)' }]
+    )
+  ).toBeNull()
 })

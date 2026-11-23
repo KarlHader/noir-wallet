@@ -1,5 +1,10 @@
+import type { RheaSwapToken } from './rhea-swap-model'
+
 const WRAP_NEAR = 'wrap.near'
+const WRAP_PROTOCOL_ASSET_ID = 'nep141:wrap.near'
+const NEAR_TOKEN_LIST_CHAIN_ID = 900001
 const WRAP_GAS = '50000000000000'
+const FT_TRANSFER_DEPOSIT = '1'
 const STORAGE_DEPOSIT_YOCTO = 1_250_000_000_000_000_000_000n
 type NearAction =
   | Readonly<{ type: 'transfer'; deposit: string }>
@@ -47,7 +52,147 @@ export function isNearWrapSwapSource(
   ) {
     throw new Error('RHEA Swap NEAR quote source does not match its asset')
   }
-  return true
+  // Native NEAR wraps its shortfall. A valid wNEAR quote spends wNEAR and does not wrap.
+  return native
+}
+
+/**
+ * From-quote view of wrap.near. It shares wNEAR's chain address, so callers must
+ * apply it after catalog parsing and must not write the result back to the cache.
+ */
+export function withNearNativeCatalogToken(
+  tokens: readonly RheaSwapToken[]
+): readonly RheaSwapToken[] {
+  if (tokens.some(token => token.rheaChainId === 'near' && token.isNative)) return tokens
+  const index = tokens.findIndex(
+    token =>
+      token.rheaChainId === 'near' &&
+      token.tokenListChainId === NEAR_TOKEN_LIST_CHAIN_ID &&
+      token.assetId === WRAP_PROTOCOL_ASSET_ID &&
+      token.rheaAddress === WRAP_NEAR &&
+      token.decimals === 24 &&
+      token.isNative === false
+  )
+  const wrapped = index < 0 ? undefined : tokens[index]
+  if (!wrapped) return tokens
+  const native = Object.freeze({
+    ...wrapped,
+    isNative: true,
+    contractAddress: null,
+    symbol: 'NEAR'
+  })
+  return [...tokens.slice(0, index), native, ...tokens.slice(index)]
+}
+
+function isFunctionArgs(
+  args: Readonly<Record<string, unknown>> | readonly number[]
+): args is Readonly<Record<string, unknown>> {
+  return !Array.isArray(args)
+}
+
+function transferAmount(action: NearAction): bigint {
+  if (action.type !== 'functionCall') return 0n
+  if (action.methodName !== 'ft_transfer' && action.methodName !== 'ft_transfer_call') return 0n
+  if (!isFunctionArgs(action.args) || typeof action.args.amount !== 'string') {
+    throw new Error('RHEA Swap NEAR wNEAR transfer amount is invalid')
+  }
+  return unsigned(action.args.amount, 'wNEAR transfer amount')
+}
+
+/**
+ * wNEAR spends the fungible balance. Drop native funding from the provider batch and
+ * keep the NEP-141 attached deposit at one yoctoNEAR.
+ */
+export function spendRheaSwapWrappedNear(transactions: readonly NearWrapTransaction[]): Readonly<{
+  transactions: readonly NearWrapTransaction[]
+  amountRaw: bigint
+}> {
+  let amountRaw = 0n
+  const next = transactions.flatMap(transaction => {
+    const actions = transaction.actions.flatMap(action => {
+      if (action.type === 'transfer') return []
+      if (action.methodName === 'near_deposit') return []
+      amountRaw += transferAmount(action)
+      if (
+        action.type === 'functionCall' &&
+        (action.methodName === 'ft_transfer' || action.methodName === 'ft_transfer_call') &&
+        action.deposit !== FT_TRANSFER_DEPOSIT
+      ) {
+        return [Object.freeze({ ...action, deposit: FT_TRANSFER_DEPOSIT })]
+      }
+      return [action]
+    })
+    if (actions.length === 0) return []
+    return [Object.freeze({ ...transaction, actions: Object.freeze(actions) })]
+  })
+  if (next.length === 0 || next.length > 16) {
+    throw new Error('RHEA Swap NEAR wNEAR transfer is missing')
+  }
+  return Object.freeze({
+    transactions: Object.freeze(next),
+    amountRaw
+  })
+}
+
+export interface NearSwapActionCost {
+  readonly executionGas: string
+  readonly sendNotSirGas: string
+  readonly sendSirGas: string
+}
+
+export interface NearSwapNativeCostConfig {
+  readonly actionReceiptCreation: NearSwapActionCost
+  readonly transfer: NearSwapActionCost
+  readonly functionCall: NearSwapActionCost
+  readonly functionCallPerByte: NearSwapActionCost
+}
+
+function actionGas(cost: NearSwapActionCost, senderIsReceiver: boolean, label: string): bigint {
+  return (
+    unsigned(senderIsReceiver ? cost.sendSirGas : cost.sendNotSirGas, `${label} send gas`) +
+    unsigned(cost.executionGas, `${label} execution gas`)
+  )
+}
+
+function functionCallBytes(action: Extract<NearAction, { type: 'functionCall' }>): bigint {
+  const argsBytes = Array.isArray(action.args)
+    ? action.args.length
+    : new TextEncoder().encode(JSON.stringify(action.args)).length
+  return BigInt(new TextEncoder().encode(action.methodName).length + argsBytes)
+}
+
+/**
+ * Native NEAR required to submit the whole batch. Prepaid gas and protocol send
+ * and execution fees use the price the caller selects, which must already be the
+ * higher of the block gas price and the minimum gas purchase price.
+ */
+export function nearSwapNativeRequiredYocto(
+  transactions: readonly NearWrapTransaction[],
+  gasPriceYocto: bigint,
+  signerId: string,
+  costs: NearSwapNativeCostConfig
+): bigint {
+  if (gasPriceYocto < 0n) throw new Error('RHEA Swap NEAR gas price is invalid')
+  let required = 0n
+  for (const transaction of transactions) {
+    const senderIsReceiver = signerId === transaction.receiverId
+    required += actionGas(costs.actionReceiptCreation, senderIsReceiver, 'receipt') * gasPriceYocto
+    for (const action of transaction.actions) {
+      required += unsigned(action.deposit, 'attached deposit')
+      if (action.type === 'transfer') {
+        required += actionGas(costs.transfer, senderIsReceiver, 'transfer') * gasPriceYocto
+        continue
+      }
+      const bytes = functionCallBytes(action)
+      required += actionGas(costs.functionCall, senderIsReceiver, 'function call') * gasPriceYocto
+      required +=
+        actionGas(costs.functionCallPerByte, senderIsReceiver, 'function call byte') *
+        bytes *
+        gasPriceYocto
+      required += unsigned(action.gas, 'gas') * gasPriceYocto
+    }
+  }
+  return required
 }
 
 export function prependRheaSwapNearWrap(

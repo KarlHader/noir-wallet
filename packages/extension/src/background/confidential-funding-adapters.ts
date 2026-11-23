@@ -187,7 +187,7 @@ export class EvmConfidentialDepositAdapter implements ConfidentialDepositAdapter
 function nearShieldDepositAsset(
   assetId: string
 ):
-  | Readonly<{ kind: 'wrap' }>
+  | Readonly<{ kind: 'wrap'; wrapShortfall: boolean }>
   | Readonly<{ kind: 'fungible'; assetId: string; contractId: string }> {
   const asset = parseAssetId(assetId)
   if (asset.chainId !== 'near:mainnet') {
@@ -198,7 +198,11 @@ function nearShieldDepositAsset(
     (asset.namespace === 'nep141' &&
       decodeNearContractId(asset.reference) === WRAP_NEAR_CONTRACT_ID)
   ) {
-    return { kind: 'wrap' }
+    // Native NEAR can wrap a shortfall. wNEAR can spend only its own balance.
+    return {
+      kind: 'wrap',
+      wrapShortfall: asset.id === NEAR_MAINNET_NATIVE_ASSET_ID
+    }
   }
   if (asset.namespace !== 'nep141') {
     throw new Error('NEAR Shield deposit asset is not supported')
@@ -308,6 +312,7 @@ export class NearConfidentialDepositAdapter implements ConfidentialDepositAdapte
         publicKey: binding.publicKey,
         depositAddress: binding.depositAddress,
         amountRaw: input.amountRaw,
+        wrapShortfall: binding.asset.wrapShortfall,
         rpc: this.rpc
       })
       if (

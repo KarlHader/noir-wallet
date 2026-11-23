@@ -5,13 +5,16 @@ export {
 export {
   isNearBridgeFungibleContract,
   isNearFungibleContractId,
+  isNearWrappedProtocolAsset,
   nearConfidentialPortfolioAssetId,
   nearFungibleAssetId,
   nearPortfolioPrivateAccountId,
   selectNearPortfolioTokens,
   NEAR_MAINNET_NATIVE_ASSET_ID,
+  NEAR_MAINNET_WRAPPED_ASSET_ID,
   NEAR_PORTFOLIO_INVENTORY_LIMIT,
   NEAR_PORTFOLIO_TOKEN_LIMIT,
+  NEAR_WRAPPED_PROTOCOL_ASSET_ID,
   type NearPortfolioPrivateExecution,
   type NearPortfolioTokenCandidate
 } from './near-portfolio-assets'

@@ -27,6 +27,7 @@ import {
 } from '@/core/chains/near/near-native-reserve'
 
 import { encodeNearFunctionArgs } from './near-rpc-codecs'
+import { formatNearBalanceShortage } from './near-rpc-client'
 import type { NearReadRpc } from './near-rpc-types'
 import {
   NearTransferError,
@@ -80,6 +81,8 @@ export interface PrepareNearIntentsDepositInput {
   readonly depositAddress: string
   readonly amountRaw: string
   readonly memo?: string
+  /** Omitted means wrap the shortfall. False spends only existing wNEAR. */
+  readonly wrapShortfall?: boolean
   readonly rpc: Pick<
     NearReadRpc,
     | 'assertExpectedChain'
@@ -232,7 +235,8 @@ export async function prepareNearIntentsDeposit(
     wrappedBalanceYocto: wrapped,
     signerRegistered,
     recipientRegistered,
-    ...(input.memo === undefined ? {} : { memo: input.memo })
+    ...(input.memo === undefined ? {} : { memo: input.memo }),
+    ...(input.wrapShortfall === undefined ? {} : { wrapShortfall: input.wrapShortfall })
   })
   const nonce = parseUnsigned(accessKey.nonce, MAXIMUM_U64, 'NEAR access key nonce')
   if (nonce === MAXIMUM_U64) throw new Error('NEAR access key nonce is exhausted')
@@ -271,20 +275,14 @@ export async function prepareNearIntentsDeposit(
     wrappedBalanceYocto: wrapped,
     storageDepositFeeYocto: plan.storageFeeYocto
   })
-  if (amount > maximum) {
-    throw new NearTransferError(
-      'insufficient-funds',
-      'NEAR balance cannot cover the Intents deposit, maximum fee, and storage reserve'
-    )
-  }
   const totalRequired = checkedU128(
     maximumFee + storageReserve + plan.nativeAttachedYocto,
     'NEAR total debit'
   )
-  if (totalRequired > balance) {
+  if (amount > maximum || totalRequired > balance) {
     throw new NearTransferError(
       'insufficient-funds',
-      'NEAR balance cannot cover the Intents deposit, maximum fee, and storage reserve'
+      formatNearBalanceShortage(balance.toString(), totalRequired.toString())
     )
   }
   const actions = Object.freeze(plan.actions.map(encodeAction))
