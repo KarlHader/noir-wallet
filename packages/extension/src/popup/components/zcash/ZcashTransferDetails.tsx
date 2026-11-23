@@ -1,5 +1,5 @@
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { ZcashSyncProgress } from '@/popup/components/zcash/ZcashSyncProgress'
 import { SendRouteInfoCard } from '@/popup/components/transaction/SendInputCards'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
@@ -17,7 +17,14 @@ import { ZEC_DECIMALS } from '@/config/wallet'
 
 import type { ZcashTransferState } from '@/popup/hooks/useZcashTransfer'
 
-export function ZcashTransferRoute({ route }: { readonly route: ZcashTransferState['route'] }) {
+export function ZcashTransferRoute({
+  route,
+  showNotice = true
+}: {
+  readonly route: ZcashTransferState['route']
+  readonly showNotice?: boolean
+}) {
+  const notice = showNotice ? (route.maximumError ?? route.error) : null
   return (
     <>
       <div className="order-5">
@@ -50,16 +57,21 @@ export function ZcashTransferRoute({ route }: { readonly route: ZcashTransferSta
           estimatedReceive={route.estimatedReceive}
         />
       </div>
-      {route.maximumError && <InlineError className="order-3 px-1" {...route.maximumError} />}
-      {route.error && <InlineError className="order-6 px-1" {...route.error} />}
+      {notice && <TransactionNotice className="order-6" {...notice} />}
     </>
   )
 }
 
-export function ZcashTransferSyncStatus({ sync }: { readonly sync: ZcashTransferState['sync'] }) {
+export function ZcashTransferSyncStatus({
+  sync,
+  showError = true
+}: {
+  readonly sync: ZcashTransferState['sync']
+  readonly showError?: boolean
+}) {
   if (sync.progress)
     return <ZcashSyncProgress className="mb-2 w-fit" showLabel {...sync.progress} />
-  if (sync.error) return <InlineError className="mb-2" {...sync.error} />
+  if (sync.error && showError) return <TransactionNotice className="mb-2" {...sync.error} />
   if (sync.loading)
     return (
       <p role="status" className="mb-2 text-xs text-muted">
@@ -160,7 +172,7 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
             />
           )
         }
-        error={review.error && <InlineError className="mt-3" {...review.error} />}
+        error={review.error && <TransactionNotice className="mt-3" {...review.error} />}
         confirmLabel={review.confirmLabel}
         confirmTone={review.confirmTone}
         preparing={review.preparing}

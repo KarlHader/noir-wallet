@@ -6,7 +6,7 @@ import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { Input } from '@/popup/components/ui/input'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { DetailRow } from '@/popup/components/common/DetailRow'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from './TransactionNotice'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import {
   Dialog,
@@ -447,7 +447,7 @@ function NetworkFeeTierEditContent({
   }
 
   const error = (
-    <InlineError
+    <TransactionNotice
       message={failure?.message}
       retrying={updating}
       onRetry={failure?.retry ? () => void applySelection(failure.retry!) : undefined}

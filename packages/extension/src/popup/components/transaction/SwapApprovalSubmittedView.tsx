@@ -1,7 +1,7 @@
 import { formatChainName, formatSortAddress, formatSymbol } from '@/lib/format'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { Button } from '@/popup/components/ui/button'
 import type { TransactionGraph } from '@/core/transactions/domain'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
@@ -52,7 +52,7 @@ export function SwapApprovalSubmittedView({
       }
       footer={
         <div className="w-full space-y-2">
-          {error && <InlineError message={error} />}
+          {error && <TransactionNotice message={error} />}
           {!error && !awaitingHardwareSignature && (
             <p className="text-center text-xs text-muted" role="status">
               Waiting for token approval

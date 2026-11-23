@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
+import { TransactionNotice } from '../transaction/TransactionNotice'
 import { DialogFooter } from '../ui/dialog'
 import type { RheaSwapQuoteMode } from '@/core/services/rhea-swap'
 import { useSwapPreferences, type SwapQuoteSettings } from '@/store/swap-store'
@@ -127,6 +128,9 @@ function SwapSettingsContent({
         ))}
         <Input
           type="text"
+          aria-label="Slippage tolerance"
+          aria-invalid={!validSlippage || undefined}
+          aria-describedby={!validSlippage ? 'swap-settings-slippage-error' : undefined}
           value={slippage}
           onChange={e => setSlippage(e.target.value.replace(/[^0-9.]/g, ''))}
           className="bg-card rounded-lg border-none text-center pr-6"
@@ -135,7 +139,11 @@ function SwapSettingsContent({
         />
       </div>
       {!validSlippage && (
-        <p className="mb-3 text-xs text-destructive">Enter 0 to 50 with up to 2 decimals.</p>
+        <TransactionNotice
+          id="swap-settings-slippage-error"
+          className="mb-3"
+          message="Enter 0 to 50 with up to 2 decimals."
+        />
       )}
 
       <DialogFooter>

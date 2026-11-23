@@ -1,7 +1,7 @@
 import { useSearchParams } from 'react-router-dom'
 import { AddressesList } from '@/popup/pages/account/AddressesList'
 import { PageHeader } from '@/popup/components/common/PageHeader'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { ListSkeleton } from '@/popup/components/ui/skeleton'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
@@ -47,7 +47,10 @@ function ActivePublicReceive() {
       <PageHeader title="Address" showBack />
       <div className="px-4 py-6 text-center text-sm text-muted">
         {error ? (
-          <InlineError message="Unable to load account addresses." onRetry={() => void refresh()} />
+          <TransactionNotice
+            message="Unable to load account addresses."
+            onRetry={() => void refresh()}
+          />
         ) : loading || contextChanging ? (
           <ListSkeleton rows={4} label="Loading addresses" card />
         ) : (
@@ -85,11 +88,11 @@ function BoundShieldReceive({
       <PageHeader title="Receive" showBack />
       <div className="px-4 py-6 text-center text-sm text-muted">
         {accountChanged ? (
-          <p role="status">Account changed. Reopen Receive.</p>
+          <TransactionNotice tone="muted" message="Account changed. Reopen Receive." />
         ) : accountLoading ? (
           <p role="status">Loading account...</p>
         ) : (
-          <InlineError message="Could not load the account." onRetry={() => void refresh()} />
+          <TransactionNotice message="Could not load the account." onRetry={() => void refresh()} />
         )}
       </div>
     </div>

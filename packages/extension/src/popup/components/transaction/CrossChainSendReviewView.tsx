@@ -3,7 +3,7 @@ import type { RheaSwapReviewView, RheaSwapToken } from '@/core/services/rhea-swa
 import { formatChainName, formatSortAddress, formatSymbol } from '@/lib/format'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { quoteReviewPrimaryAction } from '@/popup/services/quote-review'
 import { RouteProviderLabel } from './RouteProviderLabel'
 import { TransactionReviewView } from './TransactionReviewView'
@@ -205,14 +205,14 @@ export function CrossChainSendReviewView({
       afterRows={reviewedQuoteReady ? quoteChanges : undefined}
       error={
         transferPreparationError ? (
-          <InlineError message={transferPreparationError} />
+          <TransactionNotice message={transferPreparationError} />
         ) : !isPreparingReview && !reviewedQuoteReady ? (
-          <InlineError
+          <TransactionNotice
             message={quoteExpired ? 'Quote expired.' : 'Quote unavailable.'}
             tone={quoteExpired ? 'muted' : 'error'}
           />
         ) : insufficientFunds ? (
-          <InlineError message="Amount exceeds balance at this fee." />
+          <TransactionNotice message="Amount exceeds balance at this fee." />
         ) : undefined
       }
       {...primaryAction}

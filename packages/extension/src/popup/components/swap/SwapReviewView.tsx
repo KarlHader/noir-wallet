@@ -22,7 +22,7 @@ import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { ChainIcon } from '../common/ChainIcon'
 import { AmountDisplay } from '../common/AmountDisplay'
-import { InlineError } from '../common/InlineError'
+import { TransactionNotice } from '../transaction/TransactionNotice'
 import type { FundingSource } from '@/types/wallet'
 
 export interface SwapReviewAccount {
@@ -451,25 +451,25 @@ export function SwapReviewView({
         </div>
 
         {!quoteExpired && !quoteRefreshing && !preparationError && quoteChanges}
-        {(preparationError || (quoteExpired && !quoteRefreshing)) && (
-          <InlineError
+        {preparationError || (quoteExpired && !quoteRefreshing) ? (
+          <TransactionNotice
             message={preparationError ?? 'Quote expired.'}
             tone={preparationError ? 'error' : 'muted'}
-            className="mt-3 px-1"
+            className="mt-3"
           />
-        )}
-        {feeError && onRetryFee && (
-          <InlineError
+        ) : feeError && onRetryFee ? (
+          <TransactionNotice
             message="Could not estimate network fee"
             onRetry={onRetryFee}
-            className="mt-3 px-1"
+            className="mt-3"
           />
-        )}
-        {insufficient && (
-          <p className="text-warning text-xs mt-3 px-1">
-            Amount exceeds balance at this fee. Go back to lower the amount or switch fee tier.
-          </p>
-        )}
+        ) : insufficient ? (
+          <TransactionNotice
+            className="mt-3"
+            tone="warning"
+            message="Amount exceeds balance at this fee. Lower the amount or switch fee tier."
+          />
+        ) : null}
       </div>
 
       <div className="page-footer">

@@ -27,7 +27,7 @@ import {
 } from '@/popup/components/swap/SwapInputView'
 import { estimateSwapOutputFromPrices, getSwapAmountValues } from '@/popup/services/swap-estimate'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { ShieldTokenPicker } from '@/popup/components/tokens/ShieldTokenPicker'
 import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
@@ -939,9 +939,11 @@ function ShieldSwapForm({
   if (activeAccount && !canManageNear) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <p role="alert" className="px-4 py-6 text-center text-sm text-muted">
-          Shield unavailable for this account
-        </p>
+        <TransactionNotice
+          className="mx-4 mt-6"
+          tone="muted"
+          message="Shield unavailable for this account"
+        />
       </div>
     )
   }
@@ -1145,7 +1147,7 @@ function ShieldSwapForm({
           }
           error={
             error || (needsNewQuote && !refreshingReview) ? (
-              <InlineError
+              <TransactionNotice
                 className="mt-3"
                 message={error ?? 'Quote expired.'}
                 tone={error ? 'error' : 'muted'}
@@ -1268,10 +1270,24 @@ function ShieldSwapForm({
             }
           />
         )}
-        {!error && !balanceError && !previewLoading && previewError && (
-          <InlineError
+        {error || balanceError ? (
+          <TransactionNotice
             className="mt-3"
-            tone={previewNotice ? 'muted' : 'error'}
+            tone={error ? 'error' : 'warning'}
+            message={classifyError(error || balanceError).userMessage}
+            onRetry={balanceError && !error ? () => void refreshBalances() : undefined}
+            retrying={connecting}
+          />
+        ) : status === 'error' && tokens.length === 0 && trustedBalances ? (
+          <TransactionNotice
+            className="mt-3"
+            message="Shield assets are unavailable"
+            onRetry={() => void onRefreshPortfolio()}
+          />
+        ) : !previewLoading && previewError ? (
+          <TransactionNotice
+            className="mt-3"
+            tone={previewNotice ? 'muted' : 'warning'}
             message={previewNotice ?? classifyError(previewError).userMessage}
             onRetry={
               previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
@@ -1280,33 +1296,12 @@ function ShieldSwapForm({
             }
             retrying={connecting}
             retryLabel={
-              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : 'Retry'
+              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+                ? 'Refresh balances'
+                : undefined
             }
           />
-        )}
-        {(error || balanceError) && (
-          <InlineError
-            className="mt-3"
-            tone="warning"
-            role="alert"
-            message={classifyError(error || balanceError).userMessage}
-            onRetry={balanceError && !error ? () => void refreshBalances() : undefined}
-            retrying={connecting}
-          />
-        )}
-        {status === 'error' &&
-          tokens.length === 0 &&
-          trustedBalances &&
-          !error &&
-          !balanceError && (
-            <InlineError
-              className="mt-3"
-              tone="warning"
-              role="alert"
-              message="Shield assets are unavailable"
-              onRetry={() => void onRefreshPortfolio()}
-            />
-          )}
+        ) : null}
       </div>
       <div className="page-footer">
         <Button

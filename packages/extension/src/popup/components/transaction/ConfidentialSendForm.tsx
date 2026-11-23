@@ -38,7 +38,7 @@ import {
 import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import {
@@ -943,9 +943,11 @@ export function ConfidentialSendForm({
   if (activeAccount && !canManageNear) {
     return (
       <div ref={formRef} className="flex min-h-0 flex-1 flex-col">
-        <p role="alert" className="px-4 py-6 text-center text-sm text-muted">
-          Shield unavailable for this account
-        </p>
+        <TransactionNotice
+          className="mx-4 mt-6"
+          tone="muted"
+          message="Shield unavailable for this account"
+        />
       </div>
     )
   }
@@ -1120,7 +1122,7 @@ export function ConfidentialSendForm({
           }
           error={
             error || (needsNewQuote && !refreshingReview) ? (
-              <InlineError
+              <TransactionNotice
                 className="mt-3"
                 message={error ?? 'Quote expired.'}
                 tone={error ? 'error' : 'muted'}
@@ -1168,14 +1170,34 @@ export function ConfidentialSendForm({
           }
         />
       </div>
-      {!error && !balanceErrorCode && !previewLoading && previewError && (
-        <InlineError
+      {balanceErrorCode ? (
+        <TransactionNotice
+          message={balanceErrorMessage}
+          tone="warning"
+          onRetry={() => void refreshBalances()}
+          retrying={connecting || recoveryPending}
+          retryLabel={balanceAuthorizationRequired ? 'Connect' : 'Refresh balances'}
+        />
+      ) : recipient && !recipientValid ? (
+        <TransactionNotice
+          message={`Enter a valid ${destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address`}
+        />
+      ) : amountState?.error ? (
+        <TransactionNotice message={amountState.error} tone="warning" />
+      ) : error ? (
+        <TransactionNotice
+          message={error}
+          onRetry={() => void refreshBalances()}
+          retrying={connecting || recoveryPending}
+        />
+      ) : !previewLoading && previewError ? (
+        <TransactionNotice
           message={
             previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
               ? 'Shield balances need to be updated.'
               : (previewNotice ?? previewError)
           }
-          tone={previewNotice ? 'muted' : 'error'}
+          tone={previewNotice ? 'muted' : 'warning'}
           onRetry={
             previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
               ? () => void refreshBalances()
@@ -1183,39 +1205,10 @@ export function ConfidentialSendForm({
           }
           retrying={connecting || recoveryPending}
           retryLabel={
-            previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : 'Retry'
+            previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : undefined
           }
         />
-      )}
-      {amountState?.error && (
-        <p role="alert" className="text-xs text-warning">
-          {amountState.error}
-        </p>
-      )}
-      {recipient && !recipientValid && (
-        <p role="alert" className="text-xs text-warning">
-          Enter a valid {destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address
-        </p>
-      )}
-      {balanceErrorCode ? (
-        <InlineError
-          message={balanceErrorMessage}
-          tone="warning"
-          onRetry={() => void refreshBalances()}
-          retrying={connecting || recoveryPending}
-          retryLabel={balanceAuthorizationRequired ? 'Connect' : 'Refresh balances'}
-        />
-      ) : (
-        error &&
-        !amountState?.error && (
-          <InlineError
-            message={error}
-            tone="warning"
-            onRetry={() => void refreshBalances()}
-            retrying={connecting || recoveryPending}
-          />
-        )
-      )}
+      ) : null}
     </>
   )
   return (

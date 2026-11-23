@@ -71,7 +71,6 @@ import {
   getChainFromAssetId
 } from '@/lib/format'
 import { useSwapPreferences } from '@/store/swap-store'
-import { toast } from '@/store/toast-store'
 import { useTransaction } from '../../hooks/useTransaction'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
@@ -154,7 +153,7 @@ import {
   getPrivateTransferChainIds
 } from '@/popup/services/private-balance-transfer'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
-import { InlineError } from '../../components/common/InlineError'
+import { TransactionNotice } from '../../components/transaction/TransactionNotice'
 import { ZcashSyncProgress } from '../../components/zcash/ZcashSyncProgress'
 import { useZcashSyncReadStatus } from '@/popup/hooks/usePersistedExtensionContextSync'
 import { AmountDisplay } from '../../components/common/AmountDisplay'
@@ -2930,12 +2929,18 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   useEffect(() => {
     if (!maxSelected || !bitcoinMaximumUnavailable) return
     setMaxSelected(false)
-    toast.error(
+    swap.setQuoteError(
       bitcoinMaximum.value?.amountRaw === '0'
         ? 'Insufficient BTC for the network fee'
         : classifyError(bitcoinMaximum.error).userMessage
     )
-  }, [maxSelected, bitcoinMaximumUnavailable, bitcoinMaximum.value, bitcoinMaximum.error])
+  }, [
+    maxSelected,
+    bitcoinMaximumUnavailable,
+    bitcoinMaximum.value,
+    bitcoinMaximum.error,
+    swap.setQuoteError
+  ])
   const nativeMaximum = swap.isZecSource
     ? formatBaseUnitDecimalAmount(
         resolveNativeRouteMaximum({
@@ -3457,6 +3462,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     quoteRefreshTick
   ])
   const handleNativeIntentsQuoteExpiry = useCallback(() => {
+    setTransferPreparationError(null)
     setQuoteRefreshTick(value => value + 1)
   }, [])
   const {
@@ -4386,7 +4392,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     setQuoteReceivedAt(null)
     swap.setDepositAddress('')
     setQuoteRefreshTick(current => current + 1)
-    toast.info('Swap review expired. Getting a new quote.')
   }, [
     discardPreparedQuoteTransfer,
     liveQuoteRequest,
@@ -4478,7 +4483,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         return
       const review = nativeIntentsQuote.review
       if (!selectedFee.ready || !selectedFee.feeQuote) {
-        toast.error('Network fee estimate is unavailable. Please try again.')
+        feeEstimate.retry()
         return
       }
       feeConfirmationInFlight.current = true
@@ -4567,9 +4572,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               transactionId: outcome.transactionId
             })
           } else if (outcome.status === 'timeout') {
-            toast.error('Hardware signing timed out', 'The swap review has been restored.')
-          } else {
-            toast.error('Hardware signing was not completed.')
+            setTransferPreparationError('Hardware signing timed out.')
           }
           return
         }
@@ -4663,9 +4666,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               resultReturnPath
             )
         } else {
-          toast.error(message)
-          setViewStep('input')
-          setQuoteRefreshTick(value => value + 1)
+          setTransferPreparationError(message)
         }
       } finally {
         setIsSending(false)
@@ -4781,8 +4782,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           error
         )
         const message = getRheaSwapErrorMessage(error)
-        if (lockedAssetFlowRequested) setTransferPreparationError(message)
-        toast.error(message)
+        setTransferPreparationError(message)
       } finally {
         setIsSending(false)
       }
@@ -4801,7 +4801,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         return
       }
       if (!selectedFee.ready || !selectedFee.feeQuote) {
-        toast.error('Network fee estimate is unavailable. Please try again.')
+        feeEstimate.retry()
         return
       }
       if (feeConfirmationInFlight.current) return
@@ -4883,7 +4883,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           const message = classifyError(error).userMessage
           swap.setQuoteError(message)
           setViewStep('input')
-          toast.error(message)
           return
         }
 
@@ -4941,10 +4940,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 transactionId: result.transactionId
               })
             } else if (result.status === 'timeout') {
-              toast.error('Hardware signing timed out', 'The swap review has been restored.')
+              setTransferPreparationError('Hardware signing timed out.')
             }
           } catch (cause) {
-            toast.error('Could not open hardware signing', classifyError(cause).userMessage)
+            setTransferPreparationError(classifyError(cause).userMessage)
           } finally {
             setIsSending(false)
           }
@@ -5182,7 +5181,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             swap.setQuoteError(
               'Token approval is signed but still waiting to broadcast. Resume it from Activity before requesting a new quote.'
             )
-            toast.error('Token approval is signed but still waiting to broadcast')
             return
           }
           const combined = pendingRheaEvmAfterApproval.combined
@@ -5282,8 +5280,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           error
         )
         const message = getRheaSwapErrorMessage(error)
-        if (lockedAssetFlowRequested) setTransferPreparationError(message)
-        toast.error(message)
+        setTransferPreparationError(message)
       } finally {
         feeConfirmationInFlight.current = false
         setIsSending(false)
@@ -5295,6 +5292,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     nativeIntentsQuote,
     nativeIntentsRequestKey,
     selectedFee,
+    feeEstimate.retry,
     feeSelectionKey,
     networkFee,
     swap.depositAddress,
@@ -6468,7 +6466,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 : 'Refreshing swap quote'}
           </p>
           {message ? (
-            <InlineError
+            <TransactionNotice
               message={message}
               onRetry={() => {
                 if (!liveQuoteRequest) return
@@ -6562,7 +6560,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           })}
           slippage={swap.slippage}
           provider="near-confidential"
-          preparationError={!review && !swap.isQuoting ? swap.quoteError : null}
+          preparationError={
+            transferPreparationError ?? (!review && !swap.isQuoting ? swap.quoteError : null)
+          }
           onRetryPreparation={handleNativeIntentsQuoteExpiry}
           feeTier={feeTier}
           onFeeTierChange={setFeeTier}
@@ -6757,18 +6757,21 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             afterRows={quoteChanges}
             error={
               transferPreparationError ? (
-                <InlineError message={transferPreparationError} className="mt-3 px-1" />
+                <TransactionNotice message={transferPreparationError} className="mt-3" />
               ) : reviewExpired && !isPreparingReview && !refreshingMaximumReview ? (
-                <InlineError message="Quote expired." tone="muted" />
+                <TransactionNotice message="Quote expired." tone="muted" />
               ) : !transferReview && !isPreparingReview ? (
-                <p className="mt-3 px-1 text-xs text-warning" role="alert">
-                  Transfer review is unavailable. Go back and try again.
-                </p>
+                <TransactionNotice
+                  className="mt-3"
+                  tone="warning"
+                  message="Transfer review unavailable. Go back and try again."
+                />
               ) : hasInsufficientFunds || preparedFeeUnaffordable ? (
-                <p className="mt-3 px-1 text-xs text-warning">
-                  Amount exceeds balance at this fee. Go back to lower the amount or switch fee
-                  tier.
-                </p>
+                <TransactionNotice
+                  className="mt-3"
+                  tone="warning"
+                  message="Amount exceeds balance at this fee. Lower the amount or switch fee tier."
+                />
               ) : undefined
             }
             {...quoteReviewPrimaryAction({
@@ -7690,19 +7693,22 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           crossChainSendUnavailable ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">
             {crossChainSendUnavailable && swap.catalogError ? (
-              <InlineError
+              <TransactionNotice
                 message={crossChainSendUnavailable}
                 onRetry={swap.retryTokenCatalog}
-                className="w-full text-left"
+                className="w-full"
               />
             ) : (
               <>
-                <Icon icon="lucide:circle-alert" width={24} height={24} className="text-warning" />
-                <p className="mt-4 text-sm text-muted" role="alert">
-                  {legacyShieldSwapRequested
-                    ? 'This Swap link is unavailable.'
-                    : publicPrivacySendUnavailable || crossChainSendUnavailable}
-                </p>
+                <TransactionNotice
+                  className="w-full"
+                  tone="warning"
+                  message={
+                    legacyShieldSwapRequested
+                      ? 'This Swap link is unavailable.'
+                      : publicPrivacySendUnavailable || crossChainSendUnavailable
+                  }
+                />
                 <Button
                   variant="outline"
                   className="mt-5"
@@ -7794,9 +7800,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             ]}
             error={
               transferPreparationStatusError ? (
-                <InlineError
+                <TransactionNotice
                   message={transferPreparationStatusError}
-                  className="mt-3 px-1 leading-5"
+                  className="mt-3"
                   onRetry={
                     transferPreparationError || swap.quoteError || swap.catalogError
                       ? () => {

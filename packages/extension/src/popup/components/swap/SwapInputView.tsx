@@ -21,7 +21,7 @@ import { RouteProviderLabel } from '../transaction/RouteProviderLabel'
 import { SendRecipientInputCard } from '../transaction/SendInputCards'
 import { safeBig } from '@/lib/big'
 import { shouldDeferSwapAmountFocus } from '@/popup/services/swap-page-model'
-import { InlineError } from '../common/InlineError'
+import { TransactionNotice } from '../transaction/TransactionNotice'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
 
@@ -376,13 +376,12 @@ export function SwapAssetCard({
       </div>
 
       {validationMessage && (
-        <p
+        <TransactionNotice
           id="swap-source-amount-error"
-          className="mt-1 text-right text-xs text-warning"
-          role="alert"
-        >
-          {validationMessage}
-        </p>
+          className="mt-1"
+          tone="warning"
+          message={validationMessage}
+        />
       )}
 
       <div
@@ -646,10 +645,13 @@ export function SwapInputView({
         ? 'Shield'
         : 'Transparent'
       : undefined)
-  const balanceValidationMessage = hasInsufficientFunds
-    ? insufficientMessage ||
-      (feeIsApproximate ? 'Insufficient balance' : `Insufficient balance (Fee: ${networkFee} ZEC)`)
-    : undefined
+  const balanceValidationMessage =
+    hasInsufficientFunds && !recipientError
+      ? insufficientMessage ||
+        (feeIsApproximate
+          ? 'Insufficient balance'
+          : `Insufficient balance (Fee: ${networkFee} ZEC)`)
+      : undefined
   const hasQuoteDetails = Boolean(estimatedOut) && rate !== '...' && rate !== '0'
   const quoteNotice = getSwapQuoteNotice(quoteError)
   const providerNetworkFeeLabel =
@@ -802,18 +804,18 @@ export function SwapInputView({
           />
         )}
 
-        {catalogError ? (
-          <InlineError
+        {recipientError || balanceValidationMessage ? null : catalogError ? (
+          <TransactionNotice
             message="Unable to load assets"
             onRetry={onRetryTokenCatalog}
-            className="mt-2 px-1 leading-5"
+            className="mt-2"
           />
         ) : !isQuoting && quoteError ? (
-          <InlineError
+          <TransactionNotice
             message={quoteNotice ?? quoteError}
-            tone={quoteNotice ? 'muted' : 'error'}
+            tone={quoteNotice ? 'muted' : onRetryQuote ? 'warning' : 'error'}
             onRetry={onRetryQuote}
-            className="mt-2 px-1 leading-5"
+            className="mt-2"
           />
         ) : null}
         {onEnableReceiveNetwork && (
@@ -843,7 +845,9 @@ export function SwapInputView({
                   onSelectRecipient={onSelectRecipientFromWallet}
                   invalid={Boolean(recipientError)}
                 />
-                {recipientError && <InlineError message={recipientError} className="mt-2" />}
+                {recipientError && !recipientSelectorOpen && (
+                  <TransactionNotice message={recipientError} className="mt-2" />
+                )}
               </div>
             )}
           </div>
@@ -946,7 +950,7 @@ export function SwapInputView({
                 }
                 invalid={Boolean(recipientError)}
               />
-              {recipientError && <InlineError message={recipientError} className="mt-2" />}
+              {recipientError && <TransactionNotice message={recipientError} className="mt-2" />}
             </div>
           )}
           <DialogFooter className="p-5">

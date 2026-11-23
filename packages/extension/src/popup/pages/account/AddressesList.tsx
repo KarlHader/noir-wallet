@@ -4,6 +4,7 @@ import { Icon } from '@iconify/react'
 import { useNavigate } from '../../provider/Router'
 import { PageHeader } from '../../components/common/PageHeader'
 import { InlineError } from '../../components/common/InlineError'
+import { TransactionNotice } from '../../components/transaction/TransactionNotice'
 import { ReceivingAddressLayout } from '../../components/account/ReceivingAddressLayout'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../../components/common/CopyToast'
 import {
@@ -590,6 +591,8 @@ export function AddressesList({
     )
   }
 
+  const AddressLoadError = receive ? TransactionNotice : InlineError
+
   return (
     <div className="page-container">
       <CopyToast show={showToast} error={copyFailed} message="Address copied" />
@@ -608,7 +611,7 @@ export function AddressesList({
         {loading ? (
           <ListSkeleton rows={4} label="Loading addresses" className="mt-5" card />
         ) : error ? (
-          <InlineError
+          <AddressLoadError
             message={error}
             onRetry={canRetry ? () => setLoadAttempt(value => value + 1) : undefined}
             className="mt-5"
@@ -810,13 +813,23 @@ export function AddressesList({
                   </div>
                 }
                 warning={
-                  <DialogDescription className="text-center leading-5 text-muted">
-                    {qrTarget.confidential
-                      ? PRIVATE_ADDRESS_WARNING
-                      : addressPrivacyLabel(qrTarget.address) === 'transparent'
-                        ? 'This address and its activity are publicly visible on-chain.'
-                        : 'Scan this code to receive funds to this account.'}
-                  </DialogDescription>
+                  qrTarget.confidential ||
+                  addressPrivacyLabel(qrTarget.address) === 'transparent' ? (
+                    <DialogDescription asChild>
+                      <TransactionNotice
+                        tone="warning"
+                        message={
+                          qrTarget.confidential
+                            ? PRIVATE_ADDRESS_WARNING
+                            : 'This address and its activity are publicly visible on-chain.'
+                        }
+                      />
+                    </DialogDescription>
+                  ) : (
+                    <DialogDescription className="sr-only">
+                      Scan this code to receive funds.
+                    </DialogDescription>
+                  )
                 }
               >
                 <h2 className="mt-5 text-center text-xl font-medium leading-7">

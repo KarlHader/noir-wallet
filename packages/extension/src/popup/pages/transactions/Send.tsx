@@ -18,7 +18,7 @@ import type { TokenSelectionItem } from '@/popup/components/tokens/TokenPicker'
 import { TokenPicker } from '@/popup/components/tokens/TokenPicker'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { ListSkeleton } from '@/popup/components/ui/skeleton'
 import { TransactionModeDropdown } from '@/popup/components/transaction/TransactionModeDropdown'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
@@ -289,7 +289,7 @@ function AssetSelection({
         {loadingAdditional ? (
           <ListSkeleton label="Loading tokens" className="py-2" />
         ) : (
-          <InlineError
+          <TransactionNotice
             message="Unable to load tokens."
             onRetry={() => void onRetry()}
             className="mt-2 px-3 py-2.5"
@@ -459,7 +459,7 @@ function AssetSelection({
         afterRows={
           <>
             {pendingSelection?.error && (
-              <InlineError
+              <TransactionNotice
                 message={pendingSelection.error}
                 onRetry={() => {
                   void selectManaged(pendingSelection.entry)
@@ -481,7 +481,7 @@ function AssetSelection({
               </div>
             )}
             {additionalError && (
-              <InlineError
+              <TransactionNotice
                 message="Additional networks are unavailable."
                 onRetry={onRetry}
                 className="mt-2 px-3 py-2.5"
@@ -521,6 +521,11 @@ function ZcashSendForm({
   const [destinationPickerOpen, setDestinationPickerOpen] = useState(false)
   const canSelectDestination =
     funding.source === 'transparent' && destinationNetworks.length > 1 && onSelectDestinationNetwork
+  const recipientError = (recipient.znsInput && recipient.zns.error) || recipient.formatError
+  const memoError = !transfer.privacy?.checked && memoField.invalid
+  const showAmountError = !recipientError && Boolean(transfer.amountError)
+  const showMemoError = !recipientError && !showAmountError && memoError
+  const showRouteNotices = !recipientError && !showAmountError && !memoError
   if (!active) return null
 
   const selectRecipient = async () => {
@@ -581,7 +586,7 @@ function ZcashSendForm({
               value: recipient.address,
               onChange: recipient.setRecipient,
               placeholder: 'Recipient address',
-              invalid: Boolean(recipient.formatError),
+              invalid: Boolean(recipientError),
               onSelectRecipient: selectRecipient,
               network: {
                 name: transfer.networkName,
@@ -591,10 +596,17 @@ function ZcashSendForm({
               },
               feedback: (
                 <>
-                  {recipient.formatError && (
-                    <p role="alert" className="mt-1.5 px-1 text-xs text-danger">
-                      {recipient.formatError}
-                    </p>
+                  {recipientError && (
+                    <TransactionNotice
+                      className="mt-1.5"
+                      message={recipientError}
+                      onRetry={
+                        recipient.znsInput && recipient.zns.retryable
+                          ? recipient.zns.retry
+                          : undefined
+                      }
+                      retrying={recipient.zns.loading}
+                    />
                   )}
                   {recipient.zns.loading && (
                     <p className="text-muted text-xs mt-1.5 px-1 flex items-center gap-1.5">
@@ -613,14 +625,6 @@ function ZcashSendForm({
                       {formatSortAddress(recipient.zns.address)}
                     </p>
                   )}
-                  {recipient.znsInput && recipient.zns.error && (
-                    <InlineError
-                      className="mt-1.5 px-1"
-                      message={recipient.zns.error}
-                      onRetry={recipient.zns.retryable ? recipient.zns.retry : undefined}
-                      retrying={recipient.zns.loading}
-                    />
-                  )}
                 </>
               )
             },
@@ -628,7 +632,7 @@ function ZcashSendForm({
               testId: 'zcash-amount-card',
               ariaLabel: 'ZEC amount',
               ...transfer.amountField,
-              error: transfer.amountError
+              error: showAmountError ? transfer.amountError : undefined
             },
             asset: {
               symbol: 'ZEC',
@@ -642,13 +646,20 @@ function ZcashSendForm({
           }}
           footer={
             <>
-              <ZcashTransferSyncStatus sync={transfer.sync} />
+              <ZcashTransferSyncStatus
+                sync={transfer.sync}
+                showError={
+                  showRouteNotices && !transfer.balanceError && !route.maximumError && !route.error
+                }
+              />
               <SendFormActions {...action} privacy={transfer.privacy} />
             </>
           }
         >
           <div className="flex flex-col gap-4">
-            {transfer.balanceError && <InlineError {...transfer.balanceError} />}
+            {showRouteNotices && transfer.balanceError && (
+              <TransactionNotice {...transfer.balanceError} />
+            )}
             {!transfer.privacy?.checked && (
               <div className="order-4">
                 <div className="mb-1.5 flex items-center justify-between px-1">
@@ -670,20 +681,19 @@ function ZcashSendForm({
                   value={memoField.value}
                   disabled={!memoField.supported}
                   aria-invalid={memoField.invalid || undefined}
-                  aria-describedby={memoField.invalid ? 'zcash-send-memo-error' : undefined}
+                  aria-describedby={showMemoError ? 'zcash-send-memo-error' : undefined}
                   onChange={event => memoField.onChange(event.target.value)}
                   placeholder="Add a private memo"
                   rows={2}
                   className="w-full resize-none rounded-xl border border-border/60 bg-card/50 px-4 py-3 text-sm placeholder:text-muted/50 focus:border-primary/50 focus:outline-none disabled:opacity-40"
                 />
-                {memoField.invalid && (
-                  <p
+                {showMemoError && (
+                  <TransactionNotice
                     id="zcash-send-memo-error"
-                    role="alert"
-                    className="mt-1 px-1 text-xs text-warning"
-                  >
-                    This recipient cannot receive a memo.
-                  </p>
+                    tone="warning"
+                    className="mt-1"
+                    message="This recipient cannot receive a memo."
+                  />
                 )}
                 {memoField.value && (
                   <p className="mt-1 px-1 text-right text-xs text-muted">
@@ -702,7 +712,10 @@ function ZcashSendForm({
                 />
               </div>
             )}
-            <ZcashTransferRoute route={route} />
+            <ZcashTransferRoute
+              route={route}
+              showNotice={showRouteNotices && !transfer.balanceError}
+            />
           </div>
         </SendFormSlot>
       ) : (
@@ -1837,7 +1850,7 @@ function SendAssetFlow() {
         currentSession.shieldProvider === 'zcash-shield' &&
         !currentSession.zcashVisited && (
           <div className="page-content px-4 pt-4">
-            <InlineError
+            <TransactionNotice
               message={
                 requestedZcashProvider
                   ? 'Shielded ZEC is unavailable for this account.'
@@ -1916,7 +1929,7 @@ function SendAssetFlow() {
                     Loading account…
                   </p>
                 ) : (
-                  <InlineError
+                  <TransactionNotice
                     message="Unable to load account."
                     onRetry={() => void refreshAccountCatalog()}
                   />
