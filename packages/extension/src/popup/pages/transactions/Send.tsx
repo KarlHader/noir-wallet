@@ -912,9 +912,9 @@ function SendAssetFlow() {
   const transparentZcashRequested = requestedZcashProvider && initialZcashSource === 'transparent'
   const initialPublicZcash =
     transparentZcashRequested && !getFundingSourceUnavailableReason(zcashKeySource, 'transparent')
-  const shieldedZcashAvailable = zcashSources.some(
-    source => source.type === 'shielded' && !source.disabledReason
-  )
+  const shieldedZcashAvailable =
+    zcashEnabled &&
+    zcashSources.some(source => source.type === 'shielded' && !source.disabledReason)
   const initialSource =
     domainSession?.routeKey === location.key
       ? domainSession.source
@@ -925,7 +925,7 @@ function SendAssetFlow() {
           : 'main'
   const initialShieldProvider: ShieldProvider = requestedZcashProvider
     ? 'zcash-shield'
-    : requestedNearProvider || confidentialEnabled
+    : requestedNearProvider || confidentialEnabled || accountLoading || contextChanging
       ? 'near-confidential'
       : 'zcash-shield'
   const currentSession: SendDomainSession =
@@ -1083,7 +1083,7 @@ function SendAssetFlow() {
       : initialPrices
   const availableShieldProviders: ShieldProvider[] = [
     ...(confidentialEnabled ? (['near-confidential'] as const) : []),
-    ...(zcashEnabled && shieldedZcashAvailable ? (['zcash-shield'] as const) : [])
+    ...(shieldedZcashAvailable ? (['zcash-shield'] as const) : [])
   ]
 
   const load = useCallback(
@@ -1599,10 +1599,7 @@ function SendAssetFlow() {
   const switchMode = (mode: 'public' | 'private' | 'shield') => {
     if (mode === 'private' || (mode === 'shield') === shieldActive) return
     if (mode === 'shield') {
-      if (
-        (zcashActive || !confidentialEnabled) &&
-        zcashSources.some(source => source.type === 'shielded' && !source.disabledReason)
-      ) {
+      if ((zcashActive || !confidentialEnabled) && shieldedZcashAvailable) {
         selectZcash('shielded')
       } else if (selection?.chain.chain.family === 'evm' && !currentSession.publicZcash) {
         requestShieldMode(value => value + 1)
@@ -1828,10 +1825,18 @@ function SendAssetFlow() {
       )}
       {shieldActive &&
         !sourcePicker &&
+        !accountLoading &&
+        !contextChanging &&
         currentSession.shieldProvider === 'zcash-shield' &&
         !currentSession.zcashVisited && (
           <div className="page-content px-4 pt-4">
-            <InlineError message="Shielded ZEC is unavailable for this account." />
+            <InlineError
+              message={
+                requestedZcashProvider
+                  ? 'Shielded ZEC is unavailable for this account.'
+                  : 'Shield is unavailable for this account.'
+              }
+            />
           </div>
         )}
       {currentSession.publicVisited && selection && !currentSession.publicZcash && (
