@@ -3,6 +3,7 @@ import { expect } from '@playwright/test'
 
 import {
   buildCrossChainPrivateWithdrawReviewPath,
+  buildNearPrivateDepositReviewPath,
   buildPrivateDepositReviewPath,
   normalizePrivateBalanceTransferInput,
   resolveCrossChainPrivateWithdrawRoute,
@@ -242,6 +243,36 @@ test('binds a cross-chain Deposit to the selected source and eligible destinatio
     review: '1',
     maximum: '1'
   })
+})
+
+test('builds a NEAR Incognito deposit review on the same swap confirmation route', () => {
+  const sourceAssetId = 'near:mainnet/slip44:397'
+  const destinationAssetId = 'near:mainnet/nep141:token.near'
+  const reviewPath = buildNearPrivateDepositReviewPath({
+    sourceAssetId,
+    destinationAssetId,
+    amount: '0.03',
+    maximum: false
+  })
+  const reviewRoute = new URL(reviewPath, 'https://wallet.test')
+  expect(reviewRoute.pathname).toBe('/swap')
+  expect(Object.fromEntries(reviewRoute.searchParams)).toEqual({
+    source: sourceAssetId,
+    destinationAsset: destinationAssetId,
+    destinationChain: 'near',
+    privateDestination: '1',
+    balanceTransfer: '1',
+    amount: '0.03',
+    review: '1'
+  })
+  expect(() =>
+    buildNearPrivateDepositReviewPath({
+      sourceAssetId: 'eip155:1/slip44:60',
+      destinationAssetId: sourceAssetId,
+      amount: '1',
+      maximum: false
+    })
+  ).toThrow('Invalid NEAR source asset route')
 })
 
 test('offers an unfunded registered USDC destination without trusting matching token symbols', () => {

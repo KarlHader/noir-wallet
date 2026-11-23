@@ -4,9 +4,14 @@ import { parseAssetId } from '@/core/chains/registry'
 import { getPrivateCrossChainTransferAssetGroup } from '@/core/chains/cross-chain-asset-group'
 import {
   getNearMoveChainIds,
+  nearDirectQuoteAsset,
   readNearMoveDomainRaw,
   selectBalanceTransferMethod
 } from '@/core/chains/near/near-incognito-move'
+import {
+  NEAR_MAINNET_CHAIN_ID,
+  NEAR_MAINNET_NATIVE_ASSET_ID
+} from '@/core/chains/near/near-portfolio-assets'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import type { AccountNetworksView } from './account-networks-client'
 import { getAssetDomainRaw, type AssetDomain } from './asset-domains'
@@ -35,6 +40,43 @@ export function buildPrivateDepositReviewPath(input: {
   })
   const query = new URLSearchParams(path.slice(path.indexOf('?') + 1))
   query.set('source', source.id)
+  return `/swap?${query}`
+}
+
+export function buildNearPrivateDepositReviewPath(input: {
+  readonly sourceAssetId: string
+  readonly destinationAssetId: string
+  readonly amount: string
+  readonly maximum: boolean
+}): string {
+  const source = parseAssetId(input.sourceAssetId)
+  const destination = parseAssetId(input.destinationAssetId)
+  const quoteAsset = (asset: ReturnType<typeof parseAssetId>) =>
+    nearDirectQuoteAsset({
+      id: asset.id,
+      chainId: asset.chainId,
+      kind: asset.id === NEAR_MAINNET_NATIVE_ASSET_ID ? 'native' : 'token',
+      reference: asset.reference
+    })
+  if (
+    source.chainId !== NEAR_MAINNET_CHAIN_ID ||
+    destination.chainId !== NEAR_MAINNET_CHAIN_ID ||
+    !quoteAsset(source) ||
+    !quoteAsset(destination)
+  ) {
+    throw new Error('Invalid NEAR source asset route')
+  }
+  if (!/^\d+(?:\.\d+)?$/.test(input.amount)) throw new Error('Invalid NEAR transfer amount route')
+  const query = new URLSearchParams({
+    privateDestination: '1',
+    balanceTransfer: '1',
+    destinationChain: 'near',
+    destinationAsset: destination.id,
+    source: source.id,
+    amount: input.amount,
+    review: '1'
+  })
+  if (input.maximum) query.set('maximum', '1')
   return `/swap?${query}`
 }
 

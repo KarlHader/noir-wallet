@@ -136,6 +136,7 @@ import {
   balanceTransferDomainLabel as domainLabel,
   balanceTransferLabel,
   buildCrossChainPrivateWithdrawReviewPath,
+  buildNearPrivateDepositReviewPath,
   buildPrivateDepositReviewPath,
   fixedTransferSide,
   normalizePrivateBalanceTransferInput,
@@ -1757,8 +1758,14 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       if (mounted.current) setPreparingNearDirect(false)
     }
   }
+  const nearDepositDestination =
+    nearPublicPrivate &&
+    direction === 'main-to-private' &&
+    privateTransferDestination?.chain.chain.family === 'near'
+      ? privateTransferDestination
+      : null
   const review = () => {
-    if (nearPublicPrivate) {
+    if (nearPublicPrivate && !nearDepositDestination) {
       void startNearDirect()
       return
     }
@@ -1766,12 +1773,19 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     const activityDomain = fixedSide === 'to' ? to : fixedSide === 'from' ? from : walletMode
     navigate(
       direction === 'main-to-private'
-        ? buildPrivateDepositReviewPath({
-            sourceAssetId: selected.asset.asset.id,
-            destinationAssetId: privateTransferDestination!.asset.asset.id,
-            amount: currentAmount,
-            maximum: maxSelected
-          })
+        ? nearDepositDestination
+          ? buildNearPrivateDepositReviewPath({
+              sourceAssetId: selected.asset.asset.id,
+              destinationAssetId: nearDepositDestination.asset.asset.id,
+              amount: currentAmount,
+              maximum: maxSelected
+            })
+          : buildPrivateDepositReviewPath({
+              sourceAssetId: selected.asset.asset.id,
+              destinationAssetId: privateTransferDestination!.asset.asset.id,
+              amount: currentAmount,
+              maximum: maxSelected
+            })
         : crossChainPrivateTransfer
           ? buildCrossChainPrivateWithdrawReviewPath({
               sourceAssetId: selected.asset.asset.id,

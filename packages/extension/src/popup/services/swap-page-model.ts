@@ -39,6 +39,10 @@ import type { ShieldFundingAsset } from './shield-transfer'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
 import { readNearSwapBalanceRaw } from '@/popup/services/near-quote-asset-execution'
 import {
+  nearDirectCatalogToken,
+  nearDirectQuoteAsset
+} from '@/core/chains/near/near-incognito-move'
+import {
   filterCrossChainSendDestinations,
   type CrossChainSendCapabilities
 } from '@/popup/services/cross-chain-send-assets'
@@ -511,12 +515,14 @@ export function resolveSwapExecutionSourceMode(input: {
 export function filterConfidentialFundingSourceTokens(
   tokens: readonly RheaSwapToken[],
   portfolio: PortfolioReadModel | null,
-  receiveTargets: AdditionalReceiveTargetsView | null
+  receiveTargets: AdditionalReceiveTargetsView | null,
+  destinationChain: string | null = null
 ): readonly RheaSwapToken[] {
   if (!portfolio || !receiveTargets) return []
+  const family = destinationChain === 'near' ? 'near' : 'evm'
   return tokens.filter(token => {
     if (isZecToken(token)) return false
-    return resolveWalletOwnedQuoteAsset(token, portfolio, receiveTargets)?.family === 'evm'
+    return resolveWalletOwnedQuoteAsset(token, portfolio, receiveTargets)?.family === family
   })
 }
 
@@ -630,6 +636,9 @@ export function resolveConfidentialFundingDestinationToken(input: {
   if (!portfolio) return null
   return (
     input.tokens.find(token => {
+      if (input.destinationChain === 'near') {
+        return matchesNearConfidentialFundingDestination(token, input, portfolio)
+      }
       if (String(token.rheaChainId) !== input.destinationChain) return false
       if (!isConfidentialSwapDestinationSupported(token)) return false
       const destination = resolveWalletOwnedQuoteAsset(token, portfolio, input.receiveTargets)
@@ -639,6 +648,26 @@ export function resolveConfidentialFundingDestinationToken(input: {
             destination.asset.asset.id === input.destinationAsset
         : token.isNative
     }) ?? null
+  )
+}
+
+function matchesNearConfidentialFundingDestination(
+  token: RheaSwapToken,
+  input: {
+    readonly destinationAsset: string | null
+    readonly receiveTargets: AdditionalReceiveTargetsView | null
+  },
+  portfolio: PortfolioReadModel
+): boolean {
+  if (token.rheaChainId !== 'near') return false
+  const destination = resolveWalletOwnedQuoteAsset(token, portfolio, input.receiveTargets)
+  if (destination?.family !== 'near') return false
+  const quoteAsset = nearDirectQuoteAsset(destination.asset.asset)
+  if (!quoteAsset || nearDirectCatalogToken([token], quoteAsset) !== token) return false
+  if (!input.destinationAsset) return token.isNative
+  return (
+    destination.asset.asset.id === input.destinationAsset ||
+    token.assetId === input.destinationAsset
   )
 }
 
