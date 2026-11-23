@@ -169,8 +169,22 @@ test.describe('Runtime message security', () => {
         slippageBps: 50
       }
     }
+    const { recipient, ...confidentialDestination } = prepare.request.destination
+    const confidential = {
+      ...prepare,
+      request: {
+        ...prepare.request,
+        destination: confidentialDestination,
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        fundingSource: 'shielded',
+        userAction: 'swap'
+      }
+    }
+    const { userAction, ...confidentialMove } = confidential.request
     const messages = [
       prepare,
+      confidential,
+      { ...confidential, request: { ...confidentialMove, fundingSource: 'transparent' } },
       { type: 'GET_NATIVE_ZEC_INTENTS_SWAP', quoteId: 'quote-one' },
       { type: 'GET_NATIVE_ZEC_INTENTS_SWAP_STATUS', quoteId: 'quote-one' },
       { type: 'CANCEL_NATIVE_ZEC_INTENTS_SWAP', quoteId: 'quote-one' }
@@ -210,6 +224,13 @@ test.describe('Runtime message security', () => {
         request: { ...prepare.request, extra: true }
       })
     ).toThrow()
+    for (const request of [
+      { ...prepare.request, userAction },
+      { ...confidential.request, userAction: 'send' },
+      { ...confidential.request, destination: { ...confidentialDestination, recipient } }
+    ]) {
+      expect(() => parseTrustedExtensionRuntimeMessage({ ...prepare, request })).toThrow()
+    }
     expect(() =>
       parseTrustedExtensionRuntimeMessage({
         type: 'GET_NATIVE_ZEC_INTENTS_SWAP',

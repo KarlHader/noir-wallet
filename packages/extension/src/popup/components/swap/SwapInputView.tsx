@@ -76,6 +76,8 @@ export function SwapProviderCard({
 interface SwapInputViewProps {
   tokenIn: SwapToken | null
   tokenOut: SwapToken | null
+  tokenInSymbol?: string
+  tokenOutSymbol?: string
   isZecSource: boolean
   isZecDestination: boolean
   requiresRecipientAddress: boolean
@@ -148,6 +150,7 @@ interface SwapInputViewProps {
 interface SwapAssetCardProps {
   direction: 'From' | 'To'
   token: SwapToken | null
+  fallbackSymbol?: string
   tokenBadgeBlockchain?: string
   tokenNetworkLabel?: string
   zcashFundingSource?: FundingSource
@@ -172,7 +175,7 @@ interface SwapAssetCardProps {
   isReadOnly?: boolean
   isAmountLoading?: boolean
   isEstimatedAmount?: boolean
-  validationMessage?: string
+  amountErrorId?: string
   balanceHelp?: boolean
   pendingBalance?: string
 }
@@ -229,6 +232,7 @@ function ReceiveAddressSkeleton() {
 export function SwapAssetCard({
   direction,
   token,
+  fallbackSymbol,
   tokenBadgeBlockchain,
   tokenNetworkLabel,
   zcashFundingSource,
@@ -253,7 +257,7 @@ export function SwapAssetCard({
   isReadOnly = false,
   isAmountLoading = false,
   isEstimatedAmount = false,
-  validationMessage,
+  amountErrorId,
   balanceHelp = false,
   pendingBalance
 }: SwapAssetCardProps) {
@@ -291,7 +295,7 @@ export function SwapAssetCard({
     resize()
     return () => observer.disconnect()
   }, [amount, isReadOnly])
-  if (tokenSelectDisabled) return <SwapAssetCardSkeleton direction={direction} />
+  if (tokenSelectDisabled && !fallbackSymbol) return <SwapAssetCardSkeleton direction={direction} />
 
   return (
     <section className="min-h-[126px] py-3">
@@ -375,21 +379,7 @@ export function SwapAssetCard({
         )}
       </div>
 
-      {validationMessage && (
-        <TransactionNotice
-          id="swap-source-amount-error"
-          className="mt-1"
-          tone="warning"
-          message={validationMessage}
-        />
-      )}
-
-      <div
-        className={cn(
-          'flex items-center justify-between gap-3',
-          validationMessage ? 'mt-2' : 'mt-4'
-        )}
-      >
+      <div className="mt-4 flex items-center justify-between gap-3">
         <button
           type="button"
           onClick={onTokenSelect}
@@ -406,7 +396,9 @@ export function SwapAssetCard({
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1 text-xl font-semibold leading-[26px]">
-              <span className="min-w-0 truncate">{formatSymbol(token?.symbol) || 'Select'}</span>
+              <span className="min-w-0 truncate">
+                {formatSymbol(token?.symbol ?? fallbackSymbol) || 'Select'}
+              </span>
               {!tokenSelectLocked && (
                 <Icon
                   icon="lucide:chevron-down"
@@ -485,8 +477,8 @@ export function SwapAssetCard({
               onChange={event => onAmountChange?.(event.target.value.replace(/[^0-9.]/g, ''))}
               placeholder="0"
               aria-label={`${direction} amount`}
-              aria-invalid={Boolean(validationMessage) || undefined}
-              aria-describedby={validationMessage ? 'swap-source-amount-error' : undefined}
+              aria-invalid={amountErrorId ? true : undefined}
+              aria-describedby={amountErrorId}
               style={{ fontSize: amountFontSize }}
               className="w-full min-w-0 bg-transparent text-right font-sans font-semibold leading-[26px] outline-none placeholder:text-muted/60"
             />
@@ -567,6 +559,8 @@ export function SwapDestinationPanel({
 export function SwapInputView({
   tokenIn,
   tokenOut,
+  tokenInSymbol,
+  tokenOutSymbol,
   isZecSource,
   isZecDestination,
   requiresRecipientAddress,
@@ -635,6 +629,7 @@ export function SwapInputView({
   onRetryQuote,
   onGetQuote
 }: SwapInputViewProps) {
+  const amountErrorId = useId()
   const [showRefundAddress, setShowRefundAddress] = useState(false)
   const [recipientSelectorOpen, setRecipientSelectorOpen] = useState(false)
   const [routesOpen, setRoutesOpen] = useState(false)
@@ -665,6 +660,7 @@ export function SwapInputView({
           <SwapAssetCard
             direction="From"
             token={tokenIn}
+            fallbackSymbol={tokenInSymbol}
             zcashFundingSource={isZecSource ? sourceZcashFundingSource : undefined}
             amount={amountIn}
             fiatValue={fromFiat}
@@ -686,7 +682,7 @@ export function SwapInputView({
             maxLoading={maxLoading}
             maxDisabled={maxDisabled}
             maxDisabledReason={maxDisabledReason}
-            validationMessage={balanceValidationMessage}
+            amountErrorId={balanceValidationMessage ? amountErrorId : undefined}
           />
 
           <SwapDestinationPanel
@@ -696,6 +692,7 @@ export function SwapInputView({
             hideSwitchAssets={hideSwitchAssets}
             onSwitchAssets={onSwitchTokens}
             token={tokenOut}
+            fallbackSymbol={tokenOutSymbol}
             zcashFundingSource={isZecDestination ? addressType : undefined}
             amount={estimatedOut}
             fiatValue={toFiat}
@@ -804,7 +801,15 @@ export function SwapInputView({
           />
         )}
 
-        {recipientError || balanceValidationMessage ? null : catalogError ? (
+        {balanceValidationMessage ? (
+          <TransactionNotice
+            id={amountErrorId}
+            message={balanceValidationMessage}
+            tone="warning"
+            role="alert"
+            className="mt-2"
+          />
+        ) : recipientError ? null : catalogError ? (
           <TransactionNotice
             message="Unable to load assets"
             onRetry={onRetryTokenCatalog}

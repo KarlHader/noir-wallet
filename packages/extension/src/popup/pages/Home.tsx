@@ -72,7 +72,10 @@ import { buildShieldActionPath, selectShieldActions } from '../services/shield-a
 import { canSwapNativeShieldZec } from '../services/shield-swap-zec-sources'
 import { getPrivateTransferChainIds } from '../services/private-balance-transfer'
 import { prewarmInitialSwapCatalog } from '../services/swap-catalog-loading'
-import { createSwapTokenPreferenceScope } from '../services/swap-token-selection'
+import {
+  createSwapTokenPreferenceScope,
+  resolveSharedSwapPair
+} from '../services/swap-token-selection'
 import { useSwapPreferences } from '@/store/swap-store'
 import { isRetainedV1ZcashOnlyAccount } from '@/core/wallet/account-network-selection'
 
@@ -163,31 +166,23 @@ export function Home() {
       !useSwapPreferences.persist.hasHydrated()
     )
       return
-    const evmChain =
-      swapEnabledChains.find(chain => chain.id === 'eip155:1') ??
-      swapEnabledChains.find(chain => chain.family === 'evm')
-    const zcashChain = swapEnabledChains.find(chain => chain.family === 'zcash')
-    const plans = (['main', 'shield', 'private'] as const).flatMap(mode => {
-      const scope = createSwapTokenPreferenceScope(
-        effectiveWalletId,
-        effectiveAccountId,
-        currentNetwork,
-        mode
-      )
-      const selection = scope ? swapSelections[scope] : undefined
-      if (mode === 'private' && !selection) return []
-      return [
-        {
-          enabledChains: swapEnabledChains,
-          defaultSourceChainId: mode === 'shield' ? zcashChain?.id : evmChain?.id,
-          savedSourceAssetId: selection?.tokenInId,
-          savedDestinationAssetId: selection?.tokenOutId
-        }
-      ]
-    })
+    const scope = createSwapTokenPreferenceScope(
+      effectiveWalletId,
+      effectiveAccountId,
+      currentNetwork
+    )
+    const selection = resolveSharedSwapPair(
+      scope ? swapSelections[scope] : undefined,
+      swapEnabledChains
+    )
     let active = true
     const warm = () => {
-      if (active) void Promise.all(plans.map(prewarmInitialSwapCatalog))
+      if (active)
+        void prewarmInitialSwapCatalog({
+          enabledChains: swapEnabledChains,
+          savedSourceAssetId: selection.tokenInId,
+          savedDestinationAssetId: selection.tokenOutId
+        })
     }
     const idleId = window.requestIdleCallback?.(warm, { timeout: 1500 })
     const timeoutId = idleId === undefined ? window.setTimeout(warm, 250) : undefined
@@ -296,10 +291,6 @@ export function Home() {
   }
   const publicSendSource =
     assetDomain === 'public' ? selectHomeActionSource(multichainPortfolio, 'public', 'send') : null
-  const swapSource =
-    assetDomain === 'public' || assetDomain === 'private'
-      ? selectHomeActionSource(multichainPortfolio, assetDomain, 'swap')
-      : null
   const shieldActions = selectShieldActions({
     model: multichainPortfolio,
     prices: assetPrices,
@@ -362,15 +353,6 @@ export function Home() {
       query.set('sourceAccountId', effectiveAccountId)
     }
     query.set('balanceDomain', assetDomain)
-    if (swapSource) {
-      query.set('source', swapSource.asset.asset.id)
-    }
-    if (swapSource?.chain.chain.family === 'evm' && effectiveWalletId && effectiveAccountId) {
-      query.set('sourceMode', assetDomain === 'private' ? 'private' : 'main')
-    }
-    if (swapSource?.chain.chain.family === 'zcash') {
-      query.set('fundingSource', 'transparent')
-    }
     navigate.navigate(`/swap?${query.toString()}`)
   }
   const activityFilterAssetId = new URLSearchParams(location.search).get('assetId') || null

@@ -206,6 +206,7 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     'refundAddress',
     'slippageBps',
     ...(value.recipientType === undefined ? [] : ['recipientType']),
+    ...(value.userAction === undefined ? [] : ['userAction']),
     ...(value.fundingSource === undefined ? [] : ['fundingSource']),
     ...(value.requestId === undefined ? [] : ['requestId'])
   ]
@@ -217,6 +218,8 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     isNativeZecIntentsQuoteId(value.accountId) &&
     typeof value.amountZats === 'string' &&
     /^[1-9][0-9]{0,77}$/.test(value.amountZats) &&
+    (value.userAction === undefined ||
+      (value.recipientType === 'CONFIDENTIAL_INTENTS' && value.userAction === 'swap')) &&
     hasExactRuntimeKeys(destination, [
       'chainId',
       'assetId',

@@ -31,7 +31,7 @@ import {
   PersistentRheaSwapCatalogCache,
   type FreshRheaSwapCatalog
 } from '@/infrastructure/persistence/rhea-swap-catalog-cache'
-import { classifyError } from '@/lib/errors'
+import { classifyError, isRpcEndpointError } from '@/lib/errors'
 import {
   getSwapQuoteFailureMessage,
   isSwapQuotePriceMoved,
@@ -71,10 +71,12 @@ export function getRheaSwapQuoteFailure(error: unknown): {
   retryable: boolean
 } {
   const specific = getSwapQuoteFailureMessage(error)
+  if (isSwapQuoteTimeout(error) || (!specific && isRpcEndpointError(error))) {
+    return { message: SWAP_QUOTE_DISPLAY_ERROR, retryable: true }
+  }
   return {
-    message: isSwapQuoteTimeout(error) ? SWAP_QUOTE_DISPLAY_ERROR : getRheaSwapErrorMessage(error),
+    message: getRheaSwapErrorMessage(error),
     retryable:
-      isSwapQuoteTimeout(error) ||
       specific === 'Quote unavailable. Please try again.' ||
       (!specific && classifyError(error).retryable)
   }
