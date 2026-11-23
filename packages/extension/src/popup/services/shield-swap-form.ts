@@ -14,12 +14,29 @@ import {
   parseDisplayUnitAmount
 } from '@/lib/number-format'
 import type { PrepareConfidentialFundingRequest } from './confidential-funding-client'
+import { sortSendAssetsByBalanceValue } from './send-asset-order'
 import {
   getZcashTokenPickerChain,
   shieldFundingAvailableRaw,
   type ShieldFundingAsset,
   type ShieldTokenPickerItem
 } from './shield-transfer'
+
+export function sortShieldSwapPickerRows<Row extends ShieldTokenPickerItem>(
+  rows: readonly Row[]
+): readonly Row[] {
+  return sortSendAssetsByBalanceValue(
+    rows.map(row => ({
+      key: row.key,
+      amount:
+        row.availableRaw === undefined
+          ? null
+          : formatBaseUnitDecimalAmount(row.availableRaw, row.decimals),
+      priceUsd: row.priceUsd ?? null,
+      row
+    }))
+  ).map(({ row }) => row)
+}
 
 export const nativeZecDestinationKey = (source: 'transparent' | 'shielded') =>
   `native-zec-destination:${source}`

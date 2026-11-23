@@ -79,7 +79,8 @@ import {
   matchesShieldSwapReview,
   nativeZecDestinationKey,
   shieldSwapFormAmountError,
-  shieldSwapFormBalance
+  shieldSwapFormBalance,
+  sortShieldSwapPickerRows
 } from '@/popup/services/shield-swap-form'
 import {
   buildShieldSwapZecSourceOptions,
@@ -528,7 +529,7 @@ function ShieldSwapForm({
           priceUsd: tokenPrices.get(asset.managed.protocolAssetId) ?? null
         })
       )
-    return Object.freeze([...transparentZecRow, ...zecRows, ...nonZecRows])
+    return sortShieldSwapPickerRows([...transparentZecRow, ...zecRows, ...nonZecRows])
   }, [
     network,
     fromPickerReady,
@@ -576,14 +577,16 @@ function ShieldSwapForm({
   const toPickerRows = useMemo(
     () =>
       toPickerReady
-        ? buildShieldDestinationPickerRows({
-            options,
-            tokens,
-            balances: displayBalances,
-            network,
-            excludedProtocolAssetId: from?.managed.protocolAssetId,
-            nativeZecDestinations
-          })
+        ? sortShieldSwapPickerRows(
+            buildShieldDestinationPickerRows({
+              options,
+              tokens,
+              balances: displayBalances,
+              network,
+              excludedProtocolAssetId: from?.managed.protocolAssetId,
+              nativeZecDestinations
+            })
+          )
         : [],
     [
       toPickerReady,
