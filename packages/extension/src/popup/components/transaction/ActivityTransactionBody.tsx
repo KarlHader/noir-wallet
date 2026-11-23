@@ -31,6 +31,7 @@ import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
 import { TransactionProgressSteps } from './TransactionProgressSteps'
 import { TransactionReferenceValue } from './TransactionReferenceValue'
+import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
 import {
   getActivityApprovalDetails,
   getActivityInteractionPresentation
@@ -821,9 +822,20 @@ export function ActivityTransactionReferences({
   )
 }
 
-export function ActivityTransactionProgress({ view }: { readonly view: ActivityTransactionView }) {
-  if (!view.isCrossChain) return null
+type PrecedingProgress = { readonly step: TransactionProgressStep; readonly reference?: ReactNode }
+
+export function ActivityTransactionProgress({
+  view,
+  precedingProgress
+}: {
+  readonly view: ActivityTransactionView
+  readonly precedingProgress?: PrecedingProgress
+}) {
+  if (!view.isCrossChain && !precedingProgress) return null
   const referenceByStepId = new Map<string, ReactNode>()
+  if (precedingProgress?.reference) {
+    referenceByStepId.set(precedingProgress.step.id, precedingProgress.reference)
+  }
   for (const segment of view.item.segments) {
     const hash = segment.evidence?.transactionHash
     const reference =
@@ -871,7 +883,9 @@ export function ActivityTransactionProgress({ view }: { readonly view: ActivityT
   }
   return (
     <TransactionProgressSteps
-      steps={view.progressSteps}
+      steps={
+        precedingProgress ? [precedingProgress.step, ...view.progressSteps] : view.progressSteps
+      }
       referenceByStepId={referenceByStepId}
       className="mt-5"
     />
@@ -880,10 +894,12 @@ export function ActivityTransactionProgress({ view }: { readonly view: ActivityT
 
 export function ActivityTransactionBody({
   view,
+  precedingProgress,
   showDate = false,
   showAccountRoute = false
 }: {
   readonly view: ActivityTransactionView
+  readonly precedingProgress?: PrecedingProgress
   readonly showDate?: boolean
   readonly showAccountRoute?: boolean
 }) {
@@ -909,7 +925,7 @@ export function ActivityTransactionBody({
         )}
         {view.clusterPlan && <ActivityClusterTransfers plan={view.clusterPlan} />}
       </div>
-      <ActivityTransactionProgress view={view} />
+      <ActivityTransactionProgress view={view} precedingProgress={precedingProgress} />
     </>
   )
 }

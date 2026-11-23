@@ -22,6 +22,35 @@ export interface TransactionProgressStep {
   readonly statusLabel: string
 }
 
+export interface SwapApprovalProgress {
+  readonly chainId: string
+  readonly networkName: string
+  readonly transactionHash?: string
+  readonly status: 'confirming' | 'confirmed' | 'failed'
+}
+
+export function getSwapApprovalProgressStep(
+  approval: SwapApprovalProgress
+): TransactionProgressStep {
+  return {
+    id: 'token-approval',
+    label: 'Token approval',
+    detail: approval.networkName,
+    state:
+      approval.status === 'confirmed'
+        ? 'complete'
+        : approval.status === 'failed'
+          ? 'failed'
+          : 'active',
+    statusLabel:
+      approval.status === 'confirmed'
+        ? 'Confirmed'
+        : approval.status === 'failed'
+          ? 'Failed'
+          : 'Confirming'
+  }
+}
+
 export interface IntentsProgressPresentation {
   readonly title: string
   readonly description: string
