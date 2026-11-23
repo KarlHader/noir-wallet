@@ -434,7 +434,7 @@ export function buildPortfolioDisplay({
         getPortfolioChainBalanceStatus(chain) !== 'ready')
   )
   const assetGroups = buildPortfolioAssetGroups(visibleChains, prices, {
-    includeZeroBalanceNativeAssets: visibleChains.length === 1,
+    includeZeroBalanceNativeAssets: domain === 'public' || visibleChains.length === 1,
     confidentialZec
   })
 

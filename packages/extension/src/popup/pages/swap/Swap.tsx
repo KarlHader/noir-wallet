@@ -1324,10 +1324,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const combinedSwapConsent = useRef<{
     readonly scope: string
     readonly requestKey: string
-    readonly quoteHandle: string
-    readonly estimatedOut: string
-    readonly minAmountOut: string
-    readonly router: RheaSwapReviewView['router']
+    readonly review: RheaSwapReviewView
     readonly feeLimit: CombinedSwapFeeLimit
     readonly transaction: RheaSwapEvmCallView
     readonly owner: string
@@ -3637,9 +3634,14 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           if (lockedAssetFlowRequested || feeTierOverride) setTransferPreparationError(message)
           return
         }
-        const review = await measure('rhea-prepare', () =>
-          rheaSwapClient.prepare(result.quoteHandle)
-        )
+        const consent = combinedSwapConsent.current
+        const review =
+          !newlyQuoted &&
+          consent?.scope === walletSourcesScope &&
+          consent.requestKey === requestKey &&
+          consent.review.quoteHandle === result.quoteHandle
+            ? consent.review
+            : await measure('rhea-prepare', () => rheaSwapClient.prepare(result.quoteHandle))
         if (requestSequence !== quoteRequestSequence.current) {
           if (newlyQuoted) await rheaSwapClient.discard(result.quoteHandle).catch(() => {})
           return
@@ -4140,6 +4142,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       quoteResult,
       liveQuoteRequest,
       liveQuoteKey,
+      walletSourcesScope,
       quoteReceivedAt,
       viewStep,
       hasInsufficientFunds,
@@ -5183,10 +5186,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             combinedSwapConsent.current = {
               scope: walletSourcesScope,
               requestKey: liveQuoteRequest.key,
-              quoteHandle: rheaReview.quoteHandle,
-              estimatedOut: rheaReview.estimatedOut,
-              minAmountOut: rheaReview.minAmountOut,
-              router: rheaReview.router,
+              review: rheaReview,
               feeLimit: combined.limit,
               transaction: combined.transaction,
               owner: preparedQuoteTransfer.source.refundAddress
@@ -5374,10 +5374,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     if (
       consent.scope !== walletSourcesScope ||
       consent.requestKey !== liveQuoteRequest?.key ||
-      consent.quoteHandle !== rheaReview?.quoteHandle ||
-      consent.estimatedOut !== rheaReview.estimatedOut ||
-      consent.minAmountOut !== rheaReview.minAmountOut ||
-      consent.router !== rheaReview.router ||
+      consent.review !== rheaReview ||
       !rheaQuoteAccepted ||
       pendingRheaEvmAfterApproval ||
       summary?.schema !== 'evm.transaction.v1' ||
