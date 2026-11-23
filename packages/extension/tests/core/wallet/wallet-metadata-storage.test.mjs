@@ -5,6 +5,7 @@ import {
   getWalletDeletionRecord,
   markWalletBackupVerified,
   migrateRetainedV1NetworkSelections,
+  migrateSoftwareNearNetworkSelection,
   readWalletMetadata,
   renameRetainedAccountMetadata,
   renameRetainedWalletMetadata,
@@ -139,6 +140,183 @@ test.describe('Wallet metadata persistence', () => {
         testnet: ['zcash']
       })
     } finally {
+      storage.restore()
+    }
+  })
+
+  test('checks NEAR once for existing software accounts and keeps a later opt-out', async () => {
+    const software = {
+      ...wallet,
+      id: 'wallet:software',
+      accounts: [
+        {
+          id: 'account:closed',
+          networkSelections: { mainnet: ['zcash', 'evm'], testnet: ['zcash'] },
+          networkChainSelections: { mainnet: ['eip155:1'] }
+        },
+        { id: 'account:open' }
+      ]
+    }
+    const privateKey = {
+      ...wallet,
+      id: 'wallet:private-key',
+      keySource: 'private-key',
+      accounts: [
+        {
+          id: 'account:private-key',
+          networkSelections: { mainnet: ['evm'], testnet: ['evm'] }
+        }
+      ]
+    }
+    const hardware = {
+      ...wallet,
+      id: 'wallet:ledger',
+      keySource: 'ledger',
+      accounts: [
+        {
+          id: 'account:ledger',
+          networkSelections: { mainnet: ['zcash'], testnet: ['zcash'] }
+        }
+      ]
+    }
+    const storage = mockStorage({
+      wallet_state: { state: { wallets: [software, privateKey, hardware] } }
+    })
+    const previousFlag = Object.getOwnPropertyDescriptor(
+      globalThis,
+      '__ENABLED_CHAIN_FEATURE_FLAGS__'
+    )
+    Object.defineProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__', {
+      configurable: true,
+      value: ['chain.zcash', 'chain.evm']
+    })
+    try {
+      expect(await migrateSoftwareNearNetworkSelection()).toBe(false)
+      expect(storage.values.wallet_near_selection_backfill).toBeUndefined()
+      expect(storage.values.wallet_state.state.wallets[0].accounts[0].networkSelections).toEqual({
+        mainnet: ['zcash', 'evm'],
+        testnet: ['zcash']
+      })
+
+      Object.defineProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__', {
+        configurable: true,
+        value: ['chain.zcash', 'chain.evm', 'chain.near']
+      })
+      expect(await migrateSoftwareNearNetworkSelection()).toBe(true)
+      const migrated = storage.values.wallet_state.state.wallets
+      expect(migrated[0].accounts[0].networkSelections).toEqual({
+        mainnet: ['zcash', 'evm', 'near'],
+        testnet: ['zcash', 'near']
+      })
+      expect(migrated[0].accounts[0].networkChainSelections).toEqual({
+        mainnet: ['eip155:1', 'near:mainnet']
+      })
+      expect(migrated[0].accounts[1].networkSelections).toBeUndefined()
+      expect(migrated[1].accounts[0].networkSelections).toEqual({
+        mainnet: ['evm'],
+        testnet: ['evm']
+      })
+      expect(migrated[2].accounts[0].networkSelections).toEqual({
+        mainnet: ['zcash'],
+        testnet: ['zcash']
+      })
+      expect(storage.values.wallet_near_selection_backfill).toEqual([
+        'wallet:software\naccount:closed',
+        'wallet:software\naccount:open'
+      ])
+
+      migrated[0].accounts[0].networkSelections = { mainnet: ['zcash', 'evm'], testnet: ['zcash'] }
+      delete migrated[0].accounts[0].networkChainSelections.mainnet
+      migrated[0].accounts[0].networkChainSelections = { mainnet: ['eip155:1'] }
+      expect(await migrateSoftwareNearNetworkSelection()).toBe(false)
+      expect(migrated[0].accounts[0].networkSelections).toEqual({
+        mainnet: ['zcash', 'evm'],
+        testnet: ['zcash']
+      })
+      expect(migrated[0].accounts[0].networkChainSelections).toEqual({ mainnet: ['eip155:1'] })
+    } finally {
+      if (previousFlag) {
+        Object.defineProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__', previousFlag)
+      } else {
+        Reflect.deleteProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__')
+      }
+      storage.restore()
+    }
+  })
+
+  test('an explicit network save records the NEAR decision before the one-time check', async () => {
+    const storage = mockStorage({
+      wallet_state: {
+        state: {
+          wallets: [
+            {
+              ...wallet,
+              accounts: [
+                {
+                  id: 'account:0',
+                  networkSelections: { mainnet: ['zcash', 'evm'], testnet: ['zcash', 'evm'] }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    })
+    const previousFlag = Object.getOwnPropertyDescriptor(
+      globalThis,
+      '__ENABLED_CHAIN_FEATURE_FLAGS__'
+    )
+    Object.defineProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__', {
+      configurable: true,
+      value: ['chain.zcash', 'chain.evm', 'chain.near']
+    })
+    try {
+      await setAccountNetworkSelection(wallet.id, 'account:0', 'mainnet', ['zcash', 'evm'])
+      expect(await migrateSoftwareNearNetworkSelection()).toBe(false)
+      expect(storage.values.wallet_state.state.wallets[0].accounts[0].networkSelections).toEqual({
+        mainnet: ['zcash', 'evm'],
+        testnet: ['zcash', 'evm']
+      })
+      expect(storage.values.wallet_near_selection_backfill).toEqual([`${wallet.id}\naccount:0`])
+    } finally {
+      if (previousFlag) {
+        Object.defineProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__', previousFlag)
+      } else {
+        Reflect.deleteProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__')
+      }
+      storage.restore()
+    }
+  })
+
+  test('adds NEAR after a retained V1 account is limited to Zcash', async () => {
+    const retained = V1_MIGRATION_FIXTURES.find(fixture => fixture.id === 'software-single-account')
+    const retainedState = JSON.parse(retained.local.wallet_state)
+    const v1Wallet = retainedState.state.wallets[0]
+    const storage = mockStorage({
+      wallet_state: retainedState,
+      [`seed_${v1Wallet.id}`]: retained.local[`seed_${v1Wallet.id}`]
+    })
+    const previousFlag = Object.getOwnPropertyDescriptor(
+      globalThis,
+      '__ENABLED_CHAIN_FEATURE_FLAGS__'
+    )
+    Object.defineProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__', {
+      configurable: true,
+      value: ['chain.zcash', 'chain.evm', 'chain.near']
+    })
+    try {
+      expect(await migrateRetainedV1NetworkSelections()).toBe(true)
+      expect(await migrateSoftwareNearNetworkSelection()).toBe(true)
+      expect(storage.values.wallet_state.state.wallets[0].accounts[0].networkSelections).toEqual({
+        mainnet: ['zcash', 'near'],
+        testnet: ['zcash', 'near']
+      })
+    } finally {
+      if (previousFlag) {
+        Object.defineProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__', previousFlag)
+      } else {
+        Reflect.deleteProperty(globalThis, '__ENABLED_CHAIN_FEATURE_FLAGS__')
+      }
       storage.restore()
     }
   })

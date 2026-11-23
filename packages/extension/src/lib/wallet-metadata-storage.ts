@@ -1,4 +1,4 @@
-import type { Network, WalletItem } from '@/types'
+import type { AccountData, Network, WalletItem } from '@/types'
 import {
   isAccountChainEnabled,
   isAccountNetworkEnabled,
@@ -6,9 +6,13 @@ import {
   parseSelectedNetworkFamilies,
   type AccountNetworkFamily
 } from '@/core/wallet/account-network-selection'
+import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import { readEnabledChainFeatureFlags } from '@/config/enabled-chain-feature-flags'
+import { getNearNetworkConfig } from '@/config/networks'
 import { parseV1EncryptedCredentialEnvelope } from '@/infrastructure/keyring/migration/v1-credential-envelope'
 
 export const WALLET_STATE_KEY = 'wallet_state'
+const NEAR_SELECTION_BACKFILL_KEY = 'wallet_near_selection_backfill'
 const DELETED_WALLETS_KEY = 'wallet_deleted_ids'
 const DELETED_WALLET_RECORDS_KEY = 'wallet_deleted_records'
 const DELETED_ACCOUNTS_KEY = 'wallet_deleted_account_keys'
@@ -325,6 +329,148 @@ export function readWalletMetadata(): Promise<WalletSnapshot | null> {
   })
 }
 
+function isSoftwareWalletMetadata(wallet: WalletItem): boolean {
+  return wallet.keySource === undefined || wallet.keySource === 'software'
+}
+
+function nearSelectionDecisionKey(walletId: string, accountId: string): string {
+  return `${walletId}\n${accountId}`
+}
+
+function parseNearSelectionDecisions(value: unknown): Set<string> {
+  if (value == null) return new Set()
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      item =>
+        typeof item === 'string' &&
+        item.split('\n').length === 2 &&
+        item.split('\n').every(part => part.length > 0)
+    )
+  ) {
+    throw new Error('NEAR network selection records are unavailable')
+  }
+  return new Set(value)
+}
+
+function nearSelectionEnabled(): boolean {
+  return readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG)
+}
+
+function withNearFamily(
+  families: readonly AccountNetworkFamily[]
+): readonly AccountNetworkFamily[] {
+  const selected = parseSelectedNetworkFamilies(families)
+  return selected.includes('near') ? selected : parseSelectedNetworkFamilies([...selected, 'near'])
+}
+
+function withNearChain(chainIds: readonly string[], chainId: string): readonly string[] {
+  const selected = parseSelectedChainIds(chainIds)
+  return selected.includes(chainId) ? selected : parseSelectedChainIds([...selected, chainId])
+}
+
+function selectionsDiffer<T>(current: readonly T[], next: readonly T[]): boolean {
+  return current.length !== next.length || current.some((item, index) => item !== next[index])
+}
+
+function backfillAccountNearSelection(account: AccountData): {
+  readonly account: AccountData
+  readonly changed: boolean
+} {
+  let changed = false
+  const networkSelections = { ...account.networkSelections }
+  const networkChainSelections = { ...account.networkChainSelections }
+  for (const network of ['mainnet', 'testnet'] as const) {
+    const families = account.networkSelections?.[network]
+    if (!families) continue
+    const nextFamilies = withNearFamily(families)
+    if (selectionsDiffer(families, nextFamilies)) {
+      networkSelections[network] = nextFamilies
+      changed = true
+    }
+    const chainIds = account.networkChainSelections?.[network]
+    if (!chainIds) continue
+    const nextChainIds = withNearChain(chainIds, getNearNetworkConfig(network).chainId)
+    if (selectionsDiffer(chainIds, nextChainIds)) {
+      networkChainSelections[network] = nextChainIds
+      changed = true
+    }
+  }
+  if (!changed) return { account, changed: false }
+  return {
+    changed: true,
+    account: {
+      ...account,
+      networkSelections,
+      ...(account.networkChainSelections === undefined ? {} : { networkChainSelections })
+    }
+  }
+}
+
+function rememberNearSelectionDecision(
+  decided: Set<string>,
+  walletId: string,
+  accountId: string
+): boolean {
+  const key = nearSelectionDecisionKey(walletId, accountId)
+  if (decided.has(key)) return false
+  decided.add(key)
+  return true
+}
+
+export function migrateSoftwareNearNetworkSelection(): Promise<boolean> {
+  if (!nearSelectionEnabled()) return Promise.resolve(false)
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([WALLET_STATE_KEY, NEAR_SELECTION_BACKFILL_KEY])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    if (!snapshot) return false
+    const decided = parseNearSelectionDecisions(saved[NEAR_SELECTION_BACKFILL_KEY])
+    let selectionsChanged = false
+    let decisionsChanged = false
+    const wallets = snapshot.state.wallets.map(wallet => {
+      if (!isSoftwareWalletMetadata(wallet)) return wallet
+      let walletChanged = false
+      const accounts = wallet.accounts.map(account => {
+        if (!rememberNearSelectionDecision(decided, wallet.id, account.id)) return account
+        decisionsChanged = true
+        const next = backfillAccountNearSelection(account)
+        if (!next.changed) return account
+        selectionsChanged = true
+        walletChanged = true
+        return next.account
+      })
+      return walletChanged ? { ...wallet, accounts } : wallet
+    })
+    if (!decisionsChanged) return false
+    await chrome.storage.local.set({
+      ...(selectionsChanged
+        ? {
+            [WALLET_STATE_KEY]: {
+              ...snapshot,
+              state: { ...snapshot.state, wallets }
+            }
+          }
+        : {}),
+      [NEAR_SELECTION_BACKFILL_KEY]: [...decided]
+    })
+    return selectionsChanged
+  })
+}
+
+export function rememberSoftwareNearSelectionDecisions(wallet: WalletItem): Promise<void> {
+  if (!nearSelectionEnabled() || !isSoftwareWalletMetadata(wallet)) return Promise.resolve()
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(NEAR_SELECTION_BACKFILL_KEY)
+    const decided = parseNearSelectionDecisions(saved[NEAR_SELECTION_BACKFILL_KEY])
+    let changed = false
+    for (const account of wallet.accounts) {
+      changed = rememberNearSelectionDecision(decided, wallet.id, account.id) || changed
+    }
+    if (!changed) return
+    await chrome.storage.local.set({ [NEAR_SELECTION_BACKFILL_KEY]: [...decided] })
+  })
+}
+
 export function migrateRetainedV1NetworkSelections(): Promise<boolean> {
   return withMetadataLock(async () => {
     const saved = await chrome.storage.local.get(WALLET_STATE_KEY)
@@ -458,13 +604,19 @@ export function setAccountNetworkSelection(
   const selected = parseSelectedNetworkFamilies(families)
   const selectedChains = chainIds === undefined ? undefined : parseSelectedChainIds(chainIds)
   return withUndeletedWalletAccountMetadata(walletId, accountId, network, async () => {
-    const saved = await chrome.storage.local.get(WALLET_STATE_KEY)
+    const saved = await chrome.storage.local.get([WALLET_STATE_KEY, NEAR_SELECTION_BACKFILL_KEY])
     const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
     const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
     if (!snapshot || !wallet?.accounts.some(account => account.id === accountId)) {
       throw new Error('Wallet Account metadata is unavailable')
     }
+    const decided = nearSelectionEnabled()
+      ? parseNearSelectionDecisions(saved[NEAR_SELECTION_BACKFILL_KEY])
+      : null
+    const decisionRecorded =
+      decided !== null && rememberNearSelectionDecision(decided, walletId, accountId)
     await chrome.storage.local.set({
+      ...(decisionRecorded ? { [NEAR_SELECTION_BACKFILL_KEY]: [...decided] } : {}),
       [WALLET_STATE_KEY]: {
         ...snapshot,
         state: {

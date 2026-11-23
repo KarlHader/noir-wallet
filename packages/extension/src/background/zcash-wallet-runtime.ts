@@ -57,7 +57,8 @@ import {
   commitWalletMetadataDeletion,
   getDeletedAccountIndexes,
   markWalletBackupVerified,
-  readWalletMetadata
+  readWalletMetadata,
+  rememberSoftwareNearSelectionDecisions
 } from '@/lib/wallet-metadata-storage'
 import {
   getWalletsNeedingSecretPhraseBackup,
@@ -1519,6 +1520,7 @@ export class BackgroundZcashWalletRuntime {
     this.store.setCurrentAccount(wallet.id, wallet.accounts[0].id)
     this.store.setCurrentNetwork(this.network)
 
+    await rememberSoftwareNearSelectionDecisions(wallet)
     await Promise.all([flushWalletStore(), SecureStorage.saveLastActivityTime()])
     this.setSessionPassword(password)
     this.sessionCredentialWalletId = null
@@ -3775,6 +3777,7 @@ export class BackgroundZcashWalletRuntime {
     if (!this.store.currentWalletId) {
       this.store.setCurrentAccount(wallet.id, wallet.accounts[0].id)
     }
+    await rememberSoftwareNearSelectionDecisions(wallet)
     await flushWalletStore()
   }
 

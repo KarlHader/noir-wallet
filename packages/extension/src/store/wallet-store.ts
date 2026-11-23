@@ -5,6 +5,7 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { createChromeStorageAdapter } from '@/lib/chrome-storage-adapter'
 import {
   migrateRetainedV1NetworkSelections,
+  migrateSoftwareNearNetworkSelection,
   refreshWalletMetadata,
   resetWalletMetadata,
   writeWalletMetadata
@@ -347,7 +348,8 @@ export async function migrateWalletDataIfNeeded(): Promise<void> {
       throw new Error(`Legacy wallet metadata migration quarantined: ${result.reason}`)
     }
     const networkSelectionsMigrated = await migrateRetainedV1NetworkSelections()
-    if (result.status === 'retained' || networkSelectionsMigrated) {
+    const nearSelectionMigrated = await migrateSoftwareNearNetworkSelection()
+    if (result.status === 'retained' || networkSelectionsMigrated || nearSelectionMigrated) {
       await rehydrateWalletStore()
     }
   } catch (error) {
