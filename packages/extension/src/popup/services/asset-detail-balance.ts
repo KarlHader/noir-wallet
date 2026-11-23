@@ -4,10 +4,11 @@ import type { PortfolioAssetView, PortfolioBalanceView, PortfolioReadModel } fro
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { formatDisplayTokenAmount } from '@/popup/services/portfolio-format'
 import {
-  getAssetDomainRaw,
-  getAssetShieldProvider,
-  type AssetDomain
-} from '@/popup/services/asset-domains'
+  domainBalanceFamily,
+  selectAssetDetailDomainRaw,
+  selectAssetDetailDomains
+} from '@/core/portfolio/domain-balance-policy'
+import { type AssetDomain } from '@/popup/services/asset-domains'
 
 export function sumZcashDetailBalanceRaw(
   nativeRaw: string | null,
@@ -43,14 +44,9 @@ export function getAssetDetailCategories(
     model = visibleModel
     asset = model.assets.find(candidate => candidate.asset.id === asset.asset.id) ?? asset
   }
-  const evm = asset.asset.chainId.startsWith('eip155:')
-  const zcash = getAssetShieldProvider(asset) === 'zcash-shield'
-  const raw: Record<AssetDomain, string | null> = {
-    all: asset.balance.totalRaw,
-    public: getAssetDomainRaw(asset, 'public'),
-    shield: zcash ? getAssetDomainRaw(asset, 'shield') : null,
-    private: evm ? getAssetDomainRaw(asset, 'private') : null
-  }
+  const family = domainBalanceFamily(asset)
+  const evm = family === 'evm'
+  const raw: Record<AssetDomain, string | null> = { ...selectAssetDetailDomainRaw(asset) }
   let shieldPriceUsd: string | undefined
 
   if (evm && model.confidential?.status === 'ready') {
@@ -75,14 +71,7 @@ export function getAssetDetailCategories(
     }
   }
 
-  const domains: AssetDomain[] = ['all', 'public']
-  if (zcash) domains.push('shield')
-  if (evm && (privateEligible || (raw.shield !== null && BigInt(raw.shield) > 0n))) {
-    domains.push('shield')
-  }
-  if (evm && (privateEligible || (raw.private !== null && BigInt(raw.private) > 0n))) {
-    domains.push('private')
-  }
+  const domains = selectAssetDetailDomains(family, raw, privateEligible)
 
   const fiat = Object.fromEntries(
     (['all', 'public', 'shield', 'private'] as const).map(domain => {

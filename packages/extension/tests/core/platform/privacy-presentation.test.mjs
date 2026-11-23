@@ -514,12 +514,24 @@ test('Home total requires a complete current-account Portfolio and ready prices'
 
 test('Home shows only a scoped complete cached total until a current valuation is available', () => {
   const values = new Map([
-    ['mainnet_wallet-a_account-a', {
-      valuationBasis: 'wallet-assets-v2', totalUsd: '12.5', updatedAt: 1, complete: true
-    }],
-    ['mainnet_wallet-a_account-b', {
-      valuationBasis: 'wallet-assets-v2', totalUsd: '99', updatedAt: 1, complete: false
-    }]
+    [
+      'mainnet_wallet-a_account-a',
+      {
+        valuationBasis: 'wallet-assets-v2',
+        totalUsd: '12.5',
+        updatedAt: 1,
+        complete: true
+      }
+    ],
+    [
+      'mainnet_wallet-a_account-b',
+      {
+        valuationBasis: 'wallet-assets-v2',
+        totalUsd: '99',
+        updatedAt: 1,
+        complete: false
+      }
+    ]
   ])
   const cached = (network, walletId, accountId, selectedChains) =>
     resolveHomeCachedTotal(values, network, walletId, accountId, selectedChains)
@@ -530,18 +542,28 @@ test('Home shows only a scoped complete cached total until a current valuation i
   expect(cached('mainnet', 'wallet-a', 'account-a', ['eip155:1'])).toBeNull()
 
   const base = {
-    portfolio: null, walletId: 'wallet-a', accountId: 'account-a',
-    loadStatus: 'loading', settled: false, priceStatus: 'loading',
-    totalStatus: 'loading', fiat: { totalUsd: '0' }, breakdown: null,
+    portfolio: null,
+    walletId: 'wallet-a',
+    accountId: 'account-a',
+    loadStatus: 'loading',
+    settled: false,
+    priceStatus: 'loading',
+    totalStatus: 'loading',
+    fiat: { totalUsd: '0' },
+    breakdown: null,
     cachedTotalUsd: cached('mainnet', 'wallet-a', 'account-a')
   }
   const initial = resolveHomeAssetDomainDisplay(base)
   expect(initial.totals).toEqual({ all: '12.5', public: null, shield: null, private: null })
   expect(initial.loading.all).toBe(false)
   expect(resolveHomeAssetDomainDisplay({ ...base, cachedTotalUsd: null }).loading.all).toBe(true)
-  expect(resolveHomeAssetDomainDisplay({
-    ...base, totalStatus: 'ready', fiat: { totalUsd: '7' }
-  }).totals.all).toBe('7')
+  expect(
+    resolveHomeAssetDomainDisplay({
+      ...base,
+      totalStatus: 'ready',
+      fiat: { totalUsd: '7' }
+    }).totals.all
+  ).toBe('7')
 })
 
 test('Home renders available valuations during partial refreshes instead of an endless skeleton', () => {
@@ -939,6 +961,26 @@ test('home asset domains count each EVM and Zcash balance once', () => {
     privateUsdPartial: false
   })
   expect(getAssetDomainRaw({ ...evmAsset, balance: { totalRaw: '100' } }, 'public')).toBeNull()
+  const nearAsset = {
+    asset: { id: 'near:mainnet/slip44:397', chainId: 'near:mainnet' },
+    metadata: { decimals: 24, symbol: 'NEAR' },
+    balance: { totalRaw: '9', mainRaw: '4', privateRaw: '5', pendingRaw: '0' }
+  }
+  expect(getAssetDomainRaw(nearAsset, 'all')).toBe('9')
+  expect(getAssetDomainRaw(nearAsset, 'public')).toBe('9')
+  expect(getAssetDomainRaw(nearAsset, 'shield')).toBe('0')
+  expect(getAssetDomainRaw(nearAsset, 'private')).toBe('0')
+  expect(
+    getAssetDetailCategories(nearAsset, { assets: [nearAsset], chains: [] }, true).domains
+  ).toEqual(['all', 'public'])
+  expect(
+    getAssetDetailCategories(nearAsset, { assets: [nearAsset], chains: [] }, true).raw
+  ).toEqual({
+    all: '9',
+    public: '9',
+    shield: null,
+    private: null
+  })
   expect(getHomeAssetBreakdown({ ...input, livePortfolioTotal: false })).toBeNull()
 })
 

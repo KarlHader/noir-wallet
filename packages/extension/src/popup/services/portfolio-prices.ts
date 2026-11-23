@@ -9,6 +9,10 @@ import {
   type AssetPriceReadModel,
   type AssetPriceQuote
 } from '@/core/prices'
+import {
+  embeddedConfidentialRaw,
+  portfolioUsesIndependentConfidentialValuation
+} from '@/core/portfolio/domain-balance-policy'
 import { isBundledWalletAsset } from '@/popup/services/token-display-policy'
 import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
 
@@ -126,16 +130,9 @@ export function summarizePortfolioFiat(
   let pricedAssetCount = 0
   let missingAssetCount = 0
   let staleAssetCount = 0
-  const independentConfidential =
-    portfolio.confidential !== undefined ||
-    portfolio.chains?.some(
-      chain => chain.chain.family === 'evm' && chain.chain.network?.kind === 'mainnet'
-    ) === true
+  const independentConfidential = portfolioUsesIndependentConfidentialValuation(portfolio)
   for (const asset of portfolio.assets) {
-    const embeddedConfidential =
-      independentConfidential && asset.asset.chainId.startsWith('eip155:')
-        ? BigInt(asset.balance.confidentialRaw ?? '0')
-        : 0n
+    const embeddedConfidential = embeddedConfidentialRaw(asset, independentConfidential)
     const onchainRaw = BigInt(asset.balance.totalRaw) - embeddedConfidential
     if (onchainRaw < 0n) {
       missingAssetCount += 1

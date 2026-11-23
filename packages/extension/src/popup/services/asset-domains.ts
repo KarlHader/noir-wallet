@@ -2,58 +2,51 @@ import Big from '@/lib/big'
 import { formatBaseUnitDecimalAmount, formatFiatAmount } from '@/lib/number-format'
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
-import { ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import {
+  chainIncludedInDomainProjection,
+  chainSupportsPortfolioAction,
+  chainSupportsPortfolioDomain,
+  domainBalanceFamily,
+  embeddedConfidentialRaw,
+  portfolioUsesIndependentConfidentialValuation,
+  selectDomainBalanceRaw,
+  type PortfolioDomain
+} from '@/core/portfolio/domain-balance-policy'
 import {
   summarizeNearConfidentialHoldings,
   type NearConfidentialSummary
 } from './near-confidential-holdings'
 
-export type AssetDomain = 'all' | 'public' | 'shield' | 'private'
+export type AssetDomain = PortfolioDomain
 export type ShieldProvider = 'near-confidential' | 'zcash-shield'
-const ZCASH_CHAIN_ID_SET = new Set<string>(Object.values(ZCASH_CHAIN_IDS))
 
 export function formatAssetDomainFiat(value: string | number | null, partial = false): string {
   if (value === null) return '—'
   return `${partial ? '~' : ''}${formatFiatAmount(value, { showSign: true })}`
 }
 
-function completeRawParts(totalRaw: string, parts: readonly (string | undefined)[]): boolean {
-  return (
-    parts.every(part => part !== undefined) &&
-    parts.reduce<bigint>((sum, part) => sum + BigInt(part ?? '0'), 0n) === BigInt(totalRaw)
-  )
-}
-
 export function getAssetShieldProvider(asset: PortfolioAssetView): ShieldProvider | null {
-  if (asset.asset.chainId.startsWith('eip155:')) return 'near-confidential'
-  if (ZCASH_CHAIN_ID_SET.has(asset.asset.chainId)) return 'zcash-shield'
-  return null
+  const family = domainBalanceFamily(asset)
+  switch (family) {
+    case 'evm':
+      return 'near-confidential'
+    case 'zcash':
+      return 'zcash-shield'
+    case 'bitcoin':
+    case 'solana':
+    case 'tron':
+    case 'near':
+    case 'other':
+      return null
+    default: {
+      const unsupported: never = family
+      throw new Error(`Unsupported domain balance family: ${JSON.stringify(unsupported)}`)
+    }
+  }
 }
 
 export function getAssetDomainRaw(asset: PortfolioAssetView, domain: AssetDomain): string | null {
-  const { balance } = asset
-  if (domain === 'all') return balance.totalRaw
-  if (asset.asset.chainId.startsWith('eip155:')) {
-    if (!completeRawParts(balance.totalRaw, [balance.mainRaw, balance.privateRaw])) return null
-    if (domain === 'public') return balance.mainRaw ?? null
-    const privateOnchain = balance.privateOnchainRaw
-    const shield = balance.confidentialRaw
-    if (privateOnchain === undefined && shield === undefined) {
-      return domain === 'shield' ? '0' : (balance.privateRaw ?? null)
-    }
-    if (privateOnchain === undefined || shield === undefined) return null
-    if (BigInt(privateOnchain) + BigInt(shield) !== BigInt(balance.privateRaw ?? '0')) return null
-    return domain === 'shield' ? shield : privateOnchain
-  }
-  if (ZCASH_CHAIN_ID_SET.has(asset.asset.chainId)) {
-    if (domain === 'private') return '0'
-    if (!completeRawParts(balance.totalRaw, [balance.transparentRaw, balance.shieldedRaw])) {
-      return null
-    }
-    if (domain === 'public') return balance.transparentRaw ?? null
-    return balance.shieldedRaw ?? null
-  }
-  return domain === 'public' ? balance.totalRaw : '0'
+  return selectDomainBalanceRaw(asset, domain)
 }
 
 export function selectHomeActionSource(
@@ -64,9 +57,9 @@ export function selectHomeActionSource(
   if (!model) return null
   const candidates = model.assets.flatMap(asset => {
     const chain = model.chains.find(item => item.chain.id === asset.asset.chainId)
-    if (!chain || (domain === 'private' && chain.chain.family !== 'evm')) return []
+    if (!chain || !chainSupportsPortfolioDomain(chain.chain.family, domain)) return []
     if (chain.chain.capabilities.transaction.status !== 'available') return []
-    if (action === 'swap' && !['evm', 'zcash', 'bitcoin'].includes(chain.chain.family)) return []
+    if (!chainSupportsPortfolioAction(chain.chain.family, action)) return []
     const raw = getAssetDomainRaw(asset, domain)
     return raw === null ? [] : [{ asset, chain, raw }]
   })
@@ -95,19 +88,14 @@ export function projectPortfolioForDomain(
     if (
       raw === '0' &&
       options.evmPrivateAvailable === false &&
-      asset.asset.chainId.startsWith('eip155:') &&
+      domainBalanceFamily(asset) === 'evm' &&
       domain !== 'public'
     )
       continue
     projected.set(asset.asset.id, projectDisplayAsset(asset, raw))
   }
   const chains = model.chains
-    .filter(
-      chain =>
-        domain === 'public' ||
-        chain.chain.family === 'evm' ||
-        (domain === 'shield' && chain.chain.family === 'zcash')
-    )
+    .filter(chain => chainIncludedInDomainProjection(chain.chain.family, domain))
     .map(chain =>
       Object.freeze({
         ...chain,
@@ -233,20 +221,13 @@ export function summarizeAssetDomainsUsd(
   model: PortfolioReadModel,
   prices: AssetPriceReadModel | null
 ): AssetDomainFiatSummary {
-  const independentConfidential =
-    model.confidential !== undefined ||
-    model.chains?.some(
-      chain => chain.chain.family === 'evm' && chain.chain.network?.kind === 'mainnet'
-    ) === true
+  const independentConfidential = portfolioUsesIndependentConfidentialValuation(model)
   const sums = { public: new Big(0), shield: new Big(0), private: new Big(0) }
   const unknown = { public: false, shield: false, private: false }
   const stale = { public: false, shield: false, private: false }
   const knownHolding = { public: false, shield: false, private: false }
   for (const asset of model.assets) {
-    const embeddedConfidential =
-      independentConfidential && asset.asset.chainId.startsWith('eip155:')
-        ? BigInt(asset.balance.confidentialRaw ?? '0')
-        : 0n
+    const embeddedConfidential = embeddedConfidentialRaw(asset, independentConfidential)
     if (BigInt(asset.balance.totalRaw) - embeddedConfidential === 0n) continue
     const quote = findAssetPrice(prices, asset.asset.id)
     for (const domain of ['public', 'shield', 'private'] as const) {

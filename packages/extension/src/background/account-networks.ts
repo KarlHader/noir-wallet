@@ -306,7 +306,15 @@ export class AccountNetworksCoordinator {
                 const importedNearKey = keyDomain.source.kind === 'private-key'
                 if (
                   chain.family === 'near' &&
-                  supportsNearPrivateExecution(keyDomain.source) &&
+                  supportsNearPrivateExecution(
+                    keyDomain.source.kind === 'private-key'
+                      ? {
+                          kind: 'private-key',
+                          chainFamily: keyDomain.source.chainFamily,
+                          accountIndex: account.accountIndex
+                        }
+                      : keyDomain.source
+                  ) &&
                   nearPeaDerivation &&
                   deriveMissingAddresses &&
                   !(importedNearKey && account.accountIndex !== 0)

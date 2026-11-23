@@ -1,4 +1,7 @@
-export { supportsNearPrivateExecution } from './execution-capability'
+export {
+  supportsNearPrivateExecution,
+  type NearPrivateExecutionWalletSource
+} from './execution-capability'
 export {
   nearImplicitAccountIdFromPublicKey,
   nearPublicKeyFromImplicitAccountId,

@@ -17,6 +17,7 @@ import {
 } from '@/config/asset-market-assets'
 import { NOIR_SWAP_REFERRAL } from '@/config/intents'
 import { createInitialProductChainRegistry, getZcashChainId } from '@/core/chains/registry'
+import { assertNearPrivateQuoteRoute } from './rhea-swap-near-private-route'
 
 const RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/
@@ -43,7 +44,55 @@ export type PrivateQuotePurpose =
   | 'private-dapp-transfer'
   | 'public-private-send'
 
+type PrivateQuoteSourceFamily = 'evm' | 'zcash' | 'near' | 'other'
+
+function privateQuoteSourceFamily(fromChain: string): PrivateQuoteSourceFamily {
+  if (/^[1-9]\d*$/.test(fromChain)) return 'evm'
+  switch (fromChain) {
+    case 'zcash':
+      return 'zcash'
+    case 'near':
+      return 'near'
+    default:
+      return 'other'
+  }
+}
+
 export function assertPrivateQuoteRoute(
+  request: Pick<
+    QuoteRequest,
+    'fromChain' | 'toChain' | 'tokenIn' | 'tokenOut' | 'sender' | 'recipient' | 'confidentiality'
+  >,
+  account: PrivateSwapAccountRoute | null,
+  purpose: PrivateQuotePurpose,
+  scope?: Pick<PrivateSwapAccountRoute, 'walletId' | 'accountId'> & {
+    readonly zcashFundingSource?: 'transparent' | 'shielded'
+  }
+): void {
+  const family = privateQuoteSourceFamily(request.fromChain)
+  switch (family) {
+    case 'near':
+      assertNearPrivateQuoteRoute(
+        request,
+        account,
+        purpose,
+        scope,
+        assertEstablishedPrivateQuoteRoute
+      )
+      return
+    case 'evm':
+    case 'zcash':
+    case 'other':
+      assertEstablishedPrivateQuoteRoute(request, account, purpose, scope)
+      return
+    default: {
+      const unsupported: never = family
+      throw new Error(`Unsupported private quote family: ${JSON.stringify(unsupported)}`)
+    }
+  }
+}
+
+function assertEstablishedPrivateQuoteRoute(
   request: Pick<
     QuoteRequest,
     'fromChain' | 'toChain' | 'tokenIn' | 'tokenOut' | 'sender' | 'recipient' | 'confidentiality'

@@ -1,14 +1,23 @@
 import type { KeyDomainSource } from '@/core/keyring/domain'
 
-type NearExecutionKeySource =
-  | Readonly<{ kind: 'software' | 'hardware' }>
-  | Pick<Extract<KeyDomainSource, { kind: 'private-key' }>, 'kind' | 'chainFamily'>
+type PrivateKeyChainFamily = Extract<KeyDomainSource, { kind: 'private-key' }>['chainFamily']
 
-/** Software vaults and imported NEAR keys can derive a PEA. Hardware signers cannot. */
+/**
+ * Structural wallet source. Imported NEAR keys carry the account index because
+ * only index 0 has a signing key; mnemonic and hardware sources do not.
+ */
+export type NearPrivateExecutionWalletSource =
+  | Readonly<{ kind: 'software' | 'hardware' }>
+  | Readonly<{
+      kind: 'private-key'
+      chainFamily: PrivateKeyChainFamily
+      accountIndex?: number
+    }>
+
 export function supportsNearPrivateExecution(
-  source: NearExecutionKeySource | null | undefined
+  walletSource: NearPrivateExecutionWalletSource | null | undefined
 ): boolean {
-  return (
-    source?.kind === 'software' || (source?.kind === 'private-key' && source.chainFamily === 'near')
-  )
+  if (walletSource?.kind === 'software') return true
+  if (walletSource?.kind !== 'private-key') return false
+  return walletSource.chainFamily === 'near' && walletSource.accountIndex === 0
 }
