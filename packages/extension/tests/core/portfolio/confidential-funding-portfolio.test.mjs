@@ -645,3 +645,168 @@ test(
     }
   }
 )
+
+test('maps NEAR Intents balances onto chain assets without bridge assets or double counting', () => {
+  const nativeId = 'near:mainnet/slip44:397'
+  const tokenId = 'near:mainnet/nep141:token.near'
+  const chains = createInitialProductChainRegistry('mainnet')
+  const assets = createAssetRegistry(chains, [
+    ...getBundledInitialProductAssetDefinitions('mainnet'),
+    {
+      chainId: 'near:mainnet',
+      namespace: 'nep141',
+      reference: 'token.near',
+      kind: 'token',
+      metadata: { name: 'Token', symbol: 'TOK', decimals: 8 },
+      source: 'protocol',
+      verification: 'trusted'
+    }
+  ])
+  const balance = (raw, extra = {}) => ({
+    totalRaw: raw.total,
+    spendableRaw: raw.spendable,
+    availableRaw: raw.available,
+    pendingRaw: '0',
+    updatedAt: 1,
+    ...extra
+  })
+  const nearAsset = (id, raw) => ({
+    asset: { id, chainId: 'near:mainnet' },
+    metadata: { decimals: 24, name: 'NEAR', symbol: 'NEAR' },
+    balance: raw,
+    chainAccountIds: [],
+    freshness: 'fresh',
+    updatedAt: 1
+  })
+  const model = {
+    scope: { keyDomainId: 'wallet:near', accountId: 'account:near' },
+    status: 'ready',
+    ignoredAssetCount: 0,
+    chains: [
+      {
+        chain: { id: 'near:mainnet', family: 'near' },
+        status: 'ready',
+        assets: [],
+        errorCodes: []
+      }
+    ],
+    assets: [
+      nearAsset(
+        nativeId,
+        balance(
+          { total: '100', spendable: '100', available: '100' },
+          { mainRaw: '80', privateRaw: '20', privateOnchainRaw: '20', confidentialRaw: '0' }
+        )
+      ),
+      nearAsset(
+        'near:mainnet/nep141:wrap.near',
+        balance(
+          { total: '0', spendable: '0', available: '0' },
+          { mainRaw: '0', privateRaw: '0', privateOnchainRaw: '0', confidentialRaw: '0' }
+        )
+      ),
+      nearAsset(
+        tokenId,
+        balance(
+          { total: '0', spendable: '0', available: '0' },
+          { mainRaw: '0', privateRaw: '0', privateOnchainRaw: '0', confidentialRaw: '0' }
+        )
+      )
+    ]
+  }
+  const balances = [
+    { tokenId: confidentialPrivateTokenId('nep141:wrap.near'), available: '15' },
+    { tokenId: confidentialPrivateTokenId('nep141:token.near'), available: '4' },
+    { tokenId: confidentialPrivateTokenId('nep141:btc.omft.near'), available: '9' }
+  ]
+  expect(
+    filterConfidentialPortfolioMappings(
+      [
+        { assetId: nativeId, protocolAssetId: 'nep141:wrap.near' },
+        { assetId: 'eip155:1/slip44:60', protocolAssetId: 'nep141:eth.omft.near' }
+      ],
+      'mainnet'
+    ).map(mapping => mapping.assetId)
+  ).toEqual(['eip155:1/slip44:60'])
+
+  const merged = mergeConfidentialBalancesIntoPortfolio(model, [], balances)
+  const native = merged.assets.find(asset => asset.asset.id === nativeId)
+  expect(native.balance).toMatchObject({
+    mainRaw: '80',
+    privateOnchainRaw: '20',
+    confidentialRaw: '15',
+    privateRaw: '35',
+    totalRaw: '115'
+  })
+  expect(
+    merged.assets.find(asset => asset.asset.id === 'near:mainnet/nep141:wrap.near').balance
+      .confidentialRaw
+  ).toBe('0')
+  expect(merged.assets.find(asset => asset.asset.id === tokenId).balance.confidentialRaw).toBe('4')
+
+  const view = buildConfidentialPortfolioView(balances, [], [], [], assets)
+  expect(view.assets.find(asset => asset.protocolAssetId === 'nep141:wrap.near').assetId).toBe(
+    nativeId
+  )
+  expect(view.assets.find(asset => asset.protocolAssetId === 'nep141:token.near').assetId).toBe(
+    tokenId
+  )
+  expect(
+    view.assets.find(asset => asset.protocolAssetId === 'nep141:btc.omft.near').assetId
+  ).toBeUndefined()
+
+  const evmId = 'eip155:1/erc20:0x1111111111111111111111111111111111111111'
+  const displayed = {
+    ...merged,
+    assets: [
+      native,
+      {
+        asset: { id: evmId, chainId: 'eip155:1' },
+        balance: { confidentialRaw: '7' }
+      }
+    ],
+    confidential: {
+      status: 'ready',
+      assets: [
+        {
+          tokenId: confidentialPrivateTokenId('nep141:wrap.near'),
+          protocolAssetId: 'nep141:wrap.near',
+          availableRaw: '15',
+          assetId: nativeId,
+          chainId: 'near:mainnet',
+          decimals: 24,
+          symbol: 'NEAR'
+        },
+        {
+          tokenId: confidentialPrivateTokenId('nep141:usdc.omft.near'),
+          protocolAssetId: 'nep141:usdc.omft.near',
+          availableRaw: '7',
+          assetId: evmId,
+          chainId: 'eip155:1',
+          decimals: 6,
+          symbol: 'USDC'
+        },
+        {
+          tokenId: confidentialPrivateTokenId('nep141:other.near'),
+          protocolAssetId: 'nep141:other.near',
+          availableRaw: '16',
+          assetId: tokenId,
+          chainId: 'near:mainnet',
+          decimals: 8,
+          symbol: 'TOK'
+        },
+        {
+          tokenId: confidentialPrivateTokenId('nep141:btc.omft.near'),
+          protocolAssetId: 'nep141:btc.omft.near',
+          availableRaw: '9',
+          symbol: 'BTC'
+        }
+      ]
+    }
+  }
+  expect(
+    listStandaloneNearConfidentialHoldings(displayed, displayed, null).map(
+      holding => holding.entry.asset.protocolAssetId
+    )
+  ).toEqual(['nep141:other.near', 'nep141:btc.omft.near'])
+})

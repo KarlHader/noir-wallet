@@ -202,7 +202,8 @@ export function listStandaloneNearConfidentialHoldings(
 ): readonly StandaloneNearConfidentialHolding[] {
   const mergedAssets = new Map<string, string>(
     displayedModel.assets.flatMap(asset =>
-      asset.asset.chainId.startsWith('eip155:') && BigInt(asset.balance.confidentialRaw ?? '0') > 0n
+      (asset.asset.chainId.startsWith('eip155:') || asset.asset.chainId.startsWith('near:')) &&
+      BigInt(asset.balance.confidentialRaw ?? '0') > 0n
         ? [[asset.asset.id, asset.balance.confidentialRaw ?? '0'] as const]
         : []
     )

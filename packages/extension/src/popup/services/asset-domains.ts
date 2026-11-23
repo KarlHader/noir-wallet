@@ -29,13 +29,13 @@ export function getAssetShieldProvider(asset: PortfolioAssetView): ShieldProvide
   const family = domainBalanceFamily(asset)
   switch (family) {
     case 'evm':
+    case 'near':
       return 'near-confidential'
     case 'zcash':
       return 'zcash-shield'
     case 'bitcoin':
     case 'solana':
     case 'tron':
-    case 'near':
     case 'other':
       return null
     default: {
@@ -141,7 +141,8 @@ export function buildShieldProviderGroups(
   return (['near-confidential', 'zcash-shield'] as const).flatMap(id => {
     const chains = model.chains.filter(chain =>
       id === 'near-confidential'
-        ? chain.chain.family === 'evm' && chain.chain.network.kind === 'mainnet'
+        ? chain.chain.network.kind === 'mainnet' &&
+          (chain.chain.family === 'evm' || chain.chain.family === 'near')
         : chain.chain.family === 'zcash'
     )
     if (chains.length === 0) return []

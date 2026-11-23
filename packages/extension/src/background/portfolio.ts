@@ -22,6 +22,9 @@ import {
   createConfiguredNearRpcClient,
   readNearPortfolioSource
 } from '@/infrastructure/chains/near'
+import { ChromeDetectedNearAssetCatalogRepository } from '@/infrastructure/chains/near/near-detected-asset-catalog'
+import { createNearSupplementalAssetRegistry } from '@/infrastructure/chains/near/near-supplemental-asset-registry'
+import { ChromeTokenVisibilityRepository } from '@/infrastructure/portfolio/chrome-token-visibility'
 import {
   createConfiguredSolanaRpcClient,
   readSolanaPortfolioSource
@@ -38,7 +41,10 @@ import {
   DEFAULT_CHAIN_ENDPOINT_SETTINGS,
   getChainEndpointRuntimeKey
 } from '@/core/chains/chain-endpoint-settings'
-import { parseAccountId } from '@/core/accounts/domain'
+import { parseAccountId, type ChainAccount } from '@/core/accounts/domain'
+import { resolveKeyDomain } from '@/core/accounts/application'
+import { supportsNearPrivateExecution } from '@/core/chains/near'
+import type { NearPortfolioPrivateExecution } from '@/core/chains/near/near-portfolio-assets'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import {
   IndexedDbPortfolioCacheRepository,
@@ -57,12 +63,62 @@ import {
   withUndeletedWalletAccountMetadata
 } from '@/lib/wallet-metadata-storage'
 
+async function resolveNearPrivateExecution(
+  storageRepository: IndexedDbStorageV2Repository,
+  chainAccount: ChainAccount,
+  readAddress: ((chainAccount: ChainAccount) => Promise<string | null>) | undefined
+): Promise<
+  | Readonly<{ kind: 'public-only' }>
+  | Readonly<{ kind: 'unavailable' }>
+  | Readonly<{ kind: 'ready'; execution: NearPortfolioPrivateExecution }>
+> {
+  try {
+    const pointer = await storageRepository.getActivePointer()
+    const snapshot = pointer ? await storageRepository.getSnapshot(pointer.generationId) : null
+    if (!snapshot) return Object.freeze({ kind: 'unavailable' })
+    const keyDomain = resolveKeyDomain(snapshot.keyDomains, chainAccount.scope.keyDomainId)
+    const account = snapshot.accounts.find(
+      item =>
+        item.id === chainAccount.scope.accountId &&
+        item.keyDomainId === chainAccount.scope.keyDomainId
+    )
+    if (!account) return Object.freeze({ kind: 'unavailable' })
+    const walletSource =
+      keyDomain.source.kind === 'private-key'
+        ? Object.freeze({
+            kind: 'private-key' as const,
+            chainFamily: keyDomain.source.chainFamily,
+            accountIndex: account.accountIndex
+          })
+        : Object.freeze({ kind: keyDomain.source.kind })
+    if (!supportsNearPrivateExecution(walletSource)) return Object.freeze({ kind: 'public-only' })
+    const address = await readAddress?.(chainAccount)
+    if (!address || !/^[0-9a-f]{64}$/.test(address)) {
+      return Object.freeze({ kind: 'unavailable' })
+    }
+    return Object.freeze({
+      kind: 'ready',
+      execution: Object.freeze({
+        walletSource,
+        accountIndex: account.accountIndex,
+        address
+      })
+    })
+  } catch {
+    return Object.freeze({ kind: 'unavailable' })
+  }
+}
+
 export function createBackgroundPortfolioCoordinator(
   evmNetworks: readonly EvmNetworkConfig[],
   customEvmNetworks: readonly EvmNetworkConfig[] = [],
   userEvmAssets: readonly AssetDefinitionInput[] = [],
   protocolAssets: readonly AssetDefinitionInput[] = [],
   endpointSettings?: ChainEndpointSettings,
+  nearPortfolioOptions: Readonly<{
+    detectedAssets?: readonly AssetDefinitionInput[]
+    resolvePrivateExecutionAddress?: (chainAccount: ChainAccount) => Promise<string | null>
+  }> = {},
   enrich: (
     model: PortfolioReadModel,
     refresh: false | 'if-stale' | true
@@ -74,16 +130,20 @@ export function createBackgroundPortfolioCoordinator(
   const chains = createBuildAddressGatedChainRegistry(
     createInitialProductChainRegistry(DEFAULT_NETWORK, customEvmNetworks)
   )
-  const assets = createAssetRegistry(
-    chains,
-    filterAssetDefinitionsForChains(
-      [
-        ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK, customEvmNetworks),
-        ...userEvmAssets,
-        ...protocolAssets
-      ],
-      chains
-    )
+  const assets = createNearSupplementalAssetRegistry(
+    createAssetRegistry(
+      chains,
+      filterAssetDefinitionsForChains(
+        [
+          ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK, customEvmNetworks),
+          ...userEvmAssets,
+          ...protocolAssets,
+          ...(nearPortfolioOptions.detectedAssets ?? [])
+        ],
+        chains
+      )
+    ),
+    chains
   )
   const peaSigner = new EvmMultichainSigningClient({ credentials: credentialSession })
   const isNetworkEnabled = (
@@ -165,8 +225,74 @@ export function createBackgroundPortfolioCoordinator(
         chainId: nearNetwork.chainId,
         family: 'near',
         isNetworkEnabled,
-        readSource: input =>
-          readNearPortfolioSource({ ...input, rpc: nearRpc, tokenInventory: nearTokenInventory })
+        readSource: async input => {
+          const execution = await resolveNearPrivateExecution(
+            storageRepository,
+            input.chainAccount,
+            nearPortfolioOptions.resolvePrivateExecutionAddress
+          )
+          if (execution.kind === 'unavailable') {
+            return Object.freeze({
+              chainAccount: input.chainAccount,
+              status: 'error' as const,
+              balances: Object.freeze([]),
+              errorCode: 'unknown' as const
+            })
+          }
+          const overrides = await new ChromeTokenVisibilityRepository(DEFAULT_NETWORK)
+            .readUserOverrides()
+            .catch(() => ({
+              visibleAssetIds: [] as readonly string[],
+              hiddenAssetIds: [] as readonly string[]
+            }))
+          const detectedCatalog = new ChromeDetectedNearAssetCatalogRepository(DEFAULT_NETWORK)
+          return readNearPortfolioSource({
+            ...input,
+            rpc: nearRpc,
+            tokenInventory: nearTokenInventory,
+            ...(execution.kind === 'ready' ? { privateExecution: execution.execution } : {}),
+            userEnabledAssetIds: new Set(
+              overrides.visibleAssetIds.filter(assetId =>
+                assetId.startsWith(`${input.chainAccount.scope.chainId}/nep141:`)
+              )
+            ),
+            onDetectedTokens: async tokens => {
+              assets.includeDiscovered(
+                tokens.map(token =>
+                  Object.freeze({
+                    chainId: input.chainAccount.scope.chainId,
+                    namespace: 'nep141',
+                    reference: token.contractId,
+                    kind: 'token' as const,
+                    metadata: Object.freeze({
+                      name: token.name,
+                      symbol: token.symbol,
+                      decimals: token.decimals
+                    }),
+                    source: 'discovered' as const,
+                    verification: 'unverified' as const
+                  })
+                )
+              )
+              await detectedCatalog
+                .save(
+                  tokens.map(token =>
+                    Object.freeze({
+                      assetId: token.assetId,
+                      chainId: input.chainAccount.scope.chainId,
+                      contractId: token.contractId,
+                      metadata: Object.freeze({
+                        name: token.name,
+                        symbol: token.symbol,
+                        decimals: token.decimals
+                      })
+                    })
+                  )
+                )
+                .catch(() => undefined)
+            }
+          })
+        }
       })
     : undefined
 

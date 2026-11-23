@@ -46,10 +46,14 @@ export function getAssetDetailCategories(
   }
   const family = domainBalanceFamily(asset)
   const evm = family === 'evm'
+  const near = family === 'near'
   const raw: Record<AssetDomain, string | null> = { ...selectAssetDetailDomainRaw(asset) }
   let shieldPriceUsd: string | undefined
 
-  if (evm && model.confidential?.status === 'ready') {
+  if (
+    (evm || (near && asset.balance.mainRaw !== undefined)) &&
+    model.confidential?.status === 'ready'
+  ) {
     const candidates = model.confidential.assets.filter(entry => entry.assetId === asset.asset.id)
     if (
       candidates.length === 1 &&

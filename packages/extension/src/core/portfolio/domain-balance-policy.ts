@@ -66,9 +66,12 @@ function selectNearDomainBalanceRaw(
   balance: PortfolioBalanceView,
   domain: Exclude<PortfolioDomain, 'all'>
 ): string | null {
-  // NEAR still publishes the whole balance on the public domain.
-  // Shield and private stay zero until a later change splits the balance.
-  return domain === 'public' ? balance.totalRaw : '0'
+  // Cached rows from before the Main/PEA split only stored totalRaw. Until a
+  // refresh, that whole balance stays on the public domain.
+  if (balance.mainRaw === undefined && balance.privateRaw === undefined) {
+    return domain === 'public' ? balance.totalRaw : '0'
+  }
+  return selectEvmDomainBalanceRaw(balance, domain)
 }
 
 function selectUnsplitDomainBalanceRaw(
@@ -123,6 +126,12 @@ export function selectAssetDetailDomainRaw(
         private: null
       }
     case 'near':
+      return {
+        all,
+        public: publicRaw,
+        shield: selectDomainBalanceRaw(asset, 'shield'),
+        private: selectDomainBalanceRaw(asset, 'private')
+      }
     case 'bitcoin':
     case 'solana':
     case 'tron':
@@ -152,6 +161,8 @@ export function selectAssetDetailDomains(
       }
       return domains
     case 'near':
+      domains.push('shield', 'private')
+      return domains
     case 'bitcoin':
     case 'solana':
     case 'tron':
@@ -198,12 +209,12 @@ export function embeddedConfidentialRaw(
   const family = domainBalanceFamily(asset)
   switch (family) {
     case 'evm':
+    case 'near':
       return independentConfidential ? BigInt(asset.balance.confidentialRaw ?? '0') : 0n
     case 'zcash':
     case 'bitcoin':
     case 'solana':
     case 'tron':
-    case 'near':
     case 'other':
       return 0n
     default:
@@ -222,11 +233,11 @@ export function chainIncludedInDomainProjection(
       switch (family) {
         case 'evm':
         case 'zcash':
+        case 'near':
           return true
         case 'bitcoin':
         case 'solana':
         case 'tron':
-        case 'near':
           return false
         default:
           return assertNever(family)
@@ -234,12 +245,12 @@ export function chainIncludedInDomainProjection(
     case 'private':
       switch (family) {
         case 'evm':
+        case 'near':
           return true
         case 'zcash':
         case 'bitcoin':
         case 'solana':
         case 'tron':
-        case 'near':
           return false
         default:
           return assertNever(family)
@@ -270,12 +281,12 @@ export function readyChainCountsAsDomainBalance(
     case 'private':
       switch (family) {
         case 'evm':
+        case 'near':
           return true
         case 'zcash':
         case 'bitcoin':
         case 'solana':
         case 'tron':
-        case 'near':
           return false
         default:
           return assertNever(family)

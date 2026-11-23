@@ -26,7 +26,7 @@ test.describe('Portfolio asset-mode visibility', () => {
     ).toBe(true)
     expect(
       isAssetVisibleInAssetView(chain('near:mainnet', 'near', 'NEAR'), asset({ symbol: 'NEAR' }))
-    ).toBe(false)
+    ).toBe(true)
     expect(
       isAssetVisibleInAssetView(
         chain('eip155:1', 'evm', 'Ethereum'),
@@ -66,6 +66,15 @@ test.describe('Portfolio asset-mode visibility', () => {
         asset({ symbol: 'SOL' })
       )
     ).toBe(false)
+    expect(
+      isAssetVisibleInAssetView(chain('near:mainnet', 'near', 'NEAR'), asset({ symbol: 'NEAR' }))
+    ).toBe(true)
+    expect(
+      isAssetVisibleInAssetView(
+        chain('near:testnet', 'near', 'NEAR Testnet'),
+        asset({ symbol: 'NEAR' })
+      )
+    ).toBe(true)
   })
 
   test('shows a selected network native asset and registered empty tokens', () => {

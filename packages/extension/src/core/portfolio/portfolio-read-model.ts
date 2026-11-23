@@ -68,6 +68,8 @@ function aggregateAssetBalances(balances: readonly NormalizedBalance[]): Portfol
   let transparentPendingRaw = first.balance.transparentPendingRaw
   let mainRaw = first.balance.mainRaw
   let privateRaw = first.balance.privateRaw
+  let privateOnchainRaw = first.balance.privateOnchainRaw
+  let confidentialRaw = first.balance.confidentialRaw
   let updatedAt = first.balance.updatedAt
   let stale = first.sourceStatus !== 'ready'
   const chainAccountIds = new Set<ChainAccountId>([first.chainAccountId])
@@ -110,6 +112,22 @@ function aggregateAssetBalances(balances: readonly NormalizedBalance[]): Portfol
       mainRaw = addRaw(mainRaw, item.balance.mainRaw)
       privateRaw = addRaw(privateRaw, item.balance.privateRaw)
     }
+    const hasConfidentialBreakdown =
+      privateOnchainRaw !== undefined && confidentialRaw !== undefined
+    const itemHasConfidentialBreakdown =
+      item.balance.privateOnchainRaw !== undefined && item.balance.confidentialRaw !== undefined
+    if (hasConfidentialBreakdown !== itemHasConfidentialBreakdown) {
+      throw new Error('Portfolio asset confidential balance breakdown is inconsistent')
+    }
+    if (
+      privateOnchainRaw !== undefined &&
+      confidentialRaw !== undefined &&
+      item.balance.privateOnchainRaw !== undefined &&
+      item.balance.confidentialRaw !== undefined
+    ) {
+      privateOnchainRaw = addRaw(privateOnchainRaw, item.balance.privateOnchainRaw)
+      confidentialRaw = addRaw(confidentialRaw, item.balance.confidentialRaw)
+    }
     updatedAt = Math.max(updatedAt, item.balance.updatedAt)
     stale ||= item.sourceStatus !== 'ready'
     chainAccountIds.add(item.chainAccountId)
@@ -130,7 +148,9 @@ function aggregateAssetBalances(balances: readonly NormalizedBalance[]): Portfol
       ...(shieldedPendingRaw === undefined ? {} : { shieldedPendingRaw }),
       ...(transparentPendingRaw === undefined ? {} : { transparentPendingRaw }),
       ...(mainRaw === undefined ? {} : { mainRaw }),
-      ...(privateRaw === undefined ? {} : { privateRaw })
+      ...(privateRaw === undefined ? {} : { privateRaw }),
+      ...(privateOnchainRaw === undefined ? {} : { privateOnchainRaw }),
+      ...(confidentialRaw === undefined ? {} : { confidentialRaw })
     }),
     chainAccountIds: Object.freeze([...chainAccountIds]),
     freshness: stale ? 'stale' : 'fresh',

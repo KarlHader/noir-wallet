@@ -144,7 +144,7 @@ export function filterActivityItems(input: {
     // Shield activity belongs to a separate asset domain, independent of EVM execution mode.
     const modeMatches =
       input.accountMode === undefined ||
-      !chainId?.startsWith('eip155:') ||
+      !(chainId?.startsWith('eip155:') || chainId?.startsWith('near:')) ||
       shieldActivity ||
       (input.accountMode === 'private'
         ? item.accountMode === 'private'

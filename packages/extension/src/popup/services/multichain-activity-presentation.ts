@@ -255,12 +255,17 @@ export function buildActivityExecutionAddressModes(
       modes.set(activityAddressKey(network.chain.id, address.value), 'Public')
       if (network.chain.family === 'evm') modes.set(address.value.toLowerCase(), 'Public')
     }
-    if (network.chain.family === 'evm' && network.privateExecutionAddress) {
+    if (
+      (network.chain.family === 'evm' || network.chain.family === 'near') &&
+      network.privateExecutionAddress
+    ) {
       modes.set(
         activityAddressKey(network.chain.id, network.privateExecutionAddress),
         'Confidential'
       )
-      modes.set(network.privateExecutionAddress.toLowerCase(), 'Confidential')
+      if (network.chain.family === 'evm') {
+        modes.set(network.privateExecutionAddress.toLowerCase(), 'Confidential')
+      }
     }
   }
   return modes

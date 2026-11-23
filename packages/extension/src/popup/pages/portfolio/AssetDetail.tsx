@@ -5,6 +5,7 @@ import { Icon } from '@iconify/react'
 import Big from '@/lib/big'
 import { parseAssetId } from '@/core/chains/registry'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import { resolveConfidentialIdentity } from '@/core/accounts/confidential-identity'
 import type { ActivityItem } from '@/core/activity'
 import {
   findAssetPrice,
@@ -404,18 +405,18 @@ export function AssetDetail() {
     chain &&
     !fundingUnavailableReason &&
     chain.chain.capabilities.transaction.status === 'available' &&
-    ['zcash', 'evm', 'bitcoin'].includes(chain.chain.family)
+    ['zcash', 'evm', 'bitcoin', 'near'].includes(chain.chain.family)
   )
   const canReceive = Boolean(
     chain &&
     chain.chain.capabilities.address.status === 'available' &&
-    ['zcash', 'evm', 'bitcoin'].includes(chain.chain.family)
+    ['zcash', 'evm', 'bitcoin', 'near'].includes(chain.chain.family)
   )
   const canSwap = Boolean(
     asset &&
     chain &&
     !fundingUnavailableReason &&
-    ['zcash', 'evm', 'bitcoin'].includes(chain.chain.family)
+    ['zcash', 'evm', 'bitcoin', 'near'].includes(chain.chain.family)
   )
   const canSwapNativeZec =
     chain?.chain.family === 'zcash' &&
@@ -818,6 +819,20 @@ export function AssetDetail() {
       ? accountNetwork?.addresses.find(address => address.privacy === 'transparent')?.value
       : (preferredBitcoinAddress?.value ??
         accountNetwork?.addresses.find(address => address.preferredForReceive)?.value)
+  const confidentialIdentity = resolveConfidentialIdentity(
+    storageV2Account
+      ? {
+          walletSource: storageV2Account.walletSource,
+          accountIndex: storageV2Account.accountIndex
+        }
+      : null
+  )
+  const evmIntentsAddress =
+    confidentialIdentity.kind === 'evm'
+      ? storageV2Account?.networks
+          .find(network => network.chain.family === 'evm')
+          ?.addresses.find(address => address.preferredForReceive)?.value
+      : undefined
   const formatBalanceFiat = (value: string | null | undefined) =>
     value == null ? '—' : formatFiatAmount(value, { showSign: true })
   const renderBalanceAddress = (
@@ -1172,46 +1187,52 @@ export function AssetDetail() {
           </a>
         )}
 
-        {detailMode === 'all' && chain.chain.family === 'evm' && (
-          <section className="py-2" aria-label="Account balances">
-            {categories?.domains
-              .filter((domain): domain is 'public' | 'private' | 'shield' => domain !== 'all')
-              .map(domain => {
-                const raw = categories.raw[domain]
-                return (
-                  <AssetDetailBalanceRow
-                    key={domain}
-                    onSelect={() => selectDetailMode(domain)}
-                    label={
-                      domain === 'shield' ? 'Shield' : domain === 'private' ? 'Incognito' : 'Public'
-                    }
-                    subtitle={
-                      domain === 'shield'
-                        ? 'NEAR Confidential Intents'
-                        : domain === 'private'
-                          ? renderBalanceAddress(
-                              accountNetwork?.privateExecutionAddress,
-                              'Incognito',
-                              true
-                            )
-                          : renderBalanceAddress(publicAddress, 'Public')
-                    }
-                    balance={
-                      domain === 'shield' && raw === null && loadingConfidentialBalance ? (
-                        <BalanceSkeleton className="h-4 w-20" />
-                      ) : raw === null ? (
-                        '—'
-                      ) : (
-                        `${formatDisplayTokenAmount(raw, asset.metadata.decimals)} ${formatSymbol(asset.metadata.symbol)}`
-                      )
-                    }
-                    fiat={formatBalanceFiat(categories.fiat[domain])}
-                    actions={domain === 'shield' ? confidentialActions() : accountActions(domain)}
-                  />
-                )
-              })}
-          </section>
-        )}
+        {detailMode === 'all' &&
+          (chain.chain.family === 'evm' || chain.chain.family === 'near') && (
+            <section className="py-2" aria-label="Account balances">
+              {categories?.domains
+                .filter((domain): domain is 'public' | 'private' | 'shield' => domain !== 'all')
+                .map(domain => {
+                  const raw = categories.raw[domain]
+                  return (
+                    <AssetDetailBalanceRow
+                      key={domain}
+                      onSelect={() => selectDetailMode(domain)}
+                      label={
+                        domain === 'shield'
+                          ? 'Shield'
+                          : domain === 'private'
+                            ? 'Incognito'
+                            : 'Public'
+                      }
+                      subtitle={
+                        domain === 'shield'
+                          ? (renderBalanceAddress(evmIntentsAddress, 'Shield') ??
+                            'NEAR Confidential Intents')
+                          : domain === 'private'
+                            ? renderBalanceAddress(
+                                accountNetwork?.privateExecutionAddress,
+                                'Incognito',
+                                true
+                              )
+                            : renderBalanceAddress(publicAddress, 'Public')
+                      }
+                      balance={
+                        domain === 'shield' && raw === null && loadingConfidentialBalance ? (
+                          <BalanceSkeleton className="h-4 w-20" />
+                        ) : raw === null ? (
+                          '—'
+                        ) : (
+                          `${formatDisplayTokenAmount(raw, asset.metadata.decimals)} ${formatSymbol(asset.metadata.symbol)}`
+                        )
+                      }
+                      fiat={formatBalanceFiat(categories.fiat[domain])}
+                      actions={domain === 'shield' ? confidentialActions() : accountActions(domain)}
+                    />
+                  )
+                })}
+            </section>
+          )}
 
         {bitcoinCatalog && (
           <section className="border-t border-border py-4" aria-label="Bitcoin accounts">

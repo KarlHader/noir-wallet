@@ -239,9 +239,27 @@ function solanaSignature(item: ActivityItem): string | null {
   return item.id.startsWith(prefix) ? item.id.slice(prefix.length) : null
 }
 
+function withNearPrivateAccountMode(items: readonly ActivityItem[]): readonly ActivityItem[] {
+  return Object.freeze(
+    items.map(item =>
+      Object.freeze({
+        ...item,
+        id: item.id.startsWith('rpc:near:')
+          ? `rpc:near:private:${item.id.slice('rpc:near:'.length)}`
+          : `${item.id}:private`,
+        accountMode: 'private' as const
+      })
+    )
+  )
+}
+
 export function createBackgroundActivityCoordinator(
   bitcoinCustomRpcUrl?: string,
-  endpointSettings?: ChainEndpointSettings
+  endpointSettings?: ChainEndpointSettings,
+  readNearPrivateExecutionAddress?: (
+    scope: ActivityScope,
+    chainId: string
+  ) => Promise<string | null>
 ): ActivityCoordinator {
   const storageRepository = new IndexedDbStorageV2Repository()
   const peaSigner = new EvmMultichainSigningClient({ credentials: credentialSession })
@@ -563,12 +581,34 @@ export function createBackgroundActivityCoordinator(
     scope: ActivityScope,
     fallbackItems: readonly ActivityItem[]
   ): Promise<readonly ActivityItem[]> => {
-    if (!nearHistory) return Object.freeze([])
+    if (!nearHistory || DEFAULT_NETWORK !== 'mainnet') return Object.freeze([])
     const address = await resolveChainAddress(storageRepository, scope, 'near', nearNetwork.chainId)
     if (!address) return Object.freeze([])
+    const privateAddress = readNearPrivateExecutionAddress
+      ? await readNearPrivateExecutionAddress(scope, nearNetwork.chainId)
+          .then(value =>
+            value && value !== address && /^[0-9a-f]{64}$/.test(value) ? value : null
+          )
+          .catch(() => null)
+      : null
     try {
-      const fresh = await nearHistory.readAddressActivity({ scope, address })
-      return mergeBoundedActivityItems(fallbackItems, fresh)
+      const mainItems = await nearHistory.readAddressActivity({ scope, address })
+      let privateItems: readonly ActivityItem[] = []
+      if (privateAddress) {
+        try {
+          privateItems = withNearPrivateAccountMode(
+            await nearHistory.readAddressActivity({ scope, address: privateAddress })
+          )
+        } catch (error) {
+          logger.warn(
+            `NEAR private activity refresh failed: ${error instanceof Error ? error.name : 'UnknownError'}`,
+            scope.keyDomainId,
+            scope.accountId
+          )
+          privateItems = fallbackItems.filter(item => item.accountMode === 'private')
+        }
+      }
+      return mergeBoundedActivityItems(fallbackItems, [...mainItems, ...privateItems])
     } catch (error) {
       logger.warn(
         `NEAR activity refresh failed: ${formatLogError(error)}`,

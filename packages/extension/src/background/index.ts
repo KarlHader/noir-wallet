@@ -165,6 +165,7 @@ import {
 } from './evm-transaction-monitor'
 import { createBackgroundEvmPortfolioCoordinator } from './evm-portfolio'
 import { createBackgroundPortfolioCoordinator } from './portfolio'
+import { ChromeDetectedNearAssetCatalogRepository } from '@/infrastructure/chains/near/near-detected-asset-catalog'
 import { createBackgroundActivityCoordinator } from './activity'
 import { refreshZcashReceiveConfirmations } from './zcash-receive-confirmations'
 import {
@@ -214,7 +215,7 @@ import {
   type RheaSwapNearCoordinator
 } from './rhea-swap-near'
 import { parseKeyDomainId } from '@/core/keyring/domain'
-import { parseAccountId } from '@/core/accounts/domain'
+import { parseAccountId, type ChainAccount } from '@/core/accounts/domain'
 import { isAssetMarketHistoryRange } from '@/core/prices'
 import { UnsupportedAssetMarketHistoryError } from '@/infrastructure/prices'
 import {
@@ -561,6 +562,22 @@ let additionalReceiveTargetsCoordinator!: ReturnType<
   typeof createBackgroundAdditionalReceiveTargetsCoordinator
 >
 let accountNetworksCoordinator!: ReturnType<typeof createBackgroundAccountNetworksCoordinator>
+
+async function readDirectoryNearPrivateExecutionAddress(
+  keyDomainId: string,
+  accountId: string,
+  chainId: string
+): Promise<string | null> {
+  try {
+    const catalog = await accountNetworksCoordinator.readCatalog({ deriveMissingAddresses: true })
+    const address = catalog?.accounts
+      .find(item => item.walletId === keyDomainId && item.accountId === accountId)
+      ?.networks.find(network => network.chainId === chainId)?.privateExecutionAddress
+    return typeof address === 'string' && /^[0-9a-f]{64}$/.test(address) ? address : null
+  } catch {
+    return null
+  }
+}
 
 async function requireCurrentPrivateSwapQuote(
   quoteHandle: string,
@@ -1264,12 +1281,50 @@ async function reloadMultichainRuntime(
     ? createBackgroundEvmPortfolioCoordinator(activeEvm)
     : null
   portfolioCoordinator?.dispose()
+  const knownAssetIds = new Set(
+    [
+      ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK, customEvmNetworks),
+      ...userAssets.definitions,
+      ...intentsProtocolAssets
+    ].map(asset => `${asset.chainId}/${asset.namespace}:${asset.reference.replace(/_/g, '%5F')}`)
+  )
+  const detectedNearAssets = nearOperationsEnabled
+    ? await new ChromeDetectedNearAssetCatalogRepository(DEFAULT_NETWORK)
+        .list()
+        .then(records =>
+          records.flatMap(record =>
+            knownAssetIds.has(record.assetId)
+              ? []
+              : [
+                  Object.freeze({
+                    chainId: record.chainId,
+                    namespace: 'nep141' as const,
+                    reference: record.contractId,
+                    kind: 'token' as const,
+                    metadata: record.metadata,
+                    source: 'discovered' as const,
+                    verification: 'unverified' as const
+                  })
+                ]
+          )
+        )
+        .catch(() => [])
+    : []
   portfolioCoordinator = createBackgroundPortfolioCoordinator(
     catalog,
     customEvmNetworks,
     userAssets.definitions,
     intentsProtocolAssets,
     settings,
+    {
+      detectedAssets: detectedNearAssets,
+      resolvePrivateExecutionAddress: (chainAccount: ChainAccount) =>
+        readDirectoryNearPrivateExecutionAddress(
+          chainAccount.scope.keyDomainId,
+          chainAccount.scope.accountId,
+          chainAccount.scope.chainId
+        )
+    },
     async (model, refresh) => {
       try {
         return (await confidentialFundingCoordinator?.enrichPortfolio(model, refresh)) ?? model
@@ -1279,7 +1334,12 @@ async function reloadMultichainRuntime(
       }
     }
   )
-  activityCoordinator = createBackgroundActivityCoordinator(bitcoinRpcUrl, settings)
+  activityCoordinator = createBackgroundActivityCoordinator(
+    bitcoinRpcUrl,
+    settings,
+    (scope, chainId) =>
+      readDirectoryNearPrivateExecutionAddress(scope.keyDomainId, scope.accountId, chainId)
+  )
   additionalReceiveTargetsCoordinator =
     createBackgroundAdditionalReceiveTargetsCoordinator(customEvmNetworks)
   accountNetworksCoordinator = createBackgroundAccountNetworksCoordinator(

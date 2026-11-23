@@ -35,10 +35,13 @@ import {
   resolveManagedIntentsCatalog
 } from '../../services/intents-asset-manager-client'
 import {
+  buildManagedNearTokens,
   buildManagedTokenRows,
   filterManagedTokenRows,
+  type ManagedNearToken,
   type ManagedTokenRow
 } from '@/popup/services/managed-token-list'
+import { ChromeDetectedNearAssetCatalogRepository } from '@/infrastructure/chains/near/near-detected-asset-catalog'
 import {
   buildAddTokenNetworks,
   getAddTokenReferencePresentation,
@@ -75,6 +78,7 @@ export function ManageTokens() {
   const [catalogAssets, setCatalogAssets] = useState<readonly IntentsManagedAsset[]>([])
   const [hiddenAssetIds, setHiddenAssetIds] = useState<ReadonlySet<string>>(() => new Set())
   const [protocolAssetIds, setProtocolAssetIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [nearTokens, setNearTokens] = useState<readonly ManagedNearToken[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
@@ -112,9 +116,10 @@ export function ManageTokens() {
         userAssets: assets,
         detectedAssets,
         catalogAssets,
-        protocolAssetIds
+        protocolAssetIds,
+        nearTokens
       }),
-    [assets, catalogAssets, detectedAssets, networks, protocolAssetIds]
+    [assets, catalogAssets, detectedAssets, nearTokens, networks, protocolAssetIds]
   )
   const availableManagedAssets = useMemo(
     () =>
@@ -166,6 +171,11 @@ export function ManageTokens() {
       setHiddenAssetIds(new Set(result.hiddenAssetIds))
       setProtocolAssetIds(new Set(result.protocolAssetIds))
       setCatalogAssets(resolveManagedIntentsCatalog(cachedTokens))
+      const nearEnabled = isSelectableChainFamily('near', __ENABLED_CHAIN_FEATURE_FLAGS__)
+      const detectedNear = nearEnabled
+        ? await new ChromeDetectedNearAssetCatalogRepository(DEFAULT_NETWORK).list().catch(() => [])
+        : []
+      setNearTokens(buildManagedNearTokens(DEFAULT_NETWORK, detectedNear, nearEnabled))
     } catch {
       setLoadError(true)
     } finally {
@@ -190,6 +200,14 @@ export function ManageTokens() {
           setDetectedAssets(result.detectedAssets)
           setHiddenAssetIds(new Set(result.hiddenAssetIds))
           setProtocolAssetIds(new Set(result.protocolAssetIds))
+          const nearEnabled = isSelectableChainFamily('near', __ENABLED_CHAIN_FEATURE_FLAGS__)
+          const detectedNear = nearEnabled
+            ? await new ChromeDetectedNearAssetCatalogRepository(DEFAULT_NETWORK)
+                .list()
+                .catch(() => [])
+            : []
+          if (!cancelled)
+            setNearTokens(buildManagedNearTokens(DEFAULT_NETWORK, detectedNear, nearEnabled))
         }
       })
       .catch(() => {})

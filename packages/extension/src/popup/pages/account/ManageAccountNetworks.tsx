@@ -54,7 +54,9 @@ export function ManageAccountNetworks() {
     params.get('guide') === 'v1' && isRetainedV1UpgradeAccount(wallet, account, currentNetwork)
   const available = useMemo<readonly AccountNetworkFamily[]>(
     () =>
-      availableSoftwareAccountFamilies().filter(family => family === 'zcash' || family === 'evm'),
+      availableSoftwareAccountFamilies().filter(
+        family => family === 'zcash' || family === 'evm' || family === 'near'
+      ),
     []
   )
   const chains = useMemo(
@@ -114,13 +116,16 @@ export function ManageAccountNetworks() {
         )?.networks
         const zcash = networks?.find(network => network.chain.family === 'zcash')
         const evm = networks?.find(network => network.chain.family === 'evm')
+        const near = networks?.find(network => network.chain.family === 'near')
         const zcashAddress =
           zcash?.addresses.find(address => address.privacy === 'transparent')?.value ??
           zcash?.addresses.find(address => address.preferredForReceive)?.value
         const evmAddress = evm?.addresses.find(address => address.preferredForReceive)?.value
+        const nearAddress = near?.addresses.find(address => address.preferredForReceive)?.value
         setAddressPreviews({
           ...(zcashAddress ? { zcash: zcashAddress } : {}),
-          ...(evmAddress ? { evm: evmAddress } : {})
+          ...(evmAddress ? { evm: evmAddress } : {}),
+          ...(nearAddress ? { near: nearAddress } : {})
         })
         setAddressPreviewScope(previewScope)
       })

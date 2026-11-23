@@ -3,6 +3,19 @@ export {
   type NearPrivateExecutionWalletSource
 } from './execution-capability'
 export {
+  isNearBridgeFungibleContract,
+  isNearFungibleContractId,
+  nearConfidentialPortfolioAssetId,
+  nearFungibleAssetId,
+  nearPortfolioPrivateAccountId,
+  selectNearPortfolioTokens,
+  NEAR_MAINNET_NATIVE_ASSET_ID,
+  NEAR_PORTFOLIO_INVENTORY_LIMIT,
+  NEAR_PORTFOLIO_TOKEN_LIMIT,
+  type NearPortfolioPrivateExecution,
+  type NearPortfolioTokenCandidate
+} from './near-portfolio-assets'
+export {
   nearImplicitAccountIdFromPublicKey,
   nearPublicKeyFromImplicitAccountId,
   parseNearAccountId,
