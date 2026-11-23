@@ -20,11 +20,14 @@ import {
   UserEvmAssetCoordinator,
   createConfiguredEvmRpcClient
 } from '@/infrastructure/chains/evm'
+import { EvmTokenDiscoverySchedule } from '@/infrastructure/chains/evm/evm-token-discovery-schedule'
 import { ChromeTokenVisibilityRepository } from '@/infrastructure/portfolio/chrome-token-visibility'
 import { getCachedBackgroundRheaSwapTokens } from './rhea-swap'
 import { resolveSwapTokenAssetIds } from '@/core/services/intents-managed-assets'
 import { ChromeUserAssetDexPoolCacheRepository } from '@/infrastructure/prices'
 import { FourMemeMarketClient } from '@/infrastructure/prices/four-meme-market-client'
+
+const tokenDiscoverySchedule = new EvmTokenDiscoverySchedule(DEFAULT_NETWORK)
 
 export interface BackgroundUserEvmAssetRuntime {
   readonly coordinator: UserEvmAssetCoordinator
@@ -74,6 +77,7 @@ export async function createBackgroundUserEvmAssetRuntime(
     chains,
     repository: detectedRepository,
     discovery: new EvmTokenDiscoveryClient({ chains }),
+    schedule: tokenDiscoverySchedule,
     isExcluded: assetId => {
       if (bundledAssets.inspect(assetId)) return true
       if (DEFAULT_NETWORK !== 'mainnet') return false

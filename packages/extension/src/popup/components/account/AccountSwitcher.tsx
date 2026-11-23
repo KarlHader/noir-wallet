@@ -4,14 +4,12 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useWalletStore } from '@/store/wallet-store'
 import { getAccountDisplayName, formatSortAddress } from '@/lib/format'
 import { isWalletLockedError } from '@/lib/errors'
-import {
-  accountNetworksClient,
-  type AccountNetworksView
-} from '@/popup/services/account-networks-client'
+import type { AccountNetworksCatalogView } from '@/popup/services/account-networks-client'
 import {
   accountNetworkIconChain,
   accountNetworkLabel,
-  evmExecutionAddresses
+  evmExecutionAddresses,
+  zcashSettingsPath
 } from '@/popup/services/account-network-presentation'
 import {
   buildAccountSwitcherGroups,
@@ -24,6 +22,7 @@ import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyT
 import { ChainIcon } from '../common/ChainIcon'
 import evmGroupIcon from '@/images/figma-evm-group.svg'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { Skeleton } from '../ui/skeleton'
 import { cn } from '@/lib/utils'
 import type { ActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { AccountAvatar as AccountAvatarImage } from './AccountAvatar'
@@ -118,25 +117,27 @@ function AccountAddressPopover({
   isCopied,
   copyScope,
   onViewAll,
-  className
+  onOpenZcashSettings,
+  className,
+  addressesStatus
 }: {
   readonly account: SwitcherAccount
-  readonly defaultEvmMode: 'public' | 'private' | null
+  readonly defaultEvmMode: 'public' | 'private'
   readonly onCopy: (value: string, key: string) => void
   readonly onCopyPrivate: (value: string, key: string) => void
   readonly isCopied: (key: string) => boolean
   readonly copyScope: string
   readonly onViewAll: () => void
+  readonly onOpenZcashSettings: () => void
   readonly className?: string
+  readonly addressesStatus: 'loading' | 'ready' | 'error'
 }) {
   const [selectedEvmMode, setEvmMode] = useState<'public' | 'private' | null>(null)
   const keyPrefix = `${copyScope}-${account.walletId}-${account.accountId}`
   const zcash = account.networks.find(network => network.chain.family === 'zcash')
   const evm = account.networks.filter(network => network.chain.family === 'evm')
   const evmAddresses = evmExecutionAddresses(evm)
-  const evmMode =
-    selectedEvmMode ??
-    (defaultEvmMode === null ? null : evmAddresses.privateAddress ? defaultEvmMode : 'public')
+  const evmMode = evmAddresses.privateAddress ? (selectedEvmMode ?? defaultEvmMode) : 'public'
   const otherAddresses = account.networks.flatMap(network => {
     if (network.chain.family === 'zcash' || network.chain.family === 'evm') return []
     const address =
@@ -146,12 +147,7 @@ function AccountAddressPopover({
   const zcashAddresses = [...(zcash?.addresses ?? [])].sort(
     (left, right) => Number(left.privacy === 'shielded') - Number(right.privacy === 'shielded')
   )
-  const evmAddress =
-    evmMode === 'private'
-      ? evmAddresses.privateAddress
-      : evmMode === 'public'
-        ? evmAddresses.mainAddress
-        : null
+  const evmAddress = evmMode === 'private' ? evmAddresses.privateAddress : evmAddresses.mainAddress
 
   return (
     <div
@@ -169,7 +165,18 @@ function AccountAddressPopover({
             className="mt-1 size-[26px] shrink-0 rounded-[5px]"
           />
           <div className="min-w-0 flex-1">
-            <p className="text-sm leading-[18px]">Zcash</p>
+            <div className="flex min-w-0 items-center justify-between gap-1">
+              <p className="truncate text-sm leading-[18px]">Zcash</p>
+              <button
+                type="button"
+                aria-label="Open Zcash settings"
+                title="Zcash settings"
+                onClick={onOpenZcashSettings}
+                className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-white/8 hover:text-foreground active:bg-white/12 focus-visible:outline-2 focus-visible:outline-primary"
+              >
+                <Icon icon="lucide:settings" width={15} height={15} />
+              </button>
+            </div>
             {zcashAddresses.map(address => (
               <div
                 key={`${address.scheme}:${address.value}`}
@@ -242,7 +249,7 @@ function AccountAddressPopover({
                       : 'text-muted hover:bg-white/6 hover:text-foreground'
                   )}
                 >
-                  Private
+                  Incognito
                 </button>
               </div>
             )}
@@ -267,7 +274,7 @@ function AccountAddressPopover({
             {evmAddress && (
               <button
                 type="button"
-                aria-label={`Copy EVM ${evmMode === 'private' ? 'Private' : 'Public'} address`}
+                aria-label={`Copy EVM ${evmMode === 'private' ? 'Incognito' : 'Public'} address`}
                 title="Copy address"
                 onClick={() =>
                   (evmMode === 'private' ? onCopyPrivate : onCopy)(
@@ -319,9 +326,23 @@ function AccountAddressPopover({
           </button>
         </div>
       ))}
-      {account.networks.length === 0 && (
-        <p className="py-2 text-center text-xs text-muted">No addresses available</p>
-      )}
+      {account.networks.length === 0 &&
+        (addressesStatus === 'loading' ? (
+          <div role="status" aria-label="Loading addresses" className="flex items-start gap-2 py-2">
+            <Skeleton className="size-[26px] shrink-0 rounded-[5px]" />
+            <div className="min-w-0 flex-1 space-y-2.5 pt-1">
+              <Skeleton className="h-3 w-14 max-w-full" />
+              <div className="flex items-center justify-between gap-2">
+                <Skeleton className="h-2.5 w-14" />
+                <Skeleton className="h-2.5 w-24" />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="py-2 text-center text-xs text-muted" role="status">
+            {addressesStatus === 'error' ? 'Addresses unavailable' : 'No addresses available'}
+          </p>
+        ))}
       <button
         type="button"
         onClick={onViewAll}
@@ -337,12 +358,18 @@ export function AccountSwitcher({
   className,
   accountName,
   accountIdentity,
+  accountCatalog,
+  publicAccountCatalog,
+  accountCatalogError,
   defaultEvmMode = 'public'
 }: {
   readonly className?: string
   readonly accountName?: string
   readonly accountIdentity: ActiveAccountIdentity | null
-  readonly defaultEvmMode?: 'public' | 'private' | null
+  readonly accountCatalog: AccountNetworksCatalogView | null
+  readonly publicAccountCatalog: AccountNetworksCatalogView | null
+  readonly accountCatalogError: boolean
+  readonly defaultEvmMode?: 'public' | 'private'
 }) {
   const { navigate, replace } = useNavigate()
   const { confirm, alert } = useDialog()
@@ -351,7 +378,16 @@ export function AccountSwitcher({
   const { wallets, accountDisplayNames, currentWalletId, currentAccountId } = useWalletStore()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [addressesOpen, setAddressesOpen] = useState(false)
-  const [catalogAccounts, setCatalogAccounts] = useState<readonly AccountNetworksView[]>([])
+  const catalogAccounts = useMemo(
+    () =>
+      accountCatalog?.accounts ??
+      // Account management reads persisted addresses only. Use that catalog for the
+      // roster while the full address preview (including private addresses) loads.
+      publicAccountCatalog?.accounts.map(account => ({ ...account, networks: [] })) ??
+      [],
+    [accountCatalog, publicAccountCatalog]
+  )
+  const addressesStatus = accountCatalog ? 'ready' : accountCatalogError ? 'error' : 'loading'
   const selectedWalletId = accountIdentity?.walletId ?? null
   const selectedAccountId = accountIdentity?.accountId ?? null
   const [switching, setSwitching] = useState<string | null>(null)
@@ -428,19 +464,6 @@ export function AccountSwitcher({
     }
     return cancelPreviewTimer
   }, [drawerOpen, cancelPreviewTimer])
-
-  useEffect(() => {
-    let cancelled = false
-    void accountNetworksClient
-      .getCatalog()
-      .then(catalog => {
-        if (!cancelled) setCatalogAccounts(catalog?.accounts ?? [])
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [drawerOpen, addressesOpen, selectedWalletId, selectedAccountId])
 
   const groups = useMemo(
     () =>
@@ -519,6 +542,12 @@ export function AccountSwitcher({
     )
   }
 
+  const openZcashSettings = (account: SwitcherAccount) => {
+    setAddressesOpen(false)
+    setDrawerOpen(false)
+    navigate(zcashSettingsPath(account.walletId, account.accountId))
+  }
+
   const select = async (account: SwitcherAccount) => {
     if (switching) return
     if (account.active) {
@@ -582,9 +611,13 @@ export function AccountSwitcher({
             type="button"
             aria-label="Choose wallet"
             title="Choose wallet"
-            className="group wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-full hover:brightness-110 active:brightness-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="group wallet-interactive flex size-8 shrink-0 items-center justify-center rounded-full hover:brightness-110 active:brightness-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
-            <AccountAvatar name={activeName} walletId={accountIdentity?.walletId ?? null} />
+            <AccountAvatar
+              name={activeName}
+              walletId={accountIdentity?.walletId ?? null}
+              size={28}
+            />
           </button>
         </DialogPrimitive.Trigger>
         <DialogPrimitive.Portal>
@@ -622,7 +655,7 @@ export function AccountSwitcher({
             </DialogPrimitive.Close>
             <div
               ref={accountList}
-              className="min-h-0 flex-1 overflow-y-auto"
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
               onScroll={() => {
                 cancelPreviewTimer()
                 positionPreview()
@@ -730,6 +763,7 @@ export function AccountSwitcher({
                     key={`${previewAccount.walletId}:${previewAccount.accountId}`}
                     account={previewAccount}
                     defaultEvmMode={defaultEvmMode}
+                    addressesStatus={addressesStatus}
                     className="max-w-[calc(100vw-114px)]"
                     onCopy={(value, key) => void copyToClipboard(value, key)}
                     onCopyPrivate={(address, key) => {
@@ -739,6 +773,7 @@ export function AccountSwitcher({
                     isCopied={isCopied}
                     copyScope="preview"
                     onViewAll={() => viewAddresses(previewAccount)}
+                    onOpenZcashSettings={() => openZcashSettings(previewAccount)}
                   />
                 </div>
               </div>
@@ -778,15 +813,9 @@ export function AccountSwitcher({
               setAddressesOpen(false)
               setDrawerOpen(true)
             }}
-            className="wallet-interactive flex min-w-0 max-w-[150px] items-center gap-1 rounded-sm text-sm font-semibold leading-[18px] hover:text-primary active:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="wallet-interactive flex min-w-0 max-w-[150px] items-center rounded-sm text-sm font-semibold leading-[18px] text-[#e6e8ea] hover:text-primary active:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             <span className="min-w-0 truncate">{activeName}</span>
-            <Icon
-              icon="lucide:chevron-down"
-              width={10}
-              height={10}
-              className="shrink-0 text-wallet-secondary"
-            />
           </button>
         </PopoverTrigger>
         <PopoverContent
@@ -809,6 +838,7 @@ export function AccountSwitcher({
               key={`${activeAccount.walletId}:${activeAccount.accountId}`}
               account={activeAccount}
               defaultEvmMode={defaultEvmMode}
+              addressesStatus={addressesStatus}
               onCopy={(value, key) => void copyToClipboard(value, key)}
               onCopyPrivate={(address, key) => {
                 setAddressesOpen(false)
@@ -817,36 +847,12 @@ export function AccountSwitcher({
               isCopied={isCopied}
               copyScope="active"
               onViewAll={() => viewAddresses(activeAccount)}
+              onOpenZcashSettings={() => openZcashSettings(activeAccount)}
               className="!w-full"
             />
           )}
         </PopoverContent>
       </Popover>
-      <button
-        type="button"
-        aria-label="Show account addresses"
-        title="Show account addresses"
-        onPointerEnter={event => {
-          if (event.pointerType === 'mouse') {
-            cancelAddressesClose()
-            if (!addressesOpen) {
-              addressesOpenedByHover.current = true
-              setAddressesOpen(true)
-            }
-          }
-        }}
-        onPointerLeave={event => {
-          if (event.pointerType === 'mouse') scheduleAddressesClose()
-        }}
-        onClick={() => {
-          cancelAddressesClose()
-          addressesOpenedByHover.current = false
-          setAddressesOpen(true)
-        }}
-        className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-sm text-wallet-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-      >
-        <Icon icon="lucide:copy" width={14} height={14} />
-      </button>
     </div>
   )
 }

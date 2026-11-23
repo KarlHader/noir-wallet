@@ -165,6 +165,43 @@ test('a zero token event does not mask a nonzero event in the same transaction',
   ])
 })
 
+test('correlates ERC-20 credits without treating signer activity as a receipt', () => {
+  const creditSender = `0x${'4'.repeat(40)}`
+  const transferInput = `0xa9059cbb${address.slice(2).padStart(64, '0')}${'a'.padStart(64, '0')}`
+  const credit = tokenTransfer('1', '10', { from: creditSender, to: address, blockHash: undefined })
+  const exact = transaction('1', { from: creditSender, input: transferInput })
+  const relayed = transaction('1', { from: recipient })
+  for (const normal of [exact, relayed]) {
+    const [item] = map([normal], [credit])
+    assert.equal(item.kind, 'transfer')
+    assert.equal(item.completeness, 'complete')
+    assert.deepEqual(item.snapshot, {
+      schemaVersion: 1,
+      direction: 'incoming',
+      primaryAmount: { assetId: tokenAssetId, amountRaw: '10' },
+      sender: { chainId, address: creditSender },
+      recipient: { chainId, address }
+    })
+    assert.deepEqual(item.segments[0].evidence.assetEffects, {
+      source: 'indexer',
+      completeness: 'complete',
+      changes: [{ assetId: tokenAssetId, amountRaw: '10', direction: 'incoming' }]
+    })
+    assert.equal(filterTrackedEvmTokenActivity(item, new Set()), undefined)
+  }
+  const [walletCall] = map([transaction('1')], [credit])
+  assert.equal(walletCall.kind, 'contract-call')
+  assert.equal(walletCall.snapshot.direction, 'contract')
+  assert.equal(walletCall.segments[0].evidence.assetEffects.completeness, 'partial')
+
+  const [reverted] = map([{ ...exact, failed: true }], [credit])
+  assert.equal(reverted.snapshot.direction, 'contract')
+  assert.equal(reverted.segments[0].evidence.assetEffects, undefined)
+  const [conflicting] = map([exact], [{ ...credit, blockHeight: 101 }])
+  assert.equal(conflicting.snapshot.direction, 'contract')
+  assert.equal(conflicting.completeness, 'partial')
+})
+
 test('groups multiple token transfers into net asset changes alongside native value', () => {
   const incomingContract = `0x${'4'.repeat(40)}`
   const incomingAssetId = `${chainId}/erc20:${incomingContract}`

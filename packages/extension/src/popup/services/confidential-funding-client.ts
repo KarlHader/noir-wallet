@@ -10,10 +10,14 @@ import type {
   ExternalShieldDepositScope
 } from '@/core/services/confidential-funding'
 import type { SwapStatus } from '@/core/services/intents-api'
-import type { NetworkFeeTier } from '@/core/transactions/domain'
+import { NETWORK_FEE_TIERS, type NetworkFeeTier } from '@/core/transactions/domain'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { Network } from '@/types'
 import { parseZcashAddress } from '@/core/address-book/address-book'
+import { formatBaseUnitAmount } from '@/lib/number-format'
+import { formatSymbol } from '@/lib/format'
+import { evmWalletClient } from './evm-wallet-client'
+import { estimateNetworkFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
 export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
@@ -89,13 +93,7 @@ export function getConfidentialFundingResult(plan: ConfidentialFundingPlan): Rea
   })
 }
 
-const CONFIDENTIAL_TRANSACTION_PREFIX = 'tx:confidential:'
-
-export function getConfidentialFundingPlanId(transactionId: string): string | null {
-  if (!transactionId.startsWith(CONFIDENTIAL_TRANSACTION_PREFIX)) return null
-  const planId = transactionId.slice(CONFIDENTIAL_TRANSACTION_PREFIX.length)
-  return /^[a-zA-Z0-9:_-]{1,160}$/.test(planId) ? planId : null
-}
+export { getConfidentialFundingPlanId } from '@/core/services/confidential-funding/confidential-funding-graph'
 
 const PHASES = new Set<ConfidentialFundingPhase>([
   'prepared',
@@ -469,3 +467,52 @@ export function createExternalShieldDepositClient(
 export const externalShieldDepositClient = createExternalShieldDepositClient()
 
 export const confidentialFundingClient = createConfidentialFundingClient()
+
+export function previewReviewedConfidentialDepositFeeTiers(
+  review: ConfidentialFundingReview,
+  assetId: string,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const { depositAddress, sourceAmountRaw, sourceNetworkFee, sourceDomain } = review
+  if (
+    !depositAddress ||
+    !sourceNetworkFee ||
+    (sourceDomain !== 'public' && sourceDomain !== 'private')
+  ) {
+    return Promise.resolve({})
+  }
+  const executionMode = sourceDomain === 'public' ? 'main' : 'private'
+  return estimateNetworkFeeTierPreviews(
+    async feeTier =>
+      (
+        await evmWalletClient.estimateTransferFee(
+          { assetId, recipient: depositAddress, amountRaw: sourceAmountRaw },
+          { executionMode, feeTier }
+        )
+      ).maximumFeeWei,
+    sourceNetworkFee,
+    reviewedTier
+  )
+}
+
+export async function previewClusterNetworkFeeTiers(
+  request: PrepareConfidentialFundingRequest,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const previews: NetworkFeePreviews = {}
+  await Promise.allSettled(
+    NETWORK_FEE_TIERS.filter(tier => tier !== reviewedTier).map(async tier => {
+      const fee = await confidentialFundingClient.previewClusterNetworkFee({
+        ...request,
+        feeSelection: { kind: 'tier', tier }
+      })
+      if (fee)
+        previews[tier] = {
+          amount: formatBaseUnitAmount(fee.raw, fee.decimals),
+          symbol: formatSymbol(fee.symbol),
+          approximate: true
+        }
+    })
+  )
+  return previews
+}

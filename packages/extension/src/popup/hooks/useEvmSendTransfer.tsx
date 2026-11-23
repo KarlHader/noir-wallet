@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
 import { getAccountDisplayName } from '@/lib/format'
-import { formatSendFiatValue } from '@/popup/components/transaction/send-input-model'
+import { formatSendFiatValue } from '@/popup/services/send-transfer-model'
 import {
   EvmWalletClientError,
   evmWalletClient,
@@ -13,11 +13,12 @@ import {
   formatBaseUnitDecimalAmount,
   parseDisplayUnitAmount
 } from '@/lib/number-format'
-import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
+import { openMultichainHardwareSignTab } from '@/lib/hardware-tab'
 import { openModal } from '@/popup/provider/ModalManager'
 import { useNavigate } from '@/popup/provider/Router'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import { DEFAULT_NETWORK_FEE_TIER } from '@/core/transactions/domain'
+import { estimateNetworkFeeTierPreviews } from '@/popup/services/network-fee-presentation'
 import { areEvmFeeSelectionsEqual, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
 import { useEvmConfirmationEstimate } from '@/popup/hooks/useEvmConfirmationEstimate'
@@ -109,7 +110,6 @@ interface PrivateSendPreview {
 
 export function useEvmSendTransfer({
   active,
-  walletMode,
   onSelectAsset,
   onSelectShield,
   destinationNetworks,
@@ -135,6 +135,7 @@ export function useEvmSendTransfer({
     chainId: string
     name: string
     icon: string
+    switchesAsset?: boolean
   }[]
   onOpenDestinationNetworks: () => void
   onSelectDestinationNetwork: (
@@ -253,6 +254,9 @@ export function useEvmSendTransfer({
     () =>
       networkPickerOpen
         ? destinationNetworks.map(option => {
+            if (option.switchesAsset) {
+              return { id: option.chainId, name: option.name, icon: option.icon, priority: 0 }
+            }
             const availability = readEvmSendDestinationSupport({
               sourceAssetId: asset.asset.id,
               destinationChainId: option.chainId
@@ -414,7 +418,8 @@ export function useEvmSendTransfer({
           family: 'evm',
           chainId: chain.chain.id,
           availableRaw,
-          decimals: asset.metadata.decimals
+          decimals: asset.metadata.decimals,
+          priceUsd
         })
       : null
   const maximumRequestKey = `${accountContextKey}:${asset.asset.id}:${recipient}:${availableRaw}:${JSON.stringify(feeSelection)}:${route}`
@@ -694,6 +699,8 @@ export function useEvmSendTransfer({
     await openModal<string | undefined>({
       title: 'Select Recipient',
       showCloseButton: true,
+      scroll: 'body',
+      fixedHeight: true,
       body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}
@@ -726,25 +733,32 @@ export function useEvmSendTransfer({
     requestMaximum()
   }
 
-  const estimateFee = useCallback(async () => {
-    if (route !== 'onchain' || !amountRaw || !validAmount || !validRecipient) {
-      throw new Error('Incomplete EVM transfer')
-    }
-    const estimate = await evmWalletClient.estimateTransferFee(
-      { assetId: asset.asset.id, recipient, amountRaw },
-      { feeSelection, executionMode: sourceMode }
-    )
-    return { amountRaw: estimate.maximumFeeWei, details: estimate }
-  }, [
-    amountRaw,
-    asset.asset.id,
-    feeSelection,
-    recipient,
-    sourceMode,
-    route,
-    validAmount,
-    validRecipient
-  ])
+  const estimateSelectedFee = useCallback(
+    async (selection: EvmFeeSelection) => {
+      if (route !== 'onchain' || !amountRaw || !validAmount || !validRecipient) {
+        throw new Error('Incomplete EVM transfer')
+      }
+      const estimate = await evmWalletClient.estimateTransferFee(
+        { assetId: asset.asset.id, recipient, amountRaw },
+        { feeSelection: selection, executionMode: sourceMode }
+      )
+      return { amountRaw: estimate.maximumFeeWei, details: estimate }
+    },
+    [amountRaw, asset.asset.id, recipient, sourceMode, route, validAmount, validRecipient]
+  )
+  const estimateFee = useCallback(
+    () => estimateSelectedFee(feeSelection),
+    [estimateSelectedFee, feeSelection]
+  )
+  const loadTierPreviews = useCallback(
+    () =>
+      estimateNetworkFeeTierPreviews(
+        async tier => (await estimateSelectedFee({ kind: 'tier', tier })).amountRaw,
+        { decimals: nativeDecimals, symbol: nativeSymbol },
+        feeSelection.kind === 'tier' ? feeSelection.tier : undefined
+      ),
+    [estimateSelectedFee, feeSelection, nativeDecimals, nativeSymbol]
+  )
   const maximumFeeEstimate =
     route === 'onchain' &&
     maxSelected &&
@@ -805,6 +819,9 @@ export function useEvmSendTransfer({
 
   const handleFormFeeSelectionChange = async (nextFeeSelection: EvmFeeSelection) => {
     if (areEvmFeeSelectionsEqual(nextFeeSelection, feeSelection)) return
+    if (nextFeeSelection.kind !== 'tier' && !(asset.asset.kind === 'native' && maxSelected)) {
+      await estimateSelectedFee(nextFeeSelection)
+    }
     setFeeSelection(nextFeeSelection)
     if (asset.asset.kind === 'native' && maxSelected) {
       setAmount('')
@@ -851,7 +868,8 @@ export function useEvmSendTransfer({
               network: networkMode
             }),
             { ...rheaQuoteTerms(privatePreview.quote), sourceAmount: amountRaw }
-          )
+          ),
+          { replace: true }
         )
         return
       }
@@ -1057,7 +1075,7 @@ export function useEvmSendTransfer({
       setReview(null)
       if (submission.status === 'external-signature-required') {
         try {
-          await openHardwareEvmSignTab(submission.transactionId)
+          await openMultichainHardwareSignTab(submission.transactionId, 'evm')
         } catch (handoffError) {
           await evmWalletClient.rejectTransfer(submission.transactionId).catch(() => {})
           throw handoffError
@@ -1143,7 +1161,6 @@ export function useEvmSendTransfer({
 
   return {
     active,
-    walletMode,
     destinationNetworks,
     priceUsd,
     sourceMode,
@@ -1191,6 +1208,7 @@ export function useEvmSendTransfer({
     privatePreviewError,
     privatePreviewKey,
     feePreview,
+    loadTierPreviews,
     previewFee,
     confirmationTime,
     displayedError,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getActivityApprovalDetails } from '../../../src/popup/components/transaction/activity-interaction-adapters.ts'
-import { getSwapTransactionReference } from '../../../src/popup/components/swap/swap-status-model.ts'
+import { getActivityApprovalDetails } from '../../../src/popup/services/activity-interaction-adapters.ts'
+import { getSwapTransactionReference } from '../../../src/popup/services/swap-status-model.ts'
 
 test('approval details match the token contract and network and preserve unknown methods', () => {
   const address = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'

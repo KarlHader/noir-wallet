@@ -38,6 +38,13 @@ export interface SwapApprovalContinuation {
 }
 
 export type SwapApprovalContinuationInput = Omit<SwapApprovalContinuation, 'createdAt'>
+export type SwapApprovalContinuationResult =
+  | { readonly status: 'pending' }
+  | {
+      readonly status: 'ready'
+      readonly approval: SwapApprovalContinuation
+      readonly quote: RheaSwapQuoteView | null
+    }
 type ActiveScope = { network: string; walletId: string | null; accountId: string | null }
 type ReadActiveScope = () => Promise<ActiveScope>
 
@@ -239,15 +246,16 @@ export async function continueSwapAfterApproval(
   router: BackgroundEvmTransferRouter,
   readActive: ReadActiveScope,
   readQuote?: (record: SwapApprovalContinuation) => Promise<RheaSwapQuoteView | null>
-): Promise<SwapApprovalContinuation & { readonly quote: RheaSwapQuoteView | null }> {
+): Promise<SwapApprovalContinuationResult> {
   const record = await readSwapApprovalContinuation(transactionId, readActive)
   if (!record) throw new Error('Swap continuation is unavailable. Start a new Swap.')
   const graph = await new IndexedDbTransactionRepository().get(
     { keyDomainId: parseKeyDomainId(record.walletId), accountId: parseAccountId(record.accountId) },
     parseTransactionId(record.transactionId)
   )
-  if (graph?.root.status !== 'final')
-    throw new Error('Token approval is not confirmed yet. Check Activity and try again.')
+  if (!graph || graph.root.status === 'failed')
+    throw new Error('Swap continuation is unavailable. Start a new Swap.')
+  if (graph.root.status !== 'final') return { status: 'pending' }
   const allowance = await router.getTokenAllowance(
     record.chainId,
     record.token,
@@ -255,14 +263,14 @@ export async function continueSwapAfterApproval(
     record.owner,
     record.sourceMode
   )
-  if (BigInt(allowance) < BigInt(record.amountRaw))
-    throw new Error('Token allowance is not available. Check Activity and try again.')
   if (!matchesActive(record, await readActive()))
     throw new Error('Active account changed. Review this Swap again.')
+  if (BigInt(allowance) < BigInt(record.amountRaw))
+    throw new Error('Token allowance is not available. Check Activity and try again.')
   const quote = record.quoteHandle ? ((await readQuote?.(record).catch(() => null)) ?? null) : null
   if (!matchesActive(record, await readActive()))
     throw new Error('Active account changed. Review this Swap again.')
-  return { ...record, quote }
+  return { status: 'ready', approval: record, quote }
 }
 
 export async function clearSwapApprovalContinuation(transactionId: string): Promise<void> {

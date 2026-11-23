@@ -1,22 +1,48 @@
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
-import { getZcashChainId } from '@/core/chains/registry'
-import { safeBig } from '@/lib/big'
-import type { AccountAddresses, KeySource, Network, ZcashBalance } from '@/types/wallet'
+import type { Network } from '@/types/wallet'
 import type { AccountNetworksView } from './account-networks-client'
 import { summarizeNearConfidentialHoldings } from './near-confidential-holdings'
 import { getPrivateTransferChainIds } from './private-balance-transfer'
-import { getAvailableZcashSelfMoveSources } from './zcash-self-move'
 import type { ShieldProvider } from './asset-domains'
 
-export type ShieldAction = 'send' | 'receive' | 'move' | 'swap'
+export const SHIELD_ACTIONS = [
+  { action: 'send', label: 'Send' },
+  { action: 'receive', label: 'Receive' },
+  { action: 'swap', label: 'Swap' }
+] as const
 
-export function withShieldAsset(path: string, assetId: string | null): string {
-  if (!assetId) return path
-  const [pathname, search] = path.split('?')
-  const params = new URLSearchParams(search)
-  params.set('assetId', assetId)
-  return `${pathname}?${params.toString()}`
+type ShieldAction = (typeof SHIELD_ACTIONS)[number]['action']
+
+export function buildShieldActionPath(
+  action: ShieldAction,
+  options: {
+    readonly provider?: ShieldProvider
+    readonly assetId?: string | null
+    readonly account?: { readonly walletId: string; readonly accountId: string } | null
+    readonly originPath?: string
+  } = {}
+): string {
+  const { provider, assetId, account, originPath } = options
+  const query = new URLSearchParams()
+  if (provider) query.set('provider', provider)
+  if (assetId) query.set(action === 'swap' ? 'source' : 'assetId', assetId)
+  if (account) {
+    query.set(action === 'receive' ? 'walletId' : 'sourceWalletId', account.walletId)
+    query.set(action === 'receive' ? 'accountId' : 'sourceAccountId', account.accountId)
+  }
+  if (action === 'receive') {
+    query.set('mode', 'shield')
+    return `/receive?${query}`
+  }
+  if (action === 'send') {
+    query.set('sourceMode', 'shield')
+    if (originPath) query.set('originPath', originPath)
+    return `/send?${query}`
+  }
+  query.set('balanceDomain', 'shield')
+  if (provider === 'zcash-shield') query.set('shieldZecSource', 'native')
+  return `/swap?${query}`
 }
 
 export function selectShieldActions(input: {
@@ -24,35 +50,11 @@ export function selectShieldActions(input: {
   readonly prices: AssetPriceReadModel | null
   readonly account: AccountNetworksView | null
   readonly network: Network
-  readonly zcashAddresses: AccountAddresses | null | undefined
-  readonly zcashBalance: ZcashBalance | null | undefined
-  readonly zcashKeySource: KeySource | undefined
 }) {
-  const { model, prices, account, network, zcashAddresses, zcashBalance, zcashKeySource } = input
+  const { model, prices, account, network } = input
   const near = summarizeNearConfidentialHoldings(model, prices)
-  const nearChainIds = getPrivateTransferChainIds(account, network === 'mainnet')
-  const canManageNear = nearChainIds.length > 0
-  const hasMovableNear = near.entries.some(
-    entry =>
-      entry.asset.assetId &&
-      nearChainIds.some(chainId => entry.asset.assetId?.startsWith(`${chainId}/`)) &&
-      safeBig(entry.asset.availableRaw).gt(0)
-  )
-  const zcashAssetId = `${getZcashChainId(network)}/slip44:133`
-  const hasSpendableNear =
-    hasMovableNear ||
-    near.entries.some(
-      entry => entry.asset.assetId === zcashAssetId && safeBig(entry.asset.availableRaw).gt(0)
-    )
+  const canManageNear = getPrivateTransferChainIds(account, network === 'mainnet').length > 0
   const hasZcash = account?.networks.some(item => item.chain.family === 'zcash') ?? false
-  const zcashMoveSources = hasZcash
-    ? getAvailableZcashSelfMoveSources({
-        addresses: zcashAddresses,
-        balance: zcashBalance,
-        keySource: zcashKeySource,
-        network
-      })
-    : []
   const providersFor = (action: ShieldAction): readonly ShieldProvider[] => {
     const nearAvailable = canManageNear
     const zcashAvailable = action !== 'swap' && hasZcash
@@ -64,10 +66,7 @@ export function selectShieldActions(input: {
   return {
     near,
     canManageNear,
-    hasMovableNear,
-    hasSpendableNear,
     hasZcash,
-    zcashMoveSources,
     providersFor
   }
 }

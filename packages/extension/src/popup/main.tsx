@@ -1,3 +1,4 @@
+import '@/lib/buffer-polyfill'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { addCollection } from '@iconify/react'
@@ -18,7 +19,6 @@ if (new URLSearchParams(window.location.search).get('surface') === 'side-panel')
 
 async function bootstrap(): Promise<void> {
   await initializeRuntimeNetwork()
-  await import('@/core/services/rhea-sdk-init')
   const { default: App } = await import('./App')
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

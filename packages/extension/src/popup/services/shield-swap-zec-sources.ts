@@ -1,18 +1,23 @@
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { getEvmNetworkConfigs } from '@/config/networks'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { getZcashChainId } from '@/core/chains/registry'
-import { getConfidentialAvailableForAsset } from '@/core/services/confidential-funding'
-import { isNewWalletFamilyEnabled } from '@/core/chains/feature-runtime-policy'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import {
+  isNewWalletFamilyEnabled,
+  resolveEvmFeatureRuntimePolicy
+} from '@/core/chains/feature-runtime-policy'
 import {
   createBuildAddressGatedChainRegistry,
   createInitialProductChainRegistry
 } from '@/core/chains/registry'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
-import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
 import type { KeySource, Network } from '@/types'
+import type { AccountNetworksView } from './account-networks-client'
 import { getAssetDomainRaw } from './asset-domains'
 import type { ShieldFundingAsset } from './shield-transfer'
-import { shieldFundingAvailableRaw } from './shield-transfer'
+import { getZcashTokenPickerChain, shieldFundingAvailableRaw } from './shield-transfer'
 
 export const SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID = 'shield-swap-source:zec:intents' as const
 export const SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID = 'shield-swap-source:zec:native-shielded' as const
@@ -48,7 +53,9 @@ export interface ShieldSwapZecSourceOption {
   readonly symbol: string
   readonly iconUrl?: string
   readonly badgeBlockchain: string
+  readonly chainId: string
   readonly chainName: string
+  readonly sourceLabel?: string
   readonly availableRaw: string
   readonly decimals: number
   readonly intentsWalletAssetId?: string
@@ -91,6 +98,39 @@ export function resolveShieldNativeZecSwapAvailable(input: {
   return zcashReleased && zcashInProduct && input.zcashAccountEnabled
 }
 
+export function hasNativeZecConfidentialSwapRoute(
+  account: AccountNetworksView | null,
+  network: Network,
+  enabledFlags: readonly ChainFeatureFlagValue[]
+): boolean {
+  const settlementChainId = getEvmNetworkConfigs(network)[0]?.chainId
+  return Boolean(
+    resolveEvmFeatureRuntimePolicy(enabledFlags).newOperationsEnabled &&
+    supportsEvmPrivateExecution(account?.walletSource) &&
+    account?.networks.some(entry => entry.chain.id === settlementChainId)
+  )
+}
+
+export function canSwapNativeShieldZec(input: {
+  readonly account: AccountNetworksView | null
+  readonly network: Network
+  readonly enabledFlags: readonly ChainFeatureFlagValue[]
+  readonly keySource: KeySource | undefined
+}): boolean {
+  const { account, network, enabledFlags, keySource } = input
+  return (
+    network === 'mainnet' &&
+    !getFundingSourceUnavailableReason(keySource, 'shielded') &&
+    hasNativeZecConfidentialSwapRoute(account, network, enabledFlags) &&
+    resolveShieldNativeZecSwapAvailable({
+      network,
+      portfolio: null,
+      enabledFlags,
+      zcashAccountEnabled: account?.networks.some(entry => entry.chain.family === 'zcash') ?? false
+    })
+  )
+}
+
 export function buildShieldSwapZecSourceOptions(input: {
   readonly network: Network
   readonly sources: readonly ShieldFundingAsset[]
@@ -102,6 +142,7 @@ export function buildShieldSwapZecSourceOptions(input: {
 }): readonly ShieldSwapZecSourceOption[] {
   const intentsAsset = findIntentsZecFundingAsset(input.sources)
   const options: ShieldSwapZecSourceOption[] = []
+  const zcashChain = getZcashTokenPickerChain(input.network)
 
   if (intentsAsset) {
     const availableRaw = shieldFundingAvailableRaw(intentsAsset, input.balances)
@@ -111,8 +152,8 @@ export function buildShieldSwapZecSourceOptions(input: {
         kind: 'intents',
         symbol: intentsAsset.asset.metadata.symbol,
         iconUrl: intentsAsset.asset.metadata.iconUrl,
-        badgeBlockchain: 'near',
-        chainName: 'NEAR Confidential',
+        ...zcashChain,
+        sourceLabel: 'NEAR Confidential',
         availableRaw,
         decimals: intentsAsset.asset.metadata.decimals,
         intentsWalletAssetId: intentsAsset.asset.asset.id
@@ -141,8 +182,7 @@ export function buildShieldSwapZecSourceOptions(input: {
             kind: 'native-shielded',
             symbol: nativeAsset.metadata.symbol,
             iconUrl: nativeAsset.metadata.iconUrl,
-            badgeBlockchain: 'zec',
-            chainName: 'Zcash Shield',
+            ...zcashChain,
             availableRaw,
             decimals: nativeAsset.metadata.decimals
           })
@@ -156,19 +196,6 @@ export function buildShieldSwapZecSourceOptions(input: {
   return Object.freeze(options)
 }
 
-export function shieldSwapZecIntentsBalanceDecimal(
-  kind: ShieldSwapZecSourceKind,
-  options: readonly ShieldSwapZecSourceOption[]
-): string | null {
-  const row = options.find(option => option.kind === kind)
-  if (!row) return null
-  try {
-    return formatBaseUnitDecimalAmount(row.availableRaw, row.decimals)
-  } catch {
-    return null
-  }
-}
-
 export function resolveShieldConfidentialFromAssetId(
   fromId: string | null,
   zecOptions: readonly ShieldSwapZecSourceOption[]
@@ -178,11 +205,4 @@ export function resolveShieldConfidentialFromAssetId(
     return intents?.intentsWalletAssetId ?? null
   }
   return fromId
-}
-
-export function confidentialBalanceForIntentsZec(
-  balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
-): string {
-  if (!balances) return '0'
-  return getConfidentialAvailableForAsset(balances, ZEC_ZCASH_ASSET) ?? '0'
 }

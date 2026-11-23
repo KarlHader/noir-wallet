@@ -137,7 +137,7 @@ export function projectPortfolioForDomain(
   })
 }
 
-interface ShieldProviderGroup {
+export interface ShieldProviderGroup {
   readonly id: ShieldProvider
   readonly entries: readonly Readonly<{
     asset: PortfolioAssetView

@@ -4,7 +4,7 @@ import { expect } from '@playwright/test'
 import {
   getPortfolioRecoveryDelayMs,
   hasPortfolioBalanceRefreshIssue
-} from '../../../src/popup/components/portfolio/portfolio-recovery.ts'
+} from '../../../src/popup/services/portfolio-recovery.ts'
 
 function chain(displayName, status, errorCodes = [], assets = []) {
   return { chain: { displayName, family: 'evm' }, status, errorCodes, assets }

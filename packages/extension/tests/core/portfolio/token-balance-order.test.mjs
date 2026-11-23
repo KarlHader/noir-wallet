@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { sortTokensByBalanceValue } from '../../../src/popup/components/tokens/token-balance-order.ts'
+import { sortTokensByBalanceValue } from '../../../src/popup/services/token-balance-order.ts'
 
 function token(assetId, symbol, price, blockchain = 'eth') {
   return { assetId, symbol, price, blockchain, decimals: 18, priceUpdatedAt: '' }

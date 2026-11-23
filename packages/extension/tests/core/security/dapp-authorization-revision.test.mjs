@@ -83,6 +83,34 @@ test('a stale EVM network approval cannot survive revoke and reconnect', async (
   assert.equal(await manager.getEvmNetworkState(origin), null)
 })
 
+test('site revocation keeps a display-only marker for the active tab', async t => {
+  const { manager, storage } = managerFixture()
+  let tabUrl = `${origin}/market`
+  const previousChrome = globalThis.chrome
+  globalThis.chrome = { ...previousChrome, tabs: { query: async () => [{ url: tabUrl }] } }
+  t.after(() => {
+    globalThis.chrome = previousChrome
+  })
+
+  await manager.removeEvmAuthorization(origin)
+  assert.equal(await manager.getCurrentTabDAppForWallet(), null)
+  await manager.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  await manager.removeEvmAuthorization(origin)
+  const reloaded = new DAppManager(storage)
+  assert.equal((await reloaded.getCurrentTabDAppForWallet())?.disconnectedBySite, 'evm')
+  assert.equal(await reloaded.getCurrentTabDApp(), null)
+  assert.deepEqual(await reloaded.getAllConnections(), [])
+  assert.equal(await reloaded.getConnection(origin), null)
+  assert.equal(await reloaded.getChainAuthorization(origin, 'eip155:1'), null)
+
+  tabUrl = 'https://unrelated.example/'
+  assert.equal(await reloaded.getCurrentTabDAppForWallet(), null)
+  tabUrl = origin
+  await reloaded.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  await reloaded.removeConnection(origin)
+  assert.equal(await reloaded.getCurrentTabDAppForWallet(), null)
+})
+
 test('legacy grants allow only their explicitly reviewed EVM networks', async () => {
   const { manager, storage } = managerFixture()
   await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:1', [account], account)

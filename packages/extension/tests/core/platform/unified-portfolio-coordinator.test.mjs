@@ -1175,8 +1175,15 @@ test('targeted Confidential invalidation refreshes its projection through an exi
     now: () => 10_000
   })
 
+  const chainOnly = await service.refreshActive(['near:mainnet'], {
+    automatic: true,
+    refreshConfidential: false
+  })
+  expect(chainOnly.confidential).toEqual(model.confidential)
+  expect(acknowledged).toEqual([])
+
   await service.refreshActive(['near:mainnet'], { automatic: true })
-  expect(enrichModes).toEqual([false, true])
+  expect(enrichModes).toEqual([false, false, false, true])
   expect(networkRefreshes).toBe(0)
   expect(acknowledged).toEqual([marker])
 })

@@ -105,9 +105,13 @@ export type TxLookup =
  * "not found" (evicted / never mined) from a transient RPC or network error,
  * so callers never fail a live transaction on a flaky lookup.
  */
-export async function lookupTransaction(baseUrl: string, txid: string): Promise<TxLookup> {
+export async function lookupTransaction(
+  baseUrl: string,
+  txid: string,
+  signal?: AbortSignal
+): Promise<TxLookup> {
   try {
-    const tx = await getVerboseTransaction(baseUrl, txid)
+    const tx = await getVerboseTransaction(baseUrl, txid, signal)
     if (
       !txid.trim() ||
       typeof tx?.txid !== 'string' ||

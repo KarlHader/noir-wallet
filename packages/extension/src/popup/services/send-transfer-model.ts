@@ -1,4 +1,5 @@
-import { formatBaseUnitAmount, parseDisplayUnitAmount } from '@/lib/number-format'
+import { safeBig } from '@/lib/big'
+import { formatBaseUnitAmount, formatFiatAmount, parseDisplayUnitAmount } from '@/lib/number-format'
 import type { PortfolioAssetView } from '@/core/portfolio'
 import type { SolanaTransferReview } from '@/popup/services/solana-wallet-client'
 import type { NearTransferReview } from '@/popup/services/near-wallet-client'
@@ -96,4 +97,23 @@ export function matchesNearReview(
     value.graph.root.intent?.recipient?.address === recipient &&
     transferMatches
   )
+}
+
+export function formatSendFiatValue(
+  amount: string,
+  priceUsd: string | number | null | undefined
+): string | null {
+  const normalizedAmount = amount.replace(/,/g, '') || '0'
+  const normalizedPrice = String(priceUsd ?? '')
+  const decimalPattern = /^(?:\d+(?:\.\d*)?|\.\d+)$/
+  if (
+    !decimalPattern.test(normalizedAmount) ||
+    !decimalPattern.test(normalizedPrice) ||
+    safeBig(normalizedPrice).lte(0)
+  ) {
+    return null
+  }
+  return formatFiatAmount(safeBig(normalizedAmount).times(normalizedPrice).toFixed(), {
+    showSign: true
+  })
 }

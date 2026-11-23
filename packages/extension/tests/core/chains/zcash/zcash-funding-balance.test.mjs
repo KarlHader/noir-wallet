@@ -12,10 +12,8 @@ import {
   resolveZcashFundingAvailability,
   resolveZcashTransferAvailability
 } from '../../../../src/popup/services/transfer-availability.ts'
-import {
-  getDefaultZcashSelfMoveSource,
-  resolveZcashSelfMove
-} from '../../../../src/popup/services/zcash-self-move.ts'
+import { resolveZcashSelfTransfer } from '../../../../src/popup/services/zcash-self-transfer.ts'
+import { resolveZcashTransparentShieldMaximum } from '../../../../src/popup/services/zcash-send-validation.ts'
 
 const balance = {
   shielded: '2',
@@ -31,35 +29,38 @@ test('ZEC Move binds each source to the current account opposite native address'
     transparent: `t1${'A'.repeat(33)}`,
     shielded: `u1${'q'.repeat(50)}`
   }
-  assert.deepEqual(resolveZcashSelfMove(addresses, 'transparent', 'mainnet'), {
+  assert.deepEqual(resolveZcashSelfTransfer(addresses, 'transparent', 'mainnet'), {
     source: 'transparent',
     fromAddress: addresses.transparent,
     toAddress: addresses.shielded
   })
-  assert.deepEqual(resolveZcashSelfMove(addresses, 'shielded', 'mainnet'), {
+  assert.deepEqual(resolveZcashSelfTransfer(addresses, 'shielded', 'mainnet'), {
     source: 'shielded',
     fromAddress: addresses.shielded,
     toAddress: addresses.transparent
   })
-  assert.equal(resolveZcashSelfMove(addresses, 'transparent', 'testnet'), null)
+  assert.equal(resolveZcashSelfTransfer(addresses, 'transparent', 'testnet'), null)
   assert.equal(
-    resolveZcashSelfMove(
+    resolveZcashSelfTransfer(
       { ...addresses, shielded: addresses.transparent },
       'transparent',
       'mainnet'
     ),
     null
   )
-  const options = { addresses, balance, network: 'mainnet' }
-  assert.equal(getDefaultZcashSelfMoveSource({ ...options, keySource: 'software' }), 'transparent')
-  assert.equal(getDefaultZcashSelfMoveSource({ ...options, keySource: 'keystone' }), 'shielded')
-  assert.equal(
-    getDefaultZcashSelfMoveSource({ ...options, balance: null, keySource: 'keystone' }),
-    'shielded'
-  )
 })
 
 describe('Zcash funding amount validation', () => {
+  test('uses the quoted native Shield Max only when its amount and fee fit shieldable funds', () => {
+    const cappedBalance = { ...balance, shieldable: '2' }
+    assert.equal(
+      resolveZcashTransparentShieldMaximum(cappedBalance, '1.99985', '0.00015'),
+      '1.99985'
+    )
+    assert.equal(resolveZcashTransparentShieldMaximum(cappedBalance, '1.99985001', '0.00015'), null)
+    assert.equal(resolveZcashTransparentShieldMaximum(cappedBalance, '1.99985', null), null)
+  })
+
   test('offers confirmed balances for both sources while keeping Keystone transparent funding disabled', () => {
     const addresses = { shielded: 'u1test', transparent: 't1test' }
     const options = getFundingSourceOptions(balance, addresses, 'software')

@@ -1,8 +1,15 @@
 import { useMemo } from 'react'
 import { Button } from '../ui/button'
 import type { SwapStatus } from '@/core/services/intents-api'
-import { TransactionResult, type TransactionStatus } from '../transaction/TransactionResult'
+import {
+  TransactionResult,
+  TransactionResultDetailRow,
+  type TransactionStatus
+} from '../transaction/TransactionResult'
 import { AmountDisplay } from '../common/AmountDisplay'
+import { InlineError } from '../common/InlineError'
+import { TokenIcon } from '../tokens/TokenIcon'
+import { formatChainName } from '@/lib/format'
 import { isZcashDestination } from '@/lib/cross-chain-transaction'
 import { WALLET_CONFIG } from '@/config/wallet'
 import { getIntentsStatusCopy } from '@/lib/transaction-status-copy'
@@ -18,9 +25,15 @@ import {
   ActivityTransactionBody,
   buildActivityTransactionView
 } from '../transaction/ActivityTransactionBody'
-import { buildActivityExecutionAddressModes } from '../transaction/multichain-activity-presentation'
+import { buildActivityExecutionAddressModes } from '@/popup/services/multichain-activity-presentation'
 import type { AccountNetworksView } from '@/popup/services/account-networks-client'
-import { getIntentsProgressPresentation } from '@/popup/services/transaction-progress'
+import {
+  getIntentsProgressPresentation,
+  getSwapApprovalProgressStep,
+  type SwapApprovalProgress
+} from '@/popup/services/transaction-progress'
+import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
+import type { SwapToken } from '@/core/services/intents-api'
 import { TransactionProgressSteps } from '../transaction/TransactionProgressSteps'
 import { TransactionReferenceValue } from '../transaction/TransactionReferenceValue'
 import {
@@ -29,7 +42,7 @@ import {
   getSwapResultAction,
   getSwapActionLabels,
   type ConfidentialFundingStatusView
-} from './swap-status-model'
+} from '@/popup/services/swap-status-model'
 
 interface SwapStatusDisplayProps {
   network: Network
@@ -58,6 +71,13 @@ interface SwapStatusDisplayProps {
   onViewActivity: () => void
   viewActivityDisabled?: boolean
   activityItem?: ActivityItem | null
+  approvalProgress?: SwapApprovalProgress
+  beforeSubmission?: {
+    readonly token: SwapToken
+    readonly error?: string | null
+    readonly onContinue?: () => void
+    readonly continueDisabled?: boolean
+  }
   activeAccount?: AccountNetworksView | null
   portfolio?: PortfolioReadModel | null
 }
@@ -97,6 +117,8 @@ export function SwapStatusDisplay({
   onViewActivity,
   viewActivityDisabled,
   activityItem,
+  approvalProgress,
+  beforeSubmission,
   activeAccount,
   portfolio
 }: SwapStatusDisplayProps) {
@@ -137,6 +159,45 @@ export function SwapStatusDisplay({
     requiredConfirmations,
     signedOrder
   })
+  const approvalStep = approvalProgress && getSwapApprovalProgressStep(approvalProgress)
+  const approvalReference = approvalProgress?.transactionHash && (
+    <TransactionReferenceValue
+      hash={approvalProgress.transactionHash}
+      url={formatChainTransactionExplorerUrl(
+        approvalProgress.chainId,
+        approvalProgress.transactionHash,
+        network
+      )}
+      compact
+    />
+  )
+  const submittingOrigin = !!beforeSubmission && approvalProgress?.status === 'confirmed'
+  const sourceNetwork = originChainHint && formatChainName(originChainHint)
+  const destinationNetwork = destinationChainHint && formatChainName(destinationChainHint)
+  const fallbackSteps = approvalStep
+    ? progress.steps
+        .filter(step => step.id === 'origin' || originChainHint !== destinationChainHint)
+        .map(step => {
+          switch (step.id) {
+            case 'origin':
+              return {
+                ...step,
+                label: 'Origin transaction',
+                detail: sourceNetwork,
+                ...(submittingOrigin ? { state: 'active' as const, statusLabel: 'Preparing' } : {})
+              }
+            case 'intents':
+              return { ...step, label: 'Cross-chain relay', detail: router }
+            case 'destination':
+              return { ...step, label: 'Destination transaction', detail: destinationNetwork }
+            default:
+              return step
+          }
+        })
+    : progress.steps
+  const steps = approvalStep ? [approvalStep, ...fallbackSteps] : fallbackSteps
+  const referenceByStepId =
+    approvalStep && approvalReference ? new Map([[approvalStep.id, approvalReference]]) : undefined
   const txStatus: TransactionStatus = statusCopy.resultStatus
   const resultAction = getSwapResultAction(
     txStatus,
@@ -240,7 +301,27 @@ export function SwapStatusDisplay({
       title={confidentialFunding ? statusCopy.title : progress.title}
       description={confidentialFunding ? statusCopy.description : progress.description}
       footer={
-        resultAction === 'continue' && onResumeConfidentialFunding ? (
+        beforeSubmission ? (
+          <div className="w-full space-y-2">
+            {beforeSubmission.error && <InlineError message={beforeSubmission.error} />}
+            {beforeSubmission.onContinue && (
+              <Button
+                className="h-[45px] w-full"
+                onClick={beforeSubmission.onContinue}
+                disabled={beforeSubmission.continueDisabled}
+              >
+                Continue Swap
+              </Button>
+            )}
+            <Button
+              className="h-[45px] w-full"
+              onClick={onViewActivity}
+              disabled={viewActivityDisabled}
+            >
+              View Activity
+            </Button>
+          </div>
+        ) : resultAction === 'continue' && onResumeConfidentialFunding ? (
           <Button
             onClick={onResumeConfidentialFunding}
             disabled={resumingConfidentialFunding}
@@ -261,10 +342,41 @@ export function SwapStatusDisplay({
       }
     >
       {activityView ? (
-        <ActivityTransactionBody view={activityView} />
+        <ActivityTransactionBody
+          view={activityView}
+          precedingProgress={
+            approvalStep ? { step: approvalStep, reference: approvalReference } : undefined
+          }
+        />
+      ) : beforeSubmission ? (
+        <>
+          <div className="flex flex-col items-center py-7 text-center">
+            <TokenIcon token={beforeSubmission.token} size={40} showChainBadge={false} />
+            <div className="mt-4 max-w-full break-all text-3xl font-bold tabular-nums">
+              <AmountDisplay value={amountIn} prefix="−" symbol={tokenInSymbol} />
+            </div>
+            <div className="mt-1 max-w-full break-all text-sm text-muted tabular-nums">
+              Expected <AmountDisplay value={amountOut} prefix="+" symbol={tokenOutSymbol} />
+            </div>
+          </div>
+          {sourceNetwork && destinationNetwork && (
+            <TransactionResultDetailRow label="Route">
+              {sourceNetwork} → {destinationNetwork}
+            </TransactionResultDetailRow>
+          )}
+          <TransactionProgressSteps
+            steps={steps}
+            referenceByStepId={referenceByStepId}
+            className="mt-5"
+          />
+        </>
       ) : (
         <div className="w-full space-y-3">
-          <TransactionProgressSteps steps={progress.steps} className="pb-2" />
+          <TransactionProgressSteps
+            steps={steps}
+            referenceByStepId={referenceByStepId}
+            className="pb-2"
+          />
           <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 py-3">
             <span className="text-sm text-muted">
               {showExchangeAmounts ? labels.sendLabel : 'Amount'}

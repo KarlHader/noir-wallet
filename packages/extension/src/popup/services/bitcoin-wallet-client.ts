@@ -28,11 +28,9 @@ import {
   type BitcoinTransferIntent
 } from '@/infrastructure/chains/bitcoin'
 import {
-  parseBitcoinTransferActivityResponse,
-  type BitcoinTransferActivity
-} from './evm-transfer-activity'
-
-export type { BitcoinTransferActivity } from './evm-transfer-activity'
+  parseOnchainTransferActivityResponse,
+  type OnchainTransferActivity
+} from './onchain-transfer-activity'
 
 export type BitcoinWalletClientErrorCode = BitcoinWalletRuntimeErrorCode | 'invalid-response'
 
@@ -126,7 +124,7 @@ export interface BitcoinWalletClient {
     signedPsbtBase64: string
   ) => Promise<BitcoinTransferSubmission>
   readonly resumeTransfer: (transactionId: TransactionId) => Promise<BitcoinTransferSubmission>
-  readonly getTransferActivity: (graph: TransactionGraph) => Promise<BitcoinTransferActivity | null>
+  readonly getTransferActivity: (graph: TransactionGraph) => Promise<OnchainTransferActivity | null>
 }
 
 export type BitcoinRuntimeMessenger = (
@@ -623,7 +621,7 @@ export function createBitcoinWalletClient(
         throw parseRuntimeError(envelope.error)
       }
       try {
-        return parseBitcoinTransferActivityResponse(envelope, parsedGraph)
+        return parseOnchainTransferActivityResponse(envelope, parsedGraph)
       } catch {
         throw new BitcoinWalletClientError('invalid-response', 'Invalid Bitcoin runtime result')
       }

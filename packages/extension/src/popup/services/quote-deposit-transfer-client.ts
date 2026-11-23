@@ -44,6 +44,7 @@ import type {
   EvmWalletClient
 } from './evm-wallet-client'
 import { evmWalletClient } from './evm-wallet-client'
+import { estimateNetworkFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
 import type {
   BitcoinTransferReview,
   BitcoinTransferApprovalResult,
@@ -69,7 +70,6 @@ import {
   type NearWalletClient
 } from './near-wallet-client'
 
-export type QuoteDepositSourceFamily = 'evm' | 'bitcoin' | 'solana' | 'near'
 export type QuoteDepositExecutionMode = 'main' | 'private'
 
 interface WalletOwnedQuoteAssetBase {
@@ -109,6 +109,44 @@ export type QuoteDepositTransferSubmission =
   | Readonly<{ family: 'bitcoin'; value: BitcoinTransferApprovalResult }>
   | Readonly<{ family: 'solana'; value: SolanaTransferSubmission }>
   | Readonly<{ family: 'near'; value: NearTransferSubmission }>
+
+export async function loadQuoteDepositEvmFeePreviews(
+  prepared: Extract<PreparedQuoteDepositTransfer, { family: 'evm' }>,
+  executionMode: QuoteDepositExecutionMode,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const transaction = prepared.review.graph.root.intent?.evm?.unsignedTransaction
+  if (!transaction) return {}
+
+  const { source } = prepared
+  return estimateNetworkFeeTierPreviews(
+    async tier => {
+      const options = { feeTier: tier, executionMode }
+      const estimate =
+        transaction.input === '0x' && source.asset.asset.kind === 'native'
+          ? await evmWalletClient.estimateTransferFee(
+              {
+                assetId: source.asset.asset.id,
+                recipient: transaction.to,
+                amountRaw: transaction.value
+              },
+              options
+            )
+          : await evmWalletClient.estimateContractCallFee(
+              {
+                chainId: source.chain.chain.id,
+                contractAddress: transaction.to,
+                valueRaw: transaction.value,
+                calldata: transaction.input
+              },
+              options
+            )
+      return estimate.maximumFeeWei
+    },
+    source.networkFeeAsset.metadata,
+    reviewedTier
+  )
+}
 
 export interface QuoteDepositMaximum {
   readonly amountRaw: string

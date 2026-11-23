@@ -51,6 +51,18 @@ export interface IndexedDbTransactionRepositoryOptions {
   readonly databaseName?: string
 }
 
+let observeCommit:
+  | ((
+      network: typeof DEFAULT_NETWORK,
+      graph: TransactionGraph,
+      previous?: TransactionGraph
+    ) => void)
+  | undefined
+
+export function observeTransactionGraphCommits(listener: typeof observeCommit): void {
+  observeCommit = listener
+}
+
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result)
@@ -168,6 +180,7 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
       )
     )
     if (result.status === 'created') {
+      if (this.databaseName === TRANSACTION_V2_DATABASE.name) observeCommit?.(network, result.graph)
       try {
         await notifyCreatedTransactionPortfolio(network, result.graph)
       } catch {
@@ -357,6 +370,8 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
       )
     )
     if (result.status === 'applied' && result.graph && previousGraph) {
+      if (this.databaseName === TRANSACTION_V2_DATABASE.name)
+        observeCommit?.(network, result.graph, previousGraph)
       try {
         await notifyAppliedTransactionPortfolio(
           network,
@@ -388,6 +403,58 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
             store.put(createStoredTransactionGraphRecord(result.graph))
           }
           return result
+        }
+      )
+    )
+  }
+
+  async backfillRheaWithdrawActivity(
+    scope: TransactionAccountScope,
+    transactionId: TransactionId,
+    quoteHandle: string,
+    executionId: string,
+    sourceHash: string
+  ): Promise<TransactionGraph | null> {
+    return runWithTransactionV2Database(this.databaseName, database =>
+      runTransaction(
+        database,
+        [TRANSACTION_V2_DATABASE_STORES.graphs],
+        'readwrite',
+        async transaction => {
+          const store = transaction.objectStore(TRANSACTION_V2_DATABASE_STORES.graphs)
+          const raw = await requestResult<unknown>(store.get(transactionId))
+          if (raw === undefined) return null
+          const { graph } = parseStoredTransactionGraphRecord(raw)
+          const intent = graph.root.intent
+          const binding = intent?.protocol
+          if (
+            !transactionGraphMatchesScope(graph, scope) ||
+            graph.root.kind !== 'transfer' ||
+            !intent ||
+            binding?.provider !== 'rhea-cross-chain-dex' ||
+            binding.quoteHandle !== quoteHandle ||
+            binding.executionId !== executionId ||
+            !graph.segments.some(
+              segment =>
+                segment.role === 'origin' &&
+                segment.target.kind === 'onchain' &&
+                segment.target.chainId === binding.origin.chainId &&
+                segment.evidence?.transactionHash?.toLowerCase() === sourceHash.toLowerCase()
+            )
+          ) {
+            return null
+          }
+          if (binding.balanceTransfer === 'withdraw') return graph
+          const updated = parseTransactionGraph({
+            ...graph,
+            root: {
+              ...graph.root,
+              revision: graph.root.revision + 1,
+              intent: { ...intent, protocol: { ...binding, balanceTransfer: 'withdraw' } }
+            }
+          })
+          await requestResult(store.put(createStoredTransactionGraphRecord(updated)))
+          return updated
         }
       )
     )

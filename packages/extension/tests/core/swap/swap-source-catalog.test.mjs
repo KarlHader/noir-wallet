@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
-import { normalizeFromTokenList } from '@rhea-finance/cross-chain-aggregation-dex'
 import {
   MemoryRheaSwapQuoteSessionStore,
   RheaSwapService,
   RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
   toRheaSwapToken
 } from '../../../src/core/services/rhea-swap/index.ts'
-import { RheaSwapCatalogClient } from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
+import {
+  RheaSwapCatalogClient,
+  normalizeFromTokenList
+} from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
+import { RheaSwapApi } from '../../../src/core/services/rhea-swap/rhea-swap-api.ts'
 import {
   findSwapTokenInCatalog,
   mergeSelectedSwapSourceCatalog
@@ -31,6 +34,29 @@ const ETH = token('eth', 1, 'ETH')
 const USDC = token('eth', 1, 'USDC')
 const USDT = token('eth', 1, 'USDT')
 const POL = token('pol', 137, 'POL')
+
+it('accepts a large source catalog while keeping transaction responses bounded', async () => {
+  const payload = {
+    code: 0,
+    data: {
+      native: {
+        address: '0x0000000000000000000000000000000000000000',
+        symbol: 'ETH',
+        decimals: 18,
+        isNative: true,
+        platform: 'nearIntents',
+        metadata: 'x'.repeat(2 * 1024 * 1024)
+      }
+    }
+  }
+  const api = new RheaSwapApi({
+    baseUrl: 'https://catalog.example',
+    retry: { maxRetries: 0 },
+    fetch: async () => Response.json(payload)
+  })
+  assert.equal((await api.fromTokens(1)).native.symbol, 'ETH')
+  await assert.rejects(api.quote({ fromChain: '1' }), /response is too large/)
+})
 
 it('keeps same-chain destinations after selecting Ethereum USDC from a progressively loaded source selector', () => {
   const current = [ZEC]

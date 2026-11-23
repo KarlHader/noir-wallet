@@ -7,6 +7,7 @@ import type { SwapToken } from '@/core/services/intents-api'
 import { RHEA_SWAP_CHAIN_CATALOG, type RheaSwapToken } from '@/core/services/rhea-swap'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { userEvmAssetsClient } from './user-evm-assets-client'
+import type { ManagedTokenRow } from './managed-token-list'
 
 export interface InspectedTokenAddress {
   readonly candidate: UserEvmAssetCandidate
@@ -121,6 +122,15 @@ export function toWalletEvmQuoteToken(asset: PortfolioAssetView): RheaSwapToken 
     rheaAddress: '0x0000000000000000000000000000000000000000',
     isNative: true,
     sources: Object.freeze([])
+  })
+}
+
+export function toManagedEvmSwapToken(asset: ManagedTokenRow): RheaSwapToken | null {
+  return toWalletEvmSwapToken({
+    assetId: asset.assetId,
+    chainId: asset.chainId,
+    contractAddress: asset.reference,
+    metadata: asset.metadata
   })
 }
 

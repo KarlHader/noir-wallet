@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { groupAccountNetworksForDisplay } from '../../../src/popup/components/account/account-network-groups.ts'
+import { groupAccountNetworksForDisplay } from '../../../src/popup/services/account-network-presentation.ts'
 
 function network(id, family, displayName, address) {
   return {

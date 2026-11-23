@@ -19,10 +19,8 @@ packages/extension/dist-dev/
 .env
 .env.*
 !.env.example
-!.env.test-wallets.example
 
-# Local test-wallet registry and secret fixtures
-packages/extension/.env.test-wallets.local
+# Local secret fixtures
 packages/extension/.test-wallets/
 
 .cursor/

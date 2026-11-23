@@ -1,6 +1,6 @@
 import { Icon } from '@iconify/react'
 import { ExecutionAccountBadge } from './ExecutionAccountSelector'
-import { ZcashFundingBadge } from './ZcashFundingBadge'
+import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 
 export function AccountDomainBadge({
   domain,

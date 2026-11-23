@@ -15,7 +15,7 @@ import {
   getIntentsStatusCopy,
   getTransactionStatusCopy
 } from '../../../src/lib/transaction-status-copy.ts'
-import { getSwapResultAction } from '../../../src/popup/components/swap/swap-status-model.ts'
+import { getSwapResultAction } from '../../../src/popup/services/swap-status-model.ts'
 
 const INPUT = {
   depositAddress: 't1deposit',

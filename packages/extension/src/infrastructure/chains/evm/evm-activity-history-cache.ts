@@ -18,6 +18,7 @@ export interface EvmHistoryCacheRecord {
   readonly hasMore?: boolean
   readonly historyPageCount?: number
   readonly historySyncAt?: number | null
+  readonly trackedAssetKey?: string
   readonly items: readonly ActivityItem[]
 }
 
@@ -141,7 +142,7 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
         'retryAfter',
         'items'
       ],
-      ['hasMore', 'historyPageCount', 'historySyncAt']
+      ['hasMore', 'historyPageCount', 'historySyncAt', 'trackedAssetKey']
     ) ||
     value.schemaVersion !== 1
   ) {
@@ -159,6 +160,12 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
   const retryAfter = parseTimestamp(value.retryAfter, 'retry time')
   if (value.hasMore !== undefined && typeof value.hasMore !== 'boolean') {
     throw new Error('Invalid EVM history cache pagination state')
+  }
+  if (
+    value.trackedAssetKey !== undefined &&
+    (typeof value.trackedAssetKey !== 'string' || value.trackedAssetKey.length > 4_096)
+  ) {
+    throw new Error('Invalid EVM history cache tracked assets')
   }
   if (
     value.historyPageCount !== undefined &&
@@ -202,6 +209,7 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
     ...(value.hasMore === undefined ? {} : { hasMore: value.hasMore }),
     ...(value.historyPageCount === undefined ? {} : { historyPageCount: value.historyPageCount }),
     ...(historySyncAt === undefined ? {} : { historySyncAt }),
+    ...(value.trackedAssetKey === undefined ? {} : { trackedAssetKey: value.trackedAssetKey }),
     items: parseItems(value.items, parsed.scope, chainId)
   })
 }

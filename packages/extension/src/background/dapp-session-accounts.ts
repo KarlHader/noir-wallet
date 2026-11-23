@@ -14,8 +14,8 @@ export interface DAppSessionAccountProposal {
   readonly iconChain: string
   readonly accounts: readonly DAppSessionAccountOption[]
   readonly preselectedIds: readonly string[]
-  readonly activeReference: AccountRef
-  readonly activeAddress: string
+  readonly activeReference: AccountRef | null
+  readonly activeAddress: string | null
 }
 
 export interface DAppSessionAccountSelection {
@@ -29,20 +29,14 @@ export function selectDAppSessionAccounts(
 ): DAppSessionAccountSelection {
   const chosen = proposal.accounts.filter(account => selectedIds.includes(account.id))
   if (chosen.length === 0) throw new Error(`Select at least one ${proposal.chainName} account.`)
-  if (
-    !chosen.some(
-      account =>
-        account.reference.walletId === proposal.activeReference.walletId &&
-        account.reference.accountId === proposal.activeReference.accountId
-    )
-  ) {
+  if (proposal.accounts.some(account => account.required && !chosen.includes(account))) {
     throw new Error(`The active ${proposal.chainName} account must remain authorized.`)
   }
   return Object.freeze({
     authorization: Object.freeze({
       chainId: proposal.chainId,
       accounts: chosen.map(account => ({ ...account.reference })),
-      binding: Object.freeze({ ...proposal.activeReference })
+      binding: Object.freeze({ ...(proposal.activeReference ?? chosen[0]!.reference) })
     }),
     addresses: [...new Set(chosen.map(account => account.address))]
   })
@@ -53,8 +47,8 @@ export function activeDAppSessionAccountMatches(
   active: { readonly reference: AccountRef; readonly address: string }
 ): boolean {
   return (
-    proposal.activeReference.walletId === active.reference.walletId &&
-    proposal.activeReference.accountId === active.reference.accountId &&
+    proposal.activeReference?.walletId === active.reference.walletId &&
+    proposal.activeReference?.accountId === active.reference.accountId &&
     proposal.activeAddress === active.address
   )
 }

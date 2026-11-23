@@ -6,10 +6,16 @@ import {
 } from '@/core/chains/chain-endpoint-settings'
 import { useSettingsStore } from '@/store/settings-store'
 import { toast } from '@/store/toast-store'
-import { EndpointOption } from '../../components/common/EndpointOption'
+import { EndpointOption } from '../../components/settings/EndpointOption'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '../../components/ui/dialog'
 import { chainEndpointSettingsClient } from '../../services/chain-endpoint-settings-client'
 import {
   buildExplorerChainOptions,
@@ -159,7 +165,8 @@ export function PreferredExplorer({ chainId }: { readonly chainId: string }) {
       <Dialog open={editing !== null} onOpenChange={open => !open && !saving && setEditing(null)}>
         <DialogContent
           position="bottom"
-          className="flex max-h-[92vh] flex-col gap-3 p-5"
+          scroll="body"
+          className="gap-3 p-5"
           aria-describedby={undefined}
         >
           <DialogHeader className="shrink-0">
@@ -247,17 +254,11 @@ export function PreferredExplorer({ chainId }: { readonly chainId: string }) {
             )}
           </div>
           {customEditing && (
-            <div className="grid shrink-0 grid-cols-2 gap-2">
-              <Button
-                variant="outline"
-                className="h-11"
-                disabled={saving}
-                onClick={() => setCustomEditing(false)}
-              >
+            <DialogFooter>
+              <Button variant="outline" disabled={saving} onClick={() => setCustomEditing(false)}>
                 Cancel
               </Button>
               <Button
-                className="h-11"
                 isLoading={saving}
                 disabled={!url.trim() || !transactionPath.trim()}
                 onClick={() =>
@@ -266,7 +267,7 @@ export function PreferredExplorer({ chainId }: { readonly chainId: string }) {
               >
                 Save Explorer
               </Button>
-            </div>
+            </DialogFooter>
           )}
         </DialogContent>
       </Dialog>

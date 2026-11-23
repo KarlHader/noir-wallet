@@ -13,6 +13,7 @@ import {
   parseNearFinalBlock,
   parseNearFungibleTokenBalance,
   parseNearFungibleTokenRegistration,
+  parseNearFunctionCallResult,
   parseNearNativeTransferCostConfig,
   readNearAccountId,
   readNearHash,
@@ -259,7 +260,43 @@ export function createNearRpcClient(
     }
   }
 
+  const queryFunction = (
+    contractId: string,
+    methodName: string,
+    args: Readonly<Record<string, unknown>>,
+    finality: 'final' | 'optimistic',
+    signal?: AbortSignal
+  ) =>
+    request(
+      'query',
+      {
+        request_type: 'call_function',
+        finality,
+        account_id: contractId,
+        method_name: methodName,
+        args_base64: encodeNearFunctionArgs(args)
+      },
+      signal
+    )
+
+  const viewFunction: NearReadRpc['viewFunction'] = async (
+    contractId,
+    methodName,
+    args,
+    options
+  ) => {
+    const result = await queryFunction(
+      readNearAccountId(contractId, 'NEAR contract ID'),
+      methodName,
+      args,
+      options?.finality ?? 'final',
+      options?.signal
+    )
+    return parseNearFunctionCallResult(result, options?.maximumResultBytes).value
+  }
+
   return Object.freeze({
+    viewFunction,
     assertExpectedChain: async (signal?: AbortSignal) => {
       const status = await request('status', [], signal)
       const genesis = await request('genesis_config', [], signal)
@@ -411,15 +448,11 @@ export function createNearRpcClient(
     ) => {
       const contractId = readNearAccountId(contractIdValue, 'NEAR fungible token contract ID')
       const accountId = readNearAccountId(accountIdValue, 'NEAR account ID')
-      const result = await request(
-        'query',
-        Object.freeze({
-          request_type: 'call_function',
-          finality: 'final',
-          account_id: contractId,
-          method_name: 'ft_balance_of',
-          args_base64: encodeNearFunctionArgs(Object.freeze({ account_id: accountId }))
-        }),
+      const result = await queryFunction(
+        contractId,
+        'ft_balance_of',
+        { account_id: accountId },
+        'final',
         signal
       )
       return parseNearFungibleTokenBalance(result, contractId, accountId)
@@ -431,15 +464,11 @@ export function createNearRpcClient(
     ) => {
       const contractId = readNearAccountId(contractIdValue, 'NEAR fungible token contract ID')
       const accountId = readNearAccountId(accountIdValue, 'NEAR account ID')
-      const result = await request(
-        'query',
-        Object.freeze({
-          request_type: 'call_function',
-          finality: 'final',
-          account_id: contractId,
-          method_name: 'storage_balance_of',
-          args_base64: encodeNearFunctionArgs(Object.freeze({ account_id: accountId }))
-        }),
+      const result = await queryFunction(
+        contractId,
+        'storage_balance_of',
+        { account_id: accountId },
+        'final',
         signal
       )
       return parseNearFungibleTokenRegistration(result)

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { summarizePortfolioFiat } from '../../../src/popup/components/portfolio/portfolio-prices.ts'
+import { summarizePortfolioFiat } from '../../../src/popup/services/portfolio-prices.ts'
 import { getActivityTransactionReferences } from '../../../src/popup/services/activity-transaction-references.ts'
 import { shouldWarnSmallTransfer } from '../../../src/popup/services/activity-small-transfer-warning.ts'
 import { getActivityAddressAlias } from '../../../src/popup/services/activity-address-alias.ts'
@@ -18,18 +18,26 @@ import {
   summarizeAssetDomainsUsd,
   summarizeKnownShieldFiat
 } from '../../../src/popup/services/asset-domains.ts'
-import { projectPortfolioForChains } from '../../../src/popup/services/portfolio-presentation.ts'
 import {
+  buildPortfolioDisplay,
+  getMergedZecProviderBalances,
+  getPortfolioChainSection,
+  projectPortfolioForChains
+} from '../../../src/popup/services/portfolio-presentation.ts'
+import {
+  getConfidentialWalletDetailAssetId,
   getNearConfidentialChainId,
   getNearConfidentialIconChain,
   listStandaloneNearConfidentialHoldings,
   resolveConfidentialDetailAssetId,
-  resolveNearConfidentialZecHolding
+  resolveNearConfidentialZecDetail,
+  resolveNearConfidentialZecHolding,
+  withNearConfidentialZecChain
 } from '../../../src/popup/services/near-confidential-holdings.ts'
 import {
   getAssetDetailCategories,
   sumZcashDetailBalanceRaw
-} from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
+} from '../../../src/popup/services/asset-detail-balance.ts'
 import { resolveShieldZcashVaultEntry } from '../../../src/popup/services/shield-zcash-entry.ts'
 
 test('Zcash Shield requires the active V2 account source and network capability', () => {
@@ -263,6 +271,37 @@ test('NEAR Confidential ZEC stays separate from on-chain ZEC and inside its acco
   ).toBeNull()
 })
 
+test('Confidential-only ZEC resolves to its detail without a native account position', () => {
+  const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const assetId = `${chainId}/slip44:133`
+  const holding = {
+    tokenId: 'private-zec',
+    protocolAssetId: 'nep141:zec.omft.near',
+    availableRaw: '125000000'
+  }
+  const model = {
+    scope: { keyDomainId: 'wallet-a', accountId: 'account-a' },
+    assets: [],
+    chains: [],
+    confidential: { status: 'ready', assets: [holding] }
+  }
+  const input = { model, network: 'mainnet', walletId: 'wallet-a', accountId: 'account-a', assetId }
+  expect(resolveConfidentialDetailAssetId(model, holding.tokenId)).toBe(assetId)
+  expect(getConfidentialWalletDetailAssetId(model, holding)).toBe(assetId)
+  expect(resolveNearConfidentialZecDetail(input)).toMatchObject({
+    asset: { asset: { id: assetId }, balance: { totalRaw: '0' }, chainAccountIds: [] },
+    chain: { chain: { id: chainId }, assets: [] }
+  })
+  expect(resolveNearConfidentialZecDetail({ ...input, accountId: 'account-b' })).toBeNull()
+  const mismatchedHolding = { ...holding, chainId: 'eip155:1' }
+  const mismatchedModel = {
+    ...model,
+    confidential: { ...model.confidential, assets: [mismatchedHolding] }
+  }
+  expect(resolveConfidentialDetailAssetId(mismatchedModel, holding.tokenId)).toBeNull()
+  expect(getConfidentialWalletDetailAssetId(mismatchedModel, mismatchedHolding)).toBeNull()
+})
+
 test('Home keeps native and Confidential ZEC as separate balances', () => {
   const assetId = 'bip122:00040fe8ec8471911baa1db1266ea15d/slip44:133'
   const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
@@ -303,6 +342,132 @@ test('Home keeps native and Confidential ZEC as separate balances', () => {
   expect(model.assets[0].balance.totalRaw).toBe('300000000')
   expect(getAssetDomainRaw(model.assets[0], 'public')).toBe('100000000')
   expect(getAssetDomainRaw(model.assets[0], 'shield')).toBe('200000000')
+})
+
+test('Shield merges only same-chain ZEC providers in token and network views', () => {
+  const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const assetId = `${chainId}/slip44:133`
+  const evmChainId = 'eip155:56'
+  const evmAssetId = `${evmChainId}/erc20:0x1111111111111111111111111111111111111111`
+  const native = {
+    asset: { id: assetId, chainId, kind: 'native' },
+    metadata: { decimals: 8, symbol: 'ZEC', name: 'Zcash' },
+    source: 'bundled',
+    balance: {
+      totalRaw: '300000000',
+      transparentRaw: '100000000',
+      shieldedRaw: '200000000',
+      pendingRaw: '0'
+    }
+  }
+  const otherChain = {
+    asset: { id: evmAssetId, chainId: evmChainId, kind: 'token' },
+    metadata: { decimals: 8, symbol: 'ZEC', name: 'ZEC on BNB' },
+    source: 'bundled',
+    balance: {
+      totalRaw: '500000000',
+      mainRaw: '0',
+      privateRaw: '500000000',
+      privateOnchainRaw: '0',
+      confidentialRaw: '500000000',
+      pendingRaw: '0'
+    }
+  }
+  const model = {
+    scope: { keyDomainId: 'wallet-a', accountId: 'account-a' },
+    status: 'ready',
+    assets: [native, otherChain],
+    chains: [
+      {
+        chain: { id: chainId, family: 'zcash', displayName: 'Zcash' },
+        status: 'ready',
+        assets: [native],
+        errorCodes: []
+      },
+      {
+        chain: { id: evmChainId, family: 'evm', displayName: 'BNB Chain' },
+        status: 'ready',
+        assets: [otherChain],
+        errorCodes: []
+      }
+    ],
+    confidential: {
+      status: 'ready',
+      assets: [
+        {
+          tokenId: 'private-zec',
+          protocolAssetId: 'nep141:zec.omft.near',
+          assetId,
+          chainId,
+          availableRaw: '125000000',
+          decimals: 8,
+          symbol: 'ZEC'
+        }
+      ]
+    }
+  }
+  const input = {
+    model: projectPortfolioForDomain(model, 'shield'),
+    sourceModel: model,
+    network: 'mainnet',
+    domain: 'shield',
+    sourcePrices: null,
+    selectedChainIds: null,
+    enabledFlags: ['chain.zcash', 'chain.evm']
+  }
+  const display = buildPortfolioDisplay(input)
+  expect(display.confidentialZec?.amount).toBe('1.25')
+  expect(display.separateConfidential).toHaveLength(0)
+  const groups = display.primaryAssetGroups
+  expect(groups.map(group => group.representativeAssetId).sort()).toEqual(
+    [assetId, evmAssetId].sort()
+  )
+  const zecGroup = groups.find(group => group.representativeAssetId === assetId)
+  expect(zecGroup.entries[0].asset.balance.totalRaw).toBe('200000000')
+  expect(getMergedZecProviderBalances(zecGroup.entries, display.confidentialZec, 'shield')).toEqual(
+    [
+      { provider: 'Zcash Shield', amount: '2' },
+      { provider: 'NEAR Confidential', amount: '1.25' }
+    ]
+  )
+  expect(
+    getMergedZecProviderBalances(zecGroup.entries, display.confidentialZec, 'public')
+  ).toBeNull()
+  expect(
+    getMergedZecProviderBalances(
+      groups.find(group => group.representativeAssetId === evmAssetId).entries,
+      display.confidentialZec,
+      'shield'
+    )
+  ).toBeNull()
+  const zcashSection = getPortfolioChainSection(
+    display.sortedChains.find(chain => chain.chain.id === chainId),
+    display.prices,
+    display.visibleConfidential,
+    display.confidentialZec
+  )
+  expect(zcashSection.assets).toHaveLength(1)
+  expect(zcashSection.separateHoldings).toHaveLength(0)
+  expect(zcashSection.assets[0].balance.totalRaw).toBe('200000000')
+
+  const confidentialOnly = {
+    ...model,
+    assets: [otherChain],
+    chains: model.chains.slice(1)
+  }
+  const onlyProjected = projectPortfolioForDomain(confidentialOnly, 'shield')
+  const onlyDisplay = buildPortfolioDisplay({
+    ...input,
+    model: withNearConfidentialZecChain(onlyProjected, 'mainnet'),
+    sourceModel: confidentialOnly
+  })
+  const onlyGroup = onlyDisplay.primaryAssetGroups.find(
+    group => group.representativeAssetId === assetId
+  )
+  expect(onlyGroup).toBeDefined()
+  expect(
+    getMergedZecProviderBalances(onlyGroup.entries, onlyDisplay.confidentialZec, 'shield')
+  ).toBeNull()
 })
 
 test('Home domain projection keeps pending balances on their own networks', () => {

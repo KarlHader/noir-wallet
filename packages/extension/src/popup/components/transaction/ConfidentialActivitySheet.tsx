@@ -18,14 +18,12 @@ import {
   getConfidentialFundingPlanId
 } from '@/popup/services/confidential-funding-client'
 import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
+import type { ActivityPerspective } from '@/popup/services/activity-action-label'
 import type { ActivityItem } from '@/core/activity'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { Network } from '@/types'
-import {
-  getActivityStatusPresentation,
-  isLegacyPrivateShieldWithdrawDestination
-} from './multichain-activity-presentation'
-import { EvmPendingTransactionActions } from './EvmPendingTransactionActions'
+import { getActivityStatusPresentation } from '@/popup/services/multichain-activity-presentation'
+import { EvmPendingTransactionActions } from '../evm/EvmPendingTransactionActions'
 
 export interface ConfidentialActivityTarget {
   readonly network: Network
@@ -44,6 +42,7 @@ interface ConfidentialActivitySheetProps {
 
 export interface ConfidentialActivityDisplay {
   readonly operation: 'send' | 'move' | 'swap'
+  readonly perspective?: ActivityPerspective
   readonly amount: string
   readonly symbol: string
   readonly receiveAmount?: string
@@ -228,12 +227,7 @@ export function ConfidentialActivityView({
         assetMetadata: catalog.assetMetadata,
         chainMetadata: catalog.chainMetadata,
         confidentialPlan: scopedPlan,
-        legacyPrivateShieldWithdrawDestination: isLegacyPrivateShieldWithdrawDestination(
-          scopedActivity,
-          scopedPlan,
-          activeAccount,
-          plan.network
-        ),
+        perspective: display?.perspective,
         refunded,
         ...(refunded ? { statusLabel: 'Refunded', statusTone: 'neutral' as const } : {}),
         fallback: display
@@ -346,7 +340,10 @@ export function ConfidentialActivityView({
         }
       >
         {activityView ? (
-          <ActivityTransactionBody view={activityView} />
+          <ActivityTransactionBody
+            view={activityView}
+            showDate={activityView.item.snapshot?.shield?.operation === 'cluster'}
+          />
         ) : (
           <div className="divide-y divide-border/60 border-y border-border/60 text-sm">
             {display && (

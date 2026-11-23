@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { selectActivityObservation } from '../../../src/popup/services/activity-observation.ts'
+import { getActivityAction } from '../../../src/popup/services/activity-action-label.ts'
+import { filterActivityItems } from '../../../src/popup/services/activity-list-model.ts'
+import { projectLegacyShieldWithdrawActivityGraph } from '../../../src/core/services/confidential-funding/confidential-funding-graph.ts'
 
 import {
   buildActivityExecutionAddressModes,
@@ -14,13 +17,13 @@ import {
   getActivityTransferRecipient,
   getActivitySegmentStatusPresentation,
   getActivityStatusPresentation,
+  getConfirmedFailedActivityAmount,
   getActivitySwapPresentation,
   getClusterSettledDestination,
   getActivitySwapSourceMethodLabel,
   hasMatchingActivityTokenIcons,
-  isAccountModeTransfer,
-  isLegacyPrivateShieldWithdrawDestination
-} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+  isAccountModeTransfer
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 const transactionHash = `0x${'a'.repeat(64)}`
 const replacementTransactionHash = `0x${'b'.repeat(64)}`
@@ -75,6 +78,172 @@ function failedItem(evidence) {
 }
 
 test.describe('Multichain Activity presentation', () => {
+  test('shows confirmed debits but never quoted credits on a failed routed transfer', () => {
+    const assetId = 'eip155:1/slip44:60'
+    const assets = new Map([[assetId, { metadata: { symbol: 'ETH', decimals: 18 } }]])
+    const item = {
+      ...failedItem({ transactionHash }),
+      snapshot: {
+        schemaVersion: 1,
+        direction: 'outgoing',
+        primaryAmount: { assetId, amountRaw: '3000000000000000000' },
+        counterAmount: { assetId, amountRaw: '2000000000000000000' }
+      }
+    }
+    expect(getConfirmedFailedActivityAmount(item, assets, 'outgoing', assetId)).toBeUndefined()
+
+    const debit = {
+      id: 'confirmed-origin',
+      role: 'origin',
+      target: { kind: 'onchain', chainId: 'eip155:1' },
+      status: 'final',
+      evidence: {
+        transactionHash,
+        assetEffects: {
+          source: 'receipt',
+          completeness: 'complete',
+          changes: [{ assetId, amountRaw: '1000000000000000000', direction: 'outgoing' }]
+        }
+      }
+    }
+    const failedAfterDebit = { ...item, segments: [debit] }
+    expect(
+      getConfirmedFailedActivityAmount(failedAfterDebit, assets, 'outgoing', assetId)
+    ).toMatchObject({
+      symbol: 'ETH',
+      exact: '1'
+    })
+    expect(
+      getConfirmedFailedActivityAmount(failedAfterDebit, assets, 'incoming', assetId)
+    ).toBeUndefined()
+  })
+
+  test('classifies internal movement from the viewed domain and known Shield provider', () => {
+    const item = {
+      ...failedItem({ transactionHash }),
+      kind: 'withdraw',
+      snapshot: {
+        direction: 'self',
+        shield: { operation: 'withdraw', sourceDomain: 'shield', destinationDomain: 'private' }
+      }
+    }
+    expect(getActivityAction(item, { viewedDomain: 'private' })).toEqual({
+      label: 'Receive',
+      side: 'destination'
+    })
+    expect(getActivityAction(item, { viewedDomain: 'shield' })).toEqual({
+      label: 'Withdraw',
+      side: 'source'
+    })
+    const zcashWithdrawal = {
+      ...item,
+      snapshot: {
+        ...item.snapshot,
+        shield: { ...item.snapshot.shield, destinationDomain: 'public' },
+        recipient: {
+          chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+          address: 't1recipient'
+        }
+      }
+    }
+    for (const shieldProvider of [undefined, 'near-confidential']) {
+      const perspective = { viewedDomain: 'shield', shieldProvider }
+      expect(getActivityAction(zcashWithdrawal, perspective)).toEqual({
+        label: 'Withdraw',
+        side: 'source'
+      })
+      expect(
+        getActivityAction(
+          { ...zcashWithdrawal, snapshot: { ...zcashWithdrawal.snapshot, direction: 'outgoing' } },
+          perspective
+        )
+      ).toEqual({ label: 'Send', side: 'source' })
+    }
+    expect(
+      getActivityAction(
+        {
+          ...item,
+          snapshot: {
+            ...item.snapshot,
+            shield: { ...item.snapshot.shield, destinationDomain: 'shield' }
+          }
+        },
+        { viewedDomain: 'shield' }
+      )
+    ).toEqual({ label: 'Transfer', side: 'none' })
+    const providerRoute = {
+      sourceFundingSource: 'shielded',
+      destinationAccountMode: 'Confidential'
+    }
+    const historicalSwap = { ...item, kind: 'swap', snapshot: { direction: 'outgoing' } }
+    expect(
+      getActivityAction(
+        historicalSwap,
+        { viewedDomain: 'shield', shieldProvider: 'zcash-shield' },
+        providerRoute
+      )
+    ).toEqual({ label: 'Withdraw', side: 'source' })
+    expect(
+      getActivityAction(
+        historicalSwap,
+        { viewedDomain: 'shield', shieldProvider: 'near-confidential' },
+        providerRoute
+      )
+    ).toEqual({ label: 'Deposit', side: 'destination' })
+    expect(getActivityAction(historicalSwap, { viewedDomain: 'shield' }, providerRoute)).toEqual({
+      label: 'Swap',
+      side: 'none'
+    })
+    const nativeSwap = {
+      ...item,
+      id: 'tx:confidential:native-swap',
+      snapshot: {
+        ...item.snapshot,
+        shield: { operation: 'swap', sourceDomain: 'shield', destinationDomain: 'shield' },
+        primaryAmount: { assetId: 'eip155:1/slip44:60', amountRaw: '100' },
+        counterAmount: {
+          assetId: 'bip122:00040fe8ec8471911baa1db1266ea15d/slip44:133',
+          amountRaw: '90'
+        }
+      }
+    }
+    expect(
+      getActivityAction(nativeSwap, { viewedDomain: 'shield', shieldProvider: 'near-confidential' })
+    ).toEqual({ label: 'Swap', side: 'none' })
+    expect(
+      getActivityAction(nativeSwap, { viewedDomain: 'shield', shieldProvider: 'zcash-shield' })
+    ).toEqual({ label: 'Deposit', side: 'destination' })
+    expect(getActivityAction(nativeSwap, { viewedDomain: 'shield' })).toEqual({
+      label: 'Swap',
+      side: 'none'
+    })
+    const nativeZecRecipient = {
+      ...nativeSwap,
+      snapshot: {
+        ...nativeSwap.snapshot,
+        shield: { ...nativeSwap.snapshot.shield, destinationDomain: 'public' }
+      }
+    }
+    const shieldedDestination = { destinationFundingSource: 'shielded' }
+    expect(
+      getActivityAction(nativeZecRecipient, { viewedDomain: 'shield' }, shieldedDestination)
+    ).toEqual({ label: 'Swap', side: 'none' })
+    expect(
+      getActivityAction(
+        nativeZecRecipient,
+        { viewedDomain: 'shield', shieldProvider: 'near-confidential' },
+        shieldedDestination
+      )
+    ).toEqual({ label: 'Swap', side: 'none' })
+    expect(
+      getActivityAction(
+        nativeZecRecipient,
+        { viewedDomain: 'shield', shieldProvider: 'zcash-shield' },
+        shieldedDestination
+      )
+    ).toEqual({ label: 'Deposit', side: 'destination' })
+  })
+
   test('labels a legacy Shield send to the scoped Private address without relabeling other recipients', () => {
     const chainId = 'eip155:137'
     const privateAddress = `0x${'2'.repeat(40)}`
@@ -108,26 +277,58 @@ test.describe('Multichain Activity presentation', () => {
       destination: { chainId, address: privateAddress },
       externalRecipient: privateAddress
     }
-    const account = {
-      walletId: item.scope.keyDomainId,
-      accountId: item.scope.accountId,
-      networks: [
-        { chain: { id: chainId }, privateExecutionAddress: privateAddress },
-        { chain: { id: 'eip155:1' }, privateExecutionAddress: publicAddress }
-      ]
-    }
     const assets = new Map([[assetId, { metadata: { symbol: 'POL', decimals: 18 } }]])
-    const route = (activity, fundingPlan = plan, activeAccount = account, network = 'mainnet') =>
-      getActivitySwapPresentation(
-        activity,
-        assets,
-        new Map(),
-        new Map(),
-        undefined,
-        isLegacyPrivateShieldWithdrawDestination(activity, fundingPlan, activeAccount, network)
-      )
+    const project = (activity, fundingPlan = plan, ownedAddresses = [privateAddress]) => {
+      const graph = { root: { id: activity.id, scope: activity.scope, intent: activity.snapshot } }
+      return {
+        ...activity,
+        snapshot: projectLegacyShieldWithdrawActivityGraph(
+          graph,
+          fundingPlan,
+          'mainnet',
+          ownedAddresses
+        ).root.intent
+      }
+    }
+    const route = (...args) => getActivitySwapPresentation(project(...args), assets, new Map())
 
     expect(route(item)?.destinationAccountMode).toBe('Confidential')
+    const filters = { items: [project(item)], selectedChainIds: [chainId] }
+    expect(filterActivityItems({ ...filters, domain: 'private' })).toEqual([])
+    expect(filterActivityItems({ ...filters, domain: 'public' })).toEqual([])
+    expect(filterActivityItems({ ...filters, domain: 'shield' })).toEqual(filters.items)
+    const confirmed = {
+      ...project(item),
+      status: 'final',
+      failureCode: undefined,
+      segments: [
+        {
+          id: 'settlement:one',
+          role: 'destination',
+          status: 'final',
+          target: { kind: 'onchain', chainId },
+          evidence: { transactionHash, settledAmount: { assetId, amountRaw: '86' } }
+        }
+      ]
+    }
+    const executionAddressModes = new Map([[`${chainId}:${privateAddress}`, 'Confidential']])
+    const destinationFilters = { ...filters, domain: 'private', executionAddressModes }
+    const [receipt] = filterActivityItems({ ...destinationFilters, items: [confirmed] })
+    expect(receipt).toMatchObject({
+      kind: 'receive',
+      snapshot: { direction: 'incoming', primaryAmount: { assetId, amountRaw: '86' } }
+    })
+    const observed = { ...receipt, id: 'rpc:private-credit', source: 'rpc' }
+    expect(filterActivityItems({ ...destinationFilters, items: [confirmed, observed] })).toEqual([
+      observed
+    ])
+    expect(
+      filterActivityItems({
+        ...destinationFilters,
+        items: [confirmed],
+        executionAddressModes: new Map()
+      })
+    ).toEqual([])
     expect(route(item, { ...plan, externalRecipient: publicAddress })?.destinationAccountMode).toBe(
       'Public'
     )
@@ -137,12 +338,10 @@ test.describe('Multichain Activity presentation', () => {
       route(item, { ...plan, destination: { ...plan.destination, chainId: 'eip155:1' } })
         ?.destinationAccountMode
     ).toBe('Public')
-    expect(
-      route(item, plan, { ...account, accountId: 'account:other' })?.destinationAccountMode
-    ).toBe('Public')
-    expect(
-      route(item, plan, { ...account, networks: account.networks.slice(1) })?.destinationAccountMode
-    ).toBe('Public')
+    expect(route(item, { ...plan, accountId: 'account:other' })?.destinationAccountMode).toBe(
+      'Public'
+    )
+    expect(route(item, plan, [publicAddress])?.destinationAccountMode).toBe('Public')
     expect(
       route({ ...item, snapshot: { ...item.snapshot, direction: 'self' } })?.destinationAccountMode
     ).toBe('Public')
@@ -200,7 +399,8 @@ test.describe('Multichain Activity presentation', () => {
       destinationAccountMode: 'Confidential'
     })
     expect(route.hideDestinationCredit).toBeUndefined()
-    expect(getActivityRouteTitle(item, route)).toBe('Move')
+    expect(getActivityRouteTitle(item, route, { viewedDomain: 'public' })).toBe('Send')
+    expect(getActivityRouteTitle(item, route, { viewedDomain: 'private' })).toBe('Receive')
     expect(hasMatchingActivityTokenIcons(route)).toBe(true)
     expect(
       hasMatchingActivityTokenIcons({
@@ -255,7 +455,7 @@ test.describe('Multichain Activity presentation', () => {
         addressModes
       )?.hideDestinationCredit
     ).toBeUndefined()
-    expect(getActivityRouteTitle(externalTransfer, externalRoute)).toBe('Transfer')
+    expect(getActivityRouteTitle(externalTransfer, externalRoute)).toBe('Send')
   })
 
   test('keeps both Swap assets and their route tied to the correct chains', () => {
@@ -292,6 +492,17 @@ test.describe('Multichain Activity presentation', () => {
       destinationChainIconAlias: 'arbitrum'
     })
     expect(getActivityRouteTitle(item, route)).toBe('Swap')
+    expect(
+      getActivityAction(
+        item,
+        { viewedDomain: 'private' },
+        {
+          ...route,
+          sourceAccountMode: 'Public',
+          destinationAccountMode: 'Confidential'
+        }
+      )
+    ).toEqual({ label: 'Swap', side: 'none' })
     expect(hasMatchingActivityTokenIcons(route)).toBe(false)
     const recipientAddress = `0x${'3'.repeat(40)}`
     const sourceContract = `0x${'4'.repeat(40)}`
@@ -840,6 +1051,7 @@ test.describe('Multichain Activity presentation', () => {
     )
     expect(route?.destinationIsSettled).toBe(true)
     expect(route?.destination?.exact).toBe('0.144798')
+    expect(getClusterSettledDestination({ ...item, reconfirming: true }, plan)).toBeUndefined()
     expect(getClusterSettledDestination(item, { ...plan, phase: 'processing' })).toBeUndefined()
     expect(
       getClusterSettledDestination(item, {

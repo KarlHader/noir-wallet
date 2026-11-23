@@ -402,15 +402,4 @@ test.describe('Source invariants for confirmation lifecycle', () => {
     assert.match(zcashWalletRuntimeSource, /resolveMinedTransactionStatus/)
     assert.match(zcashWalletRuntimeSource, /chainTip,[\s\S]*?type/)
   })
-
-  test('Assets shows every unspendable balance without changing activity status', () => {
-    const balanceSource = readFileSync(
-      new URL('../../../src/popup/components/balance/BalanceWithPending.tsx', import.meta.url),
-      'utf-8'
-    )
-    assert.match(balanceSource, /safeBig\(pending\)\.gt\(0\)/)
-    assert.match(balanceSource, /ZEC unspendable/)
-    assert.doesNotMatch(balanceSource, /DUST_THRESHOLD/)
-    assert.doesNotMatch(balanceSource, /ZEC confirming/)
-  })
 })

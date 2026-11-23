@@ -27,9 +27,16 @@ export {
   type ConfidentialWithdrawRequest,
   type ConfidentialWithdrawRow
 } from './confidential-funding-model'
-export { createConfidentialFundingGraph } from './confidential-funding-graph'
+export {
+  createConfidentialFundingGraph,
+  getConfidentialFundingPlanId,
+  isLegacyShieldWithdrawActivityGraph,
+  projectLegacyShieldWithdrawActivityGraph,
+  projectShieldDepositSettlement
+} from './confidential-funding-graph'
 export {
   createExternalShieldDepositGraph,
+  isExternalShieldDepositAutoHidden,
   projectExternalShieldDepositActivityGraph
 } from './confidential-external-deposit'
 export type {

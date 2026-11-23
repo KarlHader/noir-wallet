@@ -1,14 +1,17 @@
 import { cn } from '@/lib/utils'
 
+const skeletonClassName = 'animate-pulse rounded-md bg-white/[0.08] motion-reduce:animate-none'
+
 export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div {...props} aria-hidden="true" className={cn(skeletonClassName, className)} />
+}
+
+export function BalanceSkeleton({ className }: { readonly className?: string }) {
   return (
-    <div
-      {...props}
-      aria-hidden="true"
-      className={cn(
-        'animate-pulse rounded-md bg-white/[0.08] motion-reduce:animate-none',
-        className
-      )}
+    <span
+      role="status"
+      aria-label="Loading balance"
+      className={cn(skeletonClassName, 'inline-block h-3 w-12 max-w-full align-middle', className)}
     />
   )
 }

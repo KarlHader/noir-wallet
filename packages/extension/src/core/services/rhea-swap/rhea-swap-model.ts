@@ -7,7 +7,7 @@ import type {
   SwapBuild,
   SwapExecution,
   SwapTokenListItem
-} from '@rhea-finance/cross-chain-aggregation-dex'
+} from './rhea-swap-protocol'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { SigningSummary } from '@/core/keyring/domain'
 import type { TransactionGraph } from '@/core/transactions/domain'
@@ -17,6 +17,10 @@ import {
 } from '@/config/asset-market-assets'
 import { NOIR_SWAP_REFERRAL } from '@/config/intents'
 import { createInitialProductChainRegistry, getZcashChainId } from '@/core/chains/registry'
+import {
+  getEvmRouteAssetIdentity,
+  getPrivateCrossChainTransferAssetGroup
+} from '@/core/chains/cross-chain-asset-group'
 
 const RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/
@@ -40,6 +44,7 @@ export type PrivateQuotePurpose =
   | 'private-swap'
   | 'private-transfer'
   | 'private-cross-chain-send'
+  | 'private-cross-chain-withdraw'
   | 'private-dapp-transfer'
   | 'public-private-send'
 
@@ -198,6 +203,30 @@ export function assertPrivateQuoteRoute(
     }
     return
   }
+  if (purpose === 'private-cross-chain-withdraw') {
+    const destination = account.networks.find(
+      network => network.chainId === `eip155:${request.toChain}`
+    )
+    const recipient = request.recipient?.toLowerCase()
+    const origin = getPrivateWithdrawAsset(request.fromChain, request.tokenIn)
+    const target = getPrivateWithdrawAsset(request.toChain, request.tokenOut)
+    if (
+      !scope ||
+      request.fromChain === request.toChain ||
+      !origin ||
+      !target ||
+      origin.group !== target.group ||
+      origin.namespace !== target.namespace ||
+      !recipient ||
+      !/^0x[0-9a-f]{40}$/.test(recipient) ||
+      /^0x0{40}$/.test(recipient) ||
+      !destination?.addresses?.some(address => address.value.toLowerCase() === recipient) ||
+      destination.privateExecutionAddress?.toLowerCase() === recipient
+    ) {
+      throw new Error('Cross-chain Withdraw must stay in this Account and asset.')
+    }
+    return
+  }
   if (purpose === 'private-dapp-transfer') {
     if (
       request.fromChain !== request.toChain ||
@@ -245,6 +274,38 @@ export function assertPrivateQuoteRoute(
   ) {
     throw new Error('Private Swap must stay in this Account.')
   }
+}
+
+export function isEvmNativeQuoteAddress(chain: string, address: string): boolean {
+  return new Set([
+    '0x0000000000000000000000000000000000000000',
+    '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    getEvmNativeProtocolAssetId(`eip155:${chain}`)?.toLowerCase(),
+    ...(chain === '137' ? ['0x0000000000000000000000000000000000001010'] : [])
+  ]).has(address.toLowerCase())
+}
+
+export function getPrivateWithdrawAsset(chain: ChainRef, token: AssetRef) {
+  if (
+    token.chain !== chain ||
+    !RHEA_SWAP_CHAIN_CATALOG.some(item => item.apiChainId === chain && item.walletFamily === 'evm')
+  )
+    return null
+  const nativeAddress = isEvmNativeQuoteAddress(chain, token.address)
+  if (
+    Boolean(token.isNative) !== nativeAddress ||
+    (!nativeAddress && !/^0x[0-9a-f]{40}$/i.test(token.address))
+  )
+    return null
+  const asset = getEvmRouteAssetIdentity(`eip155:${chain}`, token.address, nativeAddress)
+  const group = asset && getPrivateCrossChainTransferAssetGroup(asset)
+  return asset && group
+    ? {
+        group,
+        namespace: asset.namespace,
+        id: `${asset.chainId}/${asset.namespace}:${asset.reference}`
+      }
+    : null
 }
 
 const RHEA_NATIVE_QUOTE_ADDRESSES = Object.freeze(
@@ -496,6 +557,7 @@ export interface RheaSwapEvmCallView {
   readonly data: string
   readonly value: string
   readonly from: string | null
+  readonly gasLimit?: string
 }
 
 export interface RheaSwapEvmTransactionPlan {
@@ -557,6 +619,8 @@ export interface RheaSwapNearTransactionBatchPlan {
   readonly quoteHandle: string
   readonly executionId: string
   readonly chain: string
+  readonly tokenIn: string
+  readonly amountIn: string
   readonly transactions: readonly Readonly<{
     readonly signerId: string | null
     readonly receiverId: string
@@ -591,7 +655,7 @@ export interface RheaSwapSubmissionView {
 
 export interface RheaSwapOrderStatusView {
   readonly quoteHandle: string
-  readonly orderId: string
+  readonly orderId: string | null
   readonly router: string
   readonly status: OrderStatus
   readonly destinationHash: string | null
@@ -721,21 +785,21 @@ export function parseRheaSwapQuoteRequest(value: unknown): RheaSwapQuoteRequest 
   })
 }
 
-export function toSdkQuoteRequest(value: RheaSwapQuoteRequest): QuoteRequest {
+export function toRheaSwapProtocolRequest(value: RheaSwapQuoteRequest): QuoteRequest {
   const { quoteMode, ...quoteFields } = value
   const fast = quoteMode === 'fast'
   return Object.freeze({
     ...quoteFields,
-    tokenIn: toSdkQuoteAsset(value.tokenIn),
-    tokenOut: toSdkQuoteAsset(value.tokenOut),
+    tokenIn: toRheaSwapProtocolAsset(value.tokenIn),
+    tokenOut: toRheaSwapProtocolAsset(value.tokenOut),
     extensions: Object.freeze({ referral: NOIR_SWAP_REFERRAL }),
-    quoteWaitingTimeMs: fast ? 1_500 : 6_000,
-    sameChainTimeoutMs: fast ? 500 : 1_500,
-    crossChainTimeoutMs: fast ? 1_500 : 6_000
+    quoteWaitingTimeMs: fast ? 2_000 : 6_000,
+    sameChainTimeoutMs: fast ? 1_000 : 1_500,
+    crossChainTimeoutMs: fast ? 2_000 : 6_000
   })
 }
 
-function toSdkQuoteAsset(asset: AssetRef): AssetRef {
+function toRheaSwapProtocolAsset(asset: AssetRef): AssetRef {
   // Retained catalog values must not leak a catalog-only identifier into the quote API.
   const alias = RHEA_NATIVE_CATALOG_ALIASES.get(`${asset.chain}:${asset.address}`)
   return alias ? Object.freeze({ ...asset, address: alias.quoteAddress, isNative: true }) : asset

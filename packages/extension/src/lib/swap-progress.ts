@@ -63,7 +63,7 @@ export function getRheaSwapProgressStatus(
   const refunded = segments.some(segment => segment.role === 'refund' && segment.status === 'final')
   const status = refunded
     ? 'REFUNDED'
-    : relay?.status === 'failed'
+    : relay?.status === 'failed' || destination?.status === 'failed'
       ? 'FAILED'
       : relay?.status === 'final' && destination?.status === 'final'
         ? 'SUCCESS'

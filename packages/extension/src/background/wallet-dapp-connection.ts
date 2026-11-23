@@ -3,7 +3,8 @@ import {
   connectionAuthorizesAccountForWalletStatus,
   getConnectionChainAuthorization,
   type AccountRef,
-  type ConnectedDApp
+  type ConnectedDApp,
+  type SiteDisconnectedDApp
 } from '@/core/dapp/dapp-manager'
 
 export interface WalletDAppActiveAccount {
@@ -12,7 +13,7 @@ export interface WalletDAppActiveAccount {
 }
 
 interface WalletDAppConnectionOptions {
-  readonly getCurrentTabDApp: () => Promise<ConnectedDApp | null>
+  readonly getCurrentTabDApp: () => Promise<ConnectedDApp | SiteDisconnectedDApp | null>
   readonly getConnection: (origin: string) => Promise<ConnectedDApp | null>
   readonly loadActiveAccount: () => Promise<WalletDAppActiveAccount | null>
   readonly getEvmChainId: (dapp: ConnectedDApp) => string | Promise<string>
@@ -53,6 +54,9 @@ export class WalletDAppConnectionCoordinator {
       const dapp = await this.options.getCurrentTabDApp()
       if (!dapp) {
         return { dapp: null, currentAccountAuthorized: false, canConnectCurrentAccount: false }
+      }
+      if ('disconnectedBySite' in dapp) {
+        return { dapp, currentAccountAuthorized: false, canConnectCurrentAccount: false }
       }
       const active = await this.options.loadActiveAccount()
       if (!active) {

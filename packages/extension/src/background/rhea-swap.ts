@@ -1,24 +1,27 @@
 import {
   normalizeBuild,
   normalizeQuote,
+  parseStoredSwapBuildRequest,
+  readRheaSwapReportRecordId,
   type QuoteRequest,
   type SwapBuildDataRaw,
-  type SwapBuildRequestRaw,
   type SwapReportRequestRaw,
   type SwapQuoteDataRaw
-} from '@rhea-finance/cross-chain-aggregation-dex'
+} from '@/core/services/rhea-swap/rhea-swap-protocol'
 import { RheaSwapCatalogClient } from '@/core/services/rhea-swap/rhea-swap-catalog-client'
 import {
   RheaSwapService,
   RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
+  getPrivateWithdrawAsset,
   parseRheaSwapQuoteRequest,
-  toSdkQuoteRequest,
+  toRheaSwapProtocolRequest,
   type RheaSwapQuoteSessionRecord,
   type RheaSwapQuoteSessionStore,
   type RheaSwapToken,
   type RheaSwapCatalogResult
 } from '@/core/services/rhea-swap'
 import type { TransactionGraph } from '@/core/transactions/domain'
+import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/config/extension'
 import { RHEA_SWAP_TRANSACTION_MONITOR_ALARM } from './rhea-swap-transaction-monitor'
 import type { FundingSource, QuoteBinding } from '@/types/wallet'
@@ -146,7 +149,7 @@ function parseStoredRequest(value: unknown): QuoteRequest {
   })
   // Existing quotes retain their timing budgets when defaults change.
   const normalized = Object.freeze({
-    ...toSdkQuoteRequest(parsed),
+    ...toRheaSwapProtocolRequest(parsed),
     quoteWaitingTimeMs: readStoredQuoteTiming(value.quoteWaitingTimeMs),
     sameChainTimeoutMs: readStoredQuoteTiming(value.sameChainTimeoutMs),
     crossChainTimeoutMs: readStoredQuoteTiming(value.crossChainTimeoutMs)
@@ -214,6 +217,7 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
         privateSwapScope.purpose !== 'private-swap' &&
         privateSwapScope.purpose !== 'private-transfer' &&
         privateSwapScope.purpose !== 'private-cross-chain-send' &&
+        privateSwapScope.purpose !== 'private-cross-chain-withdraw' &&
         privateSwapScope.purpose !== 'private-dapp-transfer' &&
         privateSwapScope.purpose !== 'public-private-send'))
   ) {
@@ -238,7 +242,7 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
     ) {
       throw new Error('Stored RHEA Swap build metadata is invalid')
     }
-    const buildRequest = value.build.request as SwapBuildRequestRaw
+    const buildRequest = parseStoredSwapBuildRequest(value.build.request)
     const buildRaw = value.build.raw as SwapBuildDataRaw
     normalizeBuild(buildRaw, value.build.executionId, buildRequest)
     build = Object.freeze({
@@ -261,10 +265,13 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
       'reportRequest',
       'reportStatus'
     ]
+    const recordId = readRheaSwapReportRecordId(value.submission.recordId)
     if (
-      (keys.length !== expected.length &&
-        !(keys.length === expected.length + 1 && keys.includes('disposeAfterReport'))) ||
+      keys.some(
+        key => !expected.includes(key) && key !== 'disposeAfterReport' && key !== 'recordId'
+      ) ||
       expected.some(key => !keys.includes(key)) ||
+      (value.submission.recordId !== undefined && recordId !== value.submission.recordId) ||
       (value.submission.disposeAfterReport !== undefined &&
         typeof value.submission.disposeAfterReport !== 'boolean') ||
       (value.submission.orderId !== null && typeof value.submission.orderId !== 'string') ||
@@ -297,6 +304,7 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
             ),
       reportRequest: parseStoredReportRequest(value.submission.reportRequest),
       reportStatus: value.submission.reportStatus,
+      ...(recordId === undefined ? {} : { recordId }),
       ...(value.submission.disposeAfterReport === undefined
         ? {}
         : { disposeAfterReport: value.submission.disposeAfterReport })
@@ -329,6 +337,7 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
                     | 'private-swap'
                     | 'private-transfer'
                     | 'private-cross-chain-send'
+                    | 'private-cross-chain-withdraw'
                     | 'private-dapp-transfer'
                     | 'public-private-send'
                 })
@@ -410,6 +419,73 @@ export class ChromeRheaSwapQuoteStore implements RheaSwapQuoteSessionStore {
   }
 }
 
+export async function recoverRheaWithdrawActivity(
+  graph: TransactionGraph,
+  quotes: Pick<RheaSwapQuoteSessionStore, 'get'> = new ChromeRheaSwapQuoteStore(),
+  repository: Pick<
+    IndexedDbTransactionRepository,
+    'backfillRheaWithdrawActivity'
+  > = new IndexedDbTransactionRepository()
+): Promise<TransactionGraph> {
+  const { scope, id, intent, kind } = graph.root
+  const binding = intent?.protocol
+  if (
+    kind !== 'transfer' ||
+    binding?.provider !== 'rhea-cross-chain-dex' ||
+    binding.balanceTransfer !== undefined ||
+    binding.userAction !== 'transfer' ||
+    !binding.isCrossChain ||
+    !binding.origin.chainId.startsWith('eip155:') ||
+    !binding.destination.chainId.startsWith('eip155:') ||
+    binding.origin.chainId === binding.destination.chainId
+  ) {
+    return graph
+  }
+  const sourceHash = graph.segments.find(
+    segment =>
+      segment.role === 'origin' &&
+      segment.target.kind === 'onchain' &&
+      segment.target.chainId === binding.origin.chainId
+  )?.evidence?.transactionHash
+  if (!sourceHash || !/^0x[0-9a-f]{64}$/i.test(sourceHash)) return graph
+  const quote = await quotes.get(binding.quoteHandle)
+  const quoteScope = quote?.privateSwapScope
+  if (
+    !quote ||
+    quoteScope?.purpose !== 'private-cross-chain-withdraw' ||
+    quoteScope.walletId !== scope.keyDomainId ||
+    quoteScope.accountId !== scope.accountId ||
+    quote.quoteHandle !== binding.quoteHandle ||
+    quote.build?.executionId !== binding.executionId ||
+    (quote.submission && quote.submission.sourceHash.toLowerCase() !== sourceHash.toLowerCase())
+  ) {
+    return graph
+  }
+  const { request } = quote
+  if (
+    request.confidentiality !== 'basic' ||
+    request.fromChain !== binding.origin.protocolChainId ||
+    request.toChain !== binding.destination.protocolChainId ||
+    request.sender.toLowerCase() !== binding.sender.toLowerCase() ||
+    request.sender.toLowerCase() !== intent?.sender?.address.toLowerCase() ||
+    request.recipient?.toLowerCase() !== binding.destination.recipient.toLowerCase() ||
+    request.amountIn !== binding.originAmountRaw ||
+    getPrivateWithdrawAsset(request.fromChain, request.tokenIn)?.id !== binding.origin.assetId ||
+    getPrivateWithdrawAsset(request.toChain, request.tokenOut)?.id !== binding.destination.assetId
+  ) {
+    return graph
+  }
+  return (
+    (await repository.backfillRheaWithdrawActivity(
+      scope,
+      id,
+      binding.quoteHandle,
+      binding.executionId,
+      sourceHash
+    )) ?? graph
+  )
+}
+
 let service: RheaSwapService | null | undefined
 
 export function createBackgroundRheaSwapService(): RheaSwapService | null {
@@ -423,7 +499,6 @@ export function createBackgroundRheaSwapService(): RheaSwapService | null {
     baseUrl: 'https://api.rhea.finance',
     apiKey: accessToken,
     timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-    reportMode: 'manual',
     tokenListCacheTtlMs: RHEA_SWAP_TOKEN_CATALOG_TTL_MS
   })
   service = new RheaSwapService(client, new ChromeRheaSwapQuoteStore())

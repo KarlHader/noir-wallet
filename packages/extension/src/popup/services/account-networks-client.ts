@@ -405,11 +405,13 @@ let productionClient: ReturnType<typeof createAccountNetworksClient> | undefined
 let productionRegistryKey = ''
 let catalogRevision = 0
 let catalogListenerInstalled = false
-let cachedCatalog: {
+interface CachedAccountNetworksCatalog {
   scope: string
   registryKey: string
   value: AccountNetworksCatalogView
-} | null = null
+}
+let cachedCatalog: CachedAccountNetworksCatalog | null = null
+let cachedPublicCatalog: CachedAccountNetworksCatalog | null = null
 
 function observeCatalogInvalidation() {
   if (catalogListenerInstalled) return
@@ -424,6 +426,7 @@ function observeCatalogInvalidation() {
     )
       return
     cachedCatalog = null
+    cachedPublicCatalog = null
     catalogRevision++
   })
 }
@@ -459,6 +462,13 @@ export const accountNetworksClient = Object.freeze({
       ? cachedCatalog.value
       : null
   },
+  readCachedPublicCatalog: (scope: string): AccountNetworksCatalogView | null => {
+    observeCatalogInvalidation()
+    return cachedPublicCatalog?.scope === scope &&
+      cachedPublicCatalog.registryKey === JSON.stringify(getActiveChainEndpointSettings())
+      ? cachedPublicCatalog.value
+      : null
+  },
   getCatalog: async (options: AccountNetworksCatalogOptions & { readonly scope?: string } = {}) => {
     observeCatalogInvalidation()
     const revision = catalogRevision
@@ -473,11 +483,20 @@ export const accountNetworksClient = Object.freeze({
     const result = await productionClient.getCatalog(options)
     const { scope, deriveMissingAddresses } = options
     const active = result?.accounts.find(account => account.active)
-    if (scope && deriveMissingAddresses !== false && revision === catalogRevision) {
-      cachedCatalog =
-        result && active && scope === `${DEFAULT_NETWORK}:${active.walletId}:${active.accountId}`
-          ? { scope, registryKey, value: result }
+    if (revision === catalogRevision) {
+      const entry =
+        result && active
+          ? {
+              scope: `${DEFAULT_NETWORK}:${active.walletId}:${active.accountId}`,
+              registryKey,
+              value: result
+            }
           : null
+      if (deriveMissingAddresses === false) {
+        cachedPublicCatalog = entry
+      } else if (scope) {
+        cachedCatalog = entry?.scope === scope ? entry : null
+      }
     }
     return result
   }

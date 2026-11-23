@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ChainSelector } from './ChainSelector'
 import { Icon } from '@iconify/react'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
@@ -7,6 +7,14 @@ import {
   deferredChainChoices,
   selectableChainOptions
 } from '@/popup/services/chain-selection-availability'
+
+export function NetworkFilterToolbar({ children }: { readonly children: ReactNode }) {
+  return (
+    <div className="flex h-[45px] shrink-0 items-center justify-between gap-2 pt-[9px] pr-2 pb-1 pl-4">
+      {children}
+    </div>
+  )
+}
 
 export interface NetworkFilterOption {
   readonly id: string
@@ -42,7 +50,7 @@ export function NetworkFilter({
         type="button"
         aria-label={`${ariaLabelPrefix}: ${label}`}
         onClick={() => setOpen(true)}
-        className="wallet-interactive flex h-8 min-w-[117px] max-w-[190px] items-center justify-between gap-3 rounded-full bg-accent px-3.5 text-[13px] text-muted hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+        className="wallet-interactive flex h-8 min-w-[107px] max-w-[190px] items-center justify-between gap-1.5 rounded-lg bg-[var(--home-toolbar-surface,var(--color-wallet-surface))] px-2.5 text-[13px] text-muted hover:bg-accent active:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
       >
         <span className="flex min-w-0 items-center gap-1.5">
           {selectedOption && (
@@ -62,7 +70,7 @@ export function NetworkFilter({
           )}
           <span className="truncate">{label}</span>
         </span>
-        <Icon icon="lucide:chevron-down" width={13} height={13} className="text-muted" />
+        <Icon icon="lucide:chevron-down" width={13} height={13} className="shrink-0" />
       </button>
 
       <ChainSelector

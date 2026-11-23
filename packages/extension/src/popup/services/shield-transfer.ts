@@ -17,7 +17,7 @@ import {
   getAssetMarketMappings,
   getAssetProtocolSourceMappings
 } from '@/core/prices/asset-market-mappings'
-import type { Network } from '@/types'
+import type { FundingSource, Network } from '@/types'
 import { isAddress } from 'viem'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import type { PrepareConfidentialFundingRequest } from './confidential-funding-client'
@@ -42,6 +42,54 @@ export type ShieldFundingAsset = Readonly<{
   managed: ShieldTransferAsset
   marketAssetId?: string
 }>
+
+export interface ShieldTokenPickerItem {
+  readonly key: string
+  readonly assetId: string
+  readonly symbol: string
+  readonly name?: string
+  readonly searchTerms?: readonly string[]
+  readonly contractAddress?: string
+  readonly iconUrl?: string
+  readonly chainName: string
+  readonly chainId: string
+  readonly badgeBlockchain?: string
+  readonly nativeIconChain?: string
+  readonly zcashFundingSource?: FundingSource
+  readonly sourceLabel?: string
+  readonly availableRaw?: string
+  readonly displayBalance?: string
+  readonly decimals: number
+  readonly priceUsd?: string | number | null
+  readonly disabledReason?: string
+  readonly subtitle?: string
+  readonly title?: string
+  readonly ariaLabel?: string
+}
+
+export function getZcashTokenPickerChain(network: Network) {
+  return {
+    chainId: getZcashChainId(network),
+    chainName: network === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+    badgeBlockchain: 'zec'
+  }
+}
+
+export function listShieldTokenPickerNetworks(
+  rows: readonly Readonly<{ chainId: string; chainName: string; badgeBlockchain?: string }>[]
+) {
+  const networks = new Map<string, { id: string; label: string; iconChain: string }>()
+  for (const { chainId, chainName, badgeBlockchain } of rows) {
+    if (!networks.has(chainId)) {
+      networks.set(chainId, {
+        id: chainId,
+        label: chainName,
+        iconChain: badgeBlockchain ?? chainId
+      })
+    }
+  }
+  return [...networks.values()]
+}
 
 export function formatShieldQuoteTime(seconds: number): string {
   return formatIntentsConfirmationTime(seconds)
@@ -424,6 +472,34 @@ export function listShieldSendDestinations(
   network: Network
 ): readonly ShieldFundingAsset[] {
   return options.filter(option => isShieldSendDestination(source, option, network))
+}
+
+export function createShieldSendRoutes(options: readonly ShieldFundingAsset[], network: Network) {
+  const destinationsByChain = new Map<string, ShieldFundingAsset[]>()
+  for (const option of options) {
+    if (!isShieldSendDestination(option, option, network)) continue
+    const chainId = option.chain.chain.id
+    const destinations = destinationsByChain.get(chainId)
+    if (destinations) destinations.push(option)
+    else destinationsByChain.set(chainId, [option])
+  }
+
+  const getDestination = (source: ShieldFundingAsset | null, chainId: string | null) => {
+    if (!source || !chainId) return null
+    const candidates = destinationsByChain.get(chainId)
+    if (!candidates) return null
+    return selectShieldWithdrawDestinationForNetwork(
+      listShieldSendDestinations(source, candidates, network),
+      source,
+      chainId
+    )
+  }
+
+  return {
+    networks: Array.from(destinationsByChain.values(), ([first]) => first!.chain.chain),
+    getDestination,
+    getSources: (chainId: string) => options.filter(source => getDestination(source, chainId))
+  }
 }
 
 export function estimateShieldSendRouteFee(

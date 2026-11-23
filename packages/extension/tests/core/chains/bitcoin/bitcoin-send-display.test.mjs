@@ -4,7 +4,7 @@ import {
   formatBitcoinInputAddressType,
   isBitcoinBalanceKnown,
   isBitcoinSendAmountValid
-} from '../../../../src/popup/pages/transactions/bitcoin-send-display'
+} from '../../../../src/popup/services/bitcoin-send-model'
 
 function input(scriptType) {
   return { scriptType }

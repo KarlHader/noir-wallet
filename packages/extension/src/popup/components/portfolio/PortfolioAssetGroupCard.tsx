@@ -19,25 +19,28 @@ import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import {
   lookupSwapTokenForWalletAsset,
   resolvePortfolioAssetIconUrl
-} from '@/popup/components/tokens/portfolio-token-swap-icon'
+} from '@/popup/services/portfolio-token-swap-icon'
 import { BalanceHelp } from '@/popup/components/transaction/BalanceHelp'
-import { getPortfolioAssetUsdValue } from './portfolio-prices'
-import { formatDisplayAmount } from './portfolio-format'
+import { getPortfolioAssetUsdValue } from '@/popup/services/portfolio-prices'
+import { formatDisplayAmount } from '@/popup/services/portfolio-format'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import {
   getAvailablePortfolioAssetGroupUsdValue,
-  getPortfolioAssetDomainBalances,
+  getMergedZecProviderBalances,
   getPortfolioAssetGroupUnitQuote,
   type PortfolioAssetGroup,
   type PortfolioAssetGroupEntry
 } from '@/popup/services/portfolio-presentation'
 import type { AssetDomain } from '@/popup/services/asset-domains'
-import type { NearConfidentialZecRow } from '@/popup/services/near-confidential-holdings'
-import { ZcashFundingBadge } from '@/popup/components/account/ZcashFundingBadge'
+import {
+  addNearConfidentialZecFiat,
+  type NearConfidentialZecRow
+} from '@/popup/services/near-confidential-holdings'
+import { ZcashFundingBadge } from '@/popup/components/zcash/ZcashFundingBadge'
 import { Tooltip } from '@/popup/components/ui/tooltip'
 
 export const portfolioAssetRowClassName =
-  'flex min-h-[72px] w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left'
+  'flex min-h-[72px] w-full min-w-0 items-center gap-[9px] px-4 py-2.5 text-left'
 
 export function PortfolioAssetRowContent({
   icon,
@@ -117,74 +120,41 @@ function assetPendingAmount(asset: PortfolioAssetView): Big {
   return new Big(formatBaseUnitDecimalAmount(asset.balance.pendingRaw, asset.metadata.decimals))
 }
 
-function addConfidentialZecFiat(
-  fiat: string | null,
-  zec: NearConfidentialZecRow | null
-): string | null {
-  if (!zec?.mergedHolding || zec.fiat === null) return fiat
-  return new Big(fiat ?? '0').plus(zec.fiat).toFixed()
-}
-
 function PortfolioAssetQuantity({
-  entries,
-  domain,
-  prices,
   balancesHidden,
-  confidentialZec,
   amount,
-  symbol
+  symbol,
+  providerBalances
 }: {
-  readonly entries: readonly PortfolioAssetGroupEntry[]
-  readonly domain: AssetDomain
-  readonly prices: AssetPriceReadModel | null
   readonly balancesHidden: boolean
-  readonly confidentialZec?: NearConfidentialZecRow | null
   readonly amount: Big
   readonly symbol: string
+  readonly providerBalances?: ReturnType<typeof getMergedZecProviderBalances>
 }) {
-  if (balancesHidden) return <p className="mt-0.5 break-all text-xs text-muted">••••</p>
-
-  const domainBalances = getPortfolioAssetDomainBalances(entries, domain, prices)
-  const isZcash = entries.every(entry => entry.chain.chain.family === 'zcash')
-  const balances = confidentialZec
-    ? [...domainBalances, { ...confidentialZec, domain: 'near-confidential' as const }]
-    : domainBalances
+  const quantity = (
+    <p className="mt-0.5 break-all text-xs text-muted">
+      {balancesHidden ? '••••' : `${formatDisplayAmount(amount)} ${formatSymbol(symbol)}`}
+    </p>
+  )
+  if (balancesHidden || !providerBalances) return quantity
   return (
     <Tooltip
       side="top"
       className="max-w-[260px]"
       content={
         <div className="space-y-1.5">
-          {balances.map(balance => (
-            <div key={balance.domain} className="flex items-start justify-between gap-4">
-              <span className="shrink-0">
-                {balance.domain === 'public' && isZcash
-                  ? 'Transparent'
-                  : balance.domain === 'public'
-                    ? 'Public'
-                    : balance.domain === 'shield'
-                      ? 'Shield'
-                      : balance.domain === 'near-confidential'
-                        ? 'NEAR Confidential'
-                        : 'Private'}
-              </span>
+          {providerBalances.map(({ provider, amount: providerAmount }) => (
+            <div key={provider} className="flex items-start justify-between gap-4">
+              <span className="shrink-0">{provider}</span>
               <span className="text-right tabular-nums">
-                <span className="block">
-                  {balance.amount === null ? '—' : formatDisplayAmount(new Big(balance.amount))}{' '}
-                  {formatSymbol(symbol)}
-                </span>
-                <span className="block opacity-70">
-                  {balance.fiat === null ? '—' : formatFiatAmount(balance.fiat, { showSign: true })}
-                </span>
+                {formatDisplayAmount(new Big(providerAmount))} {formatSymbol(symbol)}
               </span>
             </div>
           ))}
         </div>
       }
     >
-      <span className="mt-0.5 inline-block break-all text-xs text-muted underline decoration-dotted underline-offset-2">
-        {formatDisplayAmount(amount.plus(confidentialZec?.amount ?? '0'))} {formatSymbol(symbol)}
-      </span>
+      {quantity}
     </Tooltip>
   )
 }
@@ -193,10 +163,7 @@ function PendingAssetAmount({ amount, symbol }: { readonly amount: Big; readonly
   if (amount.lte(0)) return null
   return (
     <div className="flex min-w-0 items-center justify-end gap-1 px-3 pb-2.5 text-[11px] text-muted">
-      <span
-        className="min-w-0 break-all text-right"
-        title={`${amount.toFixed()} ${formatSymbol(symbol)} pending`}
-      >
+      <span className="min-w-0 break-all text-right">
         {formatDisplayAmount(amount)} {formatSymbol(symbol)} pending
       </span>
       <BalanceHelp kind="pending" />
@@ -263,7 +230,7 @@ function PortfolioAssetBalanceRow({
   const amount = assetAmount(entry.asset)
   const pendingAmount = assetPendingAmount(entry.asset)
   const zec = confidentialZec?.assetId === entry.asset.asset.id ? confidentialZec : null
-  const fiat = addConfidentialZecFiat(getPortfolioAssetUsdValue(entry.asset, prices), zec)
+  const fiat = addNearConfidentialZecFiat(getPortfolioAssetUsdValue(entry.asset, prices), zec)
   const quote = findAssetPrice(prices, entry.asset.asset.id)
   const chainAlias = resolveChainIconAlias(
     entry.chain.chain.family,
@@ -310,7 +277,7 @@ function PortfolioAssetBalanceRow({
           </div>
           {showUnitPrice && (
             <UnitPrice
-              price={quote?.priceUsd ?? null}
+              price={quote?.priceUsd ?? zec?.mergedHolding?.entry.priceUsd ?? null}
               percent24h={quote?.marketChange?.percent24h}
               changeFreshness={quote?.marketChange?.freshness}
               loading={pricesLoading}
@@ -330,13 +297,10 @@ function PortfolioAssetBalanceRow({
             </p>
           )}
           <PortfolioAssetQuantity
-            entries={[entry]}
-            domain={domain ?? 'all'}
-            prices={prices}
             balancesHidden={balancesHidden}
-            confidentialZec={zec}
-            amount={amount}
+            amount={amount.plus(zec?.amount ?? '0')}
             symbol={entry.asset.metadata.symbol}
+            providerBalances={getMergedZecProviderBalances([entry], zec, domain ?? 'all')}
           />
         </div>
       </button>
@@ -376,7 +340,10 @@ export function PortfolioAssetGroupCard({
     new Big(0)
   )
   const zec = group.representativeAssetId === confidentialZec?.assetId ? confidentialZec : null
-  const fiat = addConfidentialZecFiat(getAvailablePortfolioAssetGroupUsdValue(group, prices), zec)
+  const fiat = addNearConfidentialZecFiat(
+    getAvailablePortfolioAssetGroupUsdValue(group, prices),
+    zec
+  )
   const unitQuote = getPortfolioAssetGroupUnitQuote(group, prices)
   const representativeAsset = group.entries[0]?.asset
   const chainBadge =
@@ -403,7 +370,7 @@ export function PortfolioAssetGroupCard({
         }
         className={cn(
           portfolioAssetRowClassName,
-          'wallet-interactive hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
+          'wallet-interactive hover:bg-foreground/[0.03] active:bg-foreground/[0.06] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
           !balancesHidden && pendingAmount.gt(0) && 'pb-0'
         )}
       >
@@ -418,7 +385,7 @@ export function PortfolioAssetGroupCard({
                     icon: group.iconUrl,
                     blockchain: chainBadge
                   })}
-              size={36}
+              size={32}
               className="shrink-0"
             />
           }
@@ -438,7 +405,7 @@ export function PortfolioAssetGroupCard({
           }
           subtitle={
             <UnitPrice
-              price={unitQuote?.priceUsd ?? null}
+              price={unitQuote?.priceUsd ?? zec?.mergedHolding?.entry.priceUsd ?? null}
               percent24h={unitQuote?.percent24h}
               changeFreshness={unitQuote?.changeFreshness}
               loading={pricesLoading}
@@ -449,7 +416,7 @@ export function PortfolioAssetGroupCard({
               {!balancesHidden && fiat === null && pricesLoading ? (
                 <Skeleton className="ml-auto h-4 w-16" />
               ) : (
-                <p className="break-all text-base font-medium">
+                <p className="break-all text-base font-medium [[data-wallet-palette=public]_&]:font-semibold">
                   {balancesHidden
                     ? '••••'
                     : fiat === null
@@ -458,13 +425,10 @@ export function PortfolioAssetGroupCard({
                 </p>
               )}
               <PortfolioAssetQuantity
-                entries={group.entries}
-                domain={domain}
-                prices={prices}
                 balancesHidden={balancesHidden}
-                confidentialZec={zec}
-                amount={totalAmount}
+                amount={totalAmount.plus(zec?.amount ?? '0')}
                 symbol={group.symbol}
+                providerBalances={getMergedZecProviderBalances(group.entries, zec, domain)}
               />
             </>
           }

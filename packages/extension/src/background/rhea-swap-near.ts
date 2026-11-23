@@ -12,6 +12,10 @@ import type {
   RheaSwapSignedOrderResult
 } from '@/core/services/rhea-swap'
 import {
+  isNearWrapSwapSource,
+  prependRheaSwapNearWrap
+} from '@/core/services/rhea-swap/rhea-swap-near-wrap'
+import {
   createRheaSwapSignedBatchGraph,
   parseRheaSwapTransactionBinding,
   parseTransactionEventId,
@@ -38,7 +42,7 @@ import { credentialSession } from './credential-session'
 import { nearLedgerSigningBridge } from './ledger-signing-bridge'
 import { encodeNearDAppFunctionArgs, parseNearDAppTransactionBatch } from './near-dapp-codecs'
 import { loadActiveNearTransferContext, type ActiveNearTransferContext } from './near-transfer'
-import { NEAR_TRANSACTION_MONITOR_ALARM } from './near-transaction-monitor'
+import { NEAR_TRANSACTION_MONITOR_ALARM } from './native-transaction-monitor'
 import { RHEA_SWAP_TRANSACTION_MONITOR_ALARM } from './rhea-swap-transaction-monitor'
 
 const STORAGE_PREFIX = 'rhea_swap_near:'
@@ -287,7 +291,14 @@ export interface RheaSwapNearCoordinatorOptions {
     'readNearTransactionBatchPlan' | 'recordTransactionSubmission' | 'reportSubmission' | 'discard'
   >
   readonly signer: Pick<NearMultichainSigningClient, 'prepare' | 'confirm' | 'cancel'>
-  readonly rpc: Pick<NearReadRpc, 'assertExpectedChain' | 'getAccessKey' | 'getTransactionStatus'> &
+  readonly rpc: Pick<
+    NearReadRpc,
+    | 'assertExpectedChain'
+    | 'getAccessKey'
+    | 'getTransactionStatus'
+    | 'getFungibleTokenBalance'
+    | 'isFungibleTokenAccountRegistered'
+  > &
     Pick<NearBroadcastRpc, 'broadcastSignedTransaction'>
   readonly pending: RheaSwapNearPendingStore
   readonly repository: Pick<TransactionRepository, 'create' | 'get' | 'applySegmentEvent'>
@@ -314,16 +325,44 @@ export class RheaSwapNearCoordinator {
     const plan = await this.options.service.readNearTransactionBatchPlan(quoteHandle)
     const binding = parseRheaSwapTransactionBinding(bindingValue)
     const { context, sender } = await this.loadSupportedContext()
-    this.assertBinding(plan, binding, sender)
-    const requests = parseNearDAppTransactionBatch([
+    this.assertBinding(plan, binding, sender, context.chainAccount.scope.chainId)
+    const originalRequests = parseNearDAppTransactionBatch([
       {
         transactions: plan.transactions.map(transaction => ({
+          ...(transaction.signerId === null ? {} : { signerId: transaction.signerId }),
           receiverId: transaction.receiverId,
           actions: transaction.actions
         }))
       }
     ])
     await this.options.rpc.assertExpectedChain()
+    let requests = originalRequests
+    if (
+      isNearWrapSwapSource(
+        context.chainAccount.scope.chainId,
+        binding.origin.assetId,
+        binding.origin.protocolAssetId,
+        plan.tokenIn
+      )
+    ) {
+      const [balance, registered] = await Promise.all([
+        this.options.rpc.getFungibleTokenBalance('wrap.near', sender),
+        this.options.rpc.isFungibleTokenAccountRegistered('wrap.near', sender)
+      ])
+      if (
+        balance.contractId !== 'wrap.near' ||
+        balance.accountId !== sender ||
+        typeof registered !== 'boolean'
+      ) {
+        throw new Error('RHEA Swap NEAR wrapped balance does not match the signer')
+      }
+      requests = prependRheaSwapNearWrap({
+        transactions: originalRequests,
+        amountIn: plan.amountIn,
+        wrappedBalanceRaw: balance.amountRaw,
+        registered
+      })
+    }
     const accessKey = await this.options.rpc.getAccessKey(sender, context.publicKey)
     if (!accessKey || accessKey.permission.kind !== 'full-access') {
       throw new Error('RHEA Swap NEAR execution requires an active full-access key')
@@ -463,10 +502,17 @@ export class RheaSwapNearCoordinator {
     }
     if (pending.signedTransactions.length < pending.commands.length) {
       const plan = await this.options.service.readNearTransactionBatchPlan(quoteHandle)
-      this.assertBinding(plan, pending.binding, sender)
+      this.assertBinding(plan, pending.binding, sender, pending.chainId)
       if (
         pending.planFingerprint !== undefined &&
-        (await fingerprintBatch([JSON.stringify(plan.transactions)])) !== pending.planFingerprint
+        (await fingerprintBatch([JSON.stringify(plan.transactions)])) !== pending.planFingerprint &&
+        (await fingerprintBatch([
+          JSON.stringify({
+            tokenIn: plan.tokenIn,
+            amountIn: plan.amountIn,
+            transactions: plan.transactions
+          })
+        ])) !== pending.planFingerprint
       ) {
         throw new Error('RHEA Swap NEAR batch changed after Ledger review')
       }
@@ -590,20 +636,29 @@ export class RheaSwapNearCoordinator {
   private assertBinding(
     plan: RheaSwapNearTransactionBatchPlan,
     binding: RheaSwapTransactionBinding,
-    sender: string
+    sender: string,
+    chainId: string
   ): void {
     if (
       plan.chain !== 'near' ||
       binding.quoteHandle !== plan.quoteHandle ||
       binding.executionId !== plan.executionId ||
       binding.origin.protocolChainId !== plan.chain ||
+      binding.origin.chainId !== chainId ||
       binding.sender !== sender ||
+      plan.amountIn !== binding.originAmountRaw ||
       plan.transactions.some(transaction =>
         transaction.signerId === null ? false : transaction.signerId !== sender
       )
     ) {
       throw new Error('RHEA Swap NEAR binding does not match its build')
     }
+    isNearWrapSwapSource(
+      chainId,
+      binding.origin.assetId,
+      binding.origin.protocolAssetId,
+      plan.tokenIn
+    )
   }
 
   private async loadSupportedContext(): Promise<{

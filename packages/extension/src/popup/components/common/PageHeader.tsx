@@ -1,11 +1,13 @@
+import type { ReactElement } from 'react'
 import { useNavigate } from '../../provider/Router'
 
 interface PageHeaderProps {
-  title?: string
+  title?: string | ReactElement
   onBack?: () => void
   showBack?: boolean
   backDisabled?: boolean
   rightContent?: React.ReactNode
+  compactTitle?: boolean
   action?: {
     ariaLabel: string
     icon: React.ReactNode
@@ -19,16 +21,21 @@ export function PageHeader({
   showBack = false,
   backDisabled = false,
   rightContent,
+  compactTitle = false,
   action
 }: PageHeaderProps) {
   const { goBack } = useNavigate()
   const handleBack = onBack || goBack
-  const visibleTitle = title.trim()
+  const visibleTitle = typeof title === 'string' ? title.trim() : title
 
   if (!visibleTitle && !showBack && !rightContent && !action) return null
 
   return (
-    <header className="h-14 flex items-center justify-center shrink-0 relative px-4">
+    <header
+      className={`h-14 flex items-center justify-center shrink-0 relative px-4${
+        compactTitle && rightContent ? ' max-[350px]:justify-start max-[350px]:pl-12' : ''
+      }`}
+    >
       {showBack && (
         <button
           type="button"
@@ -53,7 +60,13 @@ export function PageHeader({
         </button>
       )}
       {visibleTitle && (
-        <h1 className="text-lg font-medium leading-[23px] text-white">{visibleTitle}</h1>
+        <h1
+          className={`text-lg font-medium leading-[23px] text-white${
+            typeof visibleTitle === 'string' ? '' : ' min-w-0 max-w-[calc(100%_-_4rem)]'
+          }`}
+        >
+          {visibleTitle}
+        </h1>
       )}
 
       {(rightContent || action) && (

@@ -50,7 +50,7 @@ export interface BackgroundEvmTransferControllerOptions {
     executionMode: EvmTransferExecutionMode | undefined,
     binding: RheaSwapTransactionBinding,
     executionAccount?: PeaEvmExecutionAccount
-  ) => Promise<void>
+  ) => Promise<RheaSwapTransactionBinding | undefined>
 }
 
 export type EvmTransferExecutionMode = 'main' | 'private'
@@ -266,13 +266,14 @@ export class BackgroundEvmTransferController {
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     return accountContextTransition.runActiveOperation(async () => {
-      if (rheaSwapBinding)
-        await this.validateRheaSwapQuote?.(
-          rheaSwapBinding.quoteHandle,
-          executionModeValue,
-          rheaSwapBinding,
-          executionAccount
-        )
+      const scopedRheaSwapBinding = rheaSwapBinding
+        ? ((await this.validateRheaSwapQuote?.(
+            rheaSwapBinding.quoteHandle,
+            executionModeValue,
+            rheaSwapBinding,
+            executionAccount
+          )) ?? rheaSwapBinding)
+        : undefined
       const context = await measure('evm-load-active-context', () => this.requireActiveContext())
       if (!intent.assetId.startsWith(`${context.chainAccount.scope.chainId}/`)) {
         throw new Error('EVM transfer asset does not match the active network')
@@ -303,7 +304,9 @@ export class BackgroundEvmTransferController {
                 }
               : { signingMode: 'internal' as const }),
             ...(nearIntentsBinding === undefined ? {} : { nearIntentsBinding }),
-            ...(rheaSwapBinding === undefined ? {} : { rheaSwapBinding })
+            ...(scopedRheaSwapBinding === undefined
+              ? {}
+              : { rheaSwapBinding: scopedRheaSwapBinding })
           })
         )
       )
@@ -313,7 +316,8 @@ export class BackgroundEvmTransferController {
   async estimateTransferFee(
     intentValue: unknown,
     feeSelectionValue?: unknown,
-    executionModeValue: unknown = 'main'
+    executionModeValue: unknown = 'main',
+    executionAccount?: PeaEvmExecutionAccount
   ): Promise<EvmFeeEstimate> {
     const intent = parseEvmTransferIntent(intentValue)
     const feeSelection =
@@ -321,19 +325,25 @@ export class BackgroundEvmTransferController {
     if (executionModeValue !== 'main' && executionModeValue !== 'private') {
       throw new Error('Invalid EVM transfer execution mode')
     }
+    if (executionAccount !== undefined && executionModeValue !== 'main') {
+      throw new Error('EVM transfer execution account is ambiguous')
+    }
     return accountContextTransition.runActiveOperation(async () => {
       const context = await this.requireActiveContext()
       if (!intent.assetId.startsWith(`${context.chainAccount.scope.chainId}/`)) {
         throw new Error('EVM transfer asset does not match the active network')
       }
-      const executionAccount =
-        executionModeValue === 'private'
+      const selectedExecutionAccount =
+        executionAccount ??
+        (executionModeValue === 'private'
           ? await this.requirePrivateExecutionAccount(context)
-          : undefined
+          : undefined)
       return this.orchestrator.estimateFee({
         chainAccount: context.chainAccount,
         intent,
-        ...(executionAccount === undefined ? {} : { executionAccount }),
+        ...(selectedExecutionAccount === undefined
+          ? {}
+          : { executionAccount: selectedExecutionAccount }),
         ...(feeSelection === undefined ? {} : { feeSelection })
       })
     })
@@ -342,7 +352,8 @@ export class BackgroundEvmTransferController {
   async estimateContractCallFee(
     intentValue: unknown,
     feeSelectionValue?: unknown,
-    executionModeValue: unknown = 'main'
+    executionModeValue: unknown = 'main',
+    executionAccount?: PeaEvmExecutionAccount
   ): Promise<EvmFeeEstimate> {
     const intent = parseEvmContractCallIntent(intentValue)
     const feeSelection = parseEvmFeeSelection(
@@ -351,19 +362,25 @@ export class BackgroundEvmTransferController {
     if (executionModeValue !== 'main' && executionModeValue !== 'private') {
       throw new Error('Invalid EVM contract call execution mode')
     }
+    if (executionAccount !== undefined && executionModeValue !== 'main') {
+      throw new Error('EVM contract call execution account is ambiguous')
+    }
     return accountContextTransition.runActiveOperation(async () => {
       const context = await this.requireActiveContext()
       if (intent.chainId !== context.chainAccount.scope.chainId) {
         throw new Error('EVM contract call does not match the active network')
       }
-      const executionAccount =
-        executionModeValue === 'private'
+      const selectedExecutionAccount =
+        executionAccount ??
+        (executionModeValue === 'private'
           ? await this.requirePrivateExecutionAccount(context)
-          : undefined
+          : undefined)
       return this.orchestrator.estimateFee({
         chainAccount: context.chainAccount,
         intent,
-        ...(executionAccount === undefined ? {} : { executionAccount }),
+        ...(selectedExecutionAccount === undefined
+          ? {}
+          : { executionAccount: selectedExecutionAccount }),
         feeSelection
       })
     })
@@ -394,13 +411,14 @@ export class BackgroundEvmTransferController {
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     return accountContextTransition.runActiveOperation(async () => {
-      if (rheaSwapBinding)
-        await this.validateRheaSwapQuote?.(
-          rheaSwapBinding.quoteHandle,
-          executionModeValue,
-          rheaSwapBinding,
-          executionAccount
-        )
+      const scopedRheaSwapBinding = rheaSwapBinding
+        ? ((await this.validateRheaSwapQuote?.(
+            rheaSwapBinding.quoteHandle,
+            executionModeValue,
+            rheaSwapBinding,
+            executionAccount
+          )) ?? rheaSwapBinding)
+        : undefined
       const context = await measure('evm-load-active-context', () => this.requireActiveContext())
       if (intent.chainId !== context.chainAccount.scope.chainId) {
         throw new Error('EVM contract call does not match the active network')
@@ -418,7 +436,9 @@ export class BackgroundEvmTransferController {
             chainAccount: context.chainAccount,
             intent,
             feeSelection,
-            ...(rheaSwapBinding === undefined ? {} : { rheaSwapBinding }),
+            ...(scopedRheaSwapBinding === undefined
+              ? {}
+              : { rheaSwapBinding: scopedRheaSwapBinding }),
             ...(selectedExecutionAccount === undefined
               ? {}
               : { executionAccount: selectedExecutionAccount }),
@@ -461,6 +481,55 @@ export class BackgroundEvmTransferController {
       executionModeValue,
       feeSelectionValue
     )
+  }
+
+  async estimateReplacementFee(
+    action: 'cancel' | 'speed-up',
+    originalTransactionIdValue: string,
+    executionModeValue: unknown = 'main',
+    feeSelectionValue?: unknown
+  ): Promise<EvmFeeEstimate> {
+    const originalTransactionId = parseTransactionId(originalTransactionIdValue)
+    const feeSelection = parseEvmFeeSelection(feeSelectionValue ?? { kind: 'tier', tier: 'fast' })
+    if (executionModeValue !== 'main' && executionModeValue !== 'private') {
+      throw new Error('Invalid EVM replacement execution mode')
+    }
+    return accountContextTransition.runActiveOperation(async () => {
+      const context = await this.requireActiveContext()
+      const executionAccount =
+        executionModeValue === 'private'
+          ? await this.requirePrivateExecutionAccount(context)
+          : undefined
+      return this.orchestrator.estimateReplacementFee({
+        action,
+        chainAccount: context.chainAccount,
+        originalTransactionId,
+        ...(executionAccount === undefined ? {} : { executionAccount }),
+        feeSelection
+      })
+    })
+  }
+
+  async estimateNonceRecoveryFee(
+    executionModeValue: unknown = 'main',
+    feeSelectionValue?: unknown
+  ): Promise<EvmFeeEstimate> {
+    const feeSelection = parseEvmFeeSelection(feeSelectionValue ?? { kind: 'tier', tier: 'fast' })
+    if (executionModeValue !== 'main' && executionModeValue !== 'private') {
+      throw new Error('Invalid EVM nonce recovery execution mode')
+    }
+    return accountContextTransition.runActiveOperation(async () => {
+      const context = await this.requireActiveContext()
+      const executionAccount =
+        executionModeValue === 'private'
+          ? await this.requirePrivateExecutionAccount(context)
+          : undefined
+      return this.orchestrator.estimateNonceRecoveryFee({
+        chainAccount: context.chainAccount,
+        ...(executionAccount === undefined ? {} : { executionAccount }),
+        feeSelection
+      })
+    })
   }
 
   private async prepareReplacement(

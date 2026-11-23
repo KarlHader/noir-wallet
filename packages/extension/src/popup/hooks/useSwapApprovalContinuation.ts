@@ -13,6 +13,7 @@ import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-c
 
 export interface SubmittedSwapApproval {
   readonly graph: TransactionGraph
+  readonly awaitingHardwareSignature?: boolean
   readonly token: string
   readonly spender: string
   readonly amountRaw: string
@@ -43,7 +44,6 @@ export function useSwapApprovalContinuation({
   phase,
   approval,
   continuation,
-  chainId,
   walletId,
   accountId,
   intent,
@@ -51,16 +51,15 @@ export function useSwapApprovalContinuation({
   quote,
   quoteKey,
   preparing,
-  isPreparing,
   sequence,
   onPreparing,
   onError,
+  onApprovalFailed,
   onReady
 }: {
   readonly phase: 'input' | 'review' | 'approval-pending'
   readonly approval: SubmittedSwapApproval | null
   readonly continuation: SwapApprovalContinuation | undefined
-  readonly chainId: string | null
   readonly walletId: string | null
   readonly accountId: string | null
   readonly intent: ApprovalIntent
@@ -68,17 +67,18 @@ export function useSwapApprovalContinuation({
   readonly quote: RheaSwapQuoteView | null
   readonly quoteKey: string | null
   readonly preparing: RefObject<boolean>
-  readonly isPreparing: boolean
   readonly sequence: RefObject<number>
   readonly onPreparing: (value: boolean) => void
   readonly onError: (error: string | null) => void
+  readonly onApprovalFailed: () => void
   readonly onReady: (result: {
     readonly restoredQuote: RheaSwapQuoteView | null
     readonly reuseApprovedQuote: boolean
   }) => void
 }) {
   const completedApprovalId = useRef<string | null>(null)
-  const autoContinuing = useRef(false)
+  const origin = approval?.graph.segments.find(segment => segment.role === 'origin')
+  const chainId = origin?.target.kind === 'onchain' ? origin.target.chainId : null
 
   const continueAfterApproval = async () => {
     if (!approval || !chainId || !requestKey || preparing.current) return
@@ -102,12 +102,11 @@ export function useSwapApprovalContinuation({
       const resumed = continuation
         ? await swapApprovalContinuationClient.continue(continuation.transactionId)
         : null
-      const allowance = resumed?.amountRaw ?? (await getApprovalAllowance(chainId, approval))
+      if (resumed?.status === 'pending') return 'pending'
+      const allowance =
+        resumed?.approval.amountRaw ?? (await getApprovalAllowance(chainId, approval))
       if (requestSequence !== sequence.current) return
-      if (BigInt(allowance) < BigInt(approval.amountRaw)) {
-        onError('Token approval is not confirmed yet. Check Activity and try again.')
-        return
-      }
+      if (BigInt(allowance) < BigInt(approval.amountRaw)) return 'pending'
       if (continuation) completedApprovalId.current = continuation.transactionId
       const restoredQuote =
         resumed?.quote &&
@@ -136,14 +135,15 @@ export function useSwapApprovalContinuation({
   continueRef.current = continueAfterApproval
 
   useEffect(() => {
-    if (phase !== 'approval-pending' || !approval || !walletId || !accountId || !chainId) {
-      autoContinuing.current = false
-      return
-    }
+    if (phase !== 'approval-pending' || !approval || !walletId || !accountId || !chainId) return
     let active = true
     let timer: number | undefined
     const poll = async () => {
-      if (!active || autoContinuing.current || preparing.current || isPreparing) return
+      if (!active) return
+      if (preparing.current) {
+        timer = window.setTimeout(poll, 2_000)
+        return
+      }
       try {
         const graph = await new IndexedDbTransactionRepository().get(
           { keyDomainId: parseKeyDomainId(walletId), accountId: parseAccountId(accountId) },
@@ -151,6 +151,7 @@ export function useSwapApprovalContinuation({
         )
         if (!active) return
         if (graph?.root.status === 'failed') {
+          onApprovalFailed()
           onError('Token approval failed. Start a new Swap.')
           return
         }
@@ -164,12 +165,10 @@ export function useSwapApprovalContinuation({
           timer = window.setTimeout(poll, 2_000)
           return
         }
-        autoContinuing.current = true
-        await continueRef.current()
+        const result = await continueRef.current()
+        if (active && result === 'pending') timer = window.setTimeout(poll, 2_000)
       } catch {
         if (active) timer = window.setTimeout(poll, 2_000)
-      } finally {
-        if (active) autoContinuing.current = false
       }
     }
     void poll()
@@ -177,7 +176,17 @@ export function useSwapApprovalContinuation({
       active = false
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [phase, approval, walletId, accountId, chainId, preparing, isPreparing, onError])
+  }, [
+    phase,
+    approval,
+    walletId,
+    accountId,
+    chainId,
+    preparing,
+    requestKey,
+    onError,
+    onApprovalFailed
+  ])
 
   useEffect(() => {
     if (phase !== 'review' || !completedApprovalId.current) return

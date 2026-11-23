@@ -77,10 +77,8 @@ export function resolveSwapResultReturnPaths(input: {
   let resultReturnPath: string
   if (input.privateFundingRequestId) {
     resultReturnPath = `/approval?requestId=${encodeURIComponent(input.privateFundingRequestId)}`
-  } else if (input.crossChainSend) {
-    resultReturnPath = crossChainOriginPath ?? sendPath('main')
-  } else if (input.publicPrivacySend) {
-    resultReturnPath = sendPath('main')
+  } else if (input.crossChainSend || input.publicPrivacySend) {
+    resultReturnPath = crossChainOriginPath ?? '/'
   } else if (input.privateBalanceTransfer) {
     const from = input.privateTransfer ? 'private' : 'public'
     const to = input.privateTransfer ? 'public' : 'private'
@@ -88,6 +86,7 @@ export function resolveSwapResultReturnPaths(input: {
       ...(sourceAssetId ? { assetId: sourceAssetId } : {}),
       from,
       to,
+      intent: input.privateTransfer ? 'withdraw' : 'deposit',
       mode: from
     })}`
   } else if (input.privateTransfer) {
@@ -623,58 +622,6 @@ export function resolveConfidentialFundingDestinationToken(input: {
             destination.asset.asset.id === input.destinationAsset
         : token.isNative
     }) ?? null
-  )
-}
-
-export function resolvePreferredSwapSourceAssetId(
-  tokens: readonly RheaSwapToken[],
-  portfolio: PortfolioReadModel | null,
-  receiveTargets: AdditionalReceiveTargetsView | null,
-  preferFiatBalance = false
-): string | undefined {
-  const zcash = tokens.find(isZecToken)
-  if (!preferFiatBalance && zcash) return zcash.assetId
-  const walletOwnedSources = tokens.map(token => ({
-    token,
-    source:
-      portfolio && receiveTargets
-        ? resolveWalletOwnedQuoteAsset(token, portfolio, receiveTargets)
-        : null
-  }))
-  const now = Date.now()
-  const valued = preferFiatBalance
-    ? walletOwnedSources
-        .map(({ token, source }) => {
-          const price = Number(token.price)
-          const updatedAt = token.priceUpdatedAt ? Date.parse(token.priceUpdatedAt) : NaN
-          const balance = source
-            ? Number(
-                formatBaseUnitDecimalAmount(
-                  resolveAccountAvailableRaw(source.asset.balance, 'private'),
-                  source.asset.metadata.decimals
-                )
-              )
-            : 0
-          return {
-            token,
-            value:
-              Number.isFinite(price) &&
-              price > 0 &&
-              Number.isFinite(updatedAt) &&
-              updatedAt <= now &&
-              now - updatedAt <= 86_400_000 &&
-              Number.isFinite(balance) &&
-              balance > 0
-                ? price * balance
-                : 0
-          }
-        })
-        .sort((left, right) => right.value - left.value)
-    : []
-  if (valued[0]?.value > 0) return valued[0].token.assetId
-  return (
-    walletOwnedSources.find(candidate => candidate.source?.asset.asset.kind === 'native')?.token
-      .assetId ?? tokens[0]?.assetId
   )
 }
 

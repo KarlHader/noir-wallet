@@ -77,6 +77,16 @@ export interface BackgroundEvmTransferRouteController {
     executionModeValue?: unknown,
     feeSelectionValue?: unknown
   ) => Promise<BackgroundEvmTransferReview>
+  readonly estimateReplacementFee: (
+    action: 'cancel' | 'speed-up',
+    originalTransactionIdValue: string,
+    executionModeValue?: unknown,
+    feeSelectionValue?: unknown
+  ) => Promise<EvmFeeEstimate>
+  readonly estimateNonceRecoveryFee: (
+    executionModeValue?: unknown,
+    feeSelectionValue?: unknown
+  ) => Promise<EvmFeeEstimate>
   readonly getNonceRecovery: (executionModeValue?: unknown) => Promise<EvmNonceRecoveryState | null>
   readonly prepareNonceRecovery: (
     executionModeValue?: unknown,
@@ -338,6 +348,42 @@ export class BackgroundEvmTransferRouter {
       throw new Error('EVM nonce recovery returned the wrong chain')
     }
     return state
+  }
+
+  async estimateReplacementFee(
+    action: 'cancel' | 'speed-up',
+    chainIdValue: string,
+    originalTransactionIdValue: string,
+    executionMode: EvmTransferExecutionMode = 'main',
+    feeSelectionValue?: unknown
+  ): Promise<EvmFeeEstimate> {
+    const chain = parseChainId(chainIdValue)
+    if (chain.namespace !== 'eip155') throw new Error('EVM replacement requires an EVM chain')
+    const estimate = await this.requireController(chain.id).estimateReplacementFee(
+      action,
+      originalTransactionIdValue,
+      executionMode,
+      feeSelectionValue
+    )
+    if (estimate.chainId !== chain.id)
+      throw new Error('EVM replacement estimate has the wrong chain')
+    return estimate
+  }
+
+  async estimateNonceRecoveryFee(
+    chainIdValue: string,
+    executionMode: EvmTransferExecutionMode = 'main',
+    feeSelectionValue?: unknown
+  ): Promise<EvmFeeEstimate> {
+    const chain = parseChainId(chainIdValue)
+    if (chain.namespace !== 'eip155') throw new Error('EVM nonce recovery requires an EVM chain')
+    const estimate = await this.requireController(chain.id).estimateNonceRecoveryFee(
+      executionMode,
+      feeSelectionValue
+    )
+    if (estimate.chainId !== chain.id)
+      throw new Error('EVM nonce recovery estimate has the wrong chain')
+    return estimate
   }
 
   async prepareNonceRecovery(

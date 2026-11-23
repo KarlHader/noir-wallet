@@ -1,14 +1,20 @@
 import { type SwapToken } from '@/core/services/intents-api'
 import { cn } from '@/lib/utils'
 import { formatSymbol } from '@/lib/format'
-import { findBundledWalletMarketAssetId, isBundledWalletAsset } from './token-display-policy'
+import {
+  findBundledWalletMarketAssetId,
+  isBundledWalletAsset
+} from '@/popup/services/token-display-policy'
 import { MARKET_ASSETS } from '@/config/asset-market-assets'
-import { getTokenIconCandidates, isBundledEthIconIdentity } from './token-icon-candidates'
+import {
+  getTokenIconCandidates,
+  isBundledEthIconIdentity
+} from '@/popup/services/token-icon-candidates'
 import {
   clearTokenIconUrlFailure,
   hasTokenIconUrlFailed,
   recordTokenIconUrlFailure
-} from './token-icon-failure-cache'
+} from '@/popup/services/token-icon-failure-cache'
 import { ChainIcon } from '../common/ChainIcon'
 import { Icon } from '@iconify/react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -170,7 +176,7 @@ export function TokenIcon({
       {showChainBadge && blockchain && (
         <ChainIcon
           chain={blockchain}
-          className="absolute -bottom-0.5 -right-0.5 w-[45%] h-[45%] rounded-full border border-black bg-white"
+          className="absolute -bottom-0.5 -right-0.5 size-[45%] bg-background ring-1 ring-background"
         />
       )}
 

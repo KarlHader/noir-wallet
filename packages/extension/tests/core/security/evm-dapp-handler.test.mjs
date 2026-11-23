@@ -1463,6 +1463,7 @@ test.describe('Background EVM dApp handler', () => {
 
   test('re-prepares the immutable EVM review when the user changes the fee tier', async () => {
     const prepareCalls = []
+    const estimateCalls = []
     const rejected = []
     let approvedTransactionId = null
     const makeReview = index => ({
@@ -1479,6 +1480,13 @@ test.describe('Background EVM dApp handler', () => {
       approval: {
         async requestExternalApproval(_origin, action, data, options) {
           if (action === 'evmTransaction') {
+            const previews = await options.onEvmFeeTierPreviews()
+            expect(previews).toEqual({
+              low: '1000',
+              standard: '2000',
+              fast: '3000'
+            })
+            expect(prepareCalls).toHaveLength(1)
             const updated = await options.onNetworkFeeTierChange('fast')
             expect(updated.feeTier).toBe('fast')
             expect(updated.review).not.toBe(data.review)
@@ -1491,6 +1499,12 @@ test.describe('Background EVM dApp handler', () => {
         }
       },
       transferController: {
+        async estimateTransferFee(_intent, selection) {
+          estimateCalls.push(selection)
+          return {
+            maximumFeeWei: String((['low', 'standard', 'fast'].indexOf(selection.tier) + 1) * 1000)
+          }
+        },
         async prepare(...args) {
           prepareCalls.push(args)
           return makeReview(prepareCalls.length)
@@ -1528,6 +1542,11 @@ test.describe('Background EVM dApp handler', () => {
     )
 
     expect(prepareCalls).toHaveLength(2)
+    expect(estimateCalls).toEqual([
+      { kind: 'tier', tier: 'low' },
+      { kind: 'tier', tier: 'standard' },
+      { kind: 'tier', tier: 'fast' }
+    ])
     expect(prepareCalls[1][2]).toEqual({ kind: 'tier', tier: 'fast' })
     expect(rejected).toEqual(['transaction:evm:fee-1'])
     expect(approvedTransactionId).toBe('transaction:evm:fee-2')

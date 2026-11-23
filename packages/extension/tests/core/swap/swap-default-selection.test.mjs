@@ -111,6 +111,37 @@ it('uses a distinct same-chain token for a single EVM-enabled account', () => {
   )
 })
 
+it('restores a saved ERC-20 by its chain and contract without falling back to another chain', () => {
+  const polygonChain = { id: 'eip155:137', family: 'evm', network: { kind: 'mainnet' } }
+  const contractAddress = '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359'
+  const polygonUsdc = {
+    ...usdc,
+    assetId: 'nep245:v2_1.omni.hot.tg:137_qiStmoQJDQPTebaPjgx5VBxZv6L',
+    blockchain: 'pol',
+    rheaChainId: '137',
+    contractAddress
+  }
+  const sameContractOnEthereum = { ...usdc, rheaChainId: '1', contractAddress }
+  const input = {
+    tokens: [eth, sameContractOnEthereum],
+    sourceTokens: [eth, sameContractOnEthereum],
+    walletSourceTokens: [eth, sameContractOnEthereum],
+    enabledChains: [ethereumChain, polygonChain],
+    preserveSavedSelection: true,
+    savedSelection: { tokenInId: eth.assetId, tokenOutId: `eip155:137/erc20:${contractAddress}` }
+  }
+
+  assert.deepEqual(resolveSwapTokenSelection(input), { tokenIn: eth, tokenOut: null })
+  assert.deepEqual(
+    resolveSwapTokenSelection({ ...input, crossChainDestinationTokens: [polygonUsdc] }),
+    { tokenIn: eth, tokenOut: polygonUsdc }
+  )
+  assert.deepEqual(resolveSwapTokenSelection({ ...input, savedSelection: undefined }), {
+    tokenIn: eth,
+    tokenOut: sameContractOnEthereum
+  })
+})
+
 it('defaults a zero-balance Private Swap from its supported catalog without overriding a draft', () => {
   const input = {
     tokens: [eth, usdc],

@@ -108,8 +108,11 @@ test('passive Confidential balance reads skip identity setup without a session',
 
 test('minimum deposit display rounds up without changing the exact payment amount', () => {
   const raw = '8000000000000000001'
-  expect(formatMinimumDepositPaymentAmount(raw, 18)).toBe('8.000001')
+  expect(formatMinimumDepositPaymentAmount(raw, 18)).toBe('8.01')
   expect(formatDepositAmount(raw, 18)).toBe('8.000000000000000001')
+  expect(formatMinimumDepositPaymentAmount('300001', 6)).toBe('0.301')
+  expect(formatMinimumDepositPaymentAmount('300000', 6)).toBe('0.3')
+  expect(formatMinimumDepositPaymentAmount('1', 18)).toBe('0.000000000000000001')
 })
 
 test('uses the selected EVM private refund address while Zcash retains a transparent refund', () => {
@@ -1161,12 +1164,12 @@ test.describe('confidential funding safety rules', () => {
       expect(feeReads).toBe(1)
       await api.quote({
         ...withdrawal,
-        referral: 'noir_move',
+        referral: 'noir_receive',
         depositType: 'ORIGIN_CHAIN',
         recipientType: 'CONFIDENTIAL_INTENTS'
       })
       expect(quoteRequests[2].appFees).toBeUndefined()
-      expect(quoteRequests[2].referral).toBe('noir_move')
+      expect(quoteRequests[2].referral).toBe('noir_receive')
       expect(quoteRequests[2].dry).toBe(true)
       expect(quoteRequests[3].dry).toBe(false)
       expect(feeReads).toBe(1)

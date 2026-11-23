@@ -13,15 +13,16 @@ import {
   getActivityStatusPresentation,
   getActivitySwapPresentation,
   getActivityDisplayChanges,
+  getConfirmedFailedActivityAmount,
   isOwnedAccountTransfer,
   resolveActivityDisplayAmount,
   type ActivityDisplayAmount,
   type ActivitySwapPresentation
-} from './multichain-activity-presentation'
+} from '@/popup/services/multichain-activity-presentation'
 import {
   getActivityInteractionPresentation,
   type ActivityInteractionPresentation
-} from './activity-interaction-adapters'
+} from '@/popup/services/activity-interaction-adapters'
 import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import type {
   ActivityAssetMetadata,
@@ -33,9 +34,11 @@ import { getActivityAddressAlias } from '@/popup/services/activity-address-alias
 import { SMALL_TRANSFER_WARNING } from '@/popup/services/activity-small-transfer-warning'
 import { Tooltip } from '../ui/tooltip'
 import type { TransactionAssetAmount } from '@/core/transactions/domain'
+import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
 
 interface MultichainActivityRowProps {
   readonly item: ActivityItem
+  readonly perspective?: ActivityPerspective
   readonly assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>
   readonly chainMetadata: ReadonlyMap<string, ActivityChainMetadata>
   readonly networkName: string
@@ -119,36 +122,77 @@ function ActivityAvatar({
   )
 }
 
-function signedAmount(item: ActivityItem, amount: ActivityDisplayAmount): string {
-  const direction = item.snapshot?.direction
-  const sign =
-    item.kind === 'receive' || direction === 'incoming' ? '+' : direction === 'outgoing' ? '−' : ''
-  return `${sign}${amount.formatted} ${amount.symbol}`
-}
-
-function SwapActivityRow({
+function RouteActivityRow({
   item,
   presentation,
+  perspective,
+  assetMetadata,
   onClick,
   smallTransferWarning
 }: {
   readonly item: ActivityItem
   readonly presentation: ActivitySwapPresentation
+  readonly perspective?: ActivityPerspective
+  readonly assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>
   readonly onClick?: (item: ActivityItem) => void
   readonly smallTransferWarning?: boolean
 }) {
   const status = getActivityStatusPresentation(item)
-  const sourceSymbol = presentation.source?.symbol ?? 'Asset'
-  const destinationSymbol = presentation.destination?.symbol ?? 'Asset'
-  const action = getActivityRouteTitle(item, presentation)
-  const isShieldSend =
-    item.snapshot?.shield?.operation === 'withdraw' && item.snapshot.direction === 'outgoing'
-  const route = `${presentation.sourceNetwork} → ${presentation.destinationNetwork}`
-  const accountRoute =
-    presentation.isExternalDeposit || isOwnedAccountTransfer(presentation)
+  const action = getActivityRouteTitle(item, presentation, perspective)
+  const focus = getActivityAction(item, perspective, presentation).side
+  const isSwap = action === 'Swap'
+  const sourceSymbol = presentation.source?.symbol
+  const destinationSymbol = presentation.destination?.symbol
+  const title =
+    isSwap &&
+    sourceSymbol &&
+    destinationSymbol &&
+    sourceSymbol.toUpperCase() !== destinationSymbol.toUpperCase()
+      ? `Swap ${sourceSymbol} → ${destinationSymbol}`
+      : action
+  const networkRoute =
+    presentation.sourceNetwork === presentation.destinationNetwork
+      ? presentation.sourceNetwork
+      : `${presentation.sourceNetwork} → ${presentation.destinationNetwork}`
+  const swapRoute =
+    presentation.isExternalDeposit ||
+    presentation.sourceFundingSource ||
+    presentation.destinationFundingSource ||
+    isOwnedAccountTransfer(presentation)
       ? getActivityAccountRouteLabel(presentation)
-      : null
+      : networkRoute
+  const destinationMode = presentation.destinationFundingSource
+    ? presentation.destinationFundingSource === 'shielded'
+      ? 'Zcash Shield'
+      : 'Transparent'
+    : presentation.destinationAccountMode
+  const subtitle = isSwap ? swapRoute : (destinationMode ?? presentation.destinationNetwork)
   const showStatus = item.status !== 'final'
+  const failed = item.status === 'failed'
+  const showCredit = presentation.isExternalDeposit || focus === 'destination'
+  const reviewedAmount = showCredit ? presentation.destination : presentation.source
+  const amount = failed
+    ? getConfirmedFailedActivityAmount(
+        item,
+        assetMetadata,
+        showCredit ? 'incoming' : 'outgoing',
+        showCredit ? item.snapshot?.counterAmount?.assetId : item.snapshot?.primaryAmount?.assetId
+      )
+    : reviewedAmount
+  const estimate = !failed && showCredit && !presentation.destinationIsSettled
+  const amountLabel = amount
+    ? `${showCredit ? '+' : '−'}${amount.formatted} ${amount.symbol}`
+    : undefined
+  const swapCredit =
+    isSwap && focus === 'none' && !showCredit && !showStatus && !presentation.hideDestinationCredit
+      ? presentation.destination
+      : undefined
+  const swapCreditLabel = swapCredit ? `+${swapCredit.formatted} ${swapCredit.symbol}` : undefined
+  const amountDescription = amount && estimate ? `Expected ${amountLabel}` : amountLabel
+  const creditDescription =
+    swapCreditLabel && !presentation.destinationIsSettled
+      ? `Expected ${swapCreditLabel}`
+      : swapCreditLabel
 
   return (
     <div className="relative">
@@ -158,11 +202,14 @@ function SwapActivityRow({
         data-activity-status={item.status}
         data-activity-account-mode={item.accountMode}
         data-activity-kind={item.kind}
-        aria-label={
-          presentation.isExternalDeposit
-            ? `View ${action} ${destinationSymbol} details from External to Shield`
-            : `View ${action} ${sourceSymbol} to ${destinationSymbol} details from ${presentation.sourceNetwork} to ${presentation.destinationNetwork}`
-        }
+        aria-label={[
+          `View ${title} details`,
+          subtitle,
+          amountDescription,
+          showStatus ? status.label : creditDescription
+        ]
+          .filter(Boolean)
+          .join(', ')}
         onClick={() => onClick?.(item)}
         className={cn(
           'wallet-interactive grid min-h-[72px] w-full min-w-0 grid-cols-[36px_minmax(0,1fr)_minmax(0,45%)] items-center gap-3 px-4 py-3 text-left enabled:hover:bg-foreground/6 enabled:active:bg-foreground/10 focus-visible:bg-foreground/6 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary disabled:pointer-events-none',
@@ -170,66 +217,63 @@ function SwapActivityRow({
         )}
         disabled={!onClick}
       >
-        <ActivityRouteTokenIcons item={item} route={presentation} />
+        {isSwap ? (
+          <ActivityRouteTokenIcons item={item} route={presentation} />
+        ) : (
+          <ActivityAvatar
+            primary={reviewedAmount}
+            chainIconAlias={
+              showCredit
+                ? presentation.destinationChainIconAlias
+                : presentation.sourceChainIconAlias
+            }
+            interaction={null}
+          />
+        )}
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5">
-            <p className="min-w-0 truncate text-sm font-medium">
-              {presentation.isExternalDeposit
-                ? `${action} ${destinationSymbol}`
-                : action === 'Account Transfer' || action === 'Move'
-                  ? action
-                  : `${action} ${sourceSymbol} → ${destinationSymbol}`}
+            <p className="min-w-0 truncate text-sm font-medium" title={title}>
+              {title}
             </p>
-            {item.accountMode === 'private' && <ExecutionAccountBadge mode="private" iconOnly />}
-          </div>
-          <p className="truncate text-xs text-muted" title={accountRoute ?? route}>
-            {accountRoute ?? route}
-          </p>
-          {accountRoute &&
-            !presentation.isExternalDeposit &&
-            presentation.sourceNetwork !== presentation.destinationNetwork && (
-              <p className="truncate text-[11px] text-muted" title={route}>
-                {route}
-              </p>
+            {isSwap && item.accountMode === 'private' && (
+              <ExecutionAccountBadge mode="private" iconOnly />
             )}
+          </div>
+          <p className="truncate text-xs text-muted" title={subtitle}>
+            {subtitle}
+          </p>
         </div>
         <div className="w-full min-w-0 justify-self-end text-right">
-          {presentation.isExternalDeposit ? (
+          {amountLabel && (
             <p
               className={cn(
                 'truncate whitespace-nowrap font-sans text-sm font-medium tabular-nums',
-                presentation.destinationIsSettled && 'text-primary'
+                showCredit && !estimate && 'text-primary'
               )}
+              title={amountDescription}
             >
-              {presentation.destination
-                ? `${presentation.destinationIsSettled ? '+' : 'Expected +'}${presentation.destination.formatted} ${destinationSymbol}`
-                : '—'}
+              {estimate ? `≈ ${amountLabel}` : amountLabel}
             </p>
-          ) : (
-            <>
-              <p className="truncate whitespace-nowrap font-sans text-sm font-medium tabular-nums">
-                {presentation.source ? `−${presentation.source.formatted} ${sourceSymbol}` : '—'}
-              </p>
-              {presentation.destination && !presentation.hideDestinationCredit && (
-                <p className="truncate whitespace-nowrap font-sans text-[11px] text-muted tabular-nums">
-                  {isShieldSend
-                    ? 'Recipient receives '
-                    : `${presentation.destinationIsSettled ? 'Received' : 'Expected'} +`}
-                  {presentation.destination.formatted} {destinationSymbol}
-                </p>
-              )}
-            </>
           )}
-          {showStatus && (
+          {showStatus ? (
             <p
               className={cn(
-                'mt-1 text-xs font-medium',
+                'truncate text-xs font-medium',
+                amountLabel && 'mt-1',
                 getTransactionStatusToneClassName(status.tone)
               )}
+              title={status.label}
             >
               {status.label}
             </p>
-          )}
+          ) : swapCreditLabel ? (
+            <p
+              className="truncate whitespace-nowrap text-xs text-muted tabular-nums"
+              title={creditDescription}
+            >
+              {presentation.destinationIsSettled ? swapCreditLabel : `≈ ${swapCreditLabel}`}
+            </p>
+          ) : null}
         </div>
       </button>
       {smallTransferWarning && <SmallTransferWarningIcon />}
@@ -239,6 +283,7 @@ function SwapActivityRow({
 
 export function MultichainActivityRow({
   item,
+  perspective,
   assetMetadata,
   chainMetadata,
   networkName,
@@ -253,10 +298,34 @@ export function MultichainActivityRow({
   const observed =
     getActivityAssetEffects(item) !== undefined &&
     !(item.kind === 'transfer' && item.snapshot?.direction === 'self')
-  const summaryChange = changes.find(change => !change.isRaw)
-  const primary =
+  const accountRoute = {
+    sourceAccountMode: item.snapshot?.sender?.address
+      ? executionAddressModes?.get(item.snapshot.sender.address.toLowerCase())
+      : undefined,
+    destinationAccountMode: item.snapshot?.recipient?.address
+      ? executionAddressModes?.get(item.snapshot.recipient.address.toLowerCase())
+      : undefined
+  }
+  const actionSide = getActivityAction(item, perspective, accountRoute).side
+  const preferredDirection =
+    actionSide === 'destination' ? 'incoming' : actionSide === 'source' ? 'outgoing' : undefined
+  const isIncoming = item.kind === 'receive' || item.snapshot?.direction === 'incoming'
+  const displayIncoming = actionSide === 'destination' || (actionSide === 'none' && isIncoming)
+  const summaryChange =
+    changes.find(change => !change.isRaw && change.direction === preferredDirection) ??
+    changes.find(change => !change.isRaw)
+  const reviewedAmount =
     (observed ? summaryChange : undefined) ??
     resolveActivityDisplayAmount(item.snapshot?.primaryAmount, assetMetadata)
+  const primary =
+    item.status === 'failed'
+      ? getConfirmedFailedActivityAmount(
+          item,
+          assetMetadata,
+          displayIncoming ? 'incoming' : 'outgoing',
+          item.snapshot?.primaryAmount?.assetId
+        )
+      : reviewedAmount
   const counter = resolveActivityDisplayAmount(item.snapshot?.counterAmount, assetMetadata)
   const swap = getActivitySwapPresentation(
     item,
@@ -267,9 +336,11 @@ export function MultichainActivityRow({
   )
   if (swap)
     return (
-      <SwapActivityRow
+      <RouteActivityRow
         item={item}
+        perspective={perspective}
         presentation={swap}
+        assetMetadata={assetMetadata}
         onClick={onClick}
         smallTransferWarning={smallTransferWarning}
       />
@@ -280,14 +351,21 @@ export function MultichainActivityRow({
     interaction && networkName === 'Wallet' ? interaction.fallbackNetworkName : networkName
   const text = getActivityRowTextPresentation(
     item,
-    primary?.symbol,
+    (primary ?? reviewedAmount)?.symbol,
     counter?.symbol,
     resolvedNetworkName,
-    chainId
+    chainId,
+    perspective,
+    item.kind === 'transfer'
+      ? {
+          ...accountRoute,
+          sourceNetwork: resolvedNetworkName,
+          destinationNetwork: resolvedNetworkName
+        }
+      : undefined
   )
   const showStatus = item.status !== 'final'
   const isCancelled = item.status === 'failed' && item.failureCode === 'user-rejected'
-  const isIncoming = item.kind === 'receive' || item.snapshot?.direction === 'incoming'
   const accessibleTitle =
     item.kind === 'contract-call' && interaction?.family === 'evm' ? 'Contract call' : text.title
   const showChanges = observed && summaryChange !== undefined
@@ -313,7 +391,7 @@ export function MultichainActivityRow({
         disabled={!onClick}
       >
         <ActivityAvatar
-          primary={primary}
+          primary={primary ?? reviewedAmount}
           chainIconAlias={chainIconAlias}
           interaction={interaction}
         />
@@ -356,14 +434,16 @@ export function MultichainActivityRow({
                 <span className="max-w-16 shrink-0 truncate">{summaryChange.symbol}</span>
               </p>
             </div>
-          ) : primary || !observed ? (
+          ) : primary || (!observed && item.status !== 'failed') ? (
             <p
               className={cn(
                 'flex items-center justify-end gap-1 break-all font-sans text-sm font-medium tabular-nums',
-                isIncoming && 'text-primary'
+                displayIncoming && 'text-primary'
               )}
             >
-              {primary ? signedAmount(item, primary) : '—'}
+              {primary
+                ? `${displayIncoming ? '+' : actionSide === 'source' || item.status === 'failed' ? '−' : ''}${primary.formatted} ${primary.symbol}`
+                : '—'}
             </p>
           ) : null}
           {showStatus ? (

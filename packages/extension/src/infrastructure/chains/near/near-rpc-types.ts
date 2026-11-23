@@ -115,6 +115,16 @@ export interface NearReadRpc {
     signerId: string,
     signal?: AbortSignal
   ) => Promise<NearTransactionStatus>
+  readonly viewFunction: (
+    contractId: string,
+    methodName: string,
+    args: Readonly<Record<string, unknown>>,
+    options?: {
+      readonly finality?: 'final' | 'optimistic'
+      readonly signal?: AbortSignal
+      readonly maximumResultBytes?: number
+    }
+  ) => Promise<unknown>
   readonly getFungibleTokenBalance: (
     contractId: string,
     accountId: string,

@@ -349,22 +349,6 @@ export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) 
   }
 }
 
-export const WALLET_SOURCE_CHAIN_IDS = Object.freeze(
-  RHEA_SWAP_CHAIN_CATALOG.filter(chain => chain.walletFamily !== undefined)
-    .sort((left, right) => Number(right.blockchain === 'zec') - Number(left.blockchain === 'zec'))
-    .map(chain => chain.tokenListChainId)
-)
-export const ALL_DESTINATION_CHAIN_IDS = Object.freeze(
-  [
-    ...RHEA_SWAP_CHAIN_CATALOG.filter(chain =>
-      ['eth', 'zec', 'sol', 'near', 'btc'].includes(chain.blockchain)
-    ),
-    ...RHEA_SWAP_CHAIN_CATALOG.filter(
-      chain => !['eth', 'zec', 'sol', 'near', 'btc'].includes(chain.blockchain)
-    )
-  ].map(chain => chain.tokenListChainId)
-)
-
 export function mergeTokenCatalogs(
   ...catalogs: readonly (readonly RheaSwapToken[])[]
 ): readonly RheaSwapToken[] {
@@ -507,11 +491,14 @@ export async function loadTokenCatalogByChain(
         const result = await traceDebugStage(requestId, `list-chain-${chainId}`, () =>
           client.listTokens({ direction, tokenListChainIds: [chainId] }, { bypassCache })
         )
-        if (result.failedChainIds.length > 0) {
+        if (options.strict && result.failedChainIds.includes(chainId)) {
           throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
         }
         const onChain = result.tokens.filter(token => token.tokenListChainId === chainId)
         if (result.tokens.length > 0 && onChain.length === 0) {
+          throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
+        }
+        if (result.failedChainIds.includes(chainId) && onChain.length === 0) {
           throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
         }
         const available = mergeTokenCatalogs(onChain)

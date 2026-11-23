@@ -19,12 +19,12 @@ import {
 import { Button } from '@/popup/components/ui/button'
 import {
   buildSigningSummaryReviewModel,
+  type EvmReviewPresentationOptions,
   type SigningSummaryReviewRow,
   type SigningSummaryReviewSection
-} from './signing-summary-review-model'
+} from '@/popup/services/signing-review'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
 import { ExecutionAccountBadge } from '@/popup/components/account/ExecutionAccountSelector'
-import type { EvmReviewPresentationOptions } from './signing-summary-review-model-other'
 
 export type SigningRequestSource =
   | { readonly kind: 'wallet' }
@@ -82,10 +82,7 @@ function ReviewValue({
         row.value
       )}
       {showPrivateAccount && (
-        <span
-          aria-label="Confidential execution account"
-          className="mt-1.5 flex justify-end leading-none"
-        >
+        <span aria-label="Incognito account" className="mt-1.5 flex justify-end leading-none">
           <ExecutionAccountBadge mode="private" />
         </span>
       )}
@@ -523,7 +520,7 @@ export function SigningSummaryReview({
           !isDAppTransaction &&
           !isDAppTokenAuthorization && (
             <section
-              aria-label="Confidential execution account"
+              aria-label="Incognito account"
               className="flex min-w-0 items-center gap-2 rounded-xl bg-primary/6 px-3 py-2"
             >
               <ExecutionAccountBadge mode="private" />

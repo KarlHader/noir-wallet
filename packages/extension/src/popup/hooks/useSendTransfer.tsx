@@ -4,7 +4,7 @@ import type { TransactionGraph, TransactionId } from '@/core/transactions/domain
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import type { SendTransferViewState } from '@/popup/components/transaction/SendTransferView'
-import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
+import { formatPortfolioNetworkName } from '@/popup/services/portfolio-format'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import { openModal } from '@/popup/provider/ModalManager'
@@ -34,13 +34,8 @@ interface TransferSubmission {
 export interface SendTransferConfig<R extends TransferReview, S extends TransferSubmission> {
   readonly family: 'solana' | 'near'
   readonly selection: { readonly asset: PortfolioAssetView; readonly chain: PortfolioChainView }
-  readonly priceUsd: string | null
   readonly initialRecipient?: string
   readonly initialAmount?: string
-  readonly onDraftChange?: (
-    assetId: string,
-    draft: Readonly<{ recipient: string; amount: string }>
-  ) => void
   readonly onSubmitted: (submission: S) => void
   readonly parseRecipient: (value: string) => string
   readonly recipientPlaceholder: string
@@ -88,10 +83,6 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
   const pendingReview = useRef<R | null>(null)
   const { asset, chain } = config.selection
   const networkName = formatPortfolioNetworkName(chain)
-
-  useEffect(() => {
-    config.onDraftChange?.(asset.asset.id, { recipient, amount: maxSelected ? '' : amount })
-  }, [amount, asset.asset.id, maxSelected, config.onDraftChange, recipient])
 
   const reject = config.reject
   useEffect(
@@ -170,6 +161,8 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
     await openModal<string | undefined>({
       title: 'Select Recipient',
       showCloseButton: true,
+      scroll: 'body',
+      fixedHeight: true,
       body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}
@@ -302,7 +295,6 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
       nativeChain: asset.asset.kind === 'native' ? config.family : undefined,
       blockchain: asset.asset.kind === 'token' ? config.family : undefined
     },
-    priceUsd: config.priceUsd,
     networkName,
     recipientPlaceholder: config.recipientPlaceholder,
     invalidRecipientMessage: config.invalidRecipientMessage,

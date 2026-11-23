@@ -144,6 +144,8 @@ function parseQuoteBinding(value: unknown): QuoteBinding | undefined {
         'expectedAmountOut',
         'minAmountOut',
         'recipient',
+        'recipientType',
+        'fundingSource',
         'refundTo',
         'deadline'
       ]
@@ -162,15 +164,28 @@ function parseQuoteBinding(value: unknown): QuoteBinding | undefined {
   ) {
     throw new Error('Invalid hardware quote provider')
   }
-  if (value.userAction !== undefined && value.userAction !== 'transfer') {
+  if (
+    value.userAction !== undefined &&
+    value.userAction !== 'transfer' &&
+    !(value.userAction === 'swap' && value.recipientType === 'CONFIDENTIAL_INTENTS')
+  ) {
     throw new Error('Invalid hardware quote action')
+  }
+  if (
+    (value.recipientType !== undefined &&
+      (value.provider !== 'near-intents' || value.recipientType !== 'CONFIDENTIAL_INTENTS')) ||
+    (value.recipientType === 'CONFIDENTIAL_INTENTS'
+      ? value.fundingSource !== 'shielded' && value.fundingSource !== 'transparent'
+      : value.fundingSource !== undefined)
+  ) {
+    throw new Error('Invalid hardware Confidential quote route')
   }
   if (value.isCrossChain !== undefined && typeof value.isCrossChain !== 'boolean') {
     throw new Error('Invalid hardware quote route kind')
   }
   return {
     ...(value.provider === undefined ? {} : { provider: value.provider }),
-    ...(value.userAction === undefined ? {} : { userAction: 'transfer' as const }),
+    ...(value.userAction === undefined ? {} : { userAction: value.userAction }),
     ...(value.quoteHandle === undefined
       ? {}
       : { quoteHandle: parseString(value.quoteHandle, 'hardware quote handle', 160) }),
@@ -214,6 +229,12 @@ function parseQuoteBinding(value: unknown): QuoteBinding | undefined {
     ...(value.recipient === undefined
       ? {}
       : { recipient: parseString(value.recipient, 'hardware recipient', 1_024) }),
+    ...(value.recipientType === 'CONFIDENTIAL_INTENTS'
+      ? {
+          recipientType: value.recipientType,
+          fundingSource: value.fundingSource === 'shielded' ? 'shielded' : 'transparent'
+        }
+      : {}),
     ...(value.refundTo === undefined
       ? {}
       : { refundTo: parseString(value.refundTo, 'hardware refund address', 1_024) }),
@@ -452,9 +473,14 @@ export function isHardwareSignRequestFresh(
   return request.createdAt <= now && now - request.createdAt <= HARDWARE_SIGN_REQUEST_TTL_MS
 }
 
-export function openHardwareConnectTab(vendor?: HardwareConnectVendor): void {
+export function openHardwareConnectTab(
+  vendor?: HardwareConnectVendor,
+  ledgerTarget?: Readonly<{ walletId: string; accountId: string }>
+): void {
+  const route = hardwareConnectRoute(vendor)
+  const query = vendor === 'ledger' && ledgerTarget ? `?${new URLSearchParams(ledgerTarget)}` : ''
   chrome.tabs
-    .create({ url: chrome.runtime.getURL(`index.html#${hardwareConnectRoute(vendor)}`) })
+    .create({ url: chrome.runtime.getURL(`index.html#${route}${query}`) })
     .catch(console.error)
 }
 
@@ -563,15 +589,7 @@ export async function consumePreparedHardwareSignRequest(
   return prepared
 }
 
-export function openKeystoneBitcoinSignTab(transactionId: TransactionId): Promise<chrome.tabs.Tab> {
-  return chrome.tabs.create({
-    url: chrome.runtime.getURL(
-      `index.html#/hardware/bitcoin-sign?tx=${encodeURIComponent(transactionId)}`
-    )
-  })
-}
-
-async function openMultichainHardwareSignTab(
+export async function openMultichainHardwareSignTab(
   transactionId: TransactionId,
   family: 'evm' | 'bitcoin'
 ): Promise<chrome.tabs.Tab> {
@@ -581,28 +599,14 @@ async function openMultichainHardwareSignTab(
     family
   })
   if (typeof response?.error === 'string') throw new Error(response.error)
-  if (response?.result === 'ledger')
-    return chrome.tabs.create({
-      url: chrome.runtime.getURL(
-        `index.html#/hardware/ledger-sign?family=${family}&tx=${encodeURIComponent(transactionId)}`
-      )
-    })
-  if (response?.result !== 'keystone') throw new Error('Unsupported hardware signing device')
-  return family === 'evm'
-    ? openKeystoneEvmSignTab(transactionId)
-    : openKeystoneBitcoinSignTab(transactionId)
-}
-export function openHardwareEvmSignTab(transactionId: TransactionId): Promise<chrome.tabs.Tab> {
-  return openMultichainHardwareSignTab(transactionId, 'evm')
-}
-export function openHardwareBitcoinSignTab(transactionId: TransactionId): Promise<chrome.tabs.Tab> {
-  return openMultichainHardwareSignTab(transactionId, 'bitcoin')
-}
-
-export function openKeystoneEvmSignTab(transactionId: TransactionId): Promise<chrome.tabs.Tab> {
+  const vendor = response?.result
+  if (vendor !== 'ledger' && vendor !== 'keystone') {
+    throw new Error('Unsupported hardware signing device')
+  }
+  const tx = encodeURIComponent(transactionId)
+  const route =
+    vendor === 'ledger' ? `ledger-sign?family=${family}&tx=${tx}` : `${family}-sign?tx=${tx}`
   return chrome.tabs.create({
-    url: chrome.runtime.getURL(
-      `index.html#/hardware/evm-sign?tx=${encodeURIComponent(transactionId)}`
-    )
+    url: chrome.runtime.getURL(`index.html#/hardware/${route}`)
   })
 }

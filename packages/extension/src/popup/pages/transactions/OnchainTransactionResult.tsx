@@ -1,7 +1,7 @@
 import { InlineError } from '@/popup/components/common/InlineError'
 import { useEffect, useMemo, useState } from 'react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
-import type { TransactionGraph, TransactionId } from '@/core/transactions/domain'
+import type { TransactionId } from '@/core/transactions/domain'
 import { mapTransactionGraphToActivityItem } from '@/core/activity'
 import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
 import { useWalletStore } from '@/store/wallet-store'
@@ -17,9 +17,14 @@ import {
   TransactionResult,
   TransactionResultDetailRow
 } from '@/popup/components/transaction/TransactionResult'
-import type { EvmTransferActivity } from '@/popup/services/evm-transfer-activity'
-import { shouldApplyOnchainTransactionStatus } from '@/popup/services/evm-transaction-result-status'
+import type { OnchainTransferActivity } from '@/popup/services/onchain-transfer-activity'
+import { shouldApplyOnchainTransactionStatus } from '@/popup/services/onchain-transaction-result-status'
 import { formatBaseUnitAmount } from '@/lib/number-format'
+import {
+  getOnchainResultAdapter,
+  type OnchainResultFamily,
+  type OnchainTransferSubmission
+} from '@/popup/services/onchain-result-adapters'
 import {
   getOnchainTransactionFailureLabel,
   getOnchainResultAction,
@@ -29,29 +34,12 @@ import {
   resolveVisibleTransactionStatus
 } from '@/popup/services/onchain-transaction-result'
 
-export interface OnchainTransferSubmission {
-  readonly status: 'broadcast' | 'signed-pending-broadcast'
-  readonly graph: TransactionGraph
-}
-
-export interface OnchainTransferClient {
-  readonly getTransferActivity: (graph: TransactionGraph) => Promise<EvmTransferActivity | null>
-  readonly resumeTransfer: (transactionId: TransactionId) => Promise<OnchainTransferSubmission>
-}
-
-export type OnchainResultOutcome = 'pending' | 'final' | 'failed'
-
 interface OnchainTransactionResultProps {
   readonly asset: PortfolioAssetView
   readonly chain: PortfolioChainView
   readonly submission: OnchainTransferSubmission
-  readonly client: OnchainTransferClient
-  readonly feeDecimals: number
-  readonly feeSymbol: string
-  readonly feeLabel: string
-  readonly totalLabel: string
-  readonly showTotal: boolean
-  readonly onDone: (outcome: OnchainResultOutcome) => void
+  readonly family: OnchainResultFamily
+  readonly onDone: (outcome: ReturnType<typeof getOnchainResultExitOutcome>) => void
   readonly onViewActivity: (transactionId: TransactionId) => void
 }
 
@@ -59,18 +47,18 @@ export function OnchainTransactionResult({
   asset,
   chain,
   submission,
-  client,
-  feeDecimals,
-  feeSymbol,
-  feeLabel,
-  totalLabel,
-  showTotal,
+  family,
   onDone,
   onViewActivity
 }: OnchainTransactionResultProps) {
+  const { client, feeDecimals, feeSymbol, feeLabel, totalLabel } = getOnchainResultAdapter(
+    family,
+    chain
+  )
+  const showTotal = family === 'bitcoin' || asset.asset.kind === 'native'
   const network = useWalletStore(state => state.currentNetwork)
   const [graph, setGraph] = useState(submission.graph)
-  const [activity, setActivity] = useState<EvmTransferActivity | null>(null)
+  const [activity, setActivity] = useState<OnchainTransferActivity | null>(null)
   const [refreshFailed, setRefreshFailed] = useState(false)
   const [resuming, setResuming] = useState(false)
   const [resumeError, setResumeError] = useState(false)

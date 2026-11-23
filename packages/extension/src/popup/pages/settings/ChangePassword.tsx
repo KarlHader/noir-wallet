@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button } from '../../components/ui/button'
-import { PasswordInput } from '../../components/common/PasswordInput'
+import { PasswordInput } from '../../components/auth/PasswordInput'
 import { PageHeader } from '../../components/common/PageHeader'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { useNavigate } from '../../provider/Router'

@@ -7,6 +7,119 @@ import {
   type TransactionGraph
 } from '@/core/transactions/domain'
 import { getZcashChainId } from '@/core/chains/registry'
+import type { Network } from '@/types'
+import type { ConfidentialFundingPlan } from './confidential-funding-model'
+
+const CONFIDENTIAL_TRANSACTION_PREFIX = 'tx:confidential:'
+
+export function getConfidentialFundingPlanId(transactionId: string): string | null {
+  if (!transactionId.startsWith(CONFIDENTIAL_TRANSACTION_PREFIX)) return null
+  const planId = transactionId.slice(CONFIDENTIAL_TRANSACTION_PREFIX.length)
+  return /^[a-zA-Z0-9:_-]{1,160}$/.test(planId) ? planId : null
+}
+
+export function isLegacyShieldWithdrawActivityGraph(graph: TransactionGraph): boolean {
+  const intent = graph.root.intent
+  return (
+    intent?.direction === 'outgoing' &&
+    intent.shield?.operation === 'withdraw' &&
+    intent.shield.sourceDomain === 'shield' &&
+    intent.shield.destinationDomain === 'public' &&
+    intent.recipient?.chainId.startsWith('eip155:') === true
+  )
+}
+
+export function projectLegacyShieldWithdrawActivityGraph(
+  graph: TransactionGraph,
+  plan: ConfidentialFundingPlan | undefined,
+  network: Network,
+  privateExecutionAddresses: readonly string[]
+): TransactionGraph {
+  const { id, scope, intent } = graph.root
+  const recipient = intent?.recipient
+  const shield = intent?.shield
+  if (
+    !isLegacyShieldWithdrawActivityGraph(graph) ||
+    !intent ||
+    !shield ||
+    !recipient ||
+    plan?.operation !== 'withdraw' ||
+    plan.destinationDomain !== 'public' ||
+    plan.transactionId !== id ||
+    plan.network !== network ||
+    plan.keyDomainId !== scope.keyDomainId ||
+    plan.accountId !== scope.accountId ||
+    plan.destination.chainId !== recipient.chainId ||
+    plan.destination.address.toLowerCase() !== recipient.address.toLowerCase() ||
+    plan.externalRecipient?.toLowerCase() !== recipient.address.toLowerCase() ||
+    !privateExecutionAddresses.includes(recipient.address.toLowerCase())
+  )
+    return graph
+  return {
+    ...graph,
+    root: {
+      ...graph.root,
+      intent: { ...intent, shield: { ...shield, destinationDomain: 'private' } }
+    }
+  }
+}
+
+export function projectShieldDepositSettlement(
+  graph: TransactionGraph,
+  plan: ConfidentialFundingPlan | undefined,
+  network: Network
+): TransactionGraph {
+  const { root, segments } = graph
+  const intent = root.intent
+  const relay = segments.find(segment => segment.role === 'relay' && segment.status === 'final')
+  if (
+    root.status !== 'final' ||
+    root.reconfirming ||
+    !relay ||
+    segments.some(segment => segment.role === 'destination') ||
+    intent?.shield?.operation !== 'deposit' ||
+    intent.direction !== 'self' ||
+    plan?.operation !== 'deposit' ||
+    plan.phase !== 'ready' ||
+    plan.network !== network ||
+    plan.transactionId !== root.id ||
+    plan.keyDomainId !== root.scope.keyDomainId ||
+    plan.accountId !== root.scope.accountId ||
+    plan.destination.assetId !== intent.counterAmount?.assetId ||
+    plan.destination.chainId !== intent.recipient?.chainId ||
+    plan.destination.address !== intent.recipient.address ||
+    !plan.settledOutputRaw ||
+    !/^[1-9]\d*$/.test(plan.settledOutputRaw)
+  )
+    return graph
+
+  const id = parseTransactionSegmentId(`segment:confidential:${plan.planId}:deposit-credit`)
+  return parseTransactionGraph({
+    root: { ...root, segmentIds: [...root.segmentIds, id] },
+    segments: [
+      ...segments,
+      {
+        id,
+        transactionId: root.id,
+        role: 'destination',
+        target: {
+          kind: 'protocol',
+          provider: 'Confidential Intents',
+          account: plan.destination.address
+        },
+        status: 'final',
+        requiredForFinality: false,
+        dependsOn: [relay.id],
+        evidence: {
+          settledAmount: { assetId: plan.destination.assetId, amountRaw: plan.settledOutputRaw }
+        },
+        createdAt: root.createdAt,
+        updatedAt: root.updatedAt,
+        revision: 0
+      }
+    ]
+  })
+}
 
 export function createConfidentialFundingGraph(input: {
   readonly planId: string
@@ -68,7 +181,7 @@ export function createConfidentialFundingGraph(input: {
   if (!input.requiresDeposit && !/^[0-9a-f]{64}$/.test(input.signedWithdrawFingerprint ?? '')) {
     throw new Error('Confidential funding graph requires a frozen signed withdraw batch')
   }
-  const transactionId = parseTransactionId(`tx:confidential:${input.planId}`)
+  const transactionId = parseTransactionId(`${CONFIDENTIAL_TRANSACTION_PREFIX}${input.planId}`)
   const originId = parseTransactionSegmentId(`segment:confidential:${input.planId}:origin`)
   const relayId = parseTransactionSegmentId(`segment:confidential:${input.planId}:relay`)
   const destinationIds = input.withdrawDepositAddresses.map((_, index) =>

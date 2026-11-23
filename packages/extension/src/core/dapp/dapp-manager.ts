@@ -36,6 +36,14 @@ export interface ConnectedDApp {
   caip25Session?: Caip25StoredSession
 }
 
+export interface SiteDisconnectedDApp {
+  readonly origin: string
+  readonly host: string
+  readonly name: string
+  readonly favicon: string
+  readonly disconnectedBySite: 'evm' | 'native'
+}
+
 export interface DAppChainAuthorization {
   readonly chainId: string
   readonly accounts: AccountRef[]
@@ -140,6 +148,7 @@ interface AuthorizationState {
   readonly mode: 'approved' | 'revoked' | 'unreviewed'
   readonly publicExplicit?: true
   readonly firstPartySession?: 'automatic' | 'explicit'
+  readonly disconnectedBySite?: SiteDisconnectedDApp['disconnectedBySite']
 }
 
 function parseAuthorizationState(value: unknown): Record<string, AuthorizationState> {
@@ -157,7 +166,8 @@ function parseAuthorizationState(value: unknown): Record<string, AuthorizationSt
           key !== 'revision' &&
           key !== 'mode' &&
           key !== 'publicExplicit' &&
-          key !== 'firstPartySession'
+          key !== 'firstPartySession' &&
+          key !== 'disconnectedBySite'
       ) ||
       !Number.isSafeInteger(state.revision) ||
       (state.revision as number) < 0 ||
@@ -168,7 +178,10 @@ function parseAuthorizationState(value: unknown): Record<string, AuthorizationSt
       (state.publicExplicit !== undefined && state.publicExplicit !== true) ||
       (state.firstPartySession !== undefined &&
         state.firstPartySession !== 'automatic' &&
-        state.firstPartySession !== 'explicit')
+        state.firstPartySession !== 'explicit') ||
+      (state.disconnectedBySite !== undefined &&
+        state.disconnectedBySite !== 'evm' &&
+        state.disconnectedBySite !== 'native')
     ) {
       throw new Error('Invalid stored dApp authorization state')
     }
@@ -176,6 +189,7 @@ function parseAuthorizationState(value: unknown): Record<string, AuthorizationSt
       revision: state.revision as number,
       mode: state.mode ?? 'unreviewed',
       ...(state.publicExplicit === true ? { publicExplicit: true } : {}),
+      ...(state.disconnectedBySite ? { disconnectedBySite: state.disconnectedBySite } : {}),
       ...(state.firstPartySession === undefined
         ? {}
         : { firstPartySession: state.firstPartySession })
@@ -1535,6 +1549,7 @@ export class DAppManager {
       const next = new Map(this.connectedDApps)
       if (chainAuthorizations.length === 0 && getConnectionAccountRefs(dapp).length === 0) {
         next.delete(origin)
+        states[origin] = { ...states[origin], disconnectedBySite: 'evm' }
       } else {
         next.set(origin, {
           ...dapp,
@@ -1806,6 +1821,7 @@ export class DAppManager {
       const remaining = normalizeChainAuthorizations(dapp.chainAuthorizations, dapp.origin).filter(
         item => item.chainId !== chainId
       )
+      const states = this.advanceAuthorizationRevision(origin, 'explicit')
       const next = new Map(this.connectedDApps)
       if (
         remaining.length === 0 &&
@@ -1813,6 +1829,10 @@ export class DAppManager {
         !dapp.evmAuthorization
       ) {
         next.delete(origin)
+        states[origin] = {
+          ...states[origin],
+          disconnectedBySite: isEvmChain(chainId) ? 'evm' : 'native'
+        }
       } else {
         const evmNetworkState = removeEvmNetworkChains(dapp, new Set([chainId]))
         next.set(origin, {
@@ -1840,7 +1860,7 @@ export class DAppManager {
           lastActiveAt: nextActivityTime(dapp)
         })
       }
-      await this.commitConnections(next, this.advanceAuthorizationRevision(origin, 'explicit'))
+      await this.commitConnections(next, states)
     })
   }
 
@@ -1894,12 +1914,24 @@ export class DAppManager {
     })
   }
 
-  async removeConnection(origin: string): Promise<void> {
+  async removeConnection(origin: string, initiatedBy: 'wallet' | 'site' = 'wallet'): Promise<void> {
     return this.enqueueMutation(async () => {
       await this.initialize()
+      const dapp = this.connectedDApps.get(origin)
       const next = new Map(this.connectedDApps)
       next.delete(origin)
-      await this.commitConnections(next, this.revokeOrigins([origin], true))
+      const states = this.revokeOrigins([origin], true)
+      if (initiatedBy === 'site' && dapp) {
+        states[origin] = {
+          ...states[origin],
+          disconnectedBySite:
+            dapp.evmAuthorization || explicitEvmNetworkState(dapp) ? 'evm' : 'native'
+        }
+      } else if (initiatedBy === 'wallet') {
+        const { disconnectedBySite: _, ...state } = states[origin]
+        states[origin] = state
+      }
+      await this.commitConnections(next, states)
     })
   }
 
@@ -1916,8 +1948,10 @@ export class DAppManager {
         dapp.origin
       )
       const next = new Map(this.connectedDApps)
+      const states = this.revokeOrigins([origin])
       if (chainAuthorizations.length === 0 && !dapp.evmAuthorization) {
         next.delete(origin)
+        states[origin] = { ...states[origin], disconnectedBySite: 'native' }
       } else {
         next.set(origin, {
           id: dapp.id,
@@ -1935,7 +1969,7 @@ export class DAppManager {
           caip25Session: dapp.caip25Session
         })
       }
-      await this.commitConnections(next, this.revokeOrigins([origin]))
+      await this.commitConnections(next, states)
     })
   }
 
@@ -1981,7 +2015,11 @@ export class DAppManager {
     return this.enqueueMutation(async () => {
       await this.initialize()
       const origins = Object.freeze(Array.from(this.connectedDApps.keys()))
-      await this.commitConnections(new Map(), this.revokeOrigins(origins))
+      const states = this.revokeOrigins(origins)
+      for (const [origin, { disconnectedBySite, ...state }] of Object.entries(states)) {
+        if (disconnectedBySite) states[origin] = state
+      }
+      await this.commitConnections(new Map(), states)
       return origins
     })
   }
@@ -2013,6 +2051,11 @@ export class DAppManager {
   }
 
   async getCurrentTabDApp(): Promise<ConnectedDApp | null> {
+    const site = await this.getCurrentTabDAppForWallet()
+    return site && !('disconnectedBySite' in site) ? site : null
+  }
+
+  async getCurrentTabDAppForWallet(): Promise<ConnectedDApp | SiteDisconnectedDApp | null> {
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
       const currentTab = tabs[0]
@@ -2026,7 +2069,19 @@ export class DAppManager {
         return null
       }
 
-      return await this.getConnection(origin)
+      await this.waitForStableState()
+      const connection = this.connectedDApps.get(origin)
+      if (connection) return connection
+      // This marker is display-only. It never enters the connected-origin map.
+      const disconnectedBySite = this.authorizationState[origin]?.disconnectedBySite
+      if (!disconnectedBySite) return null
+      return {
+        origin,
+        host: url.host,
+        name: url.host,
+        favicon: this.getFavicon(origin, currentTab.favIconUrl),
+        disconnectedBySite
+      }
     } catch (error) {
       console.error('Failed to get current tab dApp:', error)
       return null
@@ -2117,6 +2172,12 @@ export class DAppManager {
     next: Map<string, ConnectedDApp>,
     states: Record<string, AuthorizationState> = this.authorizationState
   ): Promise<void> {
+    for (const origin of next.keys()) {
+      if (states[origin]?.disconnectedBySite) {
+        const { disconnectedBySite: _, ...state } = states[origin]
+        states = { ...states, [origin]: state }
+      }
+    }
     await this.getStorage().set({
       [STORAGE_KEY]: Array.from(next.values()),
       [AUTHORIZATION_KEY]: states

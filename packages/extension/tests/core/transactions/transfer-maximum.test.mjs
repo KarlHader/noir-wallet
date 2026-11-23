@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import {
+  estimateBitcoinRouteMaximum,
   estimateRheaRouteMaximum,
   fallbackTransferMaximum,
   resolveNativeRouteMaximum,
@@ -8,6 +9,7 @@ import {
   isTransferAmountSpendable
 } from '../../../src/popup/services/transfer-maximum.ts'
 import { EvmWalletClientError } from '../../../src/popup/services/evm-wallet-client.ts'
+import { BitcoinWalletClientError } from '../../../src/popup/services/bitcoin-wallet-client.ts'
 import { TransferMaximumEstimateCache } from '../../../src/popup/services/transfer-maximum-cache.ts'
 
 const maximum = amountRaw => ({
@@ -99,9 +101,10 @@ test('uses one fee-adjusted amount for display, Max and validation without deduc
   expect(() => resolveTransferSpendableRaw('1000', '1001', true)).toThrow('Invalid')
 })
 
-test('routed Max holds a fixed native reserve and never spends a balance below it', () => {
+test('routed Max retains its chain-specific fallback without a usable USD price', () => {
   const cases = [
-    { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 3_000_000_000_000_000n },
+    { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 300_000_000_000_000n },
+    { family: 'evm', chainId: 'eip155:11155111', decimals: 18, reserve: 300_000_000_000_000n },
     { family: 'evm', chainId: 'eip155:8453', decimals: 18, reserve: 300_000_000_000_000n },
     { family: 'zcash', decimals: 8, reserve: 50_000n }
   ]
@@ -113,6 +116,72 @@ test('routed Max holds a fixed native reserve and never spends a balance below i
       String(reserve * 99n)
     )
   }
+  expect(
+    resolveNativeRouteMaximum({
+      family: 'zcash',
+      decimals: 8,
+      availableRaw: '60000',
+      priceUsd: '0'
+    })
+  ).toBe('10000')
+})
+
+test('routed Max reserves about one dollar at the native asset price, rounded up in base units', () => {
+  const evm = {
+    family: 'evm',
+    chainId: 'eip155:1',
+    decimals: 18,
+    availableRaw: '10000000000000000'
+  }
+  expect(resolveNativeRouteMaximum({ ...evm, priceUsd: '2500' })).toBe('9600000000000000')
+  expect(resolveNativeRouteMaximum({ ...evm, priceUsd: '1250' })).toBe('9200000000000000')
+  const zcash = { family: 'zcash', decimals: 8, availableRaw: '250000', priceUsd: '900' }
+  expect(resolveNativeRouteMaximum(zcash)).toBe('138888')
+  expect(resolveNativeRouteMaximum({ ...zcash, availableRaw: '111111' })).toBe('0')
+})
+
+const bitcoinRouteSource = {
+  family: 'bitcoin',
+  bitcoinAddressType: 'p2wpkh',
+  refundAddress: 'wallet-address',
+  asset: { balance: { availableRaw: '10000' }, metadata: { decimals: 8 } },
+  networkFeeAsset: { metadata: { decimals: 8, symbol: 'BTC' } }
+}
+
+test('BTC routed Max reserves 1.5 fees rounded up, using the actual deposit estimate when available', async () => {
+  const client = {
+    estimateMaximum: async ({ depositAddress, feeTier }) => {
+      expect(feeTier).toBe('fast')
+      return depositAddress === bitcoinRouteSource.refundAddress
+        ? { ...maximum('9899'), networkFeeRaw: '101' }
+        : { ...maximum('9300'), networkFeeRaw: '201' }
+    }
+  }
+  const input = { source: bitcoinRouteSource, feeTier: 'fast', priceUsd: '100000' }
+  await expect(estimateBitcoinRouteMaximum(input, client)).resolves.toMatchObject({
+    amountRaw: '9848',
+    networkFeeRaw: '101'
+  })
+  await expect(
+    estimateBitcoinRouteMaximum({ ...input, depositAddress: 'provider-address' }, client)
+  ).resolves.toMatchObject({ amountRaw: '9199', networkFeeRaw: '201' })
+})
+
+test('BTC routed Max can fall back to a priced reserve only before the deposit address is known', async () => {
+  const error = new BitcoinWalletClientError('network-unavailable', 'No fee estimate')
+  const client = {
+    estimateMaximum: async () => {
+      throw error
+    }
+  }
+  const input = { source: bitcoinRouteSource, feeTier: 'standard', priceUsd: '100000' }
+  await expect(estimateBitcoinRouteMaximum(input, client)).resolves.toMatchObject({
+    amountRaw: '8000',
+    networkFeeRaw: '2000'
+  })
+  await expect(
+    estimateBitcoinRouteMaximum({ ...input, depositAddress: 'provider-address' }, client)
+  ).rejects.toBe(error)
 })
 
 test('fee-estimate failure leaves a positive native proposal with a fee reserve on each family', () => {

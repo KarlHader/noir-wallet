@@ -339,6 +339,8 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
       refundAddress,
       fundingSource: 'transparent',
       recipientType: 'CONFIDENTIAL_INTENTS',
+      requestId: 'explicit-zec-confidential-swap',
+      userAction: 'swap',
       slippageBps: 50
     }
     switchDuringAuthorization = true
@@ -358,14 +360,20 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
       destinationChain: destination.chainId,
       destinationAsset: protocolAssetId,
       recipient,
-      recipientType: 'CONFIDENTIAL_INTENTS'
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      userAction: 'swap'
     })
     expect(values.get(`native_zec_intents_swap:${review.quoteId}`).schemaVersion).toBe(2)
+    expect((await coordinator.get(review.quoteId)).quoteBinding).toEqual(review.quoteBinding)
+    await expect(coordinator.prepare({ ...request, userAction: undefined })).rejects.toThrow(
+      'request ID was reused with different details'
+    )
     await expect(
       coordinator.prepare({
         ...request,
         recipientType: 'DESTINATION_CHAIN',
         fundingSource: undefined,
+        userAction: undefined,
         destination: { ...destination, recipient: refundAddress }
       })
     ).rejects.toThrow('Native ZEC Intents destination is invalid')

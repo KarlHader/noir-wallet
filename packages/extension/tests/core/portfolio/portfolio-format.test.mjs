@@ -7,7 +7,7 @@ import {
   formatDisplayAmount,
   formatDisplayTokenAmount,
   formatNetworkDisplayName
-} from '../../../src/popup/components/portfolio/portfolio-format.ts'
+} from '../../../src/popup/services/portfolio-format.ts'
 
 test('formats chain and network identity without repeating the network name', () => {
   expect(formatNetworkDisplayName('Ethereum Sepolia', 'sepolia')).toBe('Ethereum Sepolia')

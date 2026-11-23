@@ -5,7 +5,7 @@ import {
   getLegacyIntentsProgressPresentation
 } from '../../../src/popup/services/transaction-progress.ts'
 import { getZcashIntentsOriginStatus } from '../../../src/lib/cross-chain-transaction.ts'
-import { getActivityProgressSteps } from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+import { getActivityProgressSteps } from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 test('an origin hash alone does not claim on-chain success', () => {
   const progress = getIntentsProgressPresentation({

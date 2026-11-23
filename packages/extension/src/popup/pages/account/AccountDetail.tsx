@@ -3,7 +3,13 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { PageHeader } from '../../components/common/PageHeader'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
 import { Button } from '../../components/ui/button'
 import {
@@ -19,6 +25,7 @@ import { useDialog } from '../../hooks/useDialog'
 import { useWalletStore } from '@/store/wallet-store'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { getAccountDisplayName } from '@/lib/format'
+import { openHardwareConnectTab } from '@/lib/hardware-tab'
 import { toast } from '@/store/toast-store'
 import { useResyncZcash } from '../../hooks/useResyncZcash'
 import { accountNetworksClient } from '../../services/account-networks-client'
@@ -67,17 +74,25 @@ export function AccountDetail() {
       icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
       action: () => navigate(`/addresses-list?accountId=${accountId}&walletId=${walletId}`)
     },
-    !isHardwareWallet && wallet.keySource !== 'private-key'
+    wallet.keySource === 'ledger'
       ? {
-          label: 'Networks',
+          label: 'Add networks',
           value: undefined,
           icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
           action: () =>
-            navigate(
-              `/account-networks?accountId=${encodeURIComponent(accountId!)}&walletId=${encodeURIComponent(walletId!)}`
-            )
+            openHardwareConnectTab('ledger', { walletId: wallet.id, accountId: account.id })
         }
-      : null,
+      : !isHardwareWallet && wallet.keySource !== 'private-key'
+        ? {
+            label: 'Networks',
+            value: undefined,
+            icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
+            action: () =>
+              navigate(
+                `/account-networks?accountId=${encodeURIComponent(accountId!)}&walletId=${encodeURIComponent(walletId!)}`
+              )
+          }
+        : null,
     // Hardware wallets are watch-only: there is no seed phrase on this device
     isHardwareWallet
       ? {
@@ -349,27 +364,29 @@ export function AccountDetail() {
             maxLength={128}
             onChange={event => setRenameDraft(event.target.value)}
           />
-          <Button
-            disabled={!renameDraft.trim()}
-            isLoading={renaming}
-            onClick={async () => {
-              setRenaming(true)
-              try {
-                await zcashWalletRuntimeClient.renameAccount(
-                  wallet.id,
-                  account.id,
-                  renameDraft.trim()
-                )
-                setRenameOpen(false)
-              } catch (error) {
-                toast.error(error instanceof Error ? error.message : 'Unable to rename account')
-              } finally {
-                setRenaming(false)
-              }
-            }}
-          >
-            Save
-          </Button>
+          <DialogFooter>
+            <Button
+              disabled={!renameDraft.trim()}
+              isLoading={renaming}
+              onClick={async () => {
+                setRenaming(true)
+                try {
+                  await zcashWalletRuntimeClient.renameAccount(
+                    wallet.id,
+                    account.id,
+                    renameDraft.trim()
+                  )
+                  setRenameOpen(false)
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : 'Unable to rename account')
+                } finally {
+                  setRenaming(false)
+                }
+              }}
+            >
+              Save
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

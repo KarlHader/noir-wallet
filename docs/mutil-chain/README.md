@@ -9,7 +9,7 @@ Chain availability comes from the product registry, enabled feature flags, and r
 - [Transaction lifecycle and Activity](architecture/transaction-lifecycle.md): local transaction ownership, lifecycle transitions, remote history, cache fallback, and reconstruction.
 - [Confidential DeFi development](operations/private-defi-development.md): Main, private execution, abstract balances, configuration, and recovery.
 - [UI design conventions](design/ui-design-system.md): production tokens, components, viewport sizes, and design-to-code review.
-- [Test-wallet registry](operations/test-wallet-registry.md): public unfunded vectors, private fixture formats, and local verification boundaries.
+- [Test-wallet registry](operations/test-wallet-registry.md): public unfunded vectors and local verification boundaries.
 - [Release runbook](../release-workflow.md): local versus release inputs, History proxy deployment, and artifact verification.
 
 ## Implementation Sources

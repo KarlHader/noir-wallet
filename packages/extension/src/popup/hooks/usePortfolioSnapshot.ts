@@ -6,14 +6,21 @@ import {
   getPortfolioSnapshot,
   portfolioSnapshotKey,
   readPortfolioSnapshot,
+  refreshBalanceSnapshot,
   refreshPortfolioSnapshot,
   subscribePortfolioSnapshot
 } from '@/popup/services/portfolio-snapshot-store'
+import type { BalanceRefreshRequest } from '@/popup/services/balance-refresh-adapters'
 
 export function usePortfolioSnapshot(
   walletId: string | null,
   accountId: string | null,
-  options: { readonly enabled?: boolean; readonly autoRefresh?: boolean } = {}
+  options: {
+    readonly enabled?: boolean
+    readonly autoRefresh?: boolean
+    readonly refreshConfidential?: boolean
+    readonly detailAssetId?: string
+  } = {}
 ) {
   const network = useWalletStore(state => state.currentNetwork)
   const endpointRuntimeKey = useSettingsStore(state =>
@@ -21,8 +28,11 @@ export function usePortfolioSnapshot(
   )
   const enabled = options.enabled !== false && Boolean(walletId && accountId)
   const autoRefresh = options.autoRefresh !== false
+  const refreshConfidential = options.refreshConfidential !== false
   const scope =
-    enabled && walletId && accountId ? { network, walletId, accountId, endpointRuntimeKey } : null
+    enabled && walletId && accountId
+      ? { network, walletId, accountId, endpointRuntimeKey, detailAssetId: options.detailAssetId }
+      : null
   const key = scope ? portfolioSnapshotKey(scope) : ''
   const subscribe = useCallback(
     (listener: () => void) => subscribePortfolioSnapshot(key, listener),
@@ -31,6 +41,10 @@ export function usePortfolioSnapshot(
   const getSnapshot = useCallback(() => getPortfolioSnapshot(key, scope ?? undefined), [key])
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   const readLatest = useCallback(() => readPortfolioSnapshot(key), [key])
+  const refreshSource = useCallback(
+    (request: BalanceRefreshRequest) => refreshBalanceSnapshot(key, request),
+    [key]
+  )
   const refresh = useCallback(
     (
       force = false,
@@ -39,20 +53,20 @@ export function usePortfolioSnapshot(
         readonly additionalChainIds?: readonly string[]
         readonly forceDiscovery?: boolean
       } = {}
-    ) => refreshPortfolioSnapshot(key, force, refreshOptions),
-    [key]
+    ) => refreshPortfolioSnapshot(key, force, { ...refreshOptions, refreshConfidential }),
+    [key, refreshConfidential]
   )
 
   useEffect(() => {
     if (!key) return
     let active = true
     void readPortfolioSnapshot(key).then(() => {
-      if (active && autoRefresh) return refreshPortfolioSnapshot(key)
+      if (active && autoRefresh) return refresh()
     })
     return () => {
       active = false
     }
-  }, [autoRefresh, key])
+  }, [autoRefresh, key, refresh])
 
-  return { ...snapshot, refresh, readLatest }
+  return { ...snapshot, scopeKey: key, refresh, refreshSource, readLatest }
 }

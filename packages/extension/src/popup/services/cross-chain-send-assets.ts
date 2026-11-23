@@ -13,9 +13,11 @@ import {
   parseAssetId,
   type ChainDefinition
 } from '@/core/chains/registry'
-import { MARKET_ASSETS } from '@/config/asset-market-assets'
-import { getAssetMarketMappings } from '@/core/prices/asset-market-mappings'
-import type { MarketAssetId } from '@/core/prices/market-asset'
+import {
+  getCrossChainSendAssetGroup,
+  getCrossChainSendDestinationAssetId,
+  type CrossChainSendAssetGroup
+} from '@/core/chains/cross-chain-asset-group'
 import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
 import type { Network } from '@/types'
 import { getSendRouteCostFromAmounts } from './send-route-cost'
@@ -23,43 +25,19 @@ import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import { isSelectableChainFamily } from './chain-selection-availability'
 import { getEnabledSwapChains } from './swap-catalog-loading'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
-import { sortTokenSelectorNetworks } from '@/popup/components/tokens/token-selector-chain-order'
+import { sortTokenSelectorNetworks } from '@/popup/services/token-selector-chain-order'
 
-type SendAssetIdentity = Readonly<{
-  chainId: string
-  namespace: string
-  reference: string
-}>
-
-export type CrossChainSendAssetGroup = MarketAssetId | `protocol:${string}`
+export { getCrossChainSendAssetGroup, getCrossChainSendDestinationAssetId }
+export type { CrossChainSendAssetGroup }
 export type CrossChainSendCapabilities = Readonly<{ evm: boolean; solana: boolean }>
 
-export function readCrossChainSendRoute(
-  searchParams: URLSearchParams,
-  navigationState: unknown,
-  crossChainSendRequested: boolean
-) {
-  const sourceAssetId = searchParams.get('source')
-  const state = navigationState && typeof navigationState === 'object' ? navigationState : null
-  return {
-    sourceAssetId,
-    destinationAssetId: searchParams.get('destination'),
-    destinationChainId: crossChainSendRequested ? searchParams.get('destinationChainId') : null,
-    recipient: crossChainSendRequested ? searchParams.get('recipient') : null,
-    amount: crossChainSendRequested ? searchParams.get('amount') : null,
-    sourceMode: searchParams.get('sourceMode'),
-    returnToSendAssetId:
-      state && 'returnToSendAssetId' in state && state.returnToSendAssetId === sourceAssetId
-        ? sourceAssetId
-        : null,
-    sendEntry:
-      state &&
-      'sendEntry' in state &&
-      (state.sendEntry === 'asset-detail' || state.sendEntry === 'shield')
-        ? state.sendEntry
-        : null
-  }
-}
+export type CrossChainSendDraft = Readonly<{
+  sourceAssetId: string
+  destinationAssetId: string | null
+  destinationChainId: string
+  recipient: string
+  amount: string
+}>
 
 interface CrossChainSendNetwork {
   readonly chain: ChainDefinition
@@ -102,30 +80,6 @@ const mainnetAssets = createAssetRegistry(
   createInitialProductChainRegistry('mainnet'),
   getBundledInitialProductAssetDefinitions('mainnet')
 )
-const marketByAssetId = new Map(
-  getAssetMarketMappings('mainnet', mainnetAssets).map(mapping => [
-    mapping.assetId,
-    mapping.marketAssetId
-  ])
-)
-const USDT0_SEND_GROUP = 'protocol:usdt0' as const
-// USDT0 deployments: https://docs.usdt0.to/technical-documentation/deployments
-// Ethereum's USDT is the source asset held by the OFT Adapter.
-const usdt0ContractsByChainId: Readonly<Record<string, string>> = Object.freeze({
-  'eip155:1': '0xdac17f958d2ee523a2206206994597c13d831ec7',
-  'eip155:10': '0x01bff41798a0bcf287b996046ca68b395dbc1071',
-  'eip155:137': '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
-  'eip155:143': '0xe7cd86e13ac4309349f30b3435a9d337750fc82d',
-  'eip155:196': '0x779ded0c9e1022225f8e0630b35a9b54be713736',
-  'eip155:9745': '0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb',
-  'eip155:42161': '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
-  'eip155:80094': '0x779ded0c9e1022225f8e0630b35a9b54be713736'
-})
-
-function isUsdt0AssetId(assetId: string): boolean {
-  const [chainId, reference] = assetId.split('/erc20:')
-  return Boolean(reference && usdt0ContractsByChainId[chainId] === reference)
-}
 
 export function getCrossChainSendDestinationCandidates<
   T extends { readonly chain: ChainDefinition }
@@ -185,108 +139,19 @@ export function resolveCrossChainSendRouteAssetDisplay(
   }
 }
 
-export function resolveCrossChainSendRouteDraft(
-  input: Readonly<{
-    network: Network
-    walletId: string | null
-    accountId: string | null
-    currentWalletId: string | null
-    currentAccountId: string | null
-    routeWalletId: string | null
-    routeAccountId: string | null
-    navigationState: unknown
-    sourceAssetId: string | null
-    destinationAssetId?: string | null
-    destinationChainId?: string | null
-    recipient: string | null
-    amount: string | null
-  }>
-) {
-  const display = resolveCrossChainSendRouteAssetDisplay(input)
-  const routeAccount =
-    typeof input.navigationState === 'object' &&
-    input.navigationState !== null &&
-    'crossChainSendRouteAccount' in input.navigationState
-      ? input.navigationState.crossChainSendRouteAccount
-      : null
-  const destinationChainId =
-    input.destinationChainId ?? input.destinationAssetId?.split('/')[0] ?? null
-  const navigationMatches =
-    !input.walletId &&
-    !input.accountId &&
-    !input.currentWalletId &&
-    !input.currentAccountId &&
-    typeof routeAccount === 'object' &&
-    routeAccount !== null &&
-    'walletId' in routeAccount &&
-    routeAccount.walletId === input.routeWalletId &&
-    'accountId' in routeAccount &&
-    routeAccount.accountId === input.routeAccountId &&
-    'sourceAssetId' in routeAccount &&
-    routeAccount.sourceAssetId === input.sourceAssetId &&
-    (input.destinationAssetId
-      ? 'destinationAssetId' in routeAccount &&
-        routeAccount.destinationAssetId === input.destinationAssetId &&
-        (!('destinationChainId' in routeAccount) ||
-          routeAccount.destinationChainId === destinationChainId)
-      : Boolean(destinationChainId) &&
-        'destinationChainId' in routeAccount &&
-        routeAccount.destinationChainId === destinationChainId &&
-        (!('destinationAssetId' in routeAccount) || routeAccount.destinationAssetId == null))
-  if (
-    !display ||
-    !input.routeWalletId ||
-    !input.routeAccountId ||
-    !(
-      (input.walletId === input.routeWalletId && input.accountId === input.routeAccountId) ||
-      navigationMatches
-    )
-  )
-    return null
-  return {
-    ...display,
-    walletId: input.routeWalletId,
-    accountId: input.routeAccountId,
-    recipient: input.recipient ?? '',
-    amount: input.amount ?? ''
-  }
+export function resolveCrossChainSendDraft(input: {
+  network: Network
+  walletId: string | null
+  accountId: string | null
+  draft: CrossChainSendDraft & { walletId: string; accountId: string }
+}) {
+  const { draft } = input
+  if (draft.walletId !== input.walletId || draft.accountId !== input.accountId) return null
+  const display = resolveCrossChainSendRouteAssetDisplay({ network: input.network, ...draft })
+  return display ? { ...draft, ...display } : null
 }
 
-const SOLANA_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 const MAINNET_EVM_NETWORKS = getEvmNetworkConfigs('mainnet')
-
-export function getCrossChainSendAssetGroup(
-  asset: SendAssetIdentity
-): CrossChainSendAssetGroup | null {
-  if (
-    asset.chainId.startsWith('solana:') &&
-    asset.namespace === 'token' &&
-    asset.reference === SOLANA_USDC_MINT
-  ) {
-    return MARKET_ASSETS.usdc
-  }
-  const reference = asset.namespace === 'erc20' ? asset.reference.toLowerCase() : asset.reference
-  const assetId = `${asset.chainId}/${asset.namespace}:${reference}`
-  return marketByAssetId.get(assetId) ?? (isUsdt0AssetId(assetId) ? USDT0_SEND_GROUP : null)
-}
-
-export function getCrossChainSendDestinationAssetId(
-  chainId: string,
-  group: CrossChainSendAssetGroup
-): string | null {
-  if (group === USDT0_SEND_GROUP)
-    return usdt0ContractsByChainId[chainId]
-      ? `${chainId}/erc20:${usdt0ContractsByChainId[chainId]}`
-      : null
-  if (group.startsWith('protocol:')) return null
-  if (group === MARKET_ASSETS.usdc && chainId.startsWith('solana:'))
-    return `${chainId}/token:${SOLANA_USDC_MINT}`
-  return (
-    [...marketByAssetId].find(
-      ([assetId, marketId]) => assetId.startsWith(`${chainId}/`) && marketId === group
-    )?.[0] ?? null
-  )
-}
 
 export function getCrossChainSendTokenGroup(token: RheaSwapToken): CrossChainSendAssetGroup | null {
   const walletAssetId = getCrossChainSendWalletAssetId(token)
@@ -298,11 +163,8 @@ export function getCrossChainSendTokenGroup(token: RheaSwapToken): CrossChainSen
     canonicalAssetId !== walletAssetId
   )
     return null
-  const known =
-    marketByAssetId.get(walletAssetId) ?? (isUsdt0AssetId(walletAssetId) ? USDT0_SEND_GROUP : null)
+  const known = getCrossChainSendAssetGroup(parseAssetId(walletAssetId))
   if (known) return known
-  if (!token.isNative && token.rheaChainId === 'solana' && token.rheaAddress === SOLANA_USDC_MINT)
-    return MARKET_ASSETS.usdc
   return /^nep(?:141|245):[^\s]+$/.test(token.assetId) ? `protocol:${token.assetId}` : null
 }
 

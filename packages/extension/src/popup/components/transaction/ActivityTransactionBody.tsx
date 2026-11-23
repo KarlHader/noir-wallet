@@ -23,28 +23,40 @@ import { AmountDisplay } from '../common/AmountDisplay'
 import { ChainIcon } from '../common/ChainIcon'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyToast'
 import { DetailRow } from '../common/DetailRow'
+import { AccountDomainBadge } from '../account/AccountDomainBadge'
 import { PrivateAddressWarningDialog } from '../account/PrivateAddressWarningDialog'
-import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
+import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
 import { TransactionProgressSteps } from './TransactionProgressSteps'
 import { TransactionReferenceValue } from './TransactionReferenceValue'
+import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
 import {
   getActivityApprovalDetails,
   getActivityInteractionPresentation
-} from './activity-interaction-adapters'
-import { resolveActivityChainId } from './activity-chain'
+} from '@/popup/services/activity-interaction-adapters'
+import { resolveActivityChainId } from '@/core/activity/activity-chain'
 import {
+  getActivityAction,
+  isActivityShieldSend,
+  type ActivityPerspective
+} from '@/popup/services/activity-action-label'
+import {
+  getActivityAccountRouteLabel,
+  getActivityCancellationPresentation,
   getActivityDisplayChanges,
   getActivityProgressSteps,
   getActivityStatusPresentation,
   getActivitySwapPresentation,
   getActivityTransferRecipient,
+  getClusterBatchStatusLabel,
+  getClusterChildStatusLabel,
+  getClusterSettledDestination,
   isDirectAccountMove,
   isOwnedAccountTransfer,
   resolveActivityChainMetadata
-} from './multichain-activity-presentation'
+} from '@/popup/services/multichain-activity-presentation'
 
 type ActivitySwap = NonNullable<ReturnType<typeof getActivitySwapPresentation>>
 type ActivityStatus = ReturnType<typeof getActivityStatusPresentation>
@@ -64,6 +76,7 @@ export interface ActivityTransactionView {
   readonly status: ActivityStatus
   readonly statusLabel: string
   readonly statusTone: ActivityStatus['tone']
+  readonly clusterPlan: ConfidentialFundingPlan | null
   readonly amount: {
     readonly value: string
     readonly symbol: string
@@ -98,6 +111,7 @@ export interface ActivityTransactionView {
   readonly isShieldSend: boolean
   readonly isMove: boolean
   readonly isRefunded: boolean
+  readonly actionSide: 'source' | 'destination' | 'none'
 }
 
 export function buildActivityTransactionView(input: {
@@ -106,8 +120,7 @@ export function buildActivityTransactionView(input: {
   readonly assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>
   readonly chainMetadata: ReadonlyMap<string, ActivityChainMetadata>
   readonly executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
-  readonly settledDestination?: Parameters<typeof getActivitySwapPresentation>[4]
-  readonly legacyPrivateShieldWithdrawDestination?: boolean
+  readonly perspective?: ActivityPerspective
   readonly fallback?: ActivityTransactionFallback
   readonly refunded?: boolean
   readonly replacementHash?: string
@@ -116,13 +129,21 @@ export function buildActivityTransactionView(input: {
   readonly confidentialPlan?: ConfidentialFundingPlan | null
 }): ActivityTransactionView {
   const { item, network, assetMetadata, chainMetadata, fallback } = input
+  const plan = input.confidentialPlan
+  const confidentialPlan =
+    plan?.transactionId === item.id &&
+    plan.network === network &&
+    plan.keyDomainId === item.scope.keyDomainId &&
+    plan.accountId === item.scope.accountId
+      ? plan
+      : null
+  const clusterPlan = confidentialPlan?.operation === 'cluster' ? confidentialPlan : null
   const rawSwap = getActivitySwapPresentation(
     item,
     assetMetadata,
     chainMetadata,
     input.executionAddressModes,
-    input.settledDestination,
-    input.legacyPrivateShieldWithdrawDestination
+    getClusterSettledDestination(item, clusterPlan)
   )
   const sourceAmount = item.snapshot?.primaryAmount
   const destinationAmount = item.snapshot?.counterAmount
@@ -159,6 +180,18 @@ export function buildActivityTransactionView(input: {
             : rawSwap.destinationNetwork
       }
     : null
+  const action = getActivityAction(
+    item,
+    input.perspective,
+    swap ?? {
+      sourceAccountMode: item.snapshot?.sender?.address
+        ? input.executionAddressModes?.get(item.snapshot.sender.address.toLowerCase())
+        : undefined,
+      destinationAccountMode: item.snapshot?.recipient?.address
+        ? input.executionAddressModes?.get(item.snapshot.recipient.address.toLowerCase())
+        : undefined
+    }
+  )
   const asset = sourceAmount ? assetMetadata.get(sourceAmount.assetId) : undefined
   const displayMetadata = asset?.metadata ?? sourceAmount?.metadata
   const amount =
@@ -167,11 +200,12 @@ export function buildActivityTransactionView(input: {
           value: formatBaseUnitAmount(sourceAmount.amountRaw, displayMetadata.decimals),
           symbol: displayMetadata.symbol,
           prefix:
+            action.side === 'destination' ||
             item.failureCode === 'refunded' ||
             item.kind === 'receive' ||
             item.snapshot?.direction === 'incoming'
               ? '+'
-              : item.snapshot?.direction === 'outgoing'
+              : action.side === 'source' || item.snapshot?.direction === 'outgoing'
                 ? '−'
                 : ''
         }
@@ -179,11 +213,19 @@ export function buildActivityTransactionView(input: {
         ? {
             value: fallback.source.value,
             symbol: fallback.source.symbol,
-            prefix: item.snapshot?.direction === 'incoming' ? '+' : '−'
+            prefix:
+              action.side === 'destination' || item.snapshot?.direction === 'incoming' ? '+' : '−'
           }
         : null
   const changes = getActivityDisplayChanges(item, assetMetadata)
     .filter(change => !change.isRaw)
+    .sort((left, right) =>
+      left.direction === right.direction || action.side === 'none'
+        ? 0
+        : left.direction === (action.side === 'destination' ? 'incoming' : 'outgoing')
+          ? -1
+          : 1
+    )
     .slice(0, 2)
   const showChanges =
     getActivityAssetEffects(item) !== undefined &&
@@ -199,20 +241,15 @@ export function buildActivityTransactionView(input: {
     item.snapshot?.shield && direction === 'self' && item.snapshot.shield.operation !== 'swap'
   )
   const isMove = isShieldMove || (swap !== null && isDirectAccountMove(item, swap))
-  const isShieldSend = item.snapshot?.shield?.operation === 'withdraw' && direction === 'outgoing'
+  const isShieldSend = isActivityShieldSend(item)
   const references = getActivityTransactionReferences(item)
-  const confidentialPlan = input.confidentialPlan
   const confidentialIntentHash = confidentialPlan?.withdraws
     .find(row => row.intentHash?.trim())
     ?.intentHash?.trim()
   const confidentialReference =
     confidentialPlan?.operation === 'swap' &&
     confidentialPlan.sourceDomain === 'shield' &&
-    confidentialPlan.destinationDomain === 'shield' &&
-    confidentialPlan.transactionId === item.id &&
-    confidentialPlan.network === network &&
-    confidentialPlan.keyDomainId === item.scope.keyDomainId &&
-    confidentialPlan.accountId === item.scope.accountId
+    confidentialPlan.destinationDomain === 'shield'
       ? confidentialIntentHash
         ? { label: 'Intent Hash', value: confidentialIntentHash }
         : confidentialPlan.orderId?.trim()
@@ -265,8 +302,10 @@ export function buildActivityTransactionView(input: {
     network,
     swap,
     status,
-    statusLabel: input.statusLabel ?? status.label,
+    statusLabel:
+      input.statusLabel ?? (clusterPlan ? getClusterBatchStatusLabel(clusterPlan) : status.label),
     statusTone: input.statusTone ?? status.tone,
+    clusterPlan,
     amount,
     changes,
     showChanges,
@@ -302,11 +341,14 @@ export function buildActivityTransactionView(input: {
         : (resolveActivityChainMetadata(chainId, chainMetadata)?.displayName ?? 'Unknown network')
     ),
     isCrossChain: item.segments.length > 1,
-    isIncoming: item.kind === 'receive' || direction === 'incoming',
+    isIncoming:
+      action.side === 'destination' ||
+      (action.side === 'none' && (item.kind === 'receive' || direction === 'incoming')),
     isShieldMove,
     isShieldSend,
     isMove,
-    isRefunded: input.refunded === true || item.failureCode === 'refunded'
+    isRefunded: input.refunded === true || item.failureCode === 'refunded',
+    actionSide: action.side
   }
 }
 
@@ -324,10 +366,10 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
     return (
       <div className="flex flex-col items-center py-7 text-center" data-activity-swap-detail>
         <ActivityRouteTokenIcons item={item} route={swap} size="detail" />
-        {swap.isExternalDeposit ? (
+        {swap.isExternalDeposit || view.actionSide === 'destination' ? (
           <div className="mt-4 max-w-full">
             <p className="text-sm text-muted">
-              {view.isRefunded ? 'Deposit' : swap.destinationIsSettled ? 'Received' : 'Expected'}
+              {view.isRefunded ? 'Refund' : swap.destinationIsSettled ? 'Received' : 'Expected'}
             </p>
             <div
               className={cn(
@@ -347,6 +389,8 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                   prefix="+"
                   symbol={swap.destination.symbol}
                 />
+              ) : swap.source ? (
+                <AmountDisplay value={swap.source.exact} prefix="+" symbol={swap.source.symbol} />
               ) : (
                 '—'
               )}
@@ -361,20 +405,25 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                 '—'
               )}
             </div>
-            {swap.destination && !swap.hideDestinationCredit && !view.isRefunded && (
-              <div className="mt-1 max-w-full break-all font-sans text-sm text-muted tabular-nums">
-                {view.isShieldSend
-                  ? 'Recipient receives'
-                  : swap.destinationIsSettled
-                    ? 'Received'
-                    : 'Expected'}{' '}
-                <AmountDisplay
-                  value={swap.destination.exact}
-                  prefix={view.isShieldSend ? '' : '+'}
-                  symbol={swap.destination.symbol}
-                />
-              </div>
-            )}
+            {swap.destination &&
+              !swap.hideDestinationCredit &&
+              !view.isRefunded &&
+              (view.actionSide !== 'source' ||
+                view.isShieldSend ||
+                !isOwnedAccountTransfer(swap)) && (
+                <div className="mt-1 max-w-full break-all font-sans text-sm text-muted tabular-nums">
+                  {view.isShieldSend
+                    ? 'Recipient receives'
+                    : swap.destinationIsSettled
+                      ? 'Received'
+                      : 'Expected'}{' '}
+                  <AmountDisplay
+                    value={swap.destination.exact}
+                    prefix={view.isShieldSend ? '' : '+'}
+                    symbol={swap.destination.symbol}
+                  />
+                </div>
+              )}
           </>
         )}
       </div>
@@ -477,16 +526,81 @@ export function ActivityTransactionRoute({ view }: { readonly view: ActivityTran
   )
 }
 
-export function ActivityTransactionStatus({ view }: { readonly view: ActivityTransactionView }) {
+function ActivityTransactionAccountRoute({ view }: { readonly view: ActivityTransactionView }) {
+  const { swap } = view
+  if (
+    !swap?.sourceAccountMode ||
+    !swap.destinationAccountMode ||
+    swap.sourceAccountMode === swap.destinationAccountMode
+  )
+    return null
   return (
-    <DetailRow label="Status">
-      <span
-        data-activity-status-value
-        className={cn('text-sm', getTransactionStatusToneClassName(view.statusTone))}
-      >
-        {view.statusLabel}
-      </span>
+    <DetailRow label={view.actionSide === 'none' ? 'Account' : 'Direction'}>
+      {swap.destinationFundingSource ? (
+        <span className="text-sm">{getActivityAccountRouteLabel(swap)}</span>
+      ) : (
+        <span className="flex items-center gap-1.5">
+          {swap.sourceFundingSource === 'shielded' ? (
+            <span className="text-sm">Zcash Shield</span>
+          ) : swap.sourceAccountMode === 'External' ? (
+            <span className="text-sm">External</span>
+          ) : (
+            <AccountDomainBadge
+              chainFamily={swap.sourceFundingSource ? 'zcash' : undefined}
+              domain={
+                swap.sourceAccountMode === 'Confidential'
+                  ? 'private'
+                  : swap.sourceAccountMode === 'Shield'
+                    ? 'shield'
+                    : 'public'
+              }
+            />
+          )}
+          <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
+          {swap.sourceFundingSource ? (
+            <span className="text-sm">NEAR Confidential</span>
+          ) : (
+            <AccountDomainBadge
+              domain={
+                swap.destinationAccountMode === 'Confidential'
+                  ? 'private'
+                  : swap.destinationAccountMode === 'Shield'
+                    ? 'shield'
+                    : 'public'
+              }
+            />
+          )}
+        </span>
+      )}
     </DetailRow>
+  )
+}
+
+export function ActivityTransactionStatus({ view }: { readonly view: ActivityTransactionView }) {
+  const cancellation = getActivityCancellationPresentation(view.item)
+  return (
+    <>
+      <DetailRow label="Status">
+        <span
+          data-activity-status-value
+          className={cn('text-sm', getTransactionStatusToneClassName(view.statusTone))}
+        >
+          {view.statusLabel}
+        </span>
+      </DetailRow>
+      {cancellation && (
+        <DetailRow label="Cancellation">
+          <span
+            className={cn(
+              'pl-2 text-right text-sm',
+              getTransactionStatusToneClassName(cancellation.tone)
+            )}
+          >
+            {cancellation.label}
+          </span>
+        </DetailRow>
+      )}
+    </>
   )
 }
 
@@ -708,11 +822,28 @@ export function ActivityTransactionReferences({
   )
 }
 
-export function ActivityTransactionProgress({ view }: { readonly view: ActivityTransactionView }) {
-  if (!view.isCrossChain) return null
+type PrecedingProgress = { readonly step: TransactionProgressStep; readonly reference?: ReactNode }
+
+export function ActivityTransactionProgress({
+  view,
+  precedingProgress
+}: {
+  readonly view: ActivityTransactionView
+  readonly precedingProgress?: PrecedingProgress
+}) {
+  if (!view.isCrossChain && !precedingProgress) return null
   const referenceByStepId = new Map<string, ReactNode>()
+  if (precedingProgress?.reference) {
+    referenceByStepId.set(precedingProgress.step.id, precedingProgress.reference)
+  }
   for (const segment of view.item.segments) {
-    const reference = view.references.find(candidate => candidate.id === segment.id)
+    const hash = segment.evidence?.transactionHash
+    const reference =
+      segment.target.kind === 'onchain' &&
+      hash &&
+      isActivityTransactionHash(hash, segment.target.chainId)
+        ? { hash, chainId: segment.target.chainId }
+        : view.references.find(candidate => candidate.id === segment.id)
     const replacement = view.replacementReferences.find(candidate => candidate.id === segment.id)
     if (!reference && !replacement) continue
     referenceByStepId.set(
@@ -752,7 +883,9 @@ export function ActivityTransactionProgress({ view }: { readonly view: ActivityT
   }
   return (
     <TransactionProgressSteps
-      steps={view.progressSteps}
+      steps={
+        precedingProgress ? [precedingProgress.step, ...view.progressSteps] : view.progressSteps
+      }
       referenceByStepId={referenceByStepId}
       className="mt-5"
     />
@@ -761,10 +894,14 @@ export function ActivityTransactionProgress({ view }: { readonly view: ActivityT
 
 export function ActivityTransactionBody({
   view,
-  showDate = false
+  precedingProgress,
+  showDate = false,
+  showAccountRoute = false
 }: {
   readonly view: ActivityTransactionView
+  readonly precedingProgress?: PrecedingProgress
   readonly showDate?: boolean
+  readonly showAccountRoute?: boolean
 }) {
   return (
     <>
@@ -783,8 +920,40 @@ export function ActivityTransactionBody({
         <ActivityTransactionFee view={view} />
         {view.isShieldMove && <ActivityTransactionStatus view={view} />}
         <ActivityTransactionReferences view={view} />
+        {(showAccountRoute || view.item.snapshot?.shield?.operation === 'cluster') && (
+          <ActivityTransactionAccountRoute view={view} />
+        )}
+        {view.clusterPlan && <ActivityClusterTransfers plan={view.clusterPlan} />}
       </div>
-      <ActivityTransactionProgress view={view} />
+      <ActivityTransactionProgress view={view} precedingProgress={precedingProgress} />
+    </>
+  )
+}
+
+function ActivityClusterTransfers({ plan }: { readonly plan: ConfidentialFundingPlan }) {
+  return (
+    <>
+      <DetailRow label="Method">
+        <span className="text-sm">Cluster</span>
+      </DetailRow>
+      <DetailRow label="Transfers">
+        <span className="text-sm">{plan.withdraws.length}</span>
+      </DetailRow>
+      <div className="space-y-2 border-t border-border/60 pt-3">
+        {plan.withdraws.map(row => (
+          <div key={row.sequence} className="flex items-start justify-between gap-3 text-sm">
+            <span className="text-muted">Transfer {row.sequence + 1}</span>
+            <div className="min-w-0 text-right">
+              <div>{getClusterChildStatusLabel(row, plan)}</div>
+              {row.scheduledAt && Number.isSafeInteger(row.scheduledAt) && (
+                <div className="text-xs text-muted">
+                  Earliest broadcast {new Date(row.scheduledAt).toLocaleString()}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </>
   )
 }

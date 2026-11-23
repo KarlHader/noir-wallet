@@ -11,7 +11,7 @@ import { accountNetworksClient } from '../services/account-networks-client'
 import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import { getTransactionToastCopy } from '@/lib/transaction-status-copy'
 import { waitForDelayOrAbort, withTimeout } from '@/lib/async-utils'
-import { EXTENSION_ACTIVITY_ROUTE } from '@/config/extension'
+import { resolveWalletEntryRoute } from '@/popup/services/home-navigation'
 
 /**
  * Custom hook for application routing logic
@@ -45,13 +45,7 @@ export function useAppRouting() {
   const isHardwareTab = useRef(window.location.hash.includes('/hardware/'))
   const isActivationDApp = useRef(window.location.hash.includes('from=dapp'))
   const isUpdatePage = useRef(window.location.hash.includes('/update'))
-  const walletEntryRoute = useRef(
-    window.location.hash === `#${EXTENSION_ACTIVITY_ROUTE}`
-      ? EXTENSION_ACTIVITY_ROUTE
-      : window.location.hash === '#/manage-tokens'
-        ? '/manage-tokens'
-        : '/'
-  )
+  const walletEntryRoute = useRef(resolveWalletEntryRoute(window.location.hash))
 
   const routeToUnlock = useCallback(() => {
     // Import/create can complete without remounting the app. Read the current

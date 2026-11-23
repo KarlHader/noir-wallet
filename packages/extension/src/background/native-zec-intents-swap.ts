@@ -121,7 +121,8 @@ function parseRecord(value: unknown): NativeZecIntentsSwapRecord {
       record.terminalStatus !== undefined ||
       record.terminalAt !== undefined ||
       record.quoteBinding.recipientType !== undefined ||
-      record.quoteBinding.fundingSource !== undefined
+      record.quoteBinding.fundingSource !== undefined ||
+      record.quoteBinding.userAction !== undefined
     ) {
       throw new Error('Stored native ZEC Intents quote route is invalid')
     }
@@ -130,6 +131,7 @@ function parseRecord(value: unknown): NativeZecIntentsSwapRecord {
     (record.fundingSource !== 'transparent' && record.fundingSource !== 'shielded') ||
     record.quoteBinding.recipientType !== record.recipientType ||
     record.quoteBinding.fundingSource !== record.fundingSource ||
+    (record.quoteBinding.userAction !== undefined && record.quoteBinding.userAction !== 'swap') ||
     !parseZcashAddress(record.refundAddress, record.network).scheme.startsWith(
       'zcash-transparent-'
     ) ||
@@ -384,6 +386,7 @@ export class NativeZecIntentsSwapCoordinator {
       parseZcashAddress(input.refundAddress, input.network)
       const confidential = input.recipientType === 'CONFIDENTIAL_INTENTS'
       if (
+        (input.userAction !== undefined && (!confidential || input.userAction !== 'swap')) ||
         (input.recipientType !== undefined &&
           input.recipientType !== 'DESTINATION_CHAIN' &&
           !confidential) ||
@@ -447,6 +450,7 @@ export class NativeZecIntentsSwapCoordinator {
           previous.destination.recipient !== recipient ||
           (previous.recipientType === 'CONFIDENTIAL_INTENTS') !== confidential ||
           previous.fundingSource !== (confidential ? input.fundingSource : undefined) ||
+          previous.quoteBinding.userAction !== input.userAction ||
           previous.refundAddress !== input.refundAddress ||
           previous.slippageBps !== input.slippageBps
         ) {
@@ -595,6 +599,7 @@ export class NativeZecIntentsSwapCoordinator {
       const quoteId = crypto.randomUUID()
       const quoteBinding: QuoteBinding = Object.freeze({
         provider: 'near-intents',
+        ...(input.userAction ? { userAction: input.userAction } : {}),
         quoteHandle: quoteId,
         isCrossChain: true,
         destinationChain: input.destination.chainId,

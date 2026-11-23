@@ -13,7 +13,7 @@ import { rehydrateWalletStore } from '@/store/wallet-store'
 import {
   selectDifferentVerificationIndices,
   type VerificationWordOption
-} from '@/popup/utils/recovery-phrase-confirmation'
+} from '@/core/wallet/recovery-phrase-confirmation'
 import { DEFAULT_ACCOUNT_NAME, normalizeAccountName } from '@/core/wallet/account-name'
 import type { ImportZcashHistorySelection } from '@/popup/services/import-zcash-history-selection'
 import type { AccountNetworkFamily } from '@/core/wallet/account-network-selection'

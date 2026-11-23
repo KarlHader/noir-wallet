@@ -7,14 +7,20 @@ import {
 import type { TransactionGraph } from '@/core/transactions/domain'
 import type { Transaction } from '@/types'
 import type { StorageV2ReadRepository, TransactionRepository } from '@/ports/repositories'
-import { mapZcashV1TransactionToActivityItem } from './zcash-v1-activity-source'
+import {
+  mapZcashSelfTransferReceipt,
+  mapZcashV1TransactionToActivityItem
+} from './zcash-v1-activity-source'
 
 type ActivityStorageRepository = Pick<StorageV2ReadRepository, 'getActivePointer' | 'getSnapshot'>
 
 export interface ActivityCoordinatorOptions {
   readonly storageRepository: ActivityStorageRepository
   readonly transactionRepository: TransactionRepository
-  readonly loadZcashTransactions: (scope: ActivityScope) => Promise<readonly Transaction[]>
+  readonly loadZcashTransactions: (
+    scope: ActivityScope,
+    options: ActivityReadOptions
+  ) => Promise<readonly Transaction[]>
   readonly loadSupplementalItems?: (
     scope: ActivityScope,
     accountMode: 'main' | 'private' | 'all',
@@ -36,7 +42,8 @@ export interface ActivityCoordinatorOptions {
   ) => Promise<readonly string[]>
   readonly filterLocalGraphs?: (
     scope: ActivityScope,
-    graphs: readonly TransactionGraph[]
+    graphs: readonly TransactionGraph[],
+    privateExecutionAddresses: readonly string[]
   ) => Promise<readonly TransactionGraph[]>
 }
 
@@ -71,15 +78,20 @@ export class ActivityCoordinator {
         limit: options.protocolProvider ? 10_000 : 200,
         ...(options.protocolProvider ? { protocolProvider: options.protocolProvider } : {})
       }),
-      options.protocolProvider ? Promise.resolve([]) : this.options.loadZcashTransactions(scope),
+      options.protocolProvider
+        ? Promise.resolve([])
+        : this.options.loadZcashTransactions(scope, options),
       options.protocolProvider
         ? Promise.resolve([])
         : this.loadSupplementalItems(scope, accountMode, options)
     ])
+    const privateExecutionAddresses = await this.loadPrivateExecutionAddresses(
+      scope,
+      storedLocalGraphs
+    )
     const localGraphs = this.options.filterLocalGraphs
-      ? await this.options.filterLocalGraphs(scope, storedLocalGraphs)
+      ? await this.options.filterLocalGraphs(scope, storedLocalGraphs, privateExecutionAddresses)
       : storedLocalGraphs
-    const privateExecutionAddresses = await this.loadPrivateExecutionAddresses(scope, localGraphs)
     const destinationReceipts = new Map<string, Transaction[]>()
     for (const transaction of zcashTransactions) {
       if (transaction.type !== 'receive' || !transaction.txHash) continue
@@ -95,7 +107,7 @@ export class ActivityCoordinator {
       scope,
       localGraphs: options.protocolProvider ? localGraphs.slice(0, confidentialLimit) : localGraphs,
       supplementalItems: Object.freeze([
-        ...zcashTransactions.map(transaction => {
+        ...zcashTransactions.flatMap(transaction => {
           const matchingReceipts = destinationReceipts
             .get(transaction.destinationTxHash?.toLowerCase() ?? '')
             ?.filter(
@@ -105,11 +117,13 @@ export class ActivityCoordinator {
                 receipt.to === transaction.quoteBinding?.recipient &&
                 (receipt.confirmations ?? 0) > 0
             )
-          return mapZcashV1TransactionToActivityItem(
+          const item = mapZcashV1TransactionToActivityItem(
             transaction,
             scope,
             matchingReceipts?.length === 1 ? matchingReceipts[0] : undefined
           )
+          const receipt = mapZcashSelfTransferReceipt(transaction, item)
+          return receipt ? [item, receipt] : [item]
         }),
         ...supplementalItems
       ]),

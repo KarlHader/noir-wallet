@@ -5,6 +5,7 @@ import { externalRecipientsMatch, isValidExternalRecipient } from './confidentia
 import { withMetadataLock, withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { ExternalShieldDeposit } from '@/core/services/confidential-funding'
+import { getConfidentialFundingPlanId } from '@/core/services/confidential-funding/confidential-funding-graph'
 import type {
   ConfidentialBalance,
   ConfidentialOrderAuthToken,
@@ -596,6 +597,32 @@ export class ChromeConfidentialFundingStore {
     const key = this.planKey(planId)
     const value = (await chrome.storage.local.get(key))[key]
     return value === undefined ? null : parsePlan(value)
+  }
+
+  async getPlansForTransactions(
+    transactionIds: readonly string[]
+  ): Promise<ReadonlyMap<string, ConfidentialFundingPlan>> {
+    const keys = transactionIds.flatMap(transactionId => {
+      const planId = getConfidentialFundingPlanId(transactionId)
+      return planId ? [this.planKey(planId)] : []
+    })
+    if (keys.length === 0) return new Map()
+    const values = await chrome.storage.local.get(keys)
+    const plans = new Map<string, ConfidentialFundingPlan>()
+    for (const [key, value] of Object.entries(values)) {
+      try {
+        const plan = parsePlan(value)
+        if (
+          key === this.planKey(plan.planId) &&
+          getConfidentialFundingPlanId(plan.transactionId) === plan.planId
+        ) {
+          plans.set(plan.transactionId, plan)
+        }
+      } catch {
+        continue
+      }
+    }
+    return plans
   }
 
   async listPlans(): Promise<readonly ConfidentialFundingPlan[]> {

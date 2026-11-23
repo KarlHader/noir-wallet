@@ -3,6 +3,7 @@ import { nearPublicKeyFromImplicitAccountId } from '@/core/chains/near'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
+import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
 import {
   createAssetRegistry,
   createInitialProductChainRegistry,
@@ -23,7 +24,7 @@ import type { StorageV2ReadRepository } from '@/ports/repositories'
 
 import { credentialSession } from './credential-session'
 import { nearLedgerSigningBridge } from './ledger-signing-bridge'
-import { NEAR_TRANSACTION_MONITOR_ALARM } from './near-transaction-monitor'
+import { NEAR_TRANSACTION_MONITOR_ALARM } from './native-transaction-monitor'
 import { reportBackgroundSendBroadcast } from './analytics/send-broadcast'
 import {
   isSelectedTransferScope,
@@ -43,17 +44,8 @@ export async function loadActiveNearTransferContext(
   repository: NearTransferStorageRepository,
   chainId: string
 ): Promise<ActiveNearTransferContext | null> {
-  const pointer = await repository.getActivePointer()
-  if (!pointer) return null
-  const snapshot = await repository.getSnapshot(pointer.generationId)
-  if (!snapshot) throw new Error('Active Storage V2 generation is missing')
-  if (
-    snapshot.manifest.status !== 'verified' ||
-    snapshot.manifest.generationId !== pointer.generationId ||
-    snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint
-  ) {
-    throw new Error('Active Storage V2 generation does not match its pointer')
-  }
+  const snapshot = await readActiveStorageV2Snapshot(repository)
+  if (!snapshot) return null
   const active = snapshot.manifest.activeAccount
   if (!active) return null
   const accounts = snapshot.accounts.filter(

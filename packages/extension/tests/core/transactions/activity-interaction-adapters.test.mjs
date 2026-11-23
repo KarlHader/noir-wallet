@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { getActivityInteractionPresentation } from '../../../src/popup/components/transaction/activity-interaction-adapters.ts'
-import { resolveActivityChainId } from '../../../src/popup/components/transaction/activity-chain.ts'
+import { getActivityInteractionPresentation } from '../../../src/popup/services/activity-interaction-adapters.ts'
+import { resolveActivityChainId } from '../../../src/core/activity/activity-chain.ts'
 
 function interactionItem(chainId, recipient = 'interaction-target') {
   return {

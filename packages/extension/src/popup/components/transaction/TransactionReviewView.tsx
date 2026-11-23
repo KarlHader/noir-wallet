@@ -4,7 +4,15 @@ import { Icon } from '@iconify/react'
 import { Button } from '@/popup/components/ui/button'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle
+} from '@/popup/components/ui/dialog'
 import { Skeleton } from '@/popup/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 import { TransactionResult, TransactionResultDetailRow } from './TransactionResult'
 
 export interface TransactionReviewAsset {
@@ -18,6 +26,41 @@ export interface TransactionReviewAsset {
 export interface TransactionReviewRow {
   readonly label: string
   readonly content: ReactNode
+}
+
+export function TransactionReviewDialog({
+  open,
+  onOpenChange,
+  title,
+  titleId,
+  description,
+  children
+}: {
+  readonly open: boolean
+  readonly onOpenChange: (open: boolean) => void
+  readonly title: string
+  readonly titleId?: string
+  readonly description: string
+  readonly children: ReactNode
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        position="bottom"
+        showCloseButton={false}
+        aria-label={titleId ? undefined : title}
+        aria-labelledby={titleId}
+        scroll="body"
+        className="gap-0 p-0"
+      >
+        <DialogTitle className="sr-only" aria-hidden={titleId ? true : undefined}>
+          {title}
+        </DialogTitle>
+        <DialogDescription className="sr-only">{description}</DialogDescription>
+        {children}
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 export function ReviewDownTriangle({ className }: { readonly className?: string }) {
@@ -55,6 +98,56 @@ interface TransactionReviewViewProps {
   readonly onConfirm: () => void
 }
 
+export type SendReview = Omit<
+  TransactionReviewViewProps,
+  'title' | 'titleId' | 'variant' | 'amountPrefix' | 'onCancel' | 'onConfirm' | 'cancelDisabled'
+>
+
+export function SendReviewDialog({
+  review,
+  titleId,
+  description,
+  active = true,
+  approving,
+  onCancel,
+  onConfirm
+}: {
+  readonly review: SendReview | null
+  readonly titleId: string
+  readonly description: string
+  readonly active?: boolean
+  readonly approving: boolean
+  readonly onCancel: () => void
+  readonly onConfirm: () => void
+}) {
+  return (
+    <TransactionReviewDialog
+      open={active && review !== null}
+      title="Confirm Send"
+      titleId={titleId}
+      description={description}
+      onOpenChange={open => {
+        if (!open && !approving) onCancel()
+      }}
+    >
+      {review && (
+        <TransactionReviewView
+          {...review}
+          title="Confirm Send"
+          titleId={titleId}
+          variant="figma"
+          amountPrefix="-"
+          confirming={approving}
+          submitting={approving}
+          cancelDisabled={approving}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      )}
+    </TransactionReviewDialog>
+  )
+}
+
 export function TransactionReviewView({
   title,
   titleId,
@@ -88,7 +181,7 @@ export function TransactionReviewView({
         status="loading"
         title="Transaction Submitting"
         layout={figma ? 'single-asset' : 'default'}
-        onClose={figma ? onCancel : undefined}
+        onClose={figma && showTitle ? onCancel : undefined}
         closeDisabled={cancelDisabled || confirming}
       >
         <div>
@@ -237,13 +330,15 @@ export function TransactionReviewView({
         {error}
       </div>
 
-      <div className={figma ? 'page-footer flex gap-2.5' : 'flex gap-3 p-5 pt-3'}>
+      <DialogFooter
+        className={
+          figma ? 'page-footer grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2.5' : 'gap-3 p-5 pt-3'
+        }
+      >
         <Button
           variant="outline"
           size={figma ? 'wallet' : 'default'}
-          className={
-            figma ? 'h-[45px] min-w-0 flex-1 border-white/10 bg-card' : 'h-[45px] min-w-0 flex-1'
-          }
+          className={figma ? 'border-white/10 bg-card' : undefined}
           disabled={cancelDisabled || confirming}
           onClick={onCancel}
         >
@@ -251,14 +346,17 @@ export function TransactionReviewView({
         </Button>
         <Button
           size={figma ? 'wallet' : 'default'}
-          className={`${figma ? 'h-[45px] min-w-0 flex-[2]' : 'h-[45px] min-w-0 flex-1'} whitespace-normal text-center leading-tight ${confirmTone === 'warning' ? 'bg-warning text-black hover:bg-warning/90' : ''}`}
+          className={cn(
+            'text-center',
+            confirmTone === 'warning' && 'bg-warning text-black hover:bg-warning/90'
+          )}
           disabled={confirmDisabled || preparing}
           isLoading={preparing || confirming}
           onClick={onConfirm}
         >
           {confirmLabel}
         </Button>
-      </div>
+      </DialogFooter>
     </div>
   )
 }

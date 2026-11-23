@@ -4,6 +4,8 @@ import type { SwapStatus } from '@/core/services/intents-api'
 import { mergeSwapProgressStatus } from '@/lib/swap-progress'
 import type { CreateAddressBookContactInput } from '@/core/address-book/address-book'
 import type { FundingSource, Network } from '@/types'
+import type { HomeAssetDomain } from '@/popup/services/home-navigation'
+import type { SwapApprovalProgress } from '@/popup/services/transaction-progress'
 import type {
   ConfidentialFundingPhase,
   ConfidentialFundingProgress
@@ -33,6 +35,7 @@ interface ZcashTransactionResult {
 
 interface SwapTransactionResult {
   type: 'swap'
+  activityDomain: HomeAssetDomain
   depositAddress: string
   status: SwapStatus | null
   tokenInSymbol: string
@@ -45,6 +48,7 @@ interface SwapTransactionResult {
   originChain?: string
   originTxHash?: string
   activityTransactionId?: string
+  approvalProgress?: SwapApprovalProgress
   zcashAccountKey?: string
   zcashTransactionId?: string
   signedOrder?: boolean

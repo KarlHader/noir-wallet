@@ -4,7 +4,7 @@ import { TokenIcon } from '../tokens/TokenIcon'
 import {
   hasMatchingActivityTokenIcons,
   type ActivitySwapPresentation
-} from './multichain-activity-presentation'
+} from '@/popup/services/multichain-activity-presentation'
 
 export function ActivityRouteTokenIcons({
   item,

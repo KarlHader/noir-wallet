@@ -23,7 +23,7 @@ import type {
   ActivityScope,
   ActivitySource
 } from './activity-types'
-import { ACTIVITY_SOURCES } from './activity-types'
+import { ACTIVITY_CANCELLATION_STATUSES, ACTIVITY_SOURCES } from './activity-types'
 
 export const ACTIVITY_READ_LIMITS = Object.freeze({
   sourceItems: 10_200,
@@ -168,12 +168,14 @@ export function mapTransactionGraphToActivityItem(
   const graph = parseTransactionGraph(value)
   const senderAddress = graph.root.intent?.sender?.address.toLowerCase()
   const recipientAddress = graph.root.intent?.recipient?.address.toLowerCase()
+  const protocol = graph.root.intent?.protocol
   // Wallet-originated activity belongs to the signer, even when the recipient is another owned account.
   const privateExecution =
-    graph.root.intent?.direction !== 'incoming' && senderAddress !== undefined
+    (protocol?.provider === 'rhea-cross-chain-dex' && protocol.balanceTransfer === 'withdraw') ||
+    (graph.root.intent?.direction !== 'incoming' && senderAddress !== undefined
       ? privateExecutionAddresses.has(senderAddress)
       : (senderAddress !== undefined && privateExecutionAddresses.has(senderAddress)) ||
-        (recipientAddress !== undefined && privateExecutionAddresses.has(recipientAddress))
+        (recipientAddress !== undefined && privateExecutionAddresses.has(recipientAddress)))
   return Object.freeze({
     id: graph.root.id,
     source: 'wallet-v2',
@@ -246,11 +248,18 @@ function itemIdentityKeys(item: ActivityItem): readonly string[] {
     if (item.segments.length > 1 && segment.role !== 'origin') {
       continue
     }
+    const namespace = segment.target.chainId.split(':', 1)[0]
+    const mode =
+      namespace === 'eip155'
+        ? `:${item.accountMode ?? 'main'}`
+        : item.source === 'zcash-v1' && item.assetDomains?.[0] === 'shield'
+          ? ':shield'
+          : ''
     keys.push(
       `hash:${segment.target.chainId}:${normalizeHexHash(
         segment.target.chainId,
         segment.evidence.transactionHash
-      )}`
+      )}${mode}`
     )
   }
   return Object.freeze(keys)
@@ -340,6 +349,15 @@ function assertItem(item: ActivityItem, scope: ActivityScope): void {
     throw new Error('Activity item does not match the requested Account scope')
   }
   parseAssetDomains(item.assetDomains, item.source)
+  if (
+    item.cancellationStatus !== undefined &&
+    (!isActivityCancellationStatus(item.cancellationStatus) ||
+      item.source !== 'wallet-v2' ||
+      item.kind === 'cancel' ||
+      !item.segments.some(segment => isEvmOrigin(segment)))
+  ) {
+    throw new Error('Invalid Activity cancellation status')
+  }
   if (
     !Number.isSafeInteger(item.createdAt) ||
     item.createdAt < 0 ||
@@ -442,7 +460,14 @@ function parseActivityItem(value: unknown, scope: ActivityScope): ActivityItem {
         'createdAt',
         'updatedAt'
       ],
-      ['snapshot', 'failureCode', 'reconfirming', 'accountMode', 'assetDomains']
+      [
+        'snapshot',
+        'failureCode',
+        'reconfirming',
+        'accountMode',
+        'assetDomains',
+        'cancellationStatus'
+      ]
     ) ||
     typeof value.source !== 'string' ||
     !ACTIVITY_SOURCES.includes(value.source as ActivitySource) ||
@@ -454,7 +479,9 @@ function parseActivityItem(value: unknown, scope: ActivityScope): ActivityItem {
     !ACTIVITY_COMPLETENESS.includes(value.completeness as ActivityCompleteness) ||
     !Array.isArray(value.segments) ||
     value.segments.length > 32 ||
-    (value.reconfirming !== undefined && value.reconfirming !== true)
+    (value.reconfirming !== undefined && value.reconfirming !== true) ||
+    (value.cancellationStatus !== undefined &&
+      !isActivityCancellationStatus(value.cancellationStatus))
   ) {
     throw new Error('Invalid Activity item')
   }
@@ -502,10 +529,27 @@ function parseActivityItem(value: unknown, scope: ActivityScope): ActivityItem {
     createdAt,
     updatedAt,
     ...(failureCode === undefined ? {} : { failureCode }),
-    ...(value.reconfirming === true ? { reconfirming: true as const } : {})
+    ...(value.reconfirming === true ? { reconfirming: true as const } : {}),
+    ...(value.cancellationStatus === undefined
+      ? {}
+      : { cancellationStatus: value.cancellationStatus })
   })
   assertItem(item, scope)
   return item
+}
+
+function isActivityCancellationStatus(
+  value: unknown
+): value is NonNullable<ActivityItem['cancellationStatus']> {
+  return ACTIVITY_CANCELLATION_STATUSES.some(status => status === value)
+}
+
+function isEvmOrigin(segment: ActivityItem['segments'][number]): boolean {
+  return (
+    segment.role === 'origin' &&
+    segment.target.kind === 'onchain' &&
+    segment.target.chainId.startsWith('eip155:')
+  )
 }
 
 export function parseActivityReadModel(value: unknown): ActivityReadModel {
@@ -572,9 +616,38 @@ export function buildActivityReadModel(input: {
     privateAddressValues.map(address => address.toLowerCase())
   )
   const confirmedSpeedUps = new Map<string, TransactionGraph[]>()
+  const cancellations = new Map<
+    string,
+    Map<
+      string,
+      {
+        readonly status: NonNullable<ActivityItem['cancellationStatus']>
+        readonly createdAt: number
+      }
+    >
+  >()
   for (const graph of input.localGraphs) {
-    const relation = graph.root.relation
-    if (graph.root.status !== 'final' || relation?.kind !== 'replacement-of') continue
+    const { id, kind, scope: graphScope, relation, status, createdAt } = graph.root
+    if (relation?.kind !== 'replacement-of') continue
+    if (kind === 'cancel') {
+      const origin = graph.segments.find(isEvmOrigin)
+      if (
+        id !== relation.transactionId &&
+        scopesMatch(graphScope, scope) &&
+        origin?.target.kind === 'onchain' &&
+        origin.evidence?.transactionHash &&
+        isActivityCancellationStatus(status)
+      ) {
+        const byChain = cancellations.get(relation.transactionId) ?? new Map()
+        const previous = byChain.get(origin.target.chainId)
+        if (!previous || createdAt > previous.createdAt) {
+          byChain.set(origin.target.chainId, { status, createdAt })
+          cancellations.set(relation.transactionId, byChain)
+        }
+      }
+      continue
+    }
+    if (status !== 'final') continue
     const linked = confirmedSpeedUps.get(relation.transactionId) ?? []
     linked.push(graph)
     confirmedSpeedUps.set(relation.transactionId, linked)
@@ -582,8 +655,15 @@ export function buildActivityReadModel(input: {
   const candidates = [
     ...input.localGraphs
       .map(graph => {
-        const item = mapTransactionGraphToActivityItem(graph, privateExecutionAddresses)
+        const originalItem = mapTransactionGraphToActivityItem(graph, privateExecutionAddresses)
         const origin = graph.segments.find(segment => segment.role === 'origin')
+        const cancellation =
+          origin?.target.kind === 'onchain' && graph.root.kind !== 'cancel'
+            ? cancellations.get(graph.root.id)?.get(origin.target.chainId)
+            : undefined
+        const item = cancellation
+          ? Object.freeze({ ...originalItem, cancellationStatus: cancellation.status })
+          : originalItem
         const replacementHash = origin?.evidence?.replacementTransactionHash
         if (origin?.status !== 'final' || !replacementHash || !item.snapshot) return item
         const replacement = confirmedSpeedUps.get(graph.root.id)?.find(candidate => {

@@ -66,10 +66,7 @@ export function NearConfidentialHoldingRow({
         {!balancesHidden && entry.amount !== null && entry.fiat === null && pricesLoading ? (
           <Skeleton className="ml-auto h-4 w-16" />
         ) : (
-          <span
-            className="block break-all text-base font-medium"
-            title={balancesHidden ? undefined : (entry.fiat ?? undefined)}
-          >
+          <span className="block break-all text-base font-medium">
             {balancesHidden
               ? '••••'
               : entry.amount === null
@@ -77,10 +74,7 @@ export function NearConfidentialHoldingRow({
                 : formatFiatAmount(entry.fiat ?? '0', { showSign: true })}
           </span>
         )}
-        <span
-          className="block break-all text-xs text-muted"
-          title={balancesHidden ? undefined : (entry.amount ?? undefined)}
-        >
+        <span className="block break-all text-xs text-muted">
           {balancesHidden
             ? '••••'
             : entry.amount === null

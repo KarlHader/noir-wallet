@@ -22,8 +22,8 @@ import { hidePortfolioAssets } from '../../../src/core/portfolio/portfolio-visib
 import { buildPortfolioReadModel, parsePortfolioReadModel } from '../../../src/core/portfolio/index.ts'
 import { findAssetPrice } from '../../../src/core/prices/asset-price.ts'
 import { listStandaloneNearConfidentialHoldings } from '../../../src/popup/services/near-confidential-holdings.ts'
-import { withConfidentialAssetPrices } from '../../../src/popup/components/portfolio/portfolio-prices.ts'
-import { getAssetDetailCategories } from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
+import { withConfidentialAssetPrices } from '../../../src/popup/services/portfolio-prices.ts'
+import { getAssetDetailCategories } from '../../../src/popup/services/asset-detail-balance.ts'
 
 test('projects Shield-only holdings independently of Public assets and preserves unknown tokens', () => {
   const protocolAssetId = 'nep141:usdc.omft.near'

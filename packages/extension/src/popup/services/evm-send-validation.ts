@@ -169,7 +169,8 @@ export function buildPublicPrivateEvmSendPath(input: {
     review: '1'
   })
   if (input.assetId === ZEC_ZCASH_ASSET) query.set('fundingSource', 'transparent')
-  if (input.maximum) query.set('maximum', '1')
+  // ZEC Send has already quoted its Max amount; Review must keep that exact input.
+  if (input.maximum && input.assetId !== ZEC_ZCASH_ASSET) query.set('maximum', '1')
   return `/swap?${query.toString()}`
 }
 

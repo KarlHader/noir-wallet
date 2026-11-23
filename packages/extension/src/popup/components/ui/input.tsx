@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { Icon } from '@iconify/react'
 
 import { cn } from '@/lib/utils'
 
@@ -75,4 +76,27 @@ const Input = React.forwardRef<
 })
 Input.displayName = 'Input'
 
-export { Input }
+function SearchInput({
+  iconSize = 16,
+  ...props
+}: Omit<React.ComponentProps<typeof Input>, 'startContent' | 'type'> & {
+  readonly iconSize?: number
+}) {
+  return (
+    <Input
+      {...props}
+      type="text"
+      startContent={
+        <Icon
+          icon="lucide:search"
+          width={iconSize}
+          height={iconSize}
+          className="text-muted"
+          aria-hidden="true"
+        />
+      }
+    />
+  )
+}
+
+export { Input, SearchInput }

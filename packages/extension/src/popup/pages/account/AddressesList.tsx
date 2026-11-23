@@ -4,7 +4,7 @@ import { Icon } from '@iconify/react'
 import { useNavigate } from '../../provider/Router'
 import { PageHeader } from '../../components/common/PageHeader'
 import { InlineError } from '../../components/common/InlineError'
-import { ReceivingAddressLayout } from '../../components/common/ReceivingAddressLayout'
+import { ReceivingAddressLayout } from '../../components/account/ReceivingAddressLayout'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../../components/common/CopyToast'
 import {
   PRIVATE_ADDRESS_WARNING,
@@ -13,14 +13,15 @@ import {
 import {
   accountNetworkAddressLabel,
   accountNetworkIconChain,
-  accountNetworkLabel
+  accountNetworkLabel,
+  zcashSettingsPath
 } from '@/popup/services/account-network-presentation'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import evmGroupIcon from '@/images/figma-evm-group.svg'
 import { Button } from '../../components/ui/button'
 import { ListSkeleton } from '../../components/ui/skeleton'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../components/ui/dialog'
-import { Input } from '../../components/ui/input'
+import { SearchInput } from '../../components/ui/input'
 import { Tooltip } from '../../components/ui/tooltip'
 import type { AddressType } from '@/types/wallet'
 import {
@@ -36,6 +37,7 @@ import { AccountAvatar } from '../../components/account/AccountAvatar'
 import { availableSoftwareAccountFamilies } from '@/popup/services/account-network-selection-client'
 import { useDAppExecutionMode } from '@/popup/hooks/useDAppExecutionMode'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import type { ActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 
 interface AddressQrTarget {
   readonly network: AccountNetworkView
@@ -49,7 +51,7 @@ function PrivateAddressRisk() {
     <Tooltip content={PRIVATE_ADDRESS_WARNING} side="bottom">
       <button
         type="button"
-        aria-label="Private address privacy risk"
+        aria-label="Incognito address privacy risk"
         className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
       >
         <Icon icon="lucide:info" width={15} height={15} />
@@ -245,14 +247,14 @@ function AddressNetworkGroup({
     return (
       <section
         className="flex min-h-[72px] min-w-0 items-center gap-[13px] border-b border-border/40 py-2"
-        aria-label={`${displayName} private execution address`}
+        aria-label={`${displayName} Incognito address`}
       >
         {icon}
         <div className="min-w-0 flex-1">
           <h2 className="flex items-center gap-1.5 text-base font-medium leading-[21px] text-foreground">
             <span className="truncate">{displayName}</span>
             <span className="shrink-0 rounded bg-private/15 px-1.5 py-0.5 text-xs text-private">
-              Private
+              Incognito
             </span>
             <PrivateAddressRisk />
           </h2>
@@ -264,8 +266,8 @@ function AddressNetworkGroup({
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            title="Copy private execution address"
-            aria-label={`Copy ${displayName} private execution address`}
+            title="Copy Incognito address"
+            aria-label={`Copy ${displayName} Incognito address`}
             className="wallet-interactive flex size-[26px] items-center justify-center rounded-md text-muted hover:bg-white/10 hover:text-foreground active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
             onClick={() => onCopyPrivateExecution(privateExecutionAddress)}
           >
@@ -274,7 +276,7 @@ function AddressNetworkGroup({
           <button
             type="button"
             title="Show QR code"
-            aria-label={`Show ${displayName} private execution address QR code`}
+            aria-label={`Show ${displayName} Incognito address QR code`}
             className="wallet-interactive flex size-[26px] items-center justify-center rounded-md text-muted hover:bg-white/10 hover:text-foreground active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
             onClick={() =>
               onShowQr({
@@ -341,11 +343,11 @@ function AddressNetworkGroup({
           <button
             type="button"
             aria-label="Open Zcash settings"
-            className="wallet-interactive flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted hover:bg-white/5 hover:text-foreground active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+            title="Zcash settings"
+            className="wallet-interactive ml-auto flex size-8 shrink-0 items-center justify-center rounded-md text-muted hover:bg-white/5 hover:text-foreground active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
             onClick={onOpenSettings}
           >
-            <Icon icon="lucide:settings-2" width={16} height={16} />
-            Settings
+            <Icon icon="lucide:settings" width={18} height={18} />
           </button>
         )}
       </div>
@@ -366,29 +368,25 @@ function AddressNetworkGroup({
   )
 }
 
-export function AddressesList() {
+export function AddressesList({
+  receive = false,
+  receiveAccount
+}: {
+  readonly receive?: boolean
+  readonly receiveAccount?: ActiveAccountIdentity
+}) {
   const { navigate } = useNavigate()
   const location = useLocation()
   const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
   const [searchParams] = useSearchParams()
-  const requestedWalletId = searchParams.get('walletId')
-  const requestedAccountId = searchParams.get('accountId')
-  const scopedChainId = searchParams.get('chainId')
-  const scopedReceive = searchParams.has('chainId')
-  const receiveView = searchParams.get('source') === 'receive'
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
-  const receiveForActiveAccount =
-    receiveView && !scopedReceive && !searchParams.has('walletId') && !searchParams.has('accountId')
-  const walletId = receiveForActiveAccount ? currentWalletId : requestedWalletId
-  const accountId = receiveForActiveAccount ? currentAccountId : requestedAccountId
-  const explicitMode = searchParams.get('mode')
-  const requestedPrivacy = searchParams.get('privacy')
-  const shieldedZcashOnly =
-    searchParams.get('chain') === 'zcash' && searchParams.get('privacy') === 'shielded'
-  const shieldedReceive = shieldedZcashOnly || (scopedReceive && requestedPrivacy === 'shielded')
-  const pageTitle = shieldedReceive ? 'Shield address' : scopedReceive ? 'Receive' : 'Address'
-  const shieldedReceiveAddress = useWalletStore(state =>
+  const walletId =
+    searchParams.get('walletId') ?? (receive ? (receiveAccount?.walletId ?? currentWalletId) : null)
+  const accountId =
+    searchParams.get('accountId') ??
+    (receive ? (receiveAccount?.accountId ?? currentAccountId) : null)
+  const currentShieldedAddress = useWalletStore(state =>
     walletId && accountId
       ? state.getAccount(walletId, accountId)?.networkAddresses?.[DEFAULT_NETWORK]?.shielded
       : undefined
@@ -400,7 +398,11 @@ export function AddressesList() {
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const executionMode = useDAppExecutionMode(
     Boolean(
-      walletId && accountId && walletId === currentWalletId && accountId === currentAccountId
+      !receive &&
+      walletId &&
+      accountId &&
+      walletId === currentWalletId &&
+      accountId === currentAccountId
     ),
     walletId,
     accountId,
@@ -408,35 +410,28 @@ export function AddressesList() {
   )
   const [privateExecutionSupported, setPrivateExecutionSupported] = useState(false)
   const defaultMode =
-    privateExecutionSupported && executionMode.state?.mode === 'private' ? 'private' : 'public'
-  const requestedMode =
-    explicitMode === 'private' && !privateExecutionSupported
-      ? 'public'
-      : explicitMode === 'private' || explicitMode === 'public'
-        ? explicitMode
-        : defaultMode
-  const requestedZcashMode = explicitMode === 'private' ? 'private' : 'public'
+    !receive && privateExecutionSupported && executionMode.state?.mode === 'private'
+      ? 'private'
+      : 'public'
   const [networkQuery, setNetworkQuery] = useState('')
   const availableFamilies = useMemo(() => availableSoftwareAccountFamilies(), [])
   const selectedFamilies = account?.networkSelections?.[DEFAULT_NETWORK] ?? availableFamilies
   const canManageNetworks =
     Boolean(wallet && account) &&
     (wallet?.keySource === undefined || wallet.keySource === 'software')
-  const missingFamilies =
-    !scopedReceive && !shieldedZcashOnly && !receiveView && canManageNetworks
-      ? (['zcash', 'evm'] as const).filter(
-          family =>
-            availableFamilies.includes(family) &&
-            !selectedFamilies.includes(family) &&
-            (!networkQuery.trim() ||
-              (family === 'evm' ? 'Ethereum & EVM' : 'Zcash')
-                .toLowerCase()
-                .includes(networkQuery.trim().toLowerCase()))
-        )
-      : []
+  const missingFamilies = canManageNetworks
+    ? (['zcash', 'evm'] as const).filter(
+        family =>
+          availableFamilies.includes(family) &&
+          !selectedFamilies.includes(family) &&
+          (!networkQuery.trim() ||
+            (family === 'evm' ? 'Ethereum & EVM' : 'Zcash')
+              .toLowerCase()
+              .includes(networkQuery.trim().toLowerCase()))
+      )
+    : []
   const [selectedMode, setMode] = useState<'public' | 'private' | null>(null)
   const mode = privateExecutionSupported ? (selectedMode ?? defaultMode) : 'public'
-  const activeMode = scopedReceive ? requestedMode : mode
   const [evmExpanded, setEvmExpanded] = useState(false)
   const [networks, setNetworks] = useState<readonly AccountNetworkView[]>([])
   const [accountIdentity, setAccountIdentity] = useState<{ name: string } | null>(null)
@@ -505,68 +500,28 @@ export function AddressesList() {
     return () => {
       cancelled = true
     }
-  }, [walletId, accountId, shieldedReceiveAddress, loadAttempt, location.key])
+  }, [walletId, accountId, currentShieldedAddress, loadAttempt, location.key])
 
   const filteredNetworks = useMemo(() => {
     const query = networkQuery.trim().toLowerCase()
-    return networks.flatMap(network => {
-      if (scopedReceive) {
-        if (network.chain.id !== scopedChainId) return []
-        if (network.chain.family === 'zcash') {
-          const privacy =
-            requestedPrivacy === 'transparent' || requestedPrivacy === 'shielded'
-              ? requestedPrivacy
-              : requestedZcashMode === 'private'
-                ? 'shielded'
-                : 'transparent'
-          const addresses = network.addresses.filter(address => address.privacy === privacy)
-          return addresses.length > 0 ? [{ ...network, addresses }] : []
-        }
-        if (requestedPrivacy) return []
-        if (
-          network.chain.family === 'evm' &&
-          requestedMode === 'private' &&
-          !network.privateExecutionAddress
-        )
-          return []
-        return [network]
-      }
-      if (shieldedZcashOnly) {
-        if (network.chain.family !== 'zcash') return []
-        const addresses = network.addresses.filter(address => address.privacy === 'shielded')
-        return addresses.length > 0 ? [{ ...network, addresses }] : []
-      }
-      return (receiveView ||
-        mode === 'public' ||
-        network.chain.family === 'zcash' ||
-        (network.chain.family === 'evm' && Boolean(network.privateExecutionAddress))) &&
+    return networks.filter(
+      network =>
+        (mode === 'public' ||
+          network.chain.family === 'zcash' ||
+          (network.chain.family === 'evm' && Boolean(network.privateExecutionAddress))) &&
         (!query ||
           `${accountNetworkLabel(network)} ${network.chain.displayName}`
             .toLowerCase()
             .includes(query))
-        ? [network]
-        : []
-    })
-  }, [
-    networkQuery,
-    networks,
-    mode,
-    requestedMode,
-    requestedZcashMode,
-    requestedPrivacy,
-    receiveView,
-    scopedChainId,
-    scopedReceive,
-    shieldedZcashOnly
-  ])
+    )
+  }, [networkQuery, networks, mode])
   const hasPrivateAddresses = networks.some(
     network => network.chain.family === 'evm' && Boolean(network.privateExecutionAddress)
   )
   const evmNetworks = filteredNetworks.filter(network => network.chain.family === 'evm')
   const otherNetworks = filteredNetworks.filter(network => network.chain.family !== 'evm')
   const otherChainNetworks = otherNetworks.filter(network => network.chain.family !== 'zcash')
-  const showOtherChains =
-    !shieldedZcashOnly && (evmNetworks.length > 0 || otherChainNetworks.length > 0)
+  const showOtherChains = evmNetworks.length > 0 || otherChainNetworks.length > 0
   const firstEvm = evmNetworks[0]
   const evmAddress =
     firstEvm &&
@@ -576,7 +531,7 @@ export function AddressesList() {
     <AddressNetworkGroup
       key={network.chain.id}
       network={network}
-      mode={scopedReceive && network.chain.family === 'zcash' ? requestedZcashMode : activeMode}
+      mode={mode}
       onCopy={(value, key) => void copyToClipboard(value, key)}
       isCopied={isCopied}
       onCopyPrivateExecution={address => setPrivateAddressAction({ address })}
@@ -586,13 +541,8 @@ export function AddressesList() {
           : setQrTarget(target)
       }
       onOpenSettings={
-        !scopedReceive && network.chain.family === 'zcash'
-          ? () => {
-              if (!walletId || !accountId) return
-              navigate(
-                `/zcash-settings?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}`
-              )
-            }
+        network.chain.family === 'zcash' && walletId && accountId
+          ? () => navigate(zcashSettingsPath(walletId, accountId))
           : undefined
       }
     />
@@ -632,7 +582,7 @@ export function AddressesList() {
   if (!walletId || !accountId) {
     return (
       <div className="page-container">
-        <PageHeader title={pageTitle} showBack />
+        <PageHeader title="Address" showBack />
         <div className="flex flex-1 items-center justify-center px-5">
           <p className="text-center text-muted">No account available</p>
         </div>
@@ -643,29 +593,20 @@ export function AddressesList() {
   return (
     <div className="page-container">
       <CopyToast show={showToast} error={copyFailed} message="Address copied" />
-      <PageHeader title={pageTitle} showBack />
+      <PageHeader title="Address" showBack />
 
       <div className="page-content min-h-0 !px-4 !pt-2">
-        {!shieldedZcashOnly && !scopedReceive && (
-          <Input
-            value={networkQuery}
-            onChange={event => setNetworkQuery(event.target.value)}
-            placeholder="Search Network"
-            aria-label="Search Network"
-            className="h-[46px] rounded-lg text-sm font-normal leading-[18px]"
-            startContent={
-              <Icon icon="lucide:search" width={18} height={18} className="text-muted" />
-            }
-          />
-        )}
+        <SearchInput
+          value={networkQuery}
+          onChange={event => setNetworkQuery(event.target.value)}
+          placeholder="Search Network"
+          aria-label="Search Network"
+          className="h-[46px] rounded-lg text-sm font-normal leading-[18px]"
+          iconSize={18}
+        />
 
         {loading ? (
-          <ListSkeleton
-            rows={scopedReceive ? 1 : 4}
-            label="Loading addresses"
-            className="mt-5"
-            card
-          />
+          <ListSkeleton rows={4} label="Loading addresses" className="mt-5" card />
         ) : error ? (
           <InlineError
             message={error}
@@ -673,21 +614,13 @@ export function AddressesList() {
             className="mt-5"
           />
         ) : filteredNetworks.length === 0 && missingFamilies.length === 0 ? (
-          <p className="py-10 text-center text-sm text-muted">
-            {shieldedReceive
-              ? 'Shield address unavailable'
-              : scopedReceive
-                ? 'Address unavailable'
-                : 'No matching networks'}
-          </p>
+          <p className="py-10 text-center text-sm text-muted">No matching networks</p>
         ) : (
           <div role="region" className="mt-3 pb-4" aria-label="Account network addresses">
-            {scopedReceive && filteredNetworks.map(renderNetwork)}
             {missingFamilies.includes('zcash') && renderMissingFamily('zcash')}
-            {!scopedReceive &&
-              otherNetworks.filter(network => network.chain.family === 'zcash').map(renderNetwork)}
+            {otherNetworks.filter(network => network.chain.family === 'zcash').map(renderNetwork)}
             {missingFamilies.includes('evm') && renderMissingFamily('evm')}
-            {!scopedReceive && !receiveView && showOtherChains && (
+            {showOtherChains && (
               <div className="mt-3 flex min-h-10 min-w-0 items-center justify-between gap-2 border-t border-border/40 pt-2">
                 <h2 className="min-w-0 text-sm text-wallet-secondary">Other chains</h2>
                 <div className="flex shrink-0 items-center gap-1">
@@ -717,15 +650,14 @@ export function AddressesList() {
                         mode === 'private' ? 'bg-wallet-mode text-white' : 'text-muted'
                       )}
                     >
-                      Private
+                      Incognito
                     </button>
                   </div>
                   {mode === 'private' && <PrivateAddressRisk />}
                 </div>
               </div>
             )}
-            {!scopedReceive && receiveView && evmNetworks.map(renderNetwork)}
-            {!scopedReceive && !receiveView && firstEvm && (
+            {firstEvm && (
               <div className="mt-2">
                 {evmExpanded ? (
                   <button
@@ -819,7 +751,7 @@ export function AddressesList() {
                 {evmExpanded && evmNetworks.map(renderNetwork)}
               </div>
             )}
-            {!scopedReceive && otherChainNetworks.map(renderNetwork)}
+            {otherChainNetworks.map(renderNetwork)}
           </div>
         )}
       </div>
@@ -831,17 +763,18 @@ export function AddressesList() {
         }}
       >
         <DialogContent
-          position="center"
+          position="bottom"
           showCloseButton={false}
-          className="!inset-0 !h-dvh !w-screen !max-w-none !translate-x-0 !translate-y-0 gap-0 rounded-none p-0 shadow-none"
+          scroll="body"
+          className="gap-0 p-0"
         >
           {qrTarget && (
             <>
               <DialogTitle className="sr-only">
-                {qrTarget.confidential ? 'Private Address' : 'Receiving Address'}
+                {qrTarget.confidential ? 'Incognito Address' : 'Receiving Address'}
               </DialogTitle>
               <ReceivingAddressLayout
-                title={qrTarget.confidential ? 'Private Address' : 'Receiving Address'}
+                title={qrTarget.confidential ? 'Incognito Address' : 'Receiving Address'}
                 onClose={() => setQrTarget(null)}
                 qrValue={qrTarget.address.value}
                 qrLabel={`${qrTarget.displayName ?? qrTarget.network.chain.displayName} address QR code`}
@@ -889,7 +822,7 @@ export function AddressesList() {
                 <h2 className="mt-5 text-center text-xl font-medium leading-7">
                   {qrTarget.displayName ?? accountNetworkLabel(qrTarget.network)}{' '}
                   {qrTarget.confidential
-                    ? 'private execution'
+                    ? 'Incognito'
                     : accountNetworkAddressLabel(qrTarget.network, qrTarget.address)}{' '}
                   address
                 </h2>

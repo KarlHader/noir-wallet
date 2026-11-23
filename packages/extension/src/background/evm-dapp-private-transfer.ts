@@ -504,7 +504,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
     if (pending.legacy || pending.exact) {
       throw new Eip1193ProviderError(
         -32000,
-        'A previous Private transfer is still recorded. Check its result before sending again.'
+        'A previous Incognito transfer is still recorded. Check its result before sending again.'
       )
     }
     await input.ensureIdentity()
@@ -807,7 +807,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
       ) {
         throw new Eip1193ProviderError(
           -32000,
-          'The prior Private transfer was not sent. Review a new request.'
+          'The prior Incognito transfer was not sent. Review a new request.'
         )
       }
       return exactSubmission.destinationHash ?? this.waitForExactOutput(exactSubmission)

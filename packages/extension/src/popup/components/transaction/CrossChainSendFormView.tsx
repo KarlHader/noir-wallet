@@ -2,22 +2,16 @@ import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import { formatChainName, formatSymbol } from '@/lib/format'
-import { formatTokenQuantity } from '@/lib/number-format'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
-import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import {
-  SendAmountInputCard,
-  SendFieldLabel,
-  SendRecipientInputCard,
-  SendRouteInfoCard,
-  SendAssetHeader,
-  SendFormView,
-  SendFormActions
-} from './SendInputCards'
+import { RouteProviderLabel } from './RouteProviderLabel'
+import { SendRouteInfoCard, SendFormActions } from './SendInputCards'
+import { SendFormSlot } from './SendFormLayout'
 
 interface CrossChainSendFormViewProps {
+  readonly shareForm: boolean
   readonly tokenIn: RheaSwapToken | null
   readonly tokenOut: RheaSwapToken | null
   readonly destinationOptions: readonly ChainSelectorOption[]
@@ -28,9 +22,7 @@ interface CrossChainSendFormViewProps {
   readonly routeCost?: string | null
   readonly recipient: string
   readonly spendableBalance: string
-  readonly sourceBadge?: string
   readonly onSelectSourceAsset?: () => void
-  readonly onSelectShieldSource?: () => void
   readonly initializing?: boolean
   readonly destinationNameFallback?: string
   readonly sourceSymbolFallback?: string
@@ -62,6 +54,7 @@ interface CrossChainSendFormViewProps {
 }
 
 export function CrossChainSendFormView({
+  shareForm,
   tokenIn,
   tokenOut,
   destinationOptions,
@@ -72,9 +65,7 @@ export function CrossChainSendFormView({
   routeCost,
   recipient,
   spendableBalance,
-  sourceBadge,
   onSelectSourceAsset,
-  onSelectShieldSource,
   initializing = false,
   destinationNameFallback,
   sourceSymbolFallback,
@@ -106,105 +97,60 @@ export function CrossChainSendFormView({
 }: CrossChainSendFormViewProps) {
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const sourceSymbol = formatSymbol(tokenIn?.symbol) || sourceSymbolFallback || 'Token'
-  const destinationName = tokenOut
-    ? formatChainName(tokenOut.blockchain)
-    : destinationNameFallback || 'Select network'
+  const quoteNotice = getSwapQuoteNotice(quoteError)
+  const destinationId = selectedDestinationChainId ?? tokenOut?.rheaChainId ?? null
+  const destination = destinationOptions.find(option => option.id === destinationId)
+  const destinationName =
+    destination?.name ??
+    destinationNameFallback ??
+    (tokenOut ? formatChainName(tokenOut.blockchain) : 'Select network')
 
   return (
     <>
-      <SendFormView
-        domain={sourceBadge === 'Private' ? 'private' : 'public'}
-        availableDomains={
-          sourceBadge === 'Private'
-            ? ['private']
-            : onSelectShieldSource
-              ? ['public', 'shield']
-              : ['public']
-        }
-        onDomainChange={domain => {
-          if (domain === 'shield') onSelectShieldSource?.()
-        }}
-        disabled={initializing}
-        recipient={
-          <div className="order-2">
-            <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-              <SendFieldLabel>Send to</SendFieldLabel>
-              <button
-                type="button"
-                onClick={() => setNetworkPickerOpen(true)}
-                disabled={
-                  initializing || (destinationAssetsLoading && destinationOptions.length === 0)
-                }
-                aria-label={`Select destination network, ${destinationName}`}
-                className="inline-flex min-w-0 items-center gap-1.5 text-xs hover:text-primary disabled:opacity-50"
-              >
-                {(tokenOut || destinationNameFallback) && (
-                  <ChainIcon
-                    chain={tokenOut?.blockchain ?? destinationNameFallback ?? ''}
-                    width={16}
-                    height={16}
-                    showTooltip={false}
-                  />
-                )}
-                <span className="max-w-32 truncate">{destinationName}</span>
-                <Icon icon="lucide:chevron-down" width={13} height={13} />
-              </button>
-            </div>
-            <SendRecipientInputCard
-              id="cross-chain-send-recipient"
-              value={recipient}
-              onChange={onRecipientChange}
-              placeholder="Enter address"
-              hideLabel
-              disabled={initializing}
-              variant="filled"
-              invalid={Boolean(recipientError)}
-              onSelectRecipient={onSelectRecipient}
-            />
-            {recipientError && <InlineError message={recipientError} className="mt-2" />}
-          </div>
-        }
-        amountInput={
-          <SendAmountInputCard
-            ariaLabel={`${sourceSymbol} amount`}
-            value={amount}
-            onChange={onAmountChange}
-            available={spendableBalance}
-            symbol={sourceSymbol}
-            inline
-            disabled={initializing || sourceAssetsLoading}
-          />
-        }
-        assetSelector={
-          <SendAssetHeader
-            assetId={tokenIn?.assetId}
-            symbol={sourceSymbol}
-            icon={tokenIn?.icon ?? undefined}
-            networkName={
-              tokenIn ? formatChainName(tokenIn.blockchain) : (sourceNetworkNameFallback ?? '')
+      <SendFormSlot
+        inline={!shareForm}
+        adapter={{
+          recipient: {
+            id: 'cross-chain-send-recipient',
+            value: recipient,
+            onChange: onRecipientChange,
+            placeholder: 'Enter address',
+            readOnly: initializing,
+            invalid: Boolean(recipientError),
+            onSelectRecipient,
+            feedback: recipientError && <InlineError message={recipientError} />,
+            network: {
+              name: destinationName,
+              icon: destination?.icon ?? tokenOut?.blockchain ?? destinationNameFallback,
+              onSelect: () => setNetworkPickerOpen(true),
+              disabled:
+                initializing || (destinationAssetsLoading && destinationOptions.length === 0)
             }
-            blockchain={tokenIn?.blockchain ?? sourceNetworkNameFallback}
-            variant="pill"
-            onSelectAsset={onSelectSourceAsset}
-          />
-        }
-        balance={formatTokenQuantity(spendableBalance)}
-        maxButton={
-          <button
-            type="button"
-            onClick={onMaxClick}
-            disabled={initializing || !onMaxClick || maxLoading || maxDisabled}
-            title={maxDisabled ? maxDisabledReason : 'Max'}
-            aria-label="Max"
-            className="rounded-md bg-white/10 px-2 py-1 font-medium text-muted disabled:opacity-40"
-          >
-            {maxLoading ? (
-              <Icon icon="lucide:loader-circle" className="size-3 animate-spin" />
-            ) : (
-              'Max'
-            )}
-          </button>
-        }
+          },
+          amount: {
+            ariaLabel: `${sourceSymbol} amount`,
+            value: amount,
+            onChange: onAmountChange,
+            disabled: initializing || sourceAssetsLoading
+          },
+          asset: {
+            assetId: tokenIn?.assetId,
+            symbol: sourceSymbol,
+            icon: tokenIn?.icon ?? undefined,
+            networkName: tokenIn
+              ? formatChainName(tokenIn.blockchain)
+              : (sourceNetworkNameFallback ?? ''),
+            blockchain: tokenIn?.blockchain ?? sourceNetworkNameFallback,
+            onSelectAsset: onSelectSourceAsset
+          },
+          balance: { value: spendableBalance },
+          maximum: {
+            onClick: onMaxClick,
+            disabled: initializing || !onMaxClick || maxLoading || maxDisabled,
+            title: maxDisabled ? maxDisabledReason : 'Max',
+            loading: maxLoading
+          }
+        }}
         footer={
           <SendFormActions
             onContinue={onReview}
@@ -214,7 +160,7 @@ export function CrossChainSendFormView({
         }
       >
         {hasInsufficientFunds && (
-          <InlineError message={insufficientMessage ?? 'Insufficient balance'} />
+          <InlineError message={insufficientMessage ?? 'Insufficient balance'} tone="muted" />
         )}
 
         <SendRouteInfoCard
@@ -224,8 +170,10 @@ export function CrossChainSendFormView({
                 <Icon icon="lucide:loader-circle" className="size-3.5 animate-spin" aria-hidden />
                 Calculating quote…
               </span>
+            ) : providerName ? (
+              <RouteProviderLabel router={providerName} />
             ) : (
-              (providerName ?? '—')
+              '—'
             )
           }
           feeLabel="Route cost (est.)"
@@ -239,38 +187,35 @@ export function CrossChainSendFormView({
             )
           }
           extra={
-            <>
-              <div className="flex min-h-5 items-center justify-between gap-3">
-                <span className="text-muted">Slippage</span>
-                <button
-                  type="button"
-                  onClick={onOpenSlippage}
-                  disabled={initializing}
-                  className="inline-flex items-center gap-1 hover:text-primary"
-                  aria-label={`Set slippage, currently ${slippage}%`}
-                >
-                  {slippage}% <Icon icon="lucide:chevron-down" width={12} />
-                </button>
-              </div>
-              {!isQuoting && tokenOut && estimatedOut && (
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="text-muted">Est. receive</span>
-                  <span
-                    className="min-w-0 truncate text-right"
-                    title={`${estimatedOut} ${sourceSymbol}`}
-                  >
-                    {formatTokenQuantity(estimatedOut)} {sourceSymbol}
-                  </span>
-                </div>
-              )}
-            </>
+            <div className="flex min-h-5 items-center justify-between gap-3">
+              <span className="text-muted">Slippage</span>
+              <button
+                type="button"
+                onClick={onOpenSlippage}
+                disabled={initializing}
+                className="inline-flex items-center gap-1 hover:text-primary"
+                aria-label={`Set slippage, currently ${slippage}%`}
+              >
+                {slippage}% <Icon icon="lucide:chevron-down" width={12} />
+              </button>
+            </div>
+          }
+          estimatedReceive={
+            !isQuoting && tokenOut && estimatedOut
+              ? { value: estimatedOut, symbol: formatSymbol(tokenOut.symbol) || sourceSymbol }
+              : undefined
           }
         />
-        {catalogError && <InlineError message="Unable to load assets" onRetry={onRetryCatalog} />}
-        {quoteError && (
-          <InlineError message={quoteError} onRetry={onRetryQuote} retrying={isQuoting} />
-        )}
-      </SendFormView>
+        {catalogError ? (
+          <InlineError message="Unable to load assets" onRetry={onRetryCatalog} />
+        ) : !isQuoting && !recipientError && quoteError ? (
+          <InlineError
+            message={quoteNotice ?? quoteError}
+            tone={quoteNotice ? 'muted' : 'error'}
+            onRetry={onRetryQuote}
+          />
+        ) : null}
+      </SendFormSlot>
       <ChainSelector
         open={networkPickerOpen}
         onOpenChange={setNetworkPickerOpen}
@@ -278,7 +223,7 @@ export function CrossChainSendFormView({
         enabledFirst
         loading={destinationNetworksLoading}
         allowSelectionWhileLoading
-        selectedId={tokenOut?.rheaChainId ?? selectedDestinationChainId ?? null}
+        selectedId={destinationId}
         onSelect={onSelectDestination}
       />
     </>

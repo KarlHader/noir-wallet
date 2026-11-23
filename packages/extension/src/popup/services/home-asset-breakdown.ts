@@ -1,12 +1,28 @@
-import type { PortfolioFiatSummary } from '@/popup/components/portfolio/portfolio-prices'
+import type { PortfolioFiatSummary } from '@/popup/services/portfolio-prices'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { buildAccountKey } from '@/core/wallet/account-scope'
 import type { AccountPortfolioValueSnapshot } from '@/core/wallet/account-portfolio-value'
 import { isPortfolioModelForScope } from './portfolio-cache'
 import { getAssetDomainRaw, summarizeAssetDomainsUsd, type AssetDomain } from './asset-domains'
+import Big from '@/lib/big'
+
+export function getHomeWalletTotal(publicUsd: string | null, incognitoUsd: string | null) {
+  if (publicUsd === null && incognitoUsd === null) return null
+  return new Big(publicUsd ?? 0).plus(incognitoUsd ?? 0).toFixed()
+}
 
 export type HomePortfolioTotalStatus = 'loading' | 'ready' | 'partial' | 'unavailable'
+
+const homePrices = new Map<'mainnet' | 'testnet', AssetPriceReadModel>()
+
+export function readHomePrices(network: 'mainnet' | 'testnet'): AssetPriceReadModel | null {
+  return homePrices.get(network) ?? null
+}
+
+export function rememberHomePrices(network: 'mainnet' | 'testnet', prices: AssetPriceReadModel) {
+  if (prices.status !== 'error') homePrices.set(network, prices)
+}
 
 export function resolveHomePortfolioTotalStatus(
   model: PortfolioReadModel | null,

@@ -10,6 +10,7 @@ import { dappExecutionModeCoordinator } from './dapp-execution-mode'
 interface FirstPartySessionAccount {
   readonly reference: AccountRef
   readonly address: string
+  readonly label: string
 }
 
 export interface FirstPartyDAppSessionSnapshot {
@@ -86,7 +87,13 @@ export async function readFirstPartyDAppSessionSnapshot(
       const address = await selectAddress(network, reference)
       if (!address) continue
       const accounts = byChain.get(network.chainId) ?? []
-      accounts.push(Object.freeze({ reference, address }))
+      accounts.push(
+        Object.freeze({
+          reference,
+          address,
+          label: `${account.walletDisplayName} \u00b7 ${account.accountDisplayName}`
+        })
+      )
       byChain.set(network.chainId, accounts)
     }
   }

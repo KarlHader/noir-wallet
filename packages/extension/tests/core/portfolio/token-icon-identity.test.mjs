@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import {
   getTokenIconCandidates,
   isBundledEthIconIdentity
-} from '../../../src/popup/components/tokens/token-icon-candidates.ts'
+} from '../../../src/popup/services/token-icon-candidates.ts'
 
 const providerIcon = 'https://tokens.example/provider-eth.png'
 const candidates = (assetId, blockchain = 'arb', contractAddress = null) =>

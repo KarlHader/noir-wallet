@@ -1,7 +1,7 @@
 import { Icon } from '@iconify/react'
 import { cn } from '@/lib/utils'
 import { ChainIcon } from '../common/ChainIcon'
-import type { ActivityInteractionPresentation } from './activity-interaction-adapters'
+import type { ActivityInteractionPresentation } from '@/popup/services/activity-interaction-adapters'
 
 interface ActivityInteractionIconProps {
   readonly presentation: ActivityInteractionPresentation

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
 import { selectWalletOwnedQuoteAssetExecution } from '../../../src/popup/services/quote-deposit-transfer-client.ts'
+import {
+  canContinueCombinedSwap,
+  getCombinedSwapFeeLimit
+} from '../../../src/popup/services/rhea-evm-approval.ts'
 import { resolveSwapMaximumAdjustment } from '../../../src/popup/services/swap-maximum.ts'
 import {
   buildLiveSwapQuoteRequest,
@@ -35,6 +39,7 @@ import {
   getSafeRheaSwapRuntimeErrorMessage
 } from '../../../src/core/services/rhea-swap/rhea-swap-error.ts'
 import { createRheaSwapFetch } from '../../../src/core/services/rhea-swap/rhea-swap-fetch.ts'
+import { RheaSwapApi } from '../../../src/core/services/rhea-swap/rhea-swap-api.ts'
 import { classifyError } from '../../../src/lib/errors.ts'
 import { selectSwapFeeEstimate } from '../../../src/lib/swap-fee.ts'
 import {
@@ -42,6 +47,48 @@ import {
   createPublicPrivateSendPreviewKey,
   getPublicPrivateSendRouteCost
 } from '../../../src/popup/services/public-private-send-preview.ts'
+
+it('continues a combined approval only for the reviewed swap call within its fee ceiling', () => {
+  const owner = `0x${'1'.repeat(40)}`
+  const call = {
+    chainId: 56,
+    to: `0x${'2'.repeat(40)}`,
+    from: owner,
+    data: '0xdeadbeef',
+    value: '0'
+  }
+  const approval = { maximumFeeWei: '50000', maxFeePerGasWei: '1', gasPriceWei: null }
+  const limit = getCombinedSwapFeeLimit(call, approval, '550000')
+  assert.equal(getCombinedSwapFeeLimit(call, approval, '549999'), null)
+  assert.ok(limit)
+  const fields = {
+    from: owner,
+    to: call.to,
+    calldata: { encoding: 'hex', value: call.data },
+    valueWei: '0',
+    maximumFeeWei: '500000',
+    maxFeePerGasWei: '1',
+    gasPriceWei: null
+  }
+  const summary = { chainId: 'eip155:56', fields }
+  assert.equal(canContinueCombinedSwap(summary, limit, call, owner), true)
+  for (const changed of [
+    { maximumFeeWei: '500001' },
+    { maxFeePerGasWei: '2' },
+    { valueWei: '1' },
+    { calldata: { encoding: 'hex', value: '0xbeefdead' } }
+  ]) {
+    assert.equal(
+      canContinueCombinedSwap(
+        { ...summary, fields: { ...fields, ...changed } },
+        limit,
+        call,
+        owner
+      ),
+      false
+    )
+  }
+})
 
 it('rejects a stale Zcash Max fee when a refreshed Max amount differs', () => {
   const feeQuote = { id: 'quote-1', standardMarginalFeeZats: 5000, expiresAt: 2000 }
@@ -528,6 +575,136 @@ it('keeps a quote timeout retryable when a successful HTTP response also mention
   })
 })
 
+it('distinguishes an exhausted route from retryable aggregate quote failures', async () => {
+  const noRoute = [
+    'lifi: LI.FI unsupported destination chain',
+    'rango: route does not support this chain pair'
+  ]
+  for (const [errors, expected] of [
+    [noRoute, { message: 'no route', retryable: false }],
+    [[...noRoute, 'nearintents quote timeout after 2s'], { message: 'no route', retryable: true }],
+    [
+      [...noRoute, 'contract: all Rhea bridge quotes failed'],
+      { message: 'RHEA Swap HTTP 400', retryable: true }
+    ]
+  ]) {
+    const api = new RheaSwapApi({
+      baseUrl: 'https://quote.invalid',
+      retry: { maxRetries: 0 },
+      fetch: async () =>
+        Response.json({ code: 400, data: { errors }, errorCode: '' }, { status: 400 })
+    })
+    await assert.rejects(api.quote({}), error => {
+      const runtimeMessage = getSafeRheaSwapRuntimeErrorMessage(error)
+      assert.deepEqual(getRheaSwapQuoteFailure(new RheaSwapClientError(runtimeMessage)), expected)
+      return true
+    })
+  }
+})
+
+it('uses the native RHEA paths and retries quote reads without replaying writes', async () => {
+  const requests = []
+  let quoteCalls = 0
+  const quoteData = {
+    bestQuote: { router: 'sushi', amountOut: '1000', minAmountOut: '990' },
+    quoteProviderWarnings: [{ errorCode: 'QUOTE_TIMEOUT' }]
+  }
+  const buildData = { router: 'sushi', executionType: 'transaction' }
+  const api = new RheaSwapApi({
+    baseUrl: 'https://api.rhea.finance/',
+    apiKey: 'test-key',
+    retry: { maxRetries: 1, baseDelayMs: 0, maxDelayMs: 0, jitter: false },
+    fetch: async (url, init) => {
+      requests.push({
+        url: new URL(url),
+        method: init.method,
+        auth: init.headers.Authorization,
+        body: init.body && JSON.parse(init.body)
+      })
+      const path = new URL(url).pathname
+      if (path === '/crosschain/swap/quote') {
+        if (++quoteCalls === 1) {
+          return new Response(
+            JSON.stringify({ code: -1, msg: 'provider details', errorCode: 'QUOTE_TIMEOUT' })
+          )
+        }
+        return Response.json({ code: 0, errorCode: '', data: quoteData })
+      }
+      if (path === '/crosschain/swap/swap') {
+        return Response.json({ code: 0, errorCode: '', data: buildData })
+      }
+      if (path === '/crosschain/swap/report') {
+        return new Response('<html>provider private error</html>', { status: 503 })
+      }
+      if (path === '/api/swap/order-submit') {
+        return new Response(JSON.stringify({ code: 500, msg: 'provider private error' }), {
+          status: 503
+        })
+      }
+      return new Response(JSON.stringify({ code: 0, msg: 'success', data: {} }))
+    }
+  })
+
+  assert.deepEqual(await api.quote({ fromChain: '1' }), quoteData)
+  assert.deepEqual(await api.build({ router: 'route' }), buildData)
+  await api.fromTokens(1)
+  await api.crossChainToTokens(1)
+  await api.orderStatus({ recordId: '123' })
+  await assert.rejects(api.submitOrder({ signature: 'test' }), error => {
+    assert.equal(error.message, 'RHEA Swap HTTP 503')
+    return true
+  })
+  await assert.rejects(api.report({ from_hash: 'hash' }), error => {
+    assert.equal(error.message, 'RHEA Swap HTTP 503')
+    return true
+  })
+  assert.deepEqual(
+    requests.map(request => request.url.pathname),
+    [
+      '/crosschain/swap/quote',
+      '/crosschain/swap/quote',
+      '/crosschain/swap/swap',
+      '/get_chain_prices',
+      '/api/swap/supported_to_tokens',
+      '/api/swap/order-status',
+      '/api/swap/order-submit',
+      '/crosschain/swap/report'
+    ]
+  )
+  assert.equal(requests[3].url.searchParams.get('chain'), '1')
+  assert.equal(requests[5].url.searchParams.get('recordId'), '123')
+  assert.equal(requests[2].body.router, 'route')
+  assert.ok(requests.every(request => request.auth === 'Bearer test-key'))
+  assert.equal(
+    requests.filter(request => request.url.pathname === '/api/swap/order-submit').length,
+    1
+  )
+  assert.equal(
+    requests.filter(request => request.url.pathname === '/crosschain/swap/report').length,
+    1
+  )
+})
+
+it('accepts successful RHEA report and order status responses without msg', async () => {
+  const api = new RheaSwapApi({
+    baseUrl: 'https://api.rhea.finance/',
+    fetch: async url =>
+      Response.json({
+        code: 0,
+        errorCode: '',
+        data: new URL(url).pathname.endsWith('/report')
+          ? { id: 123 }
+          : { status: 'SUCCESS', toHash: `0x${'a'.repeat(64)}` }
+      })
+  })
+
+  assert.deepEqual(await api.report({ from_hash: `0x${'b'.repeat(64)}` }), { id: 123 })
+  assert.deepEqual(await api.orderStatus({ recordId: '123' }), {
+    status: 'SUCCESS',
+    toHash: `0x${'a'.repeat(64)}`
+  })
+})
+
 it('keeps provider minimums from multiple route failures without returning provider metadata', () => {
   const providerFailure =
     'NearIntents quote failed (400): {"message":"Temporary swap limits: minimum swap amount is $1,000","correlationId":"provider-reference"}'
@@ -651,11 +828,21 @@ it('lists Intents and native Shield ZEC as separate selectable sources with dist
       sources: [
         {
           asset: {
-            asset: { id: 'wallet-zec-intents', chainId: 'near:mainnet', kind: 'token' },
+            asset: {
+              id: 'wallet-zec-intents',
+              chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+              kind: 'native'
+            },
             metadata: { symbol: 'ZEC', decimals: 8, name: 'ZEC' },
             balance: { totalRaw: '0' }
           },
-          chain: { chain: { id: 'near:mainnet', family: 'near', displayName: 'NEAR' } },
+          chain: {
+            chain: {
+              id: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+              family: 'zcash',
+              displayName: 'Zcash'
+            }
+          },
           managed: { protocolAssetId: 'nep141:zec.omft.near', assetId: 'wallet-zec-intents' }
         }
       ],
@@ -687,11 +874,15 @@ it('lists Intents and native Shield ZEC as separate selectable sources with dist
     assert.equal(options.length, 2)
     assert.equal(options[0].selectionId, SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID)
     assert.equal(options[0].availableRaw, '120000000')
-    assert.equal(options[0].badgeBlockchain, 'near')
-    assert.equal(options[0].chainName, 'NEAR Confidential')
+    assert.equal(options[0].intentsWalletAssetId, 'wallet-zec-intents')
+    assert.equal(options[0].sourceLabel, 'NEAR Confidential')
     assert.equal(options[1].selectionId, SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID)
     assert.equal(options[1].availableRaw, '40000000')
-    assert.equal(options[1].badgeBlockchain, 'zec')
+    for (const option of options) {
+      assert.equal(option.chainId, input.sources[0].chain.chain.id)
+      assert.equal(option.chainName, 'Zcash')
+      assert.equal(option.badgeBlockchain, 'zec')
+    }
     const pendingOnly = buildShieldSwapZecSourceOptions({
       ...input,
       portfolio: {

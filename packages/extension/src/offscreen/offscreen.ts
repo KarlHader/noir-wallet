@@ -42,6 +42,7 @@ import {
   parseKeystoneZcashVerificationResult
 } from '@/infrastructure/keyring/migration'
 import { SecureStorage } from '@/core/wallet/secure-storage'
+import { getRetainedZcashHardwareBirthdayHeight } from '@/core/wallet/birthday-height'
 import { parseStoredHardwareCredential } from '@/core/wallet/hardware-wallet-data'
 import { getNetworkConfig } from '@/lib/runtime-network'
 import {
@@ -58,36 +59,30 @@ const multichainWorkerHost = new MultichainWorkerHost()
 const compatibilityWorkerHost = new CompatibilityWorkerHost()
 
 async function verifyKeystoneZcashAccount(value: unknown) {
-  const input = parseKeystoneZcashVerificationInput(value)
-  let decrypted: string
+  let stage = 'request'
+  let walletId: string | undefined
   try {
-    decrypted = await SecureStorage.decrypt(input.envelope, input.password)
-  } catch {
-    throw new Error('Hardware credential decryption failed')
-  }
-  let credential
-  try {
-    credential = parseStoredHardwareCredential(JSON.parse(decrypted))
-  } catch {
-    throw new Error('Invalid hardware credential payload')
-  }
-  if (credential.accountExport.protocol !== 'zcash-accounts-v1') {
-    throw new Error('Hardware credential is not a Zcash account export')
-  }
-  if (input.vendor !== undefined && credential.vendor !== input.vendor) {
-    throw new Error('Hardware credential vendor mismatch')
-  }
-  if (credential.accountExport.accountHdIndex !== input.account.accountIndex) {
-    throw new Error('Hardware credential Account index mismatch')
-  }
+    const input = parseKeystoneZcashVerificationInput(value)
+    stage = 'credential-decryption'
+    const decrypted = await SecureStorage.decrypt(input.envelope, input.password)
+    stage = 'credential-validation'
+    const credential = parseStoredHardwareCredential(JSON.parse(decrypted))
+    if (
+      credential.accountExport.protocol !== 'zcash-accounts-v1' ||
+      (input.vendor !== undefined && credential.vendor !== input.vendor) ||
+      credential.accountExport.accountHdIndex !== input.account.accountIndex
+    ) {
+      throw new Error('Hardware credential does not match the account')
+    }
 
-  const walletId = `__hardware_verification__:${crypto.randomUUID()}`
-  try {
+    stage = 'worker-init'
+    walletId = `__hardware_verification__:${crypto.randomUUID()}`
     await zcashWorkerClient.requestToWorker('init', {
       walletId,
       network: input.network,
       lightwalletdUrl: getNetworkConfig(input.network).rpcUrl
     })
+    stage = 'account-creation'
     const accountId = await zcashWorkerClient.requestToWorker('wallet.createAccountUfvk', {
       walletId,
       accountName: 'Hardware verification',
@@ -95,8 +90,12 @@ async function verifyKeystoneZcashAccount(value: unknown) {
       seedFingerprintHex: credential.accountExport.seedFingerprintHex,
       accountHdIndex: credential.accountExport.accountHdIndex,
       keySource: credential.vendor,
-      birthdayHeight: input.account.birthdayHeight
+      birthdayHeight: getRetainedZcashHardwareBirthdayHeight(
+        input.account.birthdayHeight,
+        input.network
+      )
     })
+    stage = 'address-derivation'
     const addresses = await zcashWorkerClient.requestToWorker('wallet.getUnifiedAddresses', {
       walletId,
       accountId
@@ -115,8 +114,12 @@ async function verifyKeystoneZcashAccount(value: unknown) {
       shielded: addresses.unified,
       ...(fullUnified === undefined ? {} : { fullUnified })
     })
+  } catch {
+    throw new Error(`Keystone Zcash verification failed (${stage})`)
   } finally {
-    await zcashWorkerClient.requestToWorker('wallet.reset', { walletId }).catch(() => {})
+    if (walletId) {
+      await zcashWorkerClient.requestToWorker('wallet.reset', { walletId }).catch(() => {})
+    }
   }
 }
 const zcashCredentialSessionPort: ZcashCredentialSessionPort = {
@@ -1187,7 +1190,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     void verifyKeystoneZcashAccount(message.payload.input)
       .then(result => sendResponse({ result }))
-      .catch(() => sendResponse({ error: 'Keystone Zcash verification failed' }))
+      .catch(error =>
+        sendResponse({
+          error: error instanceof Error ? error.message : 'Keystone Zcash verification failed'
+        })
+      )
     return true
   }
 

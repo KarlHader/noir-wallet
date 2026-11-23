@@ -200,12 +200,12 @@ button {
 }
 
 @media (hover: hover) {
-  .wallet-action-button:enabled:hover > .wallet-action-surface {
-    background-color: rgb(255 255 255 / 10%);
+  .wallet-action-button:is(:enabled, :any-link):hover > .wallet-action-surface {
+    background-color: color-mix(in srgb, var(--color-foreground) 10%, var(--color-wallet-surface));
   }
 }
 
-.wallet-action-button:enabled:active > .wallet-action-surface {
+.wallet-action-button:is(:enabled, :any-link):active > .wallet-action-surface {
   filter: brightness(0.95);
 }
 
@@ -243,27 +243,203 @@ html[data-surface='side-panel'] #root {
   flex-direction: column;
 }
 
-[data-wallet-mode='private'] {
-  --primary: var(--color-private-action);
-  --ring: var(--color-private-action);
-  --color-primary: var(--color-private-action);
-  --color-ring: var(--color-private-action);
-  --color-background: #14110c;
-  --color-card: #222019;
-  --color-popover: #25231c;
-  --color-accent: #2b2820;
-  --color-wallet-surface: #222019;
-  --color-wallet-selected: #3b3528;
-  background-color: var(--color-background);
-  background-image: radial-gradient(
-    ellipse 375px 375px at 0 0,
-    rgb(255 161 0 / 20%),
-    transparent 100%
-  );
+[data-wallet-palette='public'] {
+  --color-background: #f2f2f5;
+  --color-foreground: #1b1b24;
+  --color-card: #e7e7ed;
+  --color-card-foreground: var(--color-foreground);
+  --color-popover: #ffffff;
+  --color-popover-foreground: var(--color-foreground);
+  --color-primary: #007d54;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #e0e0e8;
+  --color-secondary-foreground: var(--color-foreground);
+  --color-muted: #60606f;
+  --color-muted-foreground: var(--color-foreground);
+  --color-accent: #e1e1e9;
+  --color-accent-foreground: var(--color-foreground);
+  --color-border: #d4d4df;
+  --color-input: #a6a6b4;
+  --color-ring: var(--color-primary);
+  --color-wallet-surface: #e6e6ed;
+  --color-wallet-selected: #dadae4;
+  --color-wallet-secondary: #50505e;
+  --color-wallet-field-label: #555564;
+  --color-warning: #845400;
+  --color-warning-surface: #f8edda;
+  --color-success: #007d54;
+  --color-danger: #b4263d;
+  --color-destructive: var(--color-danger);
+  color-scheme: light;
 }
 
-[data-wallet-mode='private'] .wallet-action-icon {
-  color: var(--color-private);
+.home-balance-card {
+  --balance-card-overlay: transparent;
+  --balance-card-border: rgb(255 255 255 / 10%);
+  --balance-card-shadow: rgb(0 0 0 / 10%);
+  --balance-card-text: rgb(255 255 255 / 60%);
+  --balance-card-dot: rgb(255 255 255 / 20%);
+  border-color: var(--balance-card-border);
+  background:
+    linear-gradient(var(--balance-card-overlay), var(--balance-card-overlay)),
+    var(--balance-card-surface);
+  box-shadow: 0 0 20px var(--balance-card-shadow);
+  color: var(--balance-card-text);
+}
+
+.home-balance-card[data-balance-domain='public'] {
+  --balance-card-surface: linear-gradient(137deg, #f2f2f5, #a8a8a8);
+  --balance-card-overlay: rgb(0 0 0 / 30%);
+  --balance-card-shadow: rgb(0 0 0 / 25%);
+  --balance-card-text: rgb(0 0 0 / 60%);
+  --balance-card-dot: rgb(0 0 0 / 20%);
+}
+
+.home-balance-card[data-balance-domain='private'] {
+  --balance-card-surface: linear-gradient(144deg, #2e2e3b, #0b0b0e);
+  --balance-card-overlay: rgb(0 0 0 / 20%);
+}
+
+.home-balance-card[aria-pressed='true'] {
+  --balance-card-overlay: transparent;
+  --balance-card-text: #fff;
+}
+
+.home-balance-card[data-balance-domain='public'][aria-pressed='true'] {
+  --balance-card-surface: linear-gradient(137deg, #fff, #d4d4d4);
+  --balance-card-border: #fff;
+  --balance-card-text: #000;
+  --balance-card-dot: #00e74d;
+}
+
+.home-balance-card[data-balance-domain='private'][aria-pressed='true'] {
+  --balance-card-dot: #ffa100;
+  --balance-card-amount: #ffa100;
+}
+
+.home-balance-indicator {
+  background-color: var(--balance-card-dot);
+}
+
+.home-balance-card[aria-pressed='true'] .home-balance-indicator {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--balance-card-dot) 50%, transparent);
+}
+
+.home-balance-amount {
+  color: var(--balance-card-amount, currentColor);
+}
+
+.home-balance-watermark {
+  opacity: 0;
+}
+
+.home-balance-card[aria-pressed='true'] .home-balance-watermark {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .home-balance-card {
+    transition-property: width, height, top, padding, border-color, box-shadow, color, filter;
+    transition-duration: 200ms;
+    transition-timing-function: ease-out;
+  }
+
+  .home-balance-amount {
+    transition:
+      font-size 200ms ease-out,
+      line-height 200ms ease-out,
+      color 200ms ease-out;
+  }
+
+  .home-balance-watermark {
+    transition: opacity 200ms ease-out;
+  }
+}
+
+[data-home-domain='shield'] .home-mode-content .wallet-action-surface {
+  background-color: rgb(255 255 255 / 6%);
+}
+
+.home-mode-content[data-wallet-palette='public'] {
+  --color-foreground: #000;
+  --color-wallet-secondary: #606068;
+  --color-wallet-selected: rgb(0 0 0 / 6%);
+  --home-toolbar-surface: #e6e6ed;
+}
+
+[data-home-domain='private'] .home-mode-content {
+  --home-incognito-surface: linear-gradient(#1c1c25, #0b0b0e 286px);
+  --home-toolbar-surface: #202029;
+  --color-wallet-surface: rgb(255 255 255 / 6%);
+  --color-wallet-selected: rgb(255 255 255 / 6%);
+  --color-wallet-secondary: #bcbcc8;
+  background: var(--home-incognito-surface);
+}
+
+[data-home-domain='private'] .home-portfolio-tabs {
+  background: var(--home-incognito-surface) 0 -100px / 100% 286px no-repeat;
+}
+
+[data-home-domain='private'] .home-mode-content .wallet-action-icon {
+  color: var(--color-warning);
+}
+
+.home-mode-content[data-wallet-palette='public'] .wallet-action-label {
+  color: var(--color-foreground);
+}
+
+.home-portfolio-tabs [role='tab'] {
+  font-weight: 500;
+}
+
+.home-portfolio-tabs [role='tab']::after {
+  height: 3px;
+}
+
+.home-portfolio-tabs [role='tab'][data-state='active']::after {
+  width: min(37px, 100%);
+}
+
+.dapp-connection-bar {
+  --dapp-bar-surface: #212128;
+  --dapp-bar-control: rgb(255 255 255 / 10%);
+  background: var(--dapp-bar-surface);
+}
+
+.dapp-connection-bar[data-wallet-palette='public'] {
+  --dapp-bar-surface: #fff;
+  --dapp-bar-control: #fff;
+  --dapp-bar-control-border: rgb(0 0 0 / 10%);
+  --color-foreground: #000;
+  box-shadow: 0 -2px 10px rgb(0 0 0 / 6%);
+}
+
+.dapp-connection-control {
+  border: 1px solid var(--dapp-bar-control-border, transparent);
+  background-color: var(--dapp-bar-control);
+}
+
+.dapp-connection-control:is(:enabled):hover {
+  background-color: color-mix(in srgb, var(--color-foreground) 8%, var(--dapp-bar-control));
+}
+
+.dapp-connection-mode-group {
+  display: flex;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--dapp-bar-control);
+}
+
+.dapp-connection-mode-group .dapp-connection-control {
+  --dapp-bar-control: transparent;
+}
+
+.dapp-connection-mode-group > .dapp-connection-control:last-child {
+  width: 31px;
+}
+
+.home-mode-content :is(.wallet-interactive, .transition-colors) {
+  transition-property: box-shadow, opacity, filter;
 }
 
 /* Full browser tab (hardware wallet flows): show the app as a centered card */
@@ -368,6 +544,30 @@ html[data-surface='side-panel'] #root {
   pointer-events: none !important;
 }
 
+@keyframes swap-quote-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+.swap-quote-shimmer {
+  background-image: linear-gradient(90deg, var(--muted) 35%, #fff 50%, var(--muted) 65%);
+  background-size: 250% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: swap-quote-shimmer 1.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swap-quote-shimmer {
+    animation: none;
+    color: var(--muted);
+  }
+}
+
 /* Custom Tabs with short underline */
 .tab-trigger-custom {
   position: relative;
@@ -382,11 +582,11 @@ html[data-surface='side-panel'] #root {
   transform: translateX(-50%);
   width: 0;
   height: 2px;
-  background-color: var(--color-white);
+  background-color: var(--color-foreground);
   transition: width 0.2s ease;
 }
 
-.tab-trigger-custom[data-state='active']::after {
+.tab-trigger-custom:is([data-state='active'], [aria-selected='true'])::after {
   width: 60%;
 }
 

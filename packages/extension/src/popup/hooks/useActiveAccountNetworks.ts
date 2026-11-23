@@ -112,6 +112,7 @@ export function useActiveAccountNetworks() {
 
   return Object.freeze({
     catalog: visibleCatalog,
+    publicCatalog: visibleCatalog ? null : accountNetworksClient.readCachedPublicCatalog(scope),
     activeAccount,
     loading,
     error,

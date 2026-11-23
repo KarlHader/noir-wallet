@@ -47,10 +47,11 @@ export function DAppConnectionModal() {
           <div className="py-16 text-center text-sm text-muted">No connected dApps</div>
         ) : (
           <>
-            {connectionError && (
+            {connectionError && !loading && (
               <div className="px-4 py-3">
                 <InlineError
-                  message="Unable to refresh connected dApps"
+                  message="Connection list may be out of date"
+                  tone="muted"
                   onRetry={() => void refreshConnectedDApps()}
                 />
               </div>

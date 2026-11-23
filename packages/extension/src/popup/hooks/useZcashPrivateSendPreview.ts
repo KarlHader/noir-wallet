@@ -15,7 +15,8 @@ export function useZcashPrivateSendPreview({
   recipient,
   amount,
   available,
-  feeTier
+  feeTier,
+  slippage
 }: {
   readonly enabled: boolean
   readonly scopeKey: string
@@ -24,13 +25,14 @@ export function useZcashPrivateSendPreview({
   readonly amount: string
   readonly available: string
   readonly feeTier: FeeTier
+  readonly slippage: number
 }) {
   const [preview, setPreview] = useState<{
     key: string
     quote: RheaSwapQuoteView
     amountRaw: string
   } | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null)
   const [retryCount, setRetryCount] = useState(0)
   const key =
     enabled &&
@@ -38,7 +40,7 @@ export function useZcashPrivateSendPreview({
     isPublicPrivateSendRecipient(ZEC_ZCASH_ASSET, recipient) &&
     safeBig(amount || '0').gt(0) &&
     safeBig(amount || '0').lte(available)
-      ? JSON.stringify([scopeKey, sender, recipient, amount, feeTier])
+      ? JSON.stringify([scopeKey, sender, recipient, amount, feeTier, slippage])
       : null
   const currentKey = useRef(key)
   currentKey.current = key
@@ -46,7 +48,7 @@ export function useZcashPrivateSendPreview({
 
   useEffect(() => {
     setPreview(null)
-    setError(null)
+    setFailure(null)
     if (!key) return
     let cancelled = false
     let quoteHandle: string | null = null
@@ -63,7 +65,7 @@ export function useZcashPrivateSendPreview({
             sourceTokens: source.tokens,
             destinationTokens: destination.tokens,
             amount,
-            slippage: 1,
+            slippage,
             sender,
             recipient
           })
@@ -81,7 +83,7 @@ export function useZcashPrivateSendPreview({
             () => {
               if (cancelled || currentKey.current !== key) return
               setPreview(null)
-              setError('Quote expired. Try again.')
+              setFailure({ key, message: 'Quote expired. Try again.' })
               if (quoteHandle) void rheaSwapClient.discard(quoteHandle).catch(() => {})
               quoteHandle = null
             },
@@ -92,7 +94,8 @@ export function useZcashPrivateSendPreview({
             void rheaSwapClient.discard(quoteHandle).catch(() => {})
             quoteHandle = null
           }
-          if (!cancelled && currentKey.current === key) setError(getRheaSwapErrorMessage(cause))
+          if (!cancelled && currentKey.current === key)
+            setFailure({ key, message: getRheaSwapErrorMessage(cause) })
         }
       })()
     }, 800)
@@ -104,5 +107,6 @@ export function useZcashPrivateSendPreview({
     }
   }, [key, retryCount])
 
+  const error = failure?.key === key ? failure.message : null
   return { preview, error, ready, key, retry: () => setRetryCount(value => value + 1) }
 }

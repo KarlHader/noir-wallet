@@ -1,6 +1,7 @@
 import type { Network } from '@/types'
 
 export const DAPP_EXECUTION_MODES = Object.freeze(['main', 'private'] as const)
+export const DAPP_EXECUTION_MODE_STORAGE_KEY = 'dapp_execution_modes_v1'
 
 export type DAppExecutionMode = (typeof DAPP_EXECUTION_MODES)[number]
 

@@ -2,6 +2,7 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { getEvmNetworkConfig } from '@/config/networks'
 import {
+  DAPP_EXECUTION_MODE_STORAGE_KEY,
   DAppExecutionModeCoordinator,
   DAppExecutionModeRequestGate,
   type DAppExecutionModeRepository,
@@ -9,8 +10,6 @@ import {
 } from '@/core/dapp/dapp-execution-mode'
 import { loadActiveEvmPortfolioContext } from '@/infrastructure/chains/evm'
 import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
-
-const DAPP_EXECUTION_MODE_STORAGE_KEY = 'dapp_execution_modes_v1'
 
 export class ChromeDAppExecutionModeRepository implements DAppExecutionModeRepository {
   async read(): Promise<unknown> {

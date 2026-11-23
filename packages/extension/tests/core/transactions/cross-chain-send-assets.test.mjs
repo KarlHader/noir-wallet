@@ -11,7 +11,7 @@ import {
   resolveCrossChainSendDestinationByWalletAssetId,
   resolveCrossChainSendDestinationSupport,
   resolveCrossChainSendRouteAssetDisplay,
-  resolveCrossChainSendRouteDraft
+  resolveCrossChainSendDraft
 } from '../../../src/popup/services/cross-chain-send-assets.ts'
 import { getSwapDestinationTokens } from '../../../src/popup/services/swap-token-selection.ts'
 import { MARKET_ASSETS } from '../../../src/config/asset-market-assets.ts'
@@ -33,134 +33,57 @@ const eth = {
 const enabledChains = { evm: true, solana: true }
 
 test('cross-chain Send keeps the selected network draft bound to its source account', () => {
-  const route = {
-    network: 'mainnet',
+  const draft = {
     walletId: 'wallet-1',
     accountId: 'account-1',
-    currentWalletId: 'wallet-1',
-    currentAccountId: 'account-1',
-    routeWalletId: 'wallet-1',
-    routeAccountId: 'account-1',
-    navigationState: null,
     sourceAssetId: 'eip155:42161/slip44:60',
     destinationAssetId: 'eip155:1/slip44:60',
+    destinationChainId: 'eip155:1',
     recipient: '0x1111111111111111111111111111111111111111',
     amount: '0.000001'
   }
-  expect(resolveCrossChainSendRouteDraft(route)).toMatchObject({
-    recipient: route.recipient,
-    amount: route.amount,
-    sourceSymbol: 'ETH',
-    destinationName: 'Ethereum'
-  })
-  expect(resolveCrossChainSendRouteDraft({ ...route, accountId: 'account-2' })).toBeNull()
-  const chainOnlyRoute = {
-    ...route,
-    destinationAssetId: undefined,
-    destinationChainId: 'eip155:1'
+  const active = {
+    network: 'mainnet',
+    walletId: draft.walletId,
+    accountId: draft.accountId,
+    draft
   }
-  expect(resolveCrossChainSendRouteDraft(chainOnlyRoute)).toMatchObject({
-    recipient: route.recipient,
-    amount: route.amount,
-    sourceSymbol: 'ETH',
-    destinationName: 'Ethereum'
-  })
-  const chainOnlyNavigation = {
-    ...chainOnlyRoute,
-    walletId: null,
-    accountId: null,
-    currentWalletId: null,
-    currentAccountId: null,
-    navigationState: {
-      crossChainSendRouteAccount: {
-        walletId: route.routeWalletId,
-        accountId: route.routeAccountId,
-        sourceAssetId: route.sourceAssetId,
-        destinationChainId: chainOnlyRoute.destinationChainId
-      }
-    }
+  for (const destinationAssetId of [draft.destinationAssetId, null, 'eip155:1/slip44:0']) {
+    expect(
+      resolveCrossChainSendDraft({ ...active, draft: { ...draft, destinationAssetId } })
+    ).toMatchObject({
+      recipient: draft.recipient,
+      amount: draft.amount,
+      sourceSymbol: 'ETH',
+      destinationName: 'Ethereum'
+    })
   }
-  expect(resolveCrossChainSendRouteDraft(chainOnlyNavigation)).toMatchObject({
-    recipient: route.recipient,
-    amount: route.amount,
-    destinationName: 'Ethereum'
-  })
-  for (const binding of [
+  for (const scope of [
     { walletId: 'wallet-2' },
     { accountId: 'account-2' },
-    { sourceAssetId: 'eip155:8453/slip44:60' },
-    { destinationChainId: 'eip155:8453' },
-    { destinationAssetId: route.destinationAssetId }
+    { walletId: null, accountId: null },
+    { network: 'testnet' }
   ]) {
-    expect(
-      resolveCrossChainSendRouteDraft({
-        ...chainOnlyNavigation,
-        navigationState: {
-          crossChainSendRouteAccount: {
-            ...chainOnlyNavigation.navigationState.crossChainSendRouteAccount,
-            ...binding
-          }
-        }
-      })
-    ).toBeNull()
+    expect(resolveCrossChainSendDraft({ ...active, ...scope })).toBeNull()
   }
   expect(
-    resolveCrossChainSendRouteDraft({ ...chainOnlyNavigation, navigationState: null })
-  ).toBeNull()
-  expect(
-    resolveCrossChainSendRouteDraft({
-      ...chainOnlyNavigation,
-      currentWalletId: 'wallet-2',
-      currentAccountId: 'account-2'
+    resolveCrossChainSendDraft({
+      ...active,
+      draft: { ...draft, destinationAssetId: null, destinationChainId: 'eip155:999999' }
     })
   ).toBeNull()
   expect(
-    resolveCrossChainSendRouteDraft({ ...chainOnlyRoute, destinationChainId: 'eip155:999999' })
-  ).toBeNull()
-  expect(
-    resolveCrossChainSendRouteDraft({ ...route, destinationChainId: 'eip155:8453' })
-  ).toBeNull()
-
-  const navigationState = {
-    crossChainSendRouteAccount: {
-      walletId: route.routeWalletId,
-      accountId: route.routeAccountId,
-      sourceAssetId: route.sourceAssetId,
-      destinationAssetId: route.destinationAssetId
-    }
-  }
-  expect(
-    resolveCrossChainSendRouteDraft({
-      ...route,
-      walletId: null,
-      accountId: null,
-      currentWalletId: null,
-      currentAccountId: null,
-      navigationState
-    })
-  ).toMatchObject({ recipient: route.recipient, amount: route.amount })
-  expect(
-    resolveCrossChainSendRouteDraft({
-      ...route,
-      walletId: null,
-      accountId: null,
-      currentWalletId: 'wallet-2',
-      currentAccountId: 'account-2',
-      navigationState
+    resolveCrossChainSendDraft({
+      ...active,
+      draft: { ...draft, destinationChainId: 'eip155:8453' }
     })
   ).toBeNull()
   expect(
-    resolveCrossChainSendRouteAssetDisplay({ ...route, accountId: 'account-2' })
+    resolveCrossChainSendRouteAssetDisplay({ network: active.network, ...draft })
   ).toMatchObject({
     sourceSymbol: 'ETH',
     destinationName: 'Ethereum'
   })
-  expect(
-    resolveCrossChainSendRouteDraft({ ...route, destinationAssetId: 'eip155:1/slip44:0' })
-  ).toMatchObject({ destinationName: 'Ethereum' })
-  expect(
-    resolveCrossChainSendRouteDraft({ ...route, destinationAssetId: route.sourceAssetId })
-  ).toMatchObject({ destinationName: 'Arbitrum' })
 })
 
 test('cross-chain Send uses verified asset identities and excludes the source network', () => {

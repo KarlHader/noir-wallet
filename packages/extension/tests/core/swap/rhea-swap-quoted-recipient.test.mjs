@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { it } from 'node:test'
 import {
   parseRheaSwapQuoteRequest,
-  toSdkQuoteRequest
+  toRheaSwapProtocolRequest
 } from '../../../src/core/services/rhea-swap/rhea-swap-model.ts'
 import {
   MemoryRheaSwapQuoteSessionStore,
@@ -22,16 +22,16 @@ it('returns the requested recipient with the quote and binds transfer activity t
     sender: '0x1111111111111111111111111111111111111111',
     recipient: 'alice.near'
   })
-  const sdkRequest = toSdkQuoteRequest(request)
+  const sdkRequest = toRheaSwapProtocolRequest(request)
   assert.equal(sdkRequest.quoteWaitingTimeMs, 6_000)
   assert.equal(sdkRequest.sameChainTimeoutMs, 1_500)
   assert.equal(sdkRequest.crossChainTimeoutMs, 6_000)
-  const fastRequest = toSdkQuoteRequest(
+  const fastRequest = toRheaSwapProtocolRequest(
     parseRheaSwapQuoteRequest({ ...request, quoteMode: 'fast' })
   )
-  assert.equal(fastRequest.quoteWaitingTimeMs, 1_500)
-  assert.equal(fastRequest.sameChainTimeoutMs, 500)
-  assert.equal(fastRequest.crossChainTimeoutMs, 1_500)
+  assert.equal(fastRequest.quoteWaitingTimeMs, 2_000)
+  assert.equal(fastRequest.sameChainTimeoutMs, 1_000)
+  assert.equal(fastRequest.crossChainTimeoutMs, 2_000)
   assert.equal('quoteMode' in fastRequest, false)
   assert.throws(() => parseRheaSwapQuoteRequest({ ...request, quoteMode: 'turbo' }), /quote mode/)
   const service = new RheaSwapService(

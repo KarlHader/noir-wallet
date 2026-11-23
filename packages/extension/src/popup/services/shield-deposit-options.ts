@@ -17,11 +17,7 @@ import type { SwapToken } from '@/core/services/intents-api'
 import { resolveManagedIntentsCatalogAsset } from './intents-asset-manager-client'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { parseZcashAddress } from '@/core/address-book/address-book'
-import {
-  formatBaseUnitDecimalAmount,
-  formatDecimalAmount,
-  parseDisplayUnitAmount
-} from '@/lib/number-format'
+import { formatBaseUnitDecimalAmount, formatDecimalAmount } from '@/lib/number-format'
 import Big from '@/lib/big'
 import { isAddress, zeroAddress } from 'viem'
 import type { AccountNetworkView } from './account-networks-client'
@@ -170,22 +166,6 @@ export function depositRefundAddressError(
   return 'Select a supported network'
 }
 
-export function depositAmountRaw(amount: string, token: SwapToken | null): string | null {
-  if (!token) return null
-  try {
-    const raw = parseDisplayUnitAmount(amount.trim(), token.decimals)
-    return BigInt(raw) > 0n ? raw : null
-  } catch {
-    return null
-  }
-}
-
-export function depositAmountError(amount: string, token: SwapToken | null): string | null {
-  if (!token) return 'Select a token'
-  if (!amount.trim()) return 'Enter an amount'
-  return depositAmountRaw(amount, token) === null ? 'Enter a valid amount' : null
-}
-
 export function formatDepositAmount(raw: string, decimals: number | undefined): string | null {
   if (decimals === undefined) return null
   try {
@@ -199,10 +179,15 @@ export function formatMinimumDepositPaymentAmount(
   raw: string,
   decimals: number | undefined
 ): string | null {
+  if (decimals === undefined) return null
   const exact = formatDepositAmount(raw, decimals)
-  return exact === null
-    ? null
-    : formatDecimalAmount(exact, { maximumFractionDigits: 6, roundingMode: Big.roundUp })
+  if (exact === null) return null
+  const amount = new Big(exact)
+  return formatDecimalAmount(exact, {
+    maximumFractionDigits: Math.min(decimals, Math.max(2, 2 - amount.e)),
+    roundingMode: Big.roundUp,
+    displayMinimum: false
+  })
 }
 
 export function hasDepositSettlementShortfall(record: ExternalShieldDeposit): boolean {

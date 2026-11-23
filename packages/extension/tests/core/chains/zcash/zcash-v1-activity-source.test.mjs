@@ -8,6 +8,7 @@ import {
 } from '../../../../src/core/activity/index.ts'
 import { parseKeyDomainId } from '../../../../src/core/keyring/domain/index.ts'
 import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastructure/activity/index.ts'
+import { mapZcashSelfTransferReceipt } from '../../../../src/infrastructure/activity/zcash-v1-activity-source.ts'
 import { filterActivityItems } from '../../../../src/popup/services/activity-list-model.ts'
 
 const scope = {
@@ -118,16 +119,9 @@ test.describe('Zcash V1 Activity source', () => {
         .sort()
 
     expect(visible('shield')).toEqual(
-      [
-        'zcash-v1:shielded-send',
-        'zcash-v1:shielded-receive',
-        'zcash-v1:shield',
-        'zcash-v1:unshield'
-      ].sort()
+      ['zcash-v1:shielded-send', 'zcash-v1:shielded-receive', 'zcash-v1:unshield'].sort()
     )
-    expect(visible('public')).toEqual(
-      ['zcash-v1:transparent-receive', 'zcash-v1:shield', 'zcash-v1:unshield'].sort()
-    )
+    expect(visible('public')).toEqual(['zcash-v1:transparent-receive', 'zcash-v1:shield'].sort())
     expect(visible(undefined)).toHaveLength(records.length)
     expect(parseActivityReadModel(structuredClone(model))).toEqual(model)
     expect(
@@ -138,6 +132,40 @@ test.describe('Zcash V1 Activity source', () => {
         confidentialIntentsOnly: true
       })
     ).toEqual([])
+  })
+
+  test('recovers both sides of a scanned native Zcash shield with its actual credit', () => {
+    const scanned = transaction({ id: 'wasm_hash', type: 'shield', status: 'success', amount: '1' })
+    const operation = mapZcashV1TransactionToActivityItem(scanned, scope)
+    const receipt = mapZcashSelfTransferReceipt(scanned, operation)
+    const model = buildActivityReadModel({
+      scope,
+      localGraphs: [],
+      supplementalItems: [operation, receipt]
+    })
+
+    expect(model.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'shield',
+          assetDomains: ['public'],
+          snapshot: expect.objectContaining({
+            primaryAmount: expect.objectContaining({ amountRaw: '100010000' })
+          })
+        }),
+        expect.objectContaining({
+          kind: 'receive',
+          assetDomains: ['shield'],
+          snapshot: expect.objectContaining({
+            primaryAmount: expect.objectContaining({ amountRaw: '100000000' })
+          })
+        })
+      ])
+    )
+    const local = { ...scanned, id: 'local-shield' }
+    expect(
+      mapZcashSelfTransferReceipt(local, mapZcashV1TransactionToActivityItem(local, scope))
+    ).toBeUndefined()
   })
 
   test('rejects non-canonical or over-precision V1 amounts', () => {

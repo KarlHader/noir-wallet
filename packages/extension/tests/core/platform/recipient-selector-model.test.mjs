@@ -5,7 +5,7 @@ import {
   buildMyAccountRecipientGroups,
   buildSavedRecipientList,
   getMyAccountRecipientUnavailableReason
-} from '../../../src/popup/components/transaction/recipient-selector-model.ts'
+} from '../../../src/popup/services/recipient-selector-model.ts'
 import {
   ALL_EVM_NETWORKS_CHAIN_ID,
   ALL_EVM_NETWORKS_NAME,

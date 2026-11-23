@@ -20,6 +20,7 @@ test('binds a Zcash Swap activity before broadcast and ignores callbacks for a d
   const store = useTransactionResultStore.getState()
   const result = {
     type: 'swap',
+    activityDomain: 'shield',
     depositAddress: 'deposit',
     status: null,
     tokenInSymbol: 'ZEC',
@@ -78,7 +79,7 @@ test('keeps Zcash retry input separate from Done and clears it for another resul
   const store = useTransactionResultStore.getState()
   const result = { type: 'zcash', operation: 'send', step: 'failed', amount: '1' }
   const retry = {
-    path: '/send/zcash?from=shielded',
+    path: '/send?provider=zcash-shield&from=shielded',
     draft: {
       network: 'mainnet',
       walletId: 'wallet',

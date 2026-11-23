@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { formatChainName, formatExplorerUrl, getChainFromAssetId } from '../../../src/lib/format.ts'
-import { getSwapTransactionReference } from '../../../src/popup/components/swap/swap-status-model.ts'
+import { getSwapTransactionReference } from '../../../src/popup/services/swap-status-model.ts'
 
 test('maps every released EVM 1Click protocol identity to the canonical chain UI', () => {
   const cases = [
