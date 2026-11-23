@@ -154,6 +154,8 @@ import {
   getPrivateTransferChainIds
 } from '@/popup/services/private-balance-transfer'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import { NEAR_INCOGNITO_UNFUNDED_ERROR } from '@/core/services/rhea-swap/rhea-swap-near-private-route'
+import { nearPrivateSwapExecutionAvailable } from '@/popup/services/near-quote-asset-execution'
 import { InlineError } from '../../components/common/InlineError'
 import { ZcashSyncProgress } from '../../components/zcash/ZcashSyncProgress'
 import { useZcashSyncReadStatus } from '@/popup/hooks/usePersistedExtensionContextSync'
@@ -604,12 +606,32 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const getCurrentBalance = useAccountDataStore(state => state.getCurrentBalance)
   const storeBalance = getCurrentBalance()
 
-  const privateExecutionSupported = Boolean(
-    supportsEvmPrivateExecution(storageV2Account?.walletSource) &&
-    storageV2Account?.networks.some(
-      network => network.chain.family === 'evm' && network.privateExecutionAddress
-    )
+  const nearAccountNetwork = storageV2Account?.networks.find(
+    network => network.chain.family === 'near'
   )
+  const nearPrivateExecutionSupported = nearPrivateSwapExecutionAvailable({
+    enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__,
+    walletSource:
+      storageV2Account?.walletSource.kind === 'hardware'
+        ? { kind: 'hardware' }
+        : storageV2Account?.walletSource.kind === 'private-key'
+          ? {
+              kind: 'private-key',
+              chainFamily: storageV2Account.walletSource.chainFamily,
+              accountIndex: storageV2Account.accountIndex
+            }
+          : storageV2Account?.walletSource,
+    privateExecutionAddress: nearAccountNetwork?.privateExecutionAddress,
+    mainAddresses: nearAccountNetwork?.addresses.map(address => address.value)
+  })
+  const privateExecutionSupported =
+    nearPrivateExecutionSupported ||
+    Boolean(
+      supportsEvmPrivateExecution(storageV2Account?.walletSource) &&
+      storageV2Account?.networks.some(
+        network => network.chain.family === 'evm' && network.privateExecutionAddress
+      )
+    )
   const confidentialShieldAvailable =
     getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
   const nativeZecConfidentialAvailable = hasNativeZecConfidentialSwapRoute(
@@ -1512,7 +1534,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   )
   const sourcePrivateExecutionAddress = useMemo(
     () =>
-      privateExecutionSupported && walletSourceQuoteTarget?.kind === 'evm'
+      privateExecutionSupported &&
+      (walletSourceQuoteTarget?.kind === 'evm' || walletSourceQuoteTarget?.kind === 'near')
         ? storageV2Account?.networks.find(
             network => network.chain.id === walletSourceQuoteTarget.chain.id
           )?.privateExecutionAddress
@@ -1549,7 +1572,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       ? 'private'
       : !isPrivateFunding &&
           sourceMode === 'private' &&
-          (walletOwnedSourceBase?.family === 'evm' || swap.isZecSource)
+          (walletOwnedSourceBase?.family === 'evm' ||
+            walletOwnedSourceBase?.family === 'near' ||
+            swap.isZecSource)
         ? 'private'
         : resolveSwapExecutionSourceMode({
             requestedMode: sourceMode,
@@ -1620,10 +1645,17 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     walletOwnedSourceBase?.family === 'evm' &&
     !privateWalletOwnedSource &&
     !walletSourcesLoading
+  const nearIncognitoFundingError =
+    (privateSwapRequested || (crossChainSendRequested && sourceMode === 'private')) &&
+    walletOwnedSourceBase?.family === 'near' &&
+    !privateWalletOwnedSource &&
+    !walletSourcesLoading
+      ? NEAR_INCOGNITO_UNFUNDED_ERROR
+      : null
   const walletOwnedSource =
     crossChainSendRequested &&
     sourceMode === 'private' &&
-    walletOwnedSourceBase?.family === 'evm' &&
+    (walletOwnedSourceBase?.family === 'evm' || walletOwnedSourceBase?.family === 'near') &&
     !privateWalletOwnedSource
       ? null
       : executionSourceMode === 'private'
@@ -1712,9 +1744,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const privateSwapDestinationCatalogs = useMemo(() => {
     if (!privateSwapRequested) return { sameChain: [], crossChain: [] }
     const eligible = (tokens: readonly RheaSwapToken[]) =>
-      filterSwapDestinationTokens(tokens, 'basic').filter(
+      tokens.filter(
         token =>
-          (isZecToken(token) || /^[1-9]\d*$/.test(token.rheaChainId)) &&
+          (token.rheaChainId === 'near' ||
+            ((isZecToken(token) || /^[1-9]\d*$/.test(token.rheaChainId)) &&
+              isConfidentialSwapDestinationSupported(token))) &&
           (supportsPrivateDestination(token, 'main') ||
             supportsPrivateDestination(token, 'private'))
       )
@@ -1743,6 +1777,18 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       if (!portfolio) return false
       const source = resolveWalletOwnedQuoteAsset(token, portfolio, receiveTargets)
       const target = resolveWalletQuoteReceiveTarget(token, portfolio, receiveTargets)
+      if (target?.kind === 'near') {
+        const privateAddress = privateExecutionAddresses.get(target.chain.id)
+        if (
+          !privateAddress ||
+          !/^[0-9a-f]{64}$/.test(privateAddress) ||
+          privateAddress === target.address ||
+          !source
+        ) {
+          return false
+        }
+        return Boolean(selectWalletOwnedQuoteAssetExecution(source, 'private', privateAddress))
+      }
       const privateAddress =
         target?.kind === 'evm' ? privateExecutionAddresses.get(target.chain.id) : undefined
       if (
@@ -1896,7 +1942,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   )
   const destinationPrivateExecutionAddress = useMemo(
     () =>
-      privateExecutionSupported && walletDestinationTarget?.kind === 'evm'
+      privateExecutionSupported &&
+      (walletDestinationTarget?.kind === 'evm' || walletDestinationTarget?.kind === 'near')
         ? storageV2Account?.networks.find(
             network => network.chain.id === walletDestinationTarget.chain.id
           )?.privateExecutionAddress
@@ -1938,7 +1985,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const managedDestinationAddress = isZecDestination
     ? currentAccount?.addresses[zecDestinationType]
     : ordinarySwapRequested && destinationMode === 'private'
-      ? walletDestinationTarget?.kind === 'evm' &&
+      ? (walletDestinationTarget?.kind === 'evm' || walletDestinationTarget?.kind === 'near') &&
         swap.tokenOut &&
         supportsPrivateDestination(swap.tokenOut, 'private')
         ? destinationPrivateExecutionAddress
@@ -1958,7 +2005,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const unsupportedPrivateDestination = Boolean(
     swap.tokenOut &&
     (privateSwapRequested
-      ? (!isZecDestination && !/^[1-9]\d*$/.test(swap.tokenOut.rheaChainId)) ||
+      ? (swap.tokenOut.rheaChainId !== 'near' &&
+          !isZecDestination &&
+          !/^[1-9]\d*$/.test(swap.tokenOut.rheaChainId)) ||
         !supportsPrivateDestination(swap.tokenOut, destinationMode)
       : !useCustomRecipient &&
         destinationWalletActionMode.mode === 'private' &&
@@ -7080,18 +7129,20 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           onSelectSourceAsset={() => returnFromCrossChainSend('asset')}
           isQuoting={swap.isQuoting}
           quoteError={
-            crossChainPrivateSourceUnavailable
-              ? 'Confidential source is unavailable for this asset.'
-              : requestedSourceAssetId &&
-                  !lockedSourceToken &&
-                  !walletSourcesLoading &&
-                  !swap.areTokensLoading
-                ? 'Source asset is unavailable for cross-chain Send.'
-                : destinationCatalogError
-                  ? destinationCatalogError
-                  : destinationTokenMissing
-                    ? `${formatSymbol(lockedSourceToken?.symbol ?? '')} is not available on ${destinationChain?.chain.displayName ?? 'this network'}. Choose another network.`
-                    : swap.quoteError
+            nearIncognitoFundingError
+              ? nearIncognitoFundingError
+              : crossChainPrivateSourceUnavailable
+                ? 'Confidential source is unavailable for this asset.'
+                : requestedSourceAssetId &&
+                    !lockedSourceToken &&
+                    !walletSourcesLoading &&
+                    !swap.areTokensLoading
+                  ? 'Source asset is unavailable for cross-chain Send.'
+                  : destinationCatalogError
+                    ? destinationCatalogError
+                    : destinationTokenMissing
+                      ? `${formatSymbol(lockedSourceToken?.symbol ?? '')} is not available on ${destinationChain?.chain.displayName ?? 'this network'}. Choose another network.`
+                      : swap.quoteError
           }
           recipientError={
             recipientError ??
@@ -7221,63 +7272,68 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         networkFee={networkFee}
         isQuoting={swap.isQuoting}
         quoteError={
-          shieldSwapSelected &&
-          !accountNetworksLoading &&
-          !(shieldNativeZecSwap ? nativeZecConfidentialAvailable : confidentialShieldAvailable)
-            ? 'Shield Swap is unavailable for this account.'
-            : shieldNativeZecSwap && !nativeZecShieldAvailable
-              ? 'Zcash source is unavailable for this account.'
-              : crossChainPrivateSourceUnavailable
-                ? 'Confidential source is unavailable for this asset.'
-                : ordinarySwapRequested &&
-                    !shieldNativeZecSwap &&
-                    swap.tokenOut &&
-                    !resolvedRecipientAddress &&
-                    !swap.destinationTokensLoading &&
-                    !walletSourcesLoading &&
-                    swap.selectionReady
-                  ? recipientNetworkSupported
-                    ? 'Receive account unavailable for this asset.'
-                    : 'This destination network is unavailable in this wallet.'
-                  : unsupportedPrivateDestination
-                    ? privateSwapRequested &&
-                      destinationMode === 'private' &&
+          nearIncognitoFundingError
+            ? nearIncognitoFundingError
+            : shieldSwapSelected &&
+                !accountNetworksLoading &&
+                !(shieldNativeZecSwap
+                  ? nativeZecConfidentialAvailable
+                  : confidentialShieldAvailable)
+              ? 'Shield Swap is unavailable for this account.'
+              : shieldNativeZecSwap && !nativeZecShieldAvailable
+                ? 'Zcash source is unavailable for this account.'
+                : crossChainPrivateSourceUnavailable
+                  ? 'Confidential source is unavailable for this asset.'
+                  : ordinarySwapRequested &&
+                      !shieldNativeZecSwap &&
                       swap.tokenOut &&
-                      supportsPrivateDestination(swap.tokenOut, 'main')
-                      ? 'Incognito account unavailable for this destination.'
-                      : 'Select a supported destination asset.'
-                    : crossChainSendRequested &&
+                      !resolvedRecipientAddress &&
+                      !swap.destinationTokensLoading &&
+                      !walletSourcesLoading &&
+                      swap.selectionReady
+                    ? recipientNetworkSupported
+                      ? 'Receive account unavailable for this asset.'
+                      : 'This destination network is unavailable in this wallet.'
+                    : unsupportedPrivateDestination
+                      ? privateSwapRequested &&
+                        destinationMode === 'private' &&
                         swap.tokenOut &&
-                        resolvedRecipientAddress &&
-                        !crossChainSendRecipientReady
-                      ? 'Enter a valid address on the destination network.'
-                      : isPrivateFunding &&
-                          !swap.destinationTokensLoading &&
-                          !privateFundingDestinationToken
-                        ? 'This asset is not available for Confidential funding.'
-                        : shieldNativeZecSwap &&
-                            swap.tokenOut &&
-                            !walletSourcesLoading &&
-                            nativeIntentsCatalogSettled &&
-                            !awaitingNativeDestinationRestore &&
-                            (nativeConfidentialDestinationTokens.length === 0 ||
-                              initializedNativeDestinationScope.current === swapPreferenceScope) &&
-                            !resolveNativeZecIntentsDestination(
-                              swap.tokenOut,
-                              portfolio,
-                              currentNetwork,
-                              nativeIntentsManagedAssets,
-                              nativeIntentsCatalog,
-                              nativeConfidentialDestinations
-                            )
-                          ? SWAP_QUOTE_DISPLAY_ERROR
-                          : isPrivateFunding &&
-                              quoteResult &&
-                              privateFundingMinimumRaw &&
-                              /^\d+$/.test(privateFundingMinimumRaw) &&
-                              BigInt(quoteResult.minAmountOut) < BigInt(privateFundingMinimumRaw)
-                            ? `Increase the amount to receive enough ${swap.tokenOut?.symbol ?? 'Gas'}`
-                            : (reverseError ?? swap.quoteError)
+                        supportsPrivateDestination(swap.tokenOut, 'main')
+                        ? 'Incognito account unavailable for this destination.'
+                        : 'Select a supported destination asset.'
+                      : crossChainSendRequested &&
+                          swap.tokenOut &&
+                          resolvedRecipientAddress &&
+                          !crossChainSendRecipientReady
+                        ? 'Enter a valid address on the destination network.'
+                        : isPrivateFunding &&
+                            !swap.destinationTokensLoading &&
+                            !privateFundingDestinationToken
+                          ? 'This asset is not available for Confidential funding.'
+                          : shieldNativeZecSwap &&
+                              swap.tokenOut &&
+                              !walletSourcesLoading &&
+                              nativeIntentsCatalogSettled &&
+                              !awaitingNativeDestinationRestore &&
+                              (nativeConfidentialDestinationTokens.length === 0 ||
+                                initializedNativeDestinationScope.current ===
+                                  swapPreferenceScope) &&
+                              !resolveNativeZecIntentsDestination(
+                                swap.tokenOut,
+                                portfolio,
+                                currentNetwork,
+                                nativeIntentsManagedAssets,
+                                nativeIntentsCatalog,
+                                nativeConfidentialDestinations
+                              )
+                            ? SWAP_QUOTE_DISPLAY_ERROR
+                            : isPrivateFunding &&
+                                quoteResult &&
+                                privateFundingMinimumRaw &&
+                                /^\d+$/.test(privateFundingMinimumRaw) &&
+                                BigInt(quoteResult.minAmountOut) < BigInt(privateFundingMinimumRaw)
+                              ? `Increase the amount to receive enough ${swap.tokenOut?.symbol ?? 'Gas'}`
+                              : (reverseError ?? swap.quoteError)
         }
         onEnableReceiveNetwork={
           ordinarySwapRequested &&

@@ -34,6 +34,7 @@ import {
   NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
   NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
 } from '@/background/confidential-near-quote'
+import { nearConfidentialPortfolioAssetId } from '@/core/chains/near/near-portfolio-assets'
 import type { TransferDomain } from './private-balance-transfer'
 import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
 import { formatIntentsConfirmationTime } from './confirmation-time-format'
@@ -260,45 +261,70 @@ function nearShieldFundingAsset(
   chains: ReadonlyMap<string, PortfolioChainView>,
   tokensByAssetId: ReadonlyMap<string, SwapToken>,
   network: Network,
-  seen: ReadonlySet<string>
+  seen: Set<string>
 ): readonly ShieldFundingAsset[] {
-  if (
-    !nearShieldEnabled() ||
-    network !== 'mainnet' ||
-    seen.has(NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
-  ) {
-    return []
-  }
+  if (!nearShieldEnabled() || network !== 'mainnet') return []
   const chain = chains.get('near:mainnet')
-  const token = tokensByAssetId.get(NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
   if (
     chain?.chain.family !== 'near' ||
-    chain.chain.capabilities.transaction.status !== 'available' ||
-    !token ||
-    isDeprecatedIntentsToken(token) ||
-    token.decimals !== 24
+    chain.chain.capabilities.transaction.status !== 'available'
   ) {
     return []
   }
-  const managed = {
-    assetId: NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
-    chainId: 'near:mainnet',
-    protocolAssetId: NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID,
-    blockchain: token.blockchain,
-    symbol: token.symbol,
-    decimals: token.decimals
+  const rows: ShieldFundingAsset[] = []
+  const wrapToken = tokensByAssetId.get(NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+  if (
+    !seen.has(NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) &&
+    wrapToken &&
+    !isDeprecatedIntentsToken(wrapToken) &&
+    wrapToken.decimals === 24
+  ) {
+    const managed = {
+      assetId: NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
+      chainId: 'near:mainnet',
+      protocolAssetId: NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID,
+      blockchain: wrapToken.blockchain,
+      symbol: wrapToken.symbol,
+      decimals: wrapToken.decimals
+    }
+    const holding = confidentialHolding(model, NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+    const asset = fundingAssetView(model, managed, wrapToken.symbol, holding)
+    if (asset && asset.metadata.decimals === wrapToken.decimals) {
+      seen.add(NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+      rows.push({
+        asset,
+        chain,
+        managed,
+        ...(wrapToken.coingeckoId?.trim() ? { marketAssetId: wrapToken.coingeckoId.trim() } : {})
+      })
+    }
   }
-  const holding = confidentialHolding(model, NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
-  const asset = fundingAssetView(model, managed, token.symbol, holding)
-  if (!asset || asset.metadata.decimals !== token.decimals) return []
-  return [
-    {
+  for (const token of tokensByAssetId.values()) {
+    if (seen.has(token.assetId) || isDeprecatedIntentsToken(token) || token.blockchain !== 'near') {
+      continue
+    }
+    const assetId = nearConfidentialPortfolioAssetId(token.assetId)
+    if (!assetId || assetId === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID) continue
+    const managed = {
+      assetId,
+      chainId: 'near:mainnet',
+      protocolAssetId: token.assetId,
+      blockchain: token.blockchain,
+      symbol: token.symbol,
+      decimals: token.decimals
+    }
+    const holding = confidentialHolding(model, token.assetId)
+    const asset = fundingAssetView(model, managed, token.symbol, holding)
+    if (!asset || asset.metadata.decimals !== token.decimals) continue
+    seen.add(token.assetId)
+    rows.push({
       asset,
       chain,
       managed,
       ...(token.coingeckoId?.trim() ? { marketAssetId: token.coingeckoId.trim() } : {})
-    }
-  ]
+    })
+  }
+  return rows
 }
 
 export function selectShieldWithdrawDestinationForNetwork(

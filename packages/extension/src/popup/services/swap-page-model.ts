@@ -37,6 +37,7 @@ import {
 } from '@/popup/services/shield-swap-zec-sources'
 import type { ShieldFundingAsset } from './shield-transfer'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
+import { readNearSwapBalanceRaw } from '@/popup/services/near-quote-asset-execution'
 import {
   filterCrossChainSendDestinations,
   type CrossChainSendCapabilities
@@ -451,6 +452,12 @@ export function resolveWalletSwapSourceAvailableRaw(
   source: WalletOwnedQuoteAsset,
   evmExecutionMode: 'main' | 'private'
 ): string | undefined {
+  if (source.family === 'near') {
+    return readNearSwapBalanceRaw(
+      source.asset.balance,
+      evmExecutionMode === 'private' ? 'incognito' : 'main'
+    )
+  }
   if (source.family !== 'evm') return source.asset.balance.availableRaw
   if (
     evmExecutionMode === 'private' &&
@@ -495,7 +502,7 @@ export function resolveSwapExecutionSourceMode(input: {
 }): 'main' | 'private' {
   if (input.isPrivateFunding) return 'main'
   return input.requestedMode === 'private' &&
-    input.sourceFamily === 'evm' &&
+    (input.sourceFamily === 'evm' || input.sourceFamily === 'near') &&
     input.privateSourceAvailable
     ? 'private'
     : 'main'
@@ -534,7 +541,17 @@ export function isPrivateSwapDestinationSupported(
   mode: 'main' | 'private' = 'private',
   zcashAddresses?: Readonly<{ shielded: string; transparent: string }>
 ): boolean {
-  if (!portfolio || !isConfidentialSwapDestinationSupported(token)) return false
+  if (!portfolio) return false
+  if (token.rheaChainId === 'near') {
+    const target = resolveWalletQuoteReceiveTarget(token, portfolio, receiveTargets)
+    if (target?.kind !== 'near') return false
+    if (mode === 'main') return target.address.length > 0
+    const privateAddress = privateExecutionAddresses.get(target.chain.id)
+    return Boolean(
+      privateAddress && /^[0-9a-f]{64}$/.test(privateAddress) && privateAddress !== target.address
+    )
+  }
+  if (!isConfidentialSwapDestinationSupported(token)) return false
   if (isZecToken(token)) return Boolean(zcashAddresses?.shielded && zcashAddresses.transparent)
   const target = resolveWalletQuoteReceiveTarget(token, portfolio, receiveTargets)
   if (target?.kind !== 'evm') return false

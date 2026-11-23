@@ -70,6 +70,7 @@ import {
   type NearWalletClient
 } from './near-wallet-client'
 import { selectEvmQuoteAssetExecution } from './evm-quote-asset-execution'
+import { selectNearQuoteAssetExecution } from './near-quote-asset-execution'
 
 export type QuoteDepositExecutionMode = 'main' | 'private'
 
@@ -455,8 +456,7 @@ export function selectWalletOwnedQuoteAssetExecution(
     case 'evm':
       return selectEvmQuoteAssetExecution(source, mode, privateExecutionAddress, publicOnly)
     case 'near':
-      // Public NEAR quotes keep the wallet asset. Private execution is not selected yet.
-      return mode === 'main' ? source : null
+      return selectNearQuoteAssetExecution(source, mode, privateExecutionAddress)
     case 'bitcoin':
     case 'solana':
       return mode === 'main' ? source : null

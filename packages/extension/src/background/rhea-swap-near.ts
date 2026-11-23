@@ -2,7 +2,12 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import { parseAccountId } from '@/core/accounts/domain'
-import { parseNearAccountId, parseNearBase58 } from '@/core/chains/near'
+import {
+  nearPublicKeyFromImplicitAccountId,
+  parseNearAccountId,
+  parseNearBase58,
+  supportsNearPrivateExecution
+} from '@/core/chains/near'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseSigningCommandId, type SigningCommandId } from '@/core/keyring/ports'
 import type {
@@ -15,6 +20,7 @@ import {
   isNearWrapSwapSource,
   prependRheaSwapNearWrap
 } from '@/core/services/rhea-swap/rhea-swap-near-wrap'
+import { NEAR_INCOGNITO_UNFUNDED_ERROR } from '@/core/services/rhea-swap/rhea-swap-near-private-route'
 import {
   createRheaSwapSignedBatchGraph,
   parseRheaSwapTransactionBinding,
@@ -303,6 +309,10 @@ export interface RheaSwapNearCoordinatorOptions {
   readonly pending: RheaSwapNearPendingStore
   readonly repository: Pick<TransactionRepository, 'create' | 'get' | 'applySegmentEvent'>
   readonly loadContext: () => Promise<ActiveNearTransferContext | null>
+  readonly deriveNearPea?: (
+    keyDomainId: ActiveNearTransferContext['chainAccount']['scope']['keyDomainId'],
+    accountIndex: number
+  ) => Promise<Readonly<{ readonly address: string }>>
   readonly scheduleMonitoring: () => Promise<void>
   readonly now?: () => number
   readonly createId?: () => string
@@ -324,7 +334,8 @@ export class RheaSwapNearCoordinator {
   ): Promise<RheaSwapNearTransactionBatchReview> {
     const plan = await this.options.service.readNearTransactionBatchPlan(quoteHandle)
     const binding = parseRheaSwapTransactionBinding(bindingValue)
-    const { context, sender } = await this.loadSupportedContext()
+    const identity = await this.resolveSigningIdentity(binding.sender)
+    const { context, sender } = identity
     this.assertBinding(plan, binding, sender, context.chainAccount.scope.chainId)
     const originalRequests = parseNearDAppTransactionBatch([
       {
@@ -356,6 +367,10 @@ export class RheaSwapNearCoordinator {
       ) {
         throw new Error('RHEA Swap NEAR wrapped balance does not match the signer')
       }
+      // A missing PEA registration is not a reason to move funds from Main or to guess storage.
+      if (identity.kind === 'pea-near-transaction' && registered !== true) {
+        throw new Error(NEAR_INCOGNITO_UNFUNDED_ERROR)
+      }
       requests = prependRheaSwapNearWrap({
         transactions: originalRequests,
         amountIn: plan.amountIn,
@@ -363,9 +378,13 @@ export class RheaSwapNearCoordinator {
         registered
       })
     }
-    const accessKey = await this.options.rpc.getAccessKey(sender, context.publicKey)
+    const accessKey = await this.options.rpc.getAccessKey(sender, identity.publicKey)
     if (!accessKey || accessKey.permission.kind !== 'full-access') {
-      throw new Error('RHEA Swap NEAR execution requires an active full-access key')
+      throw new Error(
+        identity.kind === 'pea-near-transaction'
+          ? NEAR_INCOGNITO_UNFUNDED_ERROR
+          : 'RHEA Swap NEAR execution requires an active full-access key'
+      )
     }
     const baseNonce = BigInt(accessKey.nonce)
     if (baseNonce + BigInt(requests.length) > MAXIMUM_U64) {
@@ -375,7 +394,7 @@ export class RheaSwapNearCoordinator {
     try {
       for (const [index, request] of requests.entries()) {
         const command = await this.options.signer.prepare(context.chainAccount.scope.keyDomainId, {
-          kind: 'near-transaction',
+          kind: identity.kind,
           chainId: context.chainAccount.scope.chainId,
           accountIndex: context.accountIndex,
           transaction: Object.freeze({
@@ -491,7 +510,7 @@ export class RheaSwapNearCoordinator {
     fingerprint: string
   ): Promise<RheaSwapSignedOrderResult> {
     let pending = await this.requirePending(quoteHandle, fingerprint)
-    const { context, sender } = await this.loadSupportedContext()
+    const { context, sender } = await this.resolveSigningIdentity(pending.sender)
     if (
       sender !== pending.sender ||
       context.chainAccount.scope.chainId !== pending.chainId ||
@@ -661,6 +680,62 @@ export class RheaSwapNearCoordinator {
     )
   }
 
+  private async resolveSigningIdentity(requestedSender: string): Promise<{
+    context: ActiveNearTransferContext
+    sender: string
+    publicKey: string
+    kind: 'near-transaction' | 'pea-near-transaction'
+  }> {
+    const loaded = await this.loadSupportedContext()
+    const requested = parseNearAccountId(requestedSender, 'RHEA Swap NEAR sender')
+    if (requested === loaded.sender) {
+      return Object.freeze({
+        context: loaded.context,
+        sender: loaded.sender,
+        publicKey: loaded.context.publicKey,
+        kind: 'near-transaction'
+      })
+    }
+    if (!/^[0-9a-f]{64}$/.test(requested)) {
+      throw new Error('RHEA Swap NEAR binding does not match its build')
+    }
+    const source = loaded.context.keyDomainSource
+    const executionSource =
+      source.kind === 'private-key'
+        ? {
+            kind: 'private-key' as const,
+            chainFamily: source.chainFamily,
+            accountIndex: loaded.context.accountIndex
+          }
+        : source.kind === 'software'
+          ? { kind: 'software' as const }
+          : { kind: 'hardware' as const }
+    let derived: Readonly<{ address: string }> | null = null
+    if (
+      source.kind !== 'hardware' &&
+      supportsNearPrivateExecution(executionSource) &&
+      this.options.deriveNearPea
+    ) {
+      try {
+        derived = await this.options.deriveNearPea(
+          loaded.context.chainAccount.scope.keyDomainId,
+          loaded.context.accountIndex
+        )
+      } catch {
+        derived = null
+      }
+    }
+    if (!derived || derived.address !== requested || derived.address === loaded.sender) {
+      throw new Error(NEAR_INCOGNITO_UNFUNDED_ERROR)
+    }
+    return Object.freeze({
+      context: loaded.context,
+      sender: requested,
+      publicKey: nearPublicKeyFromImplicitAccountId(requested),
+      kind: 'pea-near-transaction'
+    })
+  }
+
   private async loadSupportedContext(): Promise<{
     context: ActiveNearTransferContext
     sender: string
@@ -767,9 +842,11 @@ export function createBackgroundRheaSwapNearCoordinator(
   const network = resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK, settings)
   const storage = new IndexedDbStorageV2Repository()
   const rpc = createConfiguredNearRpcClient({ chainId: network.chainId, rpcUrl: network.rpcUrl })
+  const signer = new NearSigner({ credentials: credentialSession, ledger: nearLedgerSigningBridge })
   return new RheaSwapNearCoordinator({
     service,
-    signer: new NearSigner({ credentials: credentialSession, ledger: nearLedgerSigningBridge }),
+    signer,
+    deriveNearPea: (keyDomainId, accountIndex) => signer.deriveNearPea(keyDomainId, accountIndex),
     rpc,
     pending: new ChromeSessionRheaSwapNearStore(),
     repository: new IndexedDbTransactionRepository(),

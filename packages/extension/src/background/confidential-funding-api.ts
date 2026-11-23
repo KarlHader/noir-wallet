@@ -19,7 +19,7 @@ import {
   assertFlexibleExternalDepositQuoteBinding
 } from '@/core/services/confidential-funding'
 import {
-  isNearConfidentialProtocolAsset,
+  isNearChainConfidentialProtocolAsset,
   NEAR_CONFIDENTIAL_DEPOSIT_MODE,
   normalizeNearConfidentialQuote
 } from './confidential-near-quote'
@@ -917,7 +917,7 @@ export class ConfidentialFundingApi {
       throw new Error('Confidential quote route is invalid')
     }
     const normalized = normalizeNearConfidentialQuote(input)
-    const nearSource = isNearConfidentialProtocolAsset(normalized.originAsset)
+    const nearSource = isNearChainConfidentialProtocolAsset(normalized.originAsset)
     const appFees = isWithdrawal || isInternalSwap ? await this.getConfidentialAppFees() : undefined
     const request = {
       dry: normalized.dry,
@@ -995,7 +995,7 @@ export class ConfidentialFundingApi {
       recipientType: 'CONFIDENTIAL_INTENTS',
       refundType: 'ORIGIN_CHAIN'
     })
-    const nearSource = isNearConfidentialProtocolAsset(normalized.originAsset)
+    const nearSource = isNearChainConfidentialProtocolAsset(normalized.originAsset)
     const request = {
       dry: true,
       swapType: 'FLEX_INPUT',

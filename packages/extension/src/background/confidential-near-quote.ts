@@ -1,4 +1,5 @@
 import { isAddress } from 'viem'
+import { nearConfidentialPortfolioAssetId } from '@/core/chains/near/near-portfolio-assets'
 import { parseNearAccountId } from '@/core/chains/near/identifiers'
 
 export const NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID = 'nep141:wrap.near'
@@ -8,6 +9,11 @@ const NEAR_DEPOSIT_ADDRESS = /^[0-9a-f]{64}$/
 
 export function isNearConfidentialProtocolAsset(assetId: string): boolean {
   return assetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
+}
+
+/** Real NEAR-chain nep141 ids. Bridge omft and omdep assets stay on their origin chain. */
+export function isNearChainConfidentialProtocolAsset(assetId: string): boolean {
+  return nearConfidentialPortfolioAssetId(assetId) !== null
 }
 
 export function assertNearConfidentialDepositAddress(value: string): string {
@@ -41,7 +47,7 @@ export function normalizeNearConfidentialQuote<
     readonly refundType: 'ORIGIN_CHAIN' | 'CONFIDENTIAL_INTENTS'
   }
 >(input: T): T {
-  if (!isNearConfidentialProtocolAsset(input.originAsset)) return input
+  if (!isNearChainConfidentialProtocolAsset(input.originAsset)) return input
   const recipient =
     input.recipientType === 'CONFIDENTIAL_INTENTS'
       ? lowercaseEvmAddress(input.recipient)

@@ -109,9 +109,12 @@ import {
   type ConfidentialDepositAdapter,
   type NearConfidentialAccount
 } from './confidential-funding-adapters'
+import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import { readEnabledChainFeatureFlags } from '@/config/enabled-chain-feature-flags'
+import { nearConfidentialPortfolioAssetId } from '@/core/chains/near/near-portfolio-assets'
 import {
   assertNearConfidentialDepositAddress,
-  isNearConfidentialProtocolAsset,
+  isNearChainConfidentialProtocolAsset,
   NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID,
   normalizeNearConfidentialQuote
 } from './confidential-near-quote'
@@ -626,6 +629,21 @@ function directApprovalIntent(plan: ConfidentialFundingPlan): unknown {
   }
 }
 
+function nearCatalogProtocolMapped(assetId: string, protocolAssetId: string): boolean {
+  return (
+    readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG) &&
+    protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID &&
+    nearConfidentialPortfolioAssetId(protocolAssetId) === assetId
+  )
+}
+
+function nearConfidentialProtocolAccepted(assetId: string, protocolAssetId: string): boolean {
+  if (protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) {
+    return nearConfidentialPortfolioAssetId(protocolAssetId) === assetId
+  }
+  return nearCatalogProtocolMapped(assetId, protocolAssetId)
+}
+
 export class ConfidentialFundingCoordinator {
   private readonly balanceRefreshes = new Map<
     string,
@@ -734,7 +752,7 @@ export class ConfidentialFundingCoordinator {
   ): Promise<ConfidentialQuote> {
     const normalized = normalizeNearConfidentialQuote(input)
     const quote = await this.options.api.quote(normalized)
-    if (isNearConfidentialProtocolAsset(normalized.originAsset) && quote.quote.depositMemo) {
+    if (isNearChainConfidentialProtocolAsset(normalized.originAsset) && quote.quote.depositMemo) {
       throw new Error('NEAR Shield quote must not include a memo')
     }
     return quote
@@ -888,6 +906,14 @@ export class ConfidentialFundingCoordinator {
     )
   }
 
+  private hasConfidentialProtocolMapping(assetId: string, protocolAssetId: string): boolean {
+    return (
+      this.options.assetMappings.some(
+        mapping => mapping.assetId === assetId && mapping.protocolAssetId === protocolAssetId
+      ) || nearCatalogProtocolMapped(assetId, protocolAssetId)
+    )
+  }
+
   hasCurrentFundingAssets(input: PrepareConfidentialFundingInput): boolean {
     const catalog = this.options.getProtocolTokens?.() ?? this.options.protocolTokens
     if (!catalog) return true
@@ -899,10 +925,7 @@ export class ConfidentialFundingCoordinator {
         registered !== undefined &&
         token.blockchain === route.chainName &&
         token.decimals === registered.metadata.decimals &&
-        this.options.assetMappings.some(
-          mapping =>
-            mapping.assetId === route.assetId && mapping.protocolAssetId === route.protocolAssetId
-        )
+        this.hasConfidentialProtocolMapping(route.assetId, route.protocolAssetId)
       )
     })
   }
@@ -3470,15 +3493,10 @@ export class ConfidentialFundingCoordinator {
       parseAssetId(value.destination.assetId).chainId !== destinationChain.id ||
       !this.options.assets.get(value.source.assetId) ||
       !this.options.assets.get(value.destination.assetId) ||
-      !this.options.assetMappings.some(
-        mapping =>
-          mapping.assetId === value.source.assetId &&
-          mapping.protocolAssetId === value.source.protocolAssetId
-      ) ||
-      !this.options.assetMappings.some(
-        mapping =>
-          mapping.assetId === value.destination.assetId &&
-          mapping.protocolAssetId === value.destination.protocolAssetId
+      !this.hasConfidentialProtocolMapping(value.source.assetId, value.source.protocolAssetId) ||
+      !this.hasConfidentialProtocolMapping(
+        value.destination.assetId,
+        value.destination.protocolAssetId
       ) ||
       !isPositiveRaw(value.source.amountRaw) ||
       !value.source.protocolAssetId ||
@@ -3499,9 +3517,13 @@ export class ConfidentialFundingCoordinator {
             destinationChain.id,
             value.network
           ))) ||
-      (sourceIsNear && value.source.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) ||
+      (sourceIsNear &&
+        !nearConfidentialProtocolAccepted(value.source.assetId, value.source.protocolAssetId)) ||
       (destinationIsNear &&
-        value.destination.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+        !nearConfidentialProtocolAccepted(
+          value.destination.assetId,
+          value.destination.protocolAssetId
+        ))
     ) {
       throw new Error('Confidential funding request is invalid')
     }

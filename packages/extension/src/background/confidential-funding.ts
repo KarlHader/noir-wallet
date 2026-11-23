@@ -12,10 +12,16 @@ import {
   createInitialProductChainRegistry,
   getBundledInitialProductAssetDefinitions,
   parseAssetDisplayMetadata,
-  type AssetDefinitionInput
+  parseAssetId,
+  type AssetDefinitionInput,
+  type AssetRegistry
 } from '@/core/chains/registry'
+import { nearConfidentialPortfolioAssetId } from '@/core/chains/near/near-portfolio-assets'
 import { getCachedTokens, type SwapToken } from '@/core/services/intents-api'
-import { resolveIntentsEvmAssets } from '@/core/services/intents-evm-assets'
+import {
+  isDeprecatedIntentsToken,
+  resolveIntentsEvmAssets
+} from '@/core/services/intents-evm-assets'
 import { loadActiveEvmPortfolioContext } from '@/infrastructure/chains/evm'
 import {
   createConfiguredNearRpcClient,
@@ -163,6 +169,53 @@ function createNearShieldDeposit(
   }
 }
 
+function nearConfidentialCatalogDefinitions(
+  tokens: readonly SwapToken[],
+  existing: AssetRegistry
+): readonly AssetDefinitionInput[] {
+  if (
+    DEFAULT_NETWORK !== 'mainnet' ||
+    !readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG)
+  ) {
+    return []
+  }
+  return tokens.flatMap(token => {
+    const assetId = nearConfidentialPortfolioAssetId(token.assetId)
+    if (
+      !assetId ||
+      assetId === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID ||
+      token.blockchain !== 'near' ||
+      isDeprecatedIntentsToken(token) ||
+      existing.inspect(assetId)
+    ) {
+      return []
+    }
+    try {
+      const parsed = parseAssetId(assetId)
+      if (parsed.namespace !== 'nep141' || parsed.chainId !== 'near:mainnet') return []
+      const metadata = parseAssetDisplayMetadata({
+        name: token.symbol,
+        symbol: token.symbol,
+        decimals: token.decimals,
+        ...(token.icon ? { iconUrl: token.icon } : {})
+      })
+      return [
+        Object.freeze({
+          chainId: parsed.chainId,
+          namespace: 'nep141' as const,
+          reference: parsed.reference,
+          kind: 'token' as const,
+          metadata,
+          source: 'protocol' as const,
+          verification: 'trusted' as const
+        })
+      ]
+    } catch {
+      return []
+    }
+  })
+}
+
 export function createBackgroundConfidentialFundingCoordinator(
   evmNetworks: readonly EvmNetworkConfig[],
   customEvmNetworks: readonly EvmNetworkConfig[],
@@ -220,9 +273,11 @@ export function createBackgroundConfidentialFundingCoordinator(
       }
     })
   const protocolDefinitionIds = new Set(confidentialEvmDefinitions.map(definitionId))
+  const nearTokenDefinitions = nearConfidentialCatalogDefinitions(protocolTokens, existingAssets)
   const assets = createAssetRegistry(chains, [
     ...existingDefinitions.filter(asset => !protocolDefinitionIds.has(definitionId(asset))),
-    ...confidentialEvmDefinitions
+    ...confidentialEvmDefinitions,
+    ...nearTokenDefinitions
   ])
   const storage = new IndexedDbStorageV2Repository()
   const signerClient = new EvmMultichainSigningClient({ credentials: credentialSession })
@@ -241,19 +296,34 @@ export function createBackgroundConfidentialFundingCoordinator(
     readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG) &&
     near.chainId === 'near:mainnet' &&
     assets.get(NEAR_CONFIDENTIAL_CHAIN_ASSET_ID) !== undefined
-  if (
-    nearShieldEnabled &&
-    ![...mappings.values()].some(
-      mapping => mapping.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
-    )
-  ) {
-    mappings.set(
-      NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
-      Object.freeze({
-        assetId: NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
-        protocolAssetId: NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
-      })
-    )
+  if (nearShieldEnabled) {
+    if (
+      ![...mappings.values()].some(
+        mapping => mapping.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
+      )
+    ) {
+      mappings.set(
+        NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
+        Object.freeze({
+          assetId: NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
+          protocolAssetId: NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
+        })
+      )
+    }
+    for (const token of protocolTokens) {
+      const assetId = nearConfidentialPortfolioAssetId(token.assetId)
+      if (
+        !assetId ||
+        assetId === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID ||
+        mappings.has(assetId) ||
+        assets.get(assetId) === undefined ||
+        token.blockchain !== 'near' ||
+        isDeprecatedIntentsToken(token)
+      ) {
+        continue
+      }
+      mappings.set(assetId, Object.freeze({ assetId, protocolAssetId: token.assetId }))
+    }
   }
   return new ConfidentialFundingCoordinator({
     network: DEFAULT_NETWORK,
