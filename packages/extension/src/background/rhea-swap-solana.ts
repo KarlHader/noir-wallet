@@ -46,7 +46,7 @@ import {
   type ActiveSolanaTransferContext
 } from './solana-transfer'
 import { RHEA_SWAP_TRANSACTION_MONITOR_ALARM } from './rhea-swap-transaction-monitor'
-import { SOLANA_TRANSACTION_MONITOR_ALARM } from './solana-transaction-monitor'
+import { SOLANA_TRANSACTION_MONITOR_ALARM } from './native-transaction-monitor'
 
 const STORAGE_PREFIX = 'rhea_swap_solana:'
 

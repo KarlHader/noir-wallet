@@ -1,5 +1,6 @@
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { getZcashChainId } from '@/core/chains/registry'
+import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
 import type { TransactionAccountScope } from '@/core/transactions/domain'
 import { fetchSwapStatus } from '@/core/services/intents-api'
 import {
@@ -87,17 +88,8 @@ export class BackgroundNearIntentsTransactionMonitor {
   }
 
   private async loadPersistedScopes(): Promise<readonly TransactionAccountScope[]> {
-    const pointer = await this.storageRepository.getActivePointer()
-    if (!pointer) return Object.freeze([])
-    const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
-    if (!snapshot) throw new Error('Active Storage V2 generation is missing')
-    if (
-      snapshot.manifest.status !== 'verified' ||
-      snapshot.manifest.generationId !== pointer.generationId ||
-      snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint
-    ) {
-      throw new Error('Active Storage V2 generation does not match its pointer')
-    }
+    const snapshot = await readActiveStorageV2Snapshot(this.storageRepository)
+    if (!snapshot) return Object.freeze([])
     const scopes = new Map<string, TransactionAccountScope>()
     for (const chainAccount of snapshot.chainAccounts) {
       const scope = Object.freeze({

@@ -1,6 +1,7 @@
 import { getBitcoinNetworkConfig } from '@/config/networks'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { listKeySourceAllowedAccountScopes } from '@/core/accounts/application'
+import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
 import type { TransactionAccountScope } from '@/core/transactions/domain'
 import {
   BitcoinTransactionMonitor,
@@ -72,17 +73,8 @@ export class BackgroundBitcoinTransactionMonitor {
   }
 
   private async loadPersistedScopes(): Promise<readonly TransactionAccountScope[]> {
-    const pointer = await this.storageRepository.getActivePointer()
-    if (!pointer) return Object.freeze([])
-    const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
-    if (!snapshot) throw new Error('Active Storage V2 generation is missing')
-    if (
-      snapshot.manifest.status !== 'verified' ||
-      snapshot.manifest.generationId !== pointer.generationId ||
-      snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint
-    ) {
-      throw new Error('Active Storage V2 generation does not match its pointer')
-    }
+    const snapshot = await readActiveStorageV2Snapshot(this.storageRepository)
+    if (!snapshot) return Object.freeze([])
     const chainId = getBitcoinNetworkConfig(DEFAULT_NETWORK).chainId
     return listKeySourceAllowedAccountScopes({
       keyDomains: snapshot.keyDomains,

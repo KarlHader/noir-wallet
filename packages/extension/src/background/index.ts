@@ -381,16 +381,13 @@ import { createSolanaWalletRuntimeError } from '@/core/chains/solana'
 import { mapSolanaWalletRuntimeError } from './solana-wallet-runtime-error'
 import { createBackgroundSolanaTransferController } from './solana-transfer'
 import {
-  BackgroundSolanaTransactionMonitor,
+  createBackgroundNativeTransactionMonitor,
+  NEAR_TRANSACTION_MONITOR_ALARM,
   SOLANA_TRANSACTION_MONITOR_ALARM
-} from './solana-transaction-monitor'
+} from './native-transaction-monitor'
 import { createNearWalletRuntimeError } from '@/core/chains/near'
 import { mapNearWalletRuntimeError } from './near-wallet-runtime-error'
 import { createBackgroundNearTransferController } from './near-transfer'
-import {
-  BackgroundNearTransactionMonitor,
-  NEAR_TRANSACTION_MONITOR_ALARM
-} from './near-transaction-monitor'
 import { hasKeystoneWalletMissingNetworkProjection } from '@/store/wallet-network-projection'
 import {
   configureLedgerSigningCoordinator,
@@ -468,8 +465,9 @@ function areNearOperationsEnabled(): boolean {
 let evmTransactionMonitor: BackgroundEvmTransactionMonitor | null = null
 let bitcoinTransactionMonitor: BackgroundBitcoinTransactionMonitor | null = null
 let nearIntentsTransactionMonitor: BackgroundNearIntentsTransactionMonitor | null = null
-let solanaTransactionMonitor: BackgroundSolanaTransactionMonitor | null = null
-let nearTransactionMonitor: BackgroundNearTransactionMonitor | null = null
+type NativeTransactionMonitor = ReturnType<typeof createBackgroundNativeTransactionMonitor>
+let solanaTransactionMonitor: NativeTransactionMonitor | null = null
+let nearTransactionMonitor: NativeTransactionMonitor | null = null
 
 type EnabledPrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near'
 
@@ -1421,7 +1419,7 @@ async function reloadMultichainRuntime(
       ? createBackgroundRheaSwapSolanaCoordinator(rheaSwapService, settings)
       : null
   solanaTransactionMonitor = solanaTransferController
-    ? new BackgroundSolanaTransactionMonitor(solanaTransferController)
+    ? createBackgroundNativeTransactionMonitor('solana', solanaTransferController)
     : null
   nearTransferController = nearOperationsEnabled
     ? createBackgroundNearTransferController(intentsProtocolAssets, settings)
@@ -1431,7 +1429,7 @@ async function reloadMultichainRuntime(
       ? createBackgroundRheaSwapNearCoordinator(rheaSwapService, settings)
       : null
   nearTransactionMonitor = nearTransferController
-    ? new BackgroundNearTransactionMonitor(nearTransferController)
+    ? createBackgroundNativeTransactionMonitor('near', nearTransferController)
     : null
   const nextEvmDAppHandler = createBackgroundEvmDAppHandler(
     evmTransferController,
