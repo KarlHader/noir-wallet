@@ -97,7 +97,6 @@ import {
 } from '@/popup/services/balance-transfer-asset-picker'
 import {
   confidentialFundingClient,
-  estimateNativeClusterMaximum,
   previewClusterNetworkFeeTiers,
   previewReviewedConfidentialDepositFeeTiers
 } from '@/popup/services/confidential-funding-client'
@@ -1354,31 +1353,10 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       chain: selected!.chain,
       managed: managedAsset!
     })
-  const exactClusterMaximum = clusterSelected && selected?.asset.asset.kind === 'native'
-  const clusterMax = useBalanceTransferEstimate({
-    enabled: Boolean(
-      maxSelected && exactClusterMaximum && shieldAvailable && managedAsset && effective && eligible
-    ),
-    requestKey: `${routeKey}:${shieldAvailable?.amountRaw ?? ''}:${JSON.stringify(evmMoveFee)}:${retry}`,
-    estimate: signal =>
-      estimateNativeClusterMaximum({
-        availableRaw: shieldAvailable!.amountRaw,
-        probeRaw: maximumRaw,
-        estimateNetworkFee: amountRaw =>
-          confidentialFundingClient.previewClusterNetworkFee({
-            ...buildClusterPreviewRequest(amountRaw),
-            feeSelection: evmMoveFee
-          }),
-        signal
-      })
-  })
-  const resolvedMaxRaw = exactClusterMaximum ? clusterMax.value : maximumRaw
   const maxAmount =
-    selected && resolvedMaxRaw !== null
-      ? formatBaseUnitDecimalAmount(resolvedMaxRaw, selected.asset.metadata.decimals)
-      : exactClusterMaximum
-        ? ''
-        : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
+    selected && maximumRaw !== null
+      ? formatBaseUnitDecimalAmount(maximumRaw, selected.asset.metadata.decimals)
+      : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
   const currentAmount = maxSelected ? maxAmount : amount
   useEffect(() => {
     if (maxSelected) setAmount(maxAmount)
@@ -1472,6 +1450,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       : clusterEstimate.value
   const directQuoted = Boolean(canEstimateMethods && methodAvailable && directEstimate.value)
   const selectedEstimate = clusterSelected ? clusterEstimate : directEstimate
+  const maxLoading = maxSelected && selectedEstimate.loading
   const clusterUnavailable = getSwapQuoteFailureMessage(clusterEstimate.errorMessage) === 'no route'
   const directUnavailable =
     directEstimate.errorMessage === 'Move route unavailable' ||
@@ -1494,7 +1473,6 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     !clusterEstimate.loading &&
     !directEstimate.loading
   const transferError =
-    clusterMax.errorMessage ??
     amountError ??
     quoteMinimumError ??
     confidentialRouteError ??
@@ -1721,9 +1699,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       !available ||
       BigInt(available.amountRaw) === 0n
   const handleMax = () => {
-    if (!selected || maxDisabled || resolvedMaxRaw === '0' || clusterMax.loading) return
+    if (!selected || maxDisabled || maximumRaw === '0' || maxLoading) return
     setSelectedAssetId(selected.asset.asset.id)
-    if (clusterMax.error) setRetry(current => current + 1)
     setMaxSelected(true)
     setAmount(maxAmount)
   }
@@ -2330,7 +2307,9 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
               }}
               max={{
                 onClick: handleMax,
-                disabled: !selected || maxDisabled || resolvedMaxRaw === '0' || clusterMax.loading
+                selected: maxSelected,
+                loading: maxLoading,
+                disabled: !selected || maxDisabled || maximumRaw === '0' || maxLoading
               }}
             />
             {receiveEntry ? (

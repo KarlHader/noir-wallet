@@ -11,7 +11,6 @@ import {
 import { EvmWalletClientError } from '../../../src/popup/services/evm-wallet-client.ts'
 import { BitcoinWalletClientError } from '../../../src/popup/services/bitcoin-wallet-client.ts'
 import { TransferMaximumEstimateCache } from '../../../src/popup/services/transfer-maximum-cache.ts'
-import { estimateNativeClusterMaximum } from '../../../src/popup/services/confidential-funding-client.ts'
 
 const maximum = amountRaw => ({
   amountRaw,
@@ -100,29 +99,6 @@ test('uses one fee-adjusted amount for display, Max and validation without deduc
   expect(isTransferAmountSpendable('901', available)).toBe(false)
   expect(resolveTransferSpendableRaw('1000', null, false)).toBe('1000')
   expect(() => resolveTransferSpendableRaw('1000', '1001', true)).toThrow('Invalid')
-})
-
-test('native Cluster Max uses a fee cap verified at the resulting quote amount', async () => {
-  const available = 1_000n
-  const estimateNetworkFee = async amountRaw => {
-    const amount = BigInt(amountRaw)
-    if (amount === 500n) return { raw: '20' }
-    if (amount === 980n || amount === 970n) return { raw: '30' }
-    return null
-  }
-  const input = {
-    availableRaw: available.toString(),
-    probeRaw: '500',
-    estimateNetworkFee,
-    signal: new AbortController().signal
-  }
-  await expect(estimateNativeClusterMaximum(input)).resolves.toBe('970')
-  await expect(
-    estimateNativeClusterMaximum({
-      ...input,
-      estimateNetworkFee: async amountRaw => (amountRaw === '500' ? { raw: '20' } : null)
-    })
-  ).rejects.toThrow('Unable to estimate Max')
 })
 
 test('routed Max retains its chain-specific fallback without a usable USD price', () => {
