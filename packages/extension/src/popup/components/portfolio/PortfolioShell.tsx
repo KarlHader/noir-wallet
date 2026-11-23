@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { Icon } from '@iconify/react'
 import { formatFiatAmount } from '@/lib/number-format'
@@ -38,6 +38,7 @@ import {
 type PortfolioViewMode = 'assets' | 'chains'
 
 interface PortfolioShellProps {
+  readonly listHeader?: ReactNode
   readonly domain: AssetDomain
   readonly model: PortfolioReadModel
   readonly sourceModel: PortfolioReadModel
@@ -57,6 +58,9 @@ interface PortfolioShellProps {
   readonly onSelectConfidentialAsset?: (tokenId: string) => void
   readonly onRefresh?: () => void
   readonly onManageTokens?: () => void
+  readonly onShieldForAsset?: (
+    assetId: string
+  ) => ((trigger: HTMLButtonElement) => void) | undefined
 }
 
 function StatePanel({
@@ -229,6 +233,7 @@ function PortfolioViewIcon({
 }
 
 export function PortfolioShell({
+  listHeader,
   model,
   sourceModel,
   network,
@@ -247,7 +252,8 @@ export function PortfolioShell({
   onSelectAsset,
   onSelectConfidentialAsset,
   onRefresh,
-  onManageTokens
+  onManageTokens,
+  onShieldForAsset
 }: PortfolioShellProps) {
   const {
     prices,
@@ -310,6 +316,7 @@ export function PortfolioShell({
           expanded={false}
           pricesLoading={pricesLoading}
           onSelectAsset={selectAsset}
+          onShield={onShieldForAsset?.(group.entries[0].asset.asset.id)}
           directAsset
           swapCatalog={swapCatalog}
         />
@@ -402,6 +409,7 @@ export function PortfolioShell({
       </NetworkFilterToolbar>
 
       <div className="min-h-0 flex-1 pb-4">
+        {listHeader}
         {model.status === 'loading' && visibleConfidential.length === 0 ? (
           <LoadingPanel />
         ) : model.status === 'error' &&
@@ -608,6 +616,7 @@ export function PortfolioShell({
                           balancesHidden={balancesHidden}
                           pricesLoading={pricesLoading}
                           onSelectAsset={selectAsset}
+                          onShield={onShieldForAsset?.(asset.asset.id)}
                           swapCatalog={swapCatalog}
                         />
                       ))}

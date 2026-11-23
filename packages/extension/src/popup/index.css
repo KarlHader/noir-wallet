@@ -274,85 +274,97 @@ html[data-surface='side-panel'] #root {
 }
 
 .home-balance-card {
-  --balance-card-overlay: transparent;
-  --balance-card-border: rgb(255 255 255 / 10%);
-  --balance-card-shadow: rgb(0 0 0 / 10%);
-  --balance-card-text: rgb(255 255 255 / 60%);
-  --balance-card-dot: rgb(255 255 255 / 20%);
-  border-color: var(--balance-card-border);
-  background:
-    linear-gradient(var(--balance-card-overlay), var(--balance-card-overlay)),
-    var(--balance-card-surface);
-  box-shadow: 0 0 20px var(--balance-card-shadow);
   color: var(--balance-card-text);
 }
 
+.home-balance-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  border: 1px solid var(--balance-card-border, var(--color-border));
+  border-radius: inherit;
+  background: var(--balance-card-surface);
+  box-shadow: 0 2px 9px rgb(0 0 0 / 22%);
+}
+
+.home-balance-card[data-peek='left']::before {
+  right: -32px;
+}
+
+.home-balance-card[data-peek='right']::before {
+  left: -32px;
+}
+
 .home-balance-card[data-balance-domain='public'] {
-  --balance-card-surface: linear-gradient(137deg, #f2f2f5, #a8a8a8);
-  --balance-card-overlay: rgb(0 0 0 / 30%);
-  --balance-card-shadow: rgb(0 0 0 / 25%);
-  --balance-card-text: rgb(0 0 0 / 60%);
-  --balance-card-dot: rgb(0 0 0 / 20%);
+  --balance-card-surface: linear-gradient(137deg, #d2d2da, #a8a8b0);
+  --balance-card-text: #202029;
+  --balance-card-accent: #5b5b68;
 }
 
 .home-balance-card[data-balance-domain='private'] {
   --balance-card-surface: linear-gradient(144deg, #2e2e3b, #0b0b0e);
-  --balance-card-overlay: rgb(0 0 0 / 20%);
+  --balance-card-text: #e8e8ef;
+  --balance-card-accent: #c9bfdc;
 }
 
-.home-balance-card[aria-pressed='true'] {
-  --balance-card-overlay: transparent;
-  --balance-card-text: #fff;
+.home-balance-card[data-balance-domain='shield'] {
+  --balance-card-accent: #38e7a5;
+  --balance-card-surface: linear-gradient(116deg, #0c1010 22%, #10211c 78%, #16372a);
+  --balance-card-text: #d8f3e9;
+  --balance-card-border: color-mix(in srgb, var(--balance-card-accent) 32%, transparent);
 }
 
 .home-balance-card[data-balance-domain='public'][aria-pressed='true'] {
   --balance-card-surface: linear-gradient(137deg, #fff, #d4d4d4);
-  --balance-card-border: #fff;
-  --balance-card-text: #000;
-  --balance-card-dot: #00e74d;
+  --balance-card-accent: #007d54;
 }
 
-.home-balance-card[data-balance-domain='private'][aria-pressed='true'] {
-  --balance-card-dot: #ffa100;
-  --balance-card-amount: #ffa100;
+.home-balance-plus {
+  color: var(--balance-card-accent);
+  border-color: color-mix(in srgb, currentColor 55%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
 }
 
 .home-balance-indicator {
-  background-color: var(--balance-card-dot);
+  background-color: var(--balance-card-accent);
 }
 
-.home-balance-card[aria-pressed='true'] .home-balance-indicator {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--balance-card-dot) 50%, transparent);
-}
-
-.home-balance-amount {
-  color: var(--balance-card-amount, currentColor);
+.home-balance-card:not([data-balance-domain='public'])[aria-pressed='true'] .home-balance-amount {
+  color: var(--balance-card-accent);
 }
 
 .home-balance-watermark {
-  opacity: 0;
+  opacity: 0.28;
 }
 
-.home-balance-card[aria-pressed='true'] .home-balance-watermark {
-  opacity: 1;
+@media (hover: hover) and (pointer: fine) {
+  .portfolio-shield-row:not(:hover, :focus-within) .portfolio-shield-action {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .portfolio-shield-row:is(:hover, :focus-within) .portfolio-row-balance {
+    opacity: 0;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .portfolio-shield-row {
+    padding-right: 76px;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .portfolio-row-balance {
+    transition: opacity 150ms ease-out;
+  }
+
   .home-balance-card {
-    transition-property: width, height, top, padding, border-color, box-shadow, color, filter;
+    transition-property: margin-block, color, filter;
     transition-duration: 200ms;
     transition-timing-function: ease-out;
-  }
-
-  .home-balance-amount {
-    transition:
-      font-size 200ms ease-out,
-      line-height 200ms ease-out,
-      color 200ms ease-out;
-  }
-
-  .home-balance-watermark {
-    transition: opacity 200ms ease-out;
   }
 }
 

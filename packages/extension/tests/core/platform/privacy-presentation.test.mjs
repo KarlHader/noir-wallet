@@ -722,6 +722,37 @@ test('home asset domains count each EVM and Zcash balance once', () => {
     privateUsd: '60',
     privateUsdPartial: false
   })
+  const scoped = {
+    ...model,
+    scope: { keyDomainId: 'wallet-a', accountId: 'account-a' },
+    status: 'ready',
+    chains: model.chains.map(chain => ({ ...chain, status: 'ready' }))
+  }
+  const homeDisplay = (quotes, totalStatus) =>
+    resolveHomeAssetDomainDisplay({
+      portfolio: scoped,
+      walletId: 'wallet-a',
+      accountId: 'account-a',
+      loadStatus: 'ready',
+      settled: true,
+      priceStatus: 'ready',
+      totalStatus,
+      fiat: summarizePortfolioFiat(scoped, { quotes }),
+      breakdown: getHomeAssetBreakdown({ ...input, portfolio: scoped, prices: { quotes } })
+    })
+  expect(homeDisplay(prices.quotes, 'ready').totals).toEqual({
+    all: '230',
+    public: '112',
+    private: '60',
+    shield: '58'
+  })
+  const partialDisplay = homeDisplay(
+    prices.quotes.filter(quote => quote.assetId === zcashAsset.asset.id),
+    'partial'
+  )
+  expect(partialDisplay.totals).toEqual({ all: '30', public: '12', private: null, shield: '18' })
+  expect(partialDisplay.loading.private).toBe(false)
+  expect(partialDisplay.partial).toMatchObject({ all: true, public: true, shield: true })
   expect(getAssetDomainRaw(evmAsset, 'private')).toBe('30')
   const baseOnly = {
     ...evmAsset,

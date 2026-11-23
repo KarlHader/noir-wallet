@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate as useRouterNavigate, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
@@ -128,8 +128,18 @@ import {
   shieldQuoteFeeRaw
 } from '@/popup/services/shield-transfer'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
+import {
+  prepareQuickShieldMaximum,
+  quickShieldMaximum,
+  readQuickShieldBalances
+} from '@/popup/services/quick-shield-maximum'
+import type { PrepareConfidentialFundingRequest } from '@/popup/services/confidential-funding-client'
 import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
-import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
+import {
+  ConfidentialActivityView,
+  openConfidentialActivity,
+  type ConfidentialActivityDisplay
+} from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { homeActivityPath } from '@/popup/services/home-navigation'
 import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
 import {
@@ -159,7 +169,19 @@ import {
 } from '@/popup/services/balance-transfer-draft'
 import { getFundingBalance } from '@/core/wallet/funding-balance'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
-import { getConfidentialZcashTransferRecipients } from '@/popup/services/zcash-self-transfer'
+import {
+  getConfidentialZcashTransferRecipients,
+  resolveZcashSelfTransfer
+} from '@/popup/services/zcash-self-transfer'
+import { getShieldableTransparentBalance } from '@/core/zcash/shielding'
+import {
+  buildFixedShieldFundsRequest,
+  fixedShieldFundsDomains,
+  matchesFixedShieldFundsRecipient,
+  selectShieldFundsAsset,
+  shieldFundsPath,
+  type ShieldFundsFormProps
+} from '@/popup/services/shield-funds-route'
 import { getZcashChainId } from '@/core/chains/registry'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import {
@@ -341,36 +363,70 @@ function MethodCard({
   )
 }
 
-export function DepositWithdraw({ receiveEntry = false }: { readonly receiveEntry?: boolean }) {
+export function DepositWithdraw({
+  receiveEntry = false,
+  fixedShield
+}: {
+  readonly receiveEntry?: boolean
+  readonly fixedShield?: ShieldFundsFormProps
+}) {
   const [params] = useSearchParams()
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
   const scope = `${network}:${walletId}:${accountId}`
-  return <DepositWithdrawForm key={`${scope}:${params.toString()}`} receiveEntry={receiveEntry} />
+  const entryKey = fixedShield
+    ? JSON.stringify([fixedShield.direction, fixedShield.assetId, fixedShield.provider])
+    : params.toString()
+  return (
+    <DepositWithdrawForm
+      key={`${scope}:${entryKey}`}
+      receiveEntry={receiveEntry}
+      fixedShield={fixedShield}
+    />
+  )
 }
 
-function NativeZcashReceiveForm({
+function NativeZcashMoveForm({
+  reviewMaximum = false,
+  onExit,
   destination,
   fundingSource,
   retryPath,
   asset,
   accounts,
-  onStateChange
+  onStateChange,
+  actionLabel,
+  resultReturnPath
 }: {
-  readonly destination: 'shielded' | 'confidential'
+  readonly reviewMaximum?: boolean
+  readonly onExit?: () => void
+  readonly destination: 'transparent' | 'shielded' | 'confidential'
   readonly fundingSource: FundingSource
   readonly retryPath: string
   readonly asset: ReactNode
   readonly accounts: ReactNode
   readonly onStateChange: (state: { readonly reviewing: boolean; readonly busy: boolean }) => void
+  readonly actionLabel?: 'Shield' | 'Unshield'
+  readonly resultReturnPath?: string
 }) {
   const transfer = useZcashTransfer({
-    shieldReceive: { destination, fundingSource, retryPath },
+    shieldReceive: {
+      destination,
+      fundingSource,
+      retryPath,
+      actionLabel,
+      resultReturnPath,
+      reviewMaximum
+    },
     onStateChange
   })
   const { action } = transfer
   const { route, sync } = transfer
+  useEffect(() => {
+    if (reviewMaximum && !transfer.review.open && !action.disabled && !action.loading)
+      action.onContinue()
+  }, [reviewMaximum, transfer.review.open, action.disabled, action.loading, action.onContinue])
   const notice =
     transfer.depositErrors.find(Boolean) ??
     transfer.balanceError ??
@@ -380,6 +436,38 @@ function NativeZcashReceiveForm({
       <div className="flex flex-1 items-center justify-center px-5">
         <p className="text-center text-muted">No account available</p>
       </div>
+    )
+  }
+
+  if (reviewMaximum) {
+    const issue = route.maximumError ?? route.error ?? notice
+    const close = () => {
+      if (!transfer.review.cancelDisabled) onExit?.()
+    }
+    return (
+      <>
+        <div className="p-4" aria-live="polite">
+          {issue ? (
+            <TransactionNotice {...issue} />
+          ) : sync.progress ? (
+            <ZcashTransferSyncStatus sync={sync} />
+          ) : (
+            'Preparing Shield…'
+          )}
+        </div>
+        <ZcashTransferReview
+          transfer={{
+            ...transfer,
+            review: {
+              ...transfer.review,
+              onCancel: close,
+              onOpenChange: open => {
+                if (!open) close()
+              }
+            }
+          }}
+        />
+      </>
     )
   }
 
@@ -415,23 +503,38 @@ function NativeZcashReceiveForm({
   )
 }
 
-function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean }) {
+function DepositWithdrawForm({
+  receiveEntry,
+  fixedShield
+}: {
+  readonly receiveEntry: boolean
+  readonly fixedShield?: ShieldFundsFormProps
+}) {
   const [params] = useSearchParams()
   const slippageBps = useSwapPreferences(state => Math.round(state.slippage * 100))
   const quoteMode = useSwapPreferences(state => state.quoteMode)
   const location = useLocation()
   const routerNavigate = useRouterNavigate()
+  const fixedDirection = fixedShield?.direction
+  const quickMaximum = fixedDirection === 'shield' && fixedShield?.reviewMaximum === true
+  const fixedDomains = fixedDirection ? fixedShieldFundsDomains(fixedDirection) : null
   const walletMode =
-    params.get('mode') === 'private' || (receiveEntry && params.get('from') === 'private')
+    !fixedDirection &&
+    (params.get('mode') === 'private' || (receiveEntry && params.get('from') === 'private'))
       ? 'private'
       : 'public'
-  const routeFrom = params.get('from')
-  const routeTo = receiveEntry ? 'shield' : params.get('to')
-  const intent = receiveEntry ? 'deposit' : resolveBalanceTransferIntent(params.get('intent'))
+  const routeFrom = fixedDomains?.from ?? params.get('from')
+  const routeTo = fixedDomains?.to ?? (receiveEntry ? 'shield' : params.get('to'))
+  const intent = fixedDirection
+    ? null
+    : receiveEntry
+      ? 'deposit'
+      : resolveBalanceTransferIntent(params.get('intent'))
   const fixedSide = fixedTransferSide(intent)
-  const routeAssetId = params.get('assetId')
+  const routeAssetId = fixedShield ? (fixedShield.assetId ?? null) : params.get('assetId')
   const entry = receiveEntry ? 'shield' : params.get('entry')
   const shieldEntry =
+    Boolean(fixedDirection) ||
     receiveEntry ||
     (entry === 'shield' &&
       (params.get('provider') === null || params.get('provider') === 'near-confidential'))
@@ -461,11 +564,12 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   })
   const scopeKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}:${endpointRuntimeKey}`
   const preferenceKey =
-    shieldEntry && !receiveEntry && effective
+    shieldEntry && !receiveEntry && !fixedDirection && effective
       ? shieldTransferPreferenceKey(currentNetwork, effective.walletId, effective.accountId)
       : null
+  const draftState = fixedDirection ? null : location.state
   const initialDraft = initialBalanceTransferDraft({
-    state: location.state,
+    state: draftState,
     scope: scopeKey,
     mode: walletMode,
     routeFrom,
@@ -473,7 +577,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     routeAssetId,
     intent
   })
-  const initialRouteState = useRef(location.state).current
+  const initialRouteState = useRef(draftState).current
   const launchDraft = initialBalanceTransferDraft({
     state: initialRouteState,
     scope: scopeKey,
@@ -517,11 +621,16 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   )
   const [preferredReceiveProvider, setPreferredReceiveProvider] = useState<ShieldProvider | null>(
     () => {
+      if (fixedShield) return fixedShield.provider ?? null
       const provider = params.get('provider')
       return provider === 'zcash-shield' || provider === 'near-confidential' ? provider : null
     }
   )
   const [nativeReceiveState, setNativeReceiveState] = useState({ reviewing: false, busy: false })
+  const [shieldActivity, setShieldActivity] = useState<{
+    plan: ConfidentialFundingPlan
+    display?: ConfidentialActivityDisplay
+  } | null>(null)
   const [pickerAccountId, setPickerAccountId] = useState<string | null>(null)
   const [draftScope, setDraftScope] = useState(scopeKey)
   const [selectedAssetId, setSelectedAssetId] = useState(initialDraft.assetId)
@@ -539,7 +648,10 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   } = usePortfolioSnapshot(effective?.walletId ?? null, effective?.accountId ?? null, {
     refreshConfidential: usesConfidentialBalances
   })
-  const actionLabel = balanceTransferLabel(intent ?? (to === 'public' ? 'withdraw' : 'deposit'))
+  const fixedActionLabel =
+    fixedDirection === 'shield' ? 'Shield' : fixedDirection ? 'Unshield' : undefined
+  const actionLabel =
+    fixedActionLabel ?? balanceTransferLabel(intent ?? (to === 'public' ? 'withdraw' : 'deposit'))
   const [amount, setAmount] = useState(initialDraft.amount)
   const [method, setMethod] = useState<'cluster' | 'directly'>(initialDraft.method)
   const [evmMoveFee, setEvmMoveFee] = useState<EvmFeeSelection>({
@@ -583,6 +695,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const [shieldError, setShieldError] = useState<string | null>(null)
   const [preparingShield, setPreparingShield] = useState(false)
   const [confirmingShield, setConfirmingShield] = useState(false)
+  const confirmingShieldRef = useRef(false)
+  const preparingShieldRef = useRef(false)
   const [confirmUncertain, setConfirmUncertain] = useState(false)
   const [cancellingShield, setCancellingShield] = useState(false)
   const confirmAttemptedPlanId = useRef<string | null>(null)
@@ -600,6 +714,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const [preparedShield, setPreparedShield] = useState<{
     key: string
     review: ConfidentialFundingReview
+    quickRequest?: PrepareConfidentialFundingRequest
   } | null>(null)
 
   useEffect(() => {
@@ -705,7 +820,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     userEditedMove.current = false
     userPickedMethod.current = launchHasDraft
     const draft = initialBalanceTransferDraft({
-      state: location.state,
+      state: draftState,
       scope: scopeKey,
       mode: walletMode,
       routeFrom,
@@ -725,6 +840,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     setPreparingShield(false)
     setConfirmingShield(false)
     setCancellingShield(false)
+    setShieldActivity(null)
     setShieldError(null)
     setConfirmUncertain(false)
     reviewAttempt.current = null
@@ -737,7 +853,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   }, [scopeKey])
 
   useEffect(() => {
-    if (!effective || draftScope !== scopeKey) return
+    if (fixedDirection || !effective || draftScope !== scopeKey) return
     const previousState =
       location.state && typeof location.state === 'object' && !Array.isArray(location.state)
         ? location.state
@@ -770,6 +886,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     amount,
     method,
     maxSelected,
+    fixedDirection,
     location.pathname,
     location.search,
     routerNavigate
@@ -807,11 +924,23 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       ...fallbackAssets
         .filter(
           item =>
-            eligibleChainIds.includes(item.chain.chain.id) && !existing.has(item.asset.asset.id)
+            (eligibleChainIds.includes(item.chain.chain.id) ||
+              (fixedDirection === 'unshield' &&
+                item.chain.chain.id === getZcashChainId(currentNetwork) &&
+                eligibleChainIds.length > 0)) &&
+            !existing.has(item.asset.asset.id)
         )
         .map(({ asset, chain }) => ({ asset, chain }))
     ]
-  }, [portfolio, currentShieldBalances, shieldAssets, eligibleChainIds, shieldEntry])
+  }, [
+    portfolio,
+    currentShieldBalances,
+    shieldAssets,
+    eligibleChainIds,
+    shieldEntry,
+    fixedDirection,
+    currentNetwork
+  ])
   const defaultAssetId = useMemo(
     () =>
       shieldEntry
@@ -921,12 +1050,38 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     item => item.privacy === 'transparent'
   )?.address
   const zcashReceiveAddress = zcashMoveRecipients.find(item => item.privacy === 'shielded')?.address
+  const currentZcashAccount = currentWallet?.accounts.find(
+    account => account.id === currentAccountId
+  )
+  const fixedZcashSource = fixedDirection === 'unshield' ? 'shielded' : 'transparent'
+  const fixedZcashSelfTransfer = fixedDirection
+    ? resolveZcashSelfTransfer(currentZcashAccount?.addresses, fixedZcashSource, currentNetwork)
+    : null
+  const fixedZcashNativeAvailable = Boolean(
+    fixedZcashSelfTransfer &&
+    !getFundingSourceUnavailableReason(currentWallet?.keySource, fixedZcashSource)
+  )
+  const fixedZcashAvailable =
+    fixedDirection === 'unshield'
+      ? getFundingBalance(zcashBalance, 'shielded').available
+      : getShieldableTransparentBalance(zcashBalance)
+  const fixedNearZecAsset =
+    fixedDirection === 'unshield' && zcashPublicAddress
+      ? shieldAssets.find(item => item.asset.asset.id === zcashAssetId)
+      : undefined
+  const fixedNearZecRaw =
+    fixedNearZecAsset && currentShieldBalances
+      ? getConfidentialAvailableForAsset(
+          currentShieldBalances,
+          fixedNearZecAsset.managed.protocolAssetId
+        )
+      : null
   const canSpendPublicZec = Boolean(
     zcashPublicAddress &&
     !getFundingSourceUnavailableReason(currentWallet?.keySource, 'transparent')
   )
   const supportsConfidentialZec =
-    receiveEntry &&
+    (receiveEntry || fixedDirection === 'shield') &&
     canLoadShield &&
     currentNetwork === 'mainnet' &&
     !isZcashHardwareKeySource(currentWallet?.keySource) &&
@@ -963,12 +1118,38 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       : receiveZec
         ? 'public'
         : from
+  const { assetId: fixedAssetId, provider: fixedProvider } = selectShieldFundsAsset({
+    direction: fixedDirection,
+    selectedAssetId,
+    defaultAssetId,
+    zcashAssetId,
+    preferredProvider: preferredReceiveProvider,
+    nativeAvailable: fixedZcashNativeAvailable,
+    nativeFunded: Number(fixedZcashAvailable) > 0,
+    confidentialZecFunded: BigInt(fixedNearZecRaw ?? '0') > 0n
+  })
+  const fixedZec = fixedAssetId === zcashAssetId
+  const fixedAvailableProviders = {
+    'zcash-shield': fixedZec && fixedZcashNativeAvailable,
+    'near-confidential':
+      fixedZec &&
+      (fixedDirection === 'shield'
+        ? supportsConfidentialZec && canSpendPublicZec
+        : Boolean(fixedNearZecAsset && fixedNearZecRaw && BigInt(fixedNearZecRaw) > 0n))
+  }
+  const fixedZecForm = fixedZec && (fixedDirection === 'shield' || fixedProvider === 'zcash-shield')
   const selected =
-    assets.find(
-      item =>
-        item.asset.asset.id ===
-        (receiveEntry ? receiveAssetId : (selectedAssetId ?? defaultAssetId))
-    ) ?? null
+    (fixedZecForm
+      ? null
+      : assets.find(
+          item =>
+            item.asset.asset.id ===
+            (fixedDirection
+              ? fixedAssetId
+              : receiveEntry
+                ? receiveAssetId
+                : (selectedAssetId ?? defaultAssetId))
+        )) ?? null
   const externalAssets = useMemo(
     () =>
       receiveEntry && canLoadShield && activeAccount
@@ -1003,7 +1184,13 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const pickerRows = useMemo(
     () =>
       listBalanceTransferAssetPickerRows({
-        assets,
+        assets: fixedDirection
+          ? assets.filter(
+              item =>
+                item.chain.chain.family === 'evm' &&
+                resolveShieldManagedAsset(item.asset, managedAssets, catalogTokens, currentNetwork)
+            )
+          : assets,
         includeEmpty: receiveEntry,
         from,
         network: currentNetwork,
@@ -1022,7 +1209,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       portfolio,
       currentShieldBalances,
       managedAssets,
-      catalogTokens
+      catalogTokens,
+      fixedDirection
     ]
   )
   const shieldAssetPicker = shieldEntry || from === 'shield' || to === 'shield'
@@ -1084,14 +1272,55 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           : [])
       ]
     : []
-  const providerAssetRows = receiveEntry ? receivePickerRows : evmShieldPickerRows
+  const providerAssetRows = fixedDirection
+    ? [
+        ...evmShieldPickerRows,
+        ...(fixedZcashNativeAvailable || (fixedDirection === 'shield' && supportsConfidentialZec)
+          ? [
+              {
+                key: zcashAssetId,
+                assetId: zcashAssetId,
+                symbol: 'ZEC',
+                ...getZcashTokenPickerChain(currentNetwork),
+                nativeIconChain: 'zcash',
+                availableRaw: parseDisplayUnitAmount(fixedZcashAvailable, ZEC_DECIMALS),
+                decimals: ZEC_DECIMALS,
+                priceUsd: zecPrice
+              }
+            ]
+          : []),
+        ...(fixedNearZecAsset && fixedNearZecRaw && BigInt(fixedNearZecRaw) > 0n
+          ? [
+              {
+                key: `near-confidential:${zcashAssetId}`,
+                assetId: zcashAssetId,
+                symbol: 'ZEC',
+                ...getZcashTokenPickerChain(currentNetwork),
+                chainName: 'Zcash · NEAR Confidential',
+                nativeIconChain: 'zcash',
+                availableRaw: fixedNearZecRaw,
+                decimals: ZEC_DECIMALS,
+                priceUsd: zecPrice
+              }
+            ]
+          : [])
+      ]
+    : receiveEntry
+      ? receivePickerRows
+      : evmShieldPickerRows
   const accountNetwork = activeAccount?.networks.find(
     item => item.chain.id === selected?.chain.chain.id
   )
   const mainAddress =
     accountNetwork?.addresses.find(address => address.preferredForReceive)?.value ?? ''
   const privateAddress = accountNetwork?.privateExecutionAddress ?? ''
-  const eligible = Boolean(selected && eligibleChainIds.includes(selected.chain.chain.id))
+  const fixedNearZecWithdraw = Boolean(
+    fixedNearZecAsset && fixedZec && fixedProvider === 'near-confidential'
+  )
+  const eligible = Boolean(
+    selected &&
+    (eligibleChainIds.includes(selected.chain.chain.id) || (fixedNearZecWithdraw && canLoadShield))
+  )
   const direction: PrivateBalanceTransferDirection =
     from === 'private' ? 'private-to-main' : 'main-to-private'
   const publicRaw = selected ? getTransferDomainBalanceRaw(selected.asset, 'public') : null
@@ -1127,7 +1356,9 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const supportedPair =
     (from === 'public' && to === 'private') || (from === 'private' && to === 'public')
   const shieldPair =
-    !externalReceive && isShieldTransferRoute(from, to) && selected?.chain.chain.family === 'evm'
+    !externalReceive &&
+    isShieldTransferRoute(from, to) &&
+    (selected?.chain.chain.family === 'evm' || fixedNearZecWithdraw)
   const privateTransferOptions = useMemo(
     () =>
       supportedPair && selected
@@ -1168,10 +1399,19 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   }, [scopeKey, supportedPair, fundingRoute])
   const managedAsset = useMemo(
     () =>
-      selected
-        ? resolveShieldManagedAsset(selected.asset, managedAssets, catalogTokens, currentNetwork)
-        : null,
-    [selected?.asset, managedAssets, catalogTokens, currentNetwork]
+      fixedNearZecWithdraw
+        ? (fixedNearZecAsset?.managed ?? null)
+        : selected
+          ? resolveShieldManagedAsset(selected.asset, managedAssets, catalogTokens, currentNetwork)
+          : null,
+    [
+      fixedNearZecWithdraw,
+      fixedNearZecAsset,
+      selected?.asset,
+      managedAssets,
+      catalogTokens,
+      currentNetwork
+    ]
   )
   const { available: receiveProviders, selected: receiveProvider } = resolveShieldReceiveProvider({
     nativeZec: receiveZec,
@@ -1192,6 +1432,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const clusterAvailable = Boolean(clusterPair && managedAsset && effective)
   const destinationOptions = useMemo(() => {
     if (from !== 'shield' || !selected || !managedAsset) return []
+    if (fixedDirection === 'unshield') return [{ ...selected, managed: managedAsset }]
     const options = shieldAssets.filter(item =>
       activeAccount?.networks.some(
         network =>
@@ -1213,7 +1454,8 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     managedAsset,
     shieldAssets,
     currentNetwork,
-    eligibleChainIds
+    eligibleChainIds,
+    fixedDirection
   ])
   const networkAssets = from === 'shield' ? destinationOptions : privateTransferOptions
   const destinationNetworkOptions: ChainSelectorOption[] = [
@@ -1279,13 +1521,15 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const targetAsset =
     from === 'shield' ? destination : supportedPair ? privateTransferDestination : selected
   const canSelectTargetNetwork =
-    from === 'shield' ||
-    (supportedPair && (privateTransferOptions.length > 1 || crossChainPrivateTransfer))
+    !fixedDirection &&
+    (from === 'shield' ||
+      (supportedPair && (privateTransferOptions.length > 1 || crossChainPrivateTransfer)))
   const targetNetwork = activeAccount?.networks.find(
     item => item.chain.id === targetAsset?.chain.chain.id
   )
-  const targetAddress =
-    to === 'private'
+  const targetAddress = fixedNearZecWithdraw
+    ? (zcashPublicAddress ?? '')
+    : to === 'private'
       ? (targetNetwork?.privateExecutionAddress ?? '')
       : (targetNetwork?.addresses.find(address => address.preferredForReceive)?.value ?? '')
   const hasShieldSnapshot = shieldBalances !== null
@@ -1367,7 +1611,15 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     selected && maximumRaw !== null
       ? formatBaseUnitDecimalAmount(maximumRaw, selected.asset.metadata.decimals)
       : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
-  const currentAmount = maxSelected ? maxAmount : amount
+  const currentAmount =
+    quickMaximum && selected && preparedShield?.quickRequest
+      ? formatBaseUnitDecimalAmount(
+          preparedShield.review.sourceAmountRaw,
+          selected.asset.metadata.decimals
+        )
+      : maxSelected
+        ? maxAmount
+        : amount
   useEffect(() => {
     if (maxSelected) setAmount(maxAmount)
   }, [maxSelected, maxAmount])
@@ -1512,11 +1764,47 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     }
   }, [method, clusterUnavailable, directUnavailable, clusterQuoted, directQuoted])
   const shieldReviewKeyForFee = (feeSelection: EvmFeeSelection) =>
-    `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${slippageBps}:${JSON.stringify(feeSelection)}`
-  const shieldReviewKey = shieldReviewKeyForFee(evmMoveFee)
+    quickMaximum
+      ? JSON.stringify([
+          routeKey,
+          fixedProvider,
+          mainAddress,
+          managedAsset?.protocolAssetId,
+          publicRaw,
+          nativeFeeRaw,
+          selected?.asset.balance.availableRaw,
+          nativeFeeAsset?.balance.availableRaw,
+          slippageBps,
+          feeSelection,
+          retry
+        ])
+      : `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${slippageBps}:${JSON.stringify(feeSelection)}`
+  const submittedQuickReview =
+    preparedShield?.quickRequest && confirmAttemptedPlanId.current === preparedShield.review.planId
+  const shieldReviewKey = submittedQuickReview
+    ? preparedShield.key
+    : shieldReviewKeyForFee(evmMoveFee)
   const latestShieldReviewKey = useRef(shieldReviewKey)
   latestShieldReviewKey.current = shieldReviewKey
   const activeShieldReview = preparedShield?.key === shieldReviewKey ? preparedShield.review : null
+  const discardPreparedOnExit = useRef<string | null>(null)
+  discardPreparedOnExit.current = preparedShield?.review.planId ?? null
+  useEffect(() => {
+    if (!fixedDirection) return
+    return () => {
+      const id = discardPreparedOnExit.current
+      if (id && id !== confirmAttemptedPlanId.current)
+        void confidentialFundingClient.cancel(id).catch(() => {})
+    }
+  }, [fixedDirection, scopeKey])
+  const stateChange = useRef(fixedShield?.onStateChange)
+  stateChange.current = fixedShield?.onStateChange
+  const reviewing = Boolean(activeShieldReview || shieldActivity || nativeReceiveState.reviewing)
+  const busy = preparingShield || confirmingShield || cancellingShield || nativeReceiveState.busy
+  useLayoutEffect(() => {
+    stateChange.current?.({ reviewing, busy })
+  }, [reviewing, busy])
+  useLayoutEffect(() => () => stateChange.current?.({ reviewing: false, busy: false }), [])
   useEffect(() => {
     if (!preparedShield || preparedShield.key === shieldReviewKey) return
     if (confirmAttemptedPlanId.current !== preparedShield.review.planId)
@@ -1554,7 +1842,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     shieldAmountState?.amountRaw
   )
   const selectDomain = (domain: TransferDomain, side: 'from' | 'to') => {
-    if (pickerAccountId !== effective?.accountId || side === fixedSide) return
+    if (fixedDirection || pickerAccountId !== effective?.accountId || side === fixedSide) return
     if (domain === (side === 'from' ? to : from)) return
     userEditedMove.current = true
     if (receiveEntry) {
@@ -1574,7 +1862,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     setDomainPicker(null)
   }
   const openDomainPicker = (side: 'from' | 'to') => {
-    if (side === fixedSide) return
+    if (fixedDirection || side === fixedSide) return
     setPickerAccountId(effective?.accountId ?? null)
     setDomainPicker(side)
   }
@@ -1729,6 +2017,85 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     )
   }
   const shieldNeedsAuthorization = shieldBalanceErrorCode === 'authorization_required'
+  const quickEvmReady = Boolean(
+    quickMaximum &&
+    !fixedZec &&
+    fixedProvider === 'near-confidential' &&
+    fixedAssetId === selected?.asset.asset.id &&
+    draftScope === scopeKey &&
+    fundingRoute &&
+    eligible &&
+    managedAsset &&
+    effective &&
+    fundingReady &&
+    mainAddress
+  )
+  useEffect(() => {
+    if (
+      !quickEvmReady ||
+      !selected ||
+      !managedAsset ||
+      !effective ||
+      submittedQuickReview ||
+      shieldActivity ||
+      preparedShield?.key === shieldReviewKey
+    )
+      return
+    let stopped = false
+    const current = () =>
+      !stopped && scopeStillCurrent() && latestShieldReviewKey.current === shieldReviewKey
+    setShieldError(null)
+    const request = buildFixedShieldFundsRequest({
+      direction: 'shield',
+      network: currentNetwork,
+      keyDomainId: effective.walletId,
+      accountId: effective.accountId,
+      amountRaw: '1',
+      asset: selected.asset,
+      chain: selected.chain,
+      managed: managedAsset,
+      slippageBps,
+      feeSelection: evmMoveFee
+    })
+    void prepareQuickShieldMaximum(request, mainAddress, current)
+      .then(result => {
+        if (!result) return
+        if (!current()) {
+          void confidentialFundingClient.cancel(result.review.planId).catch(() => {})
+          return
+        }
+        confirmAttemptedPlanId.current = null
+        setConfirmUncertain(false)
+        setPreparedShield({
+          key: shieldReviewKey,
+          review: result.review,
+          quickRequest: result.request
+        })
+      })
+      .catch(error => {
+        if (current()) setShieldError(classifyError(error).userMessage)
+      })
+    return () => {
+      stopped = true
+    }
+  }, [quickEvmReady, shieldReviewKey])
+  useEffect(() => {
+    if (!quickMaximum || !activeShieldReview || confirmingShield || confirmUncertain) return
+    const timer = window.setTimeout(
+      () => {
+        if (
+          confirmingShieldRef.current ||
+          confirmAttemptedPlanId.current === activeShieldReview.planId
+        )
+          return
+        void confidentialFundingClient.cancel(activeShieldReview.planId).catch(() => {})
+        setPreparedShield(null)
+        setShieldError('Shield review expired. Try again.')
+      },
+      Math.max(0, activeShieldReview.expiresAt - Date.now())
+    )
+    return () => window.clearTimeout(timer)
+  }, [quickMaximum, activeShieldReview, confirmingShield, confirmUncertain])
   const refreshShield = async (authorize = false) => {
     if (!effective || !scopeStillCurrent()) return
     setShieldConnection('busy')
@@ -1750,6 +2117,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     replacingReview = false
   ): Promise<boolean> => {
     if (
+      preparingShieldRef.current ||
       (!replacingReview && !canReviewShield) ||
       !selected ||
       !managedAsset ||
@@ -1763,25 +2131,35 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     if (reviewAttempt.current?.key !== key)
       reviewAttempt.current = { key, dedupKey: `move:${crypto.randomUUID()}` }
     const dedupKey = reviewAttempt.current.dedupKey
+    preparingShieldRef.current = true
     setPreparingShield(true)
     setShieldError(null)
     try {
-      const request = buildShieldTransferRequest({
+      const commonRequest = {
         network: currentNetwork,
         keyDomainId: effective.walletId,
         accountId: effective.accountId,
-        from,
-        to,
-        method: clusterSelected ? 'cluster' : 'directly',
         amountRaw: shieldAmountState.amountRaw,
         asset: selected.asset,
         chain: selected.chain,
         managed: managedAsset,
         slippageBps,
         ...(from === 'shield' ? {} : { feeSelection }),
-        ...(from === 'shield' && destination ? { destination } : {}),
         dedupKey
-      })
+      }
+      const request = fixedDirection
+        ? buildFixedShieldFundsRequest({
+            ...commonRequest,
+            direction: fixedDirection,
+            ownTransparentAddress: fixedNearZecWithdraw ? zcashPublicAddress : undefined
+          })
+        : buildShieldTransferRequest({
+            ...commonRequest,
+            from,
+            to,
+            method: clusterSelected ? 'cluster' : 'directly',
+            ...(from === 'shield' && destination ? { destination } : {})
+          })
       const result = await confidentialFundingClient.prepare(request)
       if (!scopeStillCurrent() || latestShieldReviewKey.current !== expectedKey) {
         if (result.phase === 'prepared')
@@ -1797,7 +2175,15 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         if (status === 'started') reviewAttempt.current = null
         return false
       }
-      if (!matchesShieldReview(result, request)) {
+      if (
+        !matchesShieldReview(result, request) ||
+        (fixedDirection &&
+          !matchesFixedShieldFundsRecipient(
+            result,
+            request,
+            fixedNearZecWithdraw ? targetAddress : mainAddress
+          ))
+      ) {
         void confidentialFundingClient.cancel(result.planId).catch(() => {})
         throw new Error('Shield review changed. Try again.')
       }
@@ -1823,6 +2209,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       }
       return false
     } finally {
+      preparingShieldRef.current = false
       if (scopeStillCurrent()) setPreparingShield(false)
     }
   }
@@ -1841,21 +2228,24 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       reviewAttempt.current = null
       updateFeeRefresh(null)
       const domain = plan.sourceDomain ?? from
-      void openConfidentialActivity(
-        plan,
-        () => navigate(homeActivityPath(domain, plan.transactionId)),
-        selected
-          ? {
-              operation: 'move',
-              perspective: { viewedDomain: domain },
-              amount: currentAmount,
-              symbol: formatSymbol(selected.asset.metadata.symbol),
-              from: `${accountName} · ${domainLabel(from)}`,
-              recipient: `${accountName} · ${domainLabel(to)}`,
-              network: selected.chain.chain.displayName
-            }
-          : undefined
-      )
+      const display: ConfidentialActivityDisplay | undefined = selected
+        ? {
+            operation: 'move',
+            perspective: { viewedDomain: domain },
+            amount: currentAmount,
+            symbol: formatSymbol(selected.asset.metadata.symbol),
+            from: `${accountName} · ${domainLabel(from)}`,
+            recipient: `${accountName} · ${domainLabel(to)}`,
+            network: selected.chain.chain.displayName
+          }
+        : undefined
+      if (fixedDirection) setShieldActivity({ plan, display })
+      else
+        void openConfidentialActivity(
+          plan,
+          () => navigate(homeActivityPath(domain, plan.transactionId)),
+          display
+        )
     }
   }
   const checkShieldPlan = async (
@@ -1869,6 +2259,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         return 'started'
       }
       if (isUnsignedShieldTerminal(plan)) {
+        if (quickMaximum) confirmAttemptedPlanId.current = null
         setPreparedShield(null)
         setConfirmUncertain(false)
         setShieldError('Transfer was not started. Try again.')
@@ -1879,6 +2270,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
         setShieldError('Approval did not complete. Check status before trying again.')
         return 'pending'
       }
+      if (quickMaximum && plan.phase === 'prepared') confirmAttemptedPlanId.current = null
       setConfirmUncertain(false)
       return 'prepared'
     } catch {
@@ -1911,11 +2303,20 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   }
   const confirmShield = async () => {
     const pending = activeShieldReview
-    if (!pending || feeRefreshRef.current || preparingShield || !scopeStillCurrent()) return
+    if (
+      !pending ||
+      confirmingShieldRef.current ||
+      cancellingShield ||
+      feeRefreshRef.current ||
+      preparingShieldRef.current ||
+      !scopeStillCurrent()
+    )
+      return
     if (!confirmUncertain && pending.expiresAt <= Date.now()) {
       setShieldError('Shield review expired. Try again.')
       return
     }
+    confirmingShieldRef.current = true
     setConfirmingShield(true)
     setShieldError(null)
     try {
@@ -1925,6 +2326,19 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           setShieldError('Transfer not started. Review and try again.')
         return
       }
+      if (preparedShield?.quickRequest) {
+        const balances = await readQuickShieldBalances(preparedShield.quickRequest)
+        if (!scopeStillCurrent() || latestShieldReviewKey.current !== shieldReviewKey) return
+        if (
+          quickShieldMaximum(balances, pending.sourceNetworkFee!.raw) !== pending.sourceAmountRaw ||
+          pending.expiresAt <= Date.now()
+        ) {
+          await confidentialFundingClient.cancel(pending.planId)
+          setPreparedShield(null)
+          setShieldError('Balance or quote changed. Review the maximum again.')
+          return
+        }
+      }
       confirmAttemptedPlanId.current = pending.planId
       const plan = await confidentialFundingClient.confirm(
         pending.planId,
@@ -1933,10 +2347,19 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       if (hasShieldTransferStarted(plan)) openShieldActivity(plan)
       else await checkShieldPlan(plan.planId)
     } catch (error) {
+      if (preparedShield?.quickRequest && confirmAttemptedPlanId.current !== pending.planId) {
+        if (scopeStillCurrent()) {
+          void confidentialFundingClient.cancel(pending.planId).catch(() => {})
+          setPreparedShield(null)
+          setShieldError(classifyError(error).userMessage)
+        }
+        return
+      }
       const status = await checkShieldPlan(pending.planId)
       if (status === 'prepared' && scopeStillCurrent())
         setShieldError(classifyError(error).userMessage)
     } finally {
+      confirmingShieldRef.current = false
       if (scopeStillCurrent()) setConfirmingShield(false)
     }
   }
@@ -1991,7 +2414,24 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     }
   }
 
-  if (activeShieldReview && selected) {
+  const exitForm = fixedShield?.onBack ?? goBack
+  if (shieldActivity && draftScope === scopeKey) {
+    const { plan, display } = shieldActivity
+    return (
+      <div className="page-container">
+        <ConfidentialActivityView
+          plan={plan}
+          display={display}
+          onDone={exitForm}
+          onViewActivity={() =>
+            navigate(homeActivityPath(plan.sourceDomain ?? from, plan.transactionId))
+          }
+        />
+      </div>
+    )
+  }
+
+  if (activeShieldReview && selected && draftScope === scopeKey) {
     const output = formatBaseUnitAmount(
       activeShieldReview.expectedOutputRaw,
       targetAsset?.asset.metadata.decimals ?? selected.asset.metadata.decimals
@@ -2086,50 +2526,51 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
               ? [
                   {
                     label: 'Max network fee',
-                    content: activeShieldReview.sourceEvmFee ? (
-                      <NetworkFeeTierPicker
-                        chainFamily="evm"
-                        tier={evmMoveFee.kind === 'tier' ? evmMoveFee.tier : 'standard'}
-                        selection={evmMoveFee}
-                        feeModel={
-                          activeShieldReview.sourceEvmFee.transactionType === 'legacy'
-                            ? 'legacy'
-                            : 'eip1559'
-                        }
-                        customDefaults={{
-                          gasLimit: activeShieldReview.sourceEvmFee.gasLimit,
-                          maxFeePerGasWei: activeShieldReview.sourceEvmFee.maxFeePerGasWei ?? '0',
-                          maxPriorityFeePerGasWei:
-                            activeShieldReview.sourceEvmFee.maxPriorityFeePerGasWei ?? '0',
-                          gasPriceWei: activeShieldReview.sourceEvmFee.gasPriceWei
-                        }}
-                        amount={formatBaseUnitAmount(networkFee.raw, networkFee.decimals)}
-                        symbol={formatSymbol(networkFee.symbol)}
-                        loadTierPreviews={() =>
-                          scopeStillCurrent()
-                            ? previewReviewedConfidentialDepositFeeTiers(
-                                activeShieldReview,
-                                selected.asset.asset.id,
-                                evmMoveFee.kind === 'tier' ? evmMoveFee.tier : undefined
-                              )
-                            : Promise.resolve({})
-                        }
-                        onTierChange={tier => changeShieldFee({ kind: 'tier', tier })}
-                        onSelectionChange={changeShieldFee}
-                        disabled={
-                          cancellingShield ||
-                          confirmingShield ||
-                          confirmUncertain ||
-                          preparingShield
-                        }
-                      />
-                    ) : (
-                      <AmountDisplay
-                        value={formatBaseUnitAmount(networkFee.raw, networkFee.decimals)}
-                        symbol={formatSymbol(networkFee.symbol)}
-                        profile="fee"
-                      />
-                    )
+                    content:
+                      activeShieldReview.sourceEvmFee && !quickMaximum ? (
+                        <NetworkFeeTierPicker
+                          chainFamily="evm"
+                          tier={evmMoveFee.kind === 'tier' ? evmMoveFee.tier : 'standard'}
+                          selection={evmMoveFee}
+                          feeModel={
+                            activeShieldReview.sourceEvmFee.transactionType === 'legacy'
+                              ? 'legacy'
+                              : 'eip1559'
+                          }
+                          customDefaults={{
+                            gasLimit: activeShieldReview.sourceEvmFee.gasLimit,
+                            maxFeePerGasWei: activeShieldReview.sourceEvmFee.maxFeePerGasWei ?? '0',
+                            maxPriorityFeePerGasWei:
+                              activeShieldReview.sourceEvmFee.maxPriorityFeePerGasWei ?? '0',
+                            gasPriceWei: activeShieldReview.sourceEvmFee.gasPriceWei
+                          }}
+                          amount={formatBaseUnitAmount(networkFee.raw, networkFee.decimals)}
+                          symbol={formatSymbol(networkFee.symbol)}
+                          loadTierPreviews={() =>
+                            scopeStillCurrent()
+                              ? previewReviewedConfidentialDepositFeeTiers(
+                                  activeShieldReview,
+                                  selected.asset.asset.id,
+                                  evmMoveFee.kind === 'tier' ? evmMoveFee.tier : undefined
+                                )
+                              : Promise.resolve({})
+                          }
+                          onTierChange={tier => changeShieldFee({ kind: 'tier', tier })}
+                          onSelectionChange={changeShieldFee}
+                          disabled={
+                            cancellingShield ||
+                            confirmingShield ||
+                            confirmUncertain ||
+                            preparingShield
+                          }
+                        />
+                      ) : (
+                        <AmountDisplay
+                          value={formatBaseUnitAmount(networkFee.raw, networkFee.decimals)}
+                          symbol={formatSymbol(networkFee.symbol)}
+                          profile="fee"
+                        />
+                      )
                   }
                 ]
               : [])
@@ -2162,25 +2603,28 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
             feeRefresh !== null ||
             (!confirmUncertain && activeShieldReview.expiresAt <= Date.now())
           }
-          onCancel={() => void cancelShieldReview()}
+          onCancel={quickMaximum && !confirmUncertain ? exitForm : () => void cancelShieldReview()}
           onConfirm={() => void confirmShield()}
         />
       </div>
     )
   }
 
-  const assetSymbol = receiveZec
-    ? 'ZEC'
-    : symbol || formatSymbol(externalAsset?.token.symbol ?? pendingAssetHint?.symbol)
+  const assetSymbol =
+    receiveZec || fixedZec
+      ? 'ZEC'
+      : symbol || formatSymbol(externalAsset?.token.symbol ?? pendingAssetHint?.symbol)
   const confidentialAssetSource = !receiveEntry && from === 'shield'
   const assetIcon = (
     <TokenIcon
-      assetId={selected?.asset.asset.id ?? receiveAssetId ?? selectedAssetId ?? undefined}
+      assetId={
+        selected?.asset.asset.id ?? receiveAssetId ?? fixedAssetId ?? selectedAssetId ?? undefined
+      }
       symbol={assetSymbol}
       icon={selected?.asset.metadata.iconUrl ?? pendingAssetHint?.iconUrl}
-      nativeChain={receiveZec ? 'zcash' : undefined}
+      nativeChain={receiveZec || fixedZec ? 'zcash' : undefined}
       blockchain={
-        receiveZec
+        receiveZec || fixedZec
           ? 'zec'
           : externalAsset
             ? resolveChainIconAlias(
@@ -2197,7 +2641,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     <button
       type="button"
       onClick={() => setAssetPickerOpen(true)}
-      disabled={!receiveEntry && !selected && loadState === 'loading'}
+      disabled={!receiveEntry && !selected && !fixedZec && loadState === 'loading'}
       className="wallet-interactive flex h-9 max-w-full items-center gap-2 rounded-full bg-card px-2 text-base font-medium leading-[21px] hover:bg-wallet-selected active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary"
       aria-label="Select transfer asset"
     >
@@ -2251,10 +2695,84 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       walletId: currentWalletId ?? '',
       accountId: currentAccountId ?? ''
     })}`
+  const fixedNativeRetryPath =
+    fixedDirection && fixedZecForm && fixedProvider && fixedAvailableProviders[fixedProvider]
+      ? shieldFundsPath(fixedDirection, zcashAssetId, fixedProvider)
+      : null
+  const showNativeMove = Boolean(nativeRetryPath || fixedNativeRetryPath)
+  const canChooseFixedProvider =
+    fixedAvailableProviders['zcash-shield'] && fixedAvailableProviders['near-confidential']
+  const openFixedProvider = canChooseFixedProvider ? () => setProviderPickerOpen(true) : undefined
+  const fixedZecAccounts = fixedZecForm && (
+    <div className="mt-3 space-y-2.5">
+      <BalanceTransferAccountCard
+        label="From"
+        accountName={accountName}
+        domain={from}
+        transparent={from === 'public'}
+        address={
+          fixedZcashSelfTransfer?.fromAddress ??
+          (from === 'public' ? (zcashPublicAddress ?? '') : '')
+        }
+        network="zcash"
+        provider={from === 'shield' ? 'zcash-shield' : null}
+        onAccountClick={from === 'shield' ? openFixedProvider : undefined}
+      />
+      <BalanceTransferAccountCard
+        label="To"
+        accountName={accountName}
+        domain={to}
+        transparent={to === 'public'}
+        address={
+          fixedProvider === 'near-confidential' ? '' : (fixedZcashSelfTransfer?.toAddress ?? '')
+        }
+        network={fixedProvider === 'near-confidential' ? 'near' : 'zcash'}
+        provider={to === 'shield' ? fixedProvider : null}
+        onAccountClick={to === 'shield' ? openFixedProvider : undefined}
+      />
+    </div>
+  )
+
+  if (quickMaximum && !fixedNativeRetryPath) {
+    const connecting = shieldConnection === 'required'
+    const error =
+      shieldError ??
+      (connecting
+        ? 'Shield balance unavailable.'
+        : !quickEvmReady &&
+            catalogReady &&
+            loadState !== 'loading' &&
+            !accountLoading &&
+            shieldConnection !== 'checking' &&
+            shieldConnection !== 'busy'
+          ? 'Shield is unavailable for this asset.'
+          : null)
+    return (
+      <div className="page-container">
+        <PageHeader title="Shield" showBack onBack={exitForm} />
+        <div className="p-4" aria-live="polite">
+          {error ? (
+            <TransactionNotice
+              message={error}
+              onRetry={() => {
+                if (connecting) void refreshShield(shieldNeedsAuthorization)
+                else {
+                  setRetry(value => value + 1)
+                  void refreshPortfolio(true)
+                }
+              }}
+            />
+          ) : (
+            'Preparing Shield…'
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="page-container" data-wallet-mode={receiveEntry ? 'public' : walletMode}>
-      {(!nativeReceive || !nativeReceiveState.reviewing) && (
+      {(!showNativeMove || !nativeReceiveState.reviewing) && (
         <PageHeader
           title={
             receiveEntry
@@ -2266,10 +2784,16 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   : actionLabel
           }
           showBack
-          onBack={goBack}
-          backDisabled={nativeReceive && nativeReceiveState.busy}
+          onBack={exitForm}
+          backDisabled={
+            Boolean(fixedDirection && busy) || (showNativeMove && nativeReceiveState.busy)
+          }
           rightContent={
-            !receiveEntry || receiveProvider === 'near-confidential' ? (
+            (
+              fixedDirection
+                ? fixedProvider === 'near-confidential'
+                : !receiveEntry || receiveProvider === 'near-confidential'
+            ) ? (
               <SwapSettingsButton
                 disabled={preparingShield || confirmingShield || nativeReceiveState.busy}
               />
@@ -2277,8 +2801,30 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           }
         />
       )}
-      {nativeRetryPath ? (
-        <NativeZcashReceiveForm
+      {fixedNativeRetryPath ? (
+        <NativeZcashMoveForm
+          key={`${scopeKey}:${fixedDirection}:${fixedProvider}`}
+          destination={
+            fixedProvider === 'near-confidential'
+              ? 'confidential'
+              : fixedDirection === 'unshield'
+                ? 'transparent'
+                : 'shielded'
+          }
+          fundingSource={fixedZcashSource}
+          reviewMaximum={quickMaximum}
+          onExit={exitForm}
+          retryPath={fixedNativeRetryPath}
+          asset={assetControl}
+          accounts={fixedZecAccounts}
+          onStateChange={setNativeReceiveState}
+          actionLabel={fixedActionLabel}
+          resultReturnPath={
+            fixedShield?.onBack ? location.pathname + location.search : '/?domain=shield'
+          }
+        />
+      ) : nativeRetryPath ? (
+        <NativeZcashMoveForm
           key={`${receiveProvider}:${receiveFundingSource}`}
           destination={receiveProvider === 'zcash-shield' ? 'shielded' : 'confidential'}
           fundingSource={receiveFundingSource}
@@ -2344,7 +2890,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                 privateMode={walletMode === 'private'}
                 disabled={!selected}
                 onReverse={
-                  fixedSide
+                  fixedDirection || fixedSide
                     ? undefined
                     : () => {
                         userEditedMove.current = true
@@ -2368,10 +2914,17 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                     address={addressFor(from)}
                     networkName={selected?.chain.chain.displayName ?? ''}
                     network={from === 'shield' ? 'near' : networkIcon}
-                    onNetworkClick={() => setAssetPickerOpen(true)}
+                    onNetworkClick={fixedDirection ? undefined : () => setAssetPickerOpen(true)}
                     onAccountClick={
-                      fixedSide === 'from' ? undefined : () => openDomainPicker('from')
+                      fixedDirection
+                        ? from === 'shield'
+                          ? openFixedProvider
+                          : undefined
+                        : fixedSide === 'from'
+                          ? undefined
+                          : () => openDomainPicker('from')
                     }
+                    provider={fixedDirection && from === 'shield' ? 'near-confidential' : null}
                     disabled={!selected}
                   />
                 }
@@ -2398,7 +2951,12 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                       canSelectTargetNetwork ? () => setNetworkPickerOpen(true) : undefined
                     }
                     showNetwork={to !== 'shield'}
-                    onAccountClick={fixedSide === 'to' ? undefined : () => openDomainPicker('to')}
+                    onAccountClick={
+                      fixedDirection || fixedSide === 'to'
+                        ? undefined
+                        : () => openDomainPicker('to')
+                    }
+                    provider={fixedDirection && to === 'shield' ? 'near-confidential' : null}
                     disabled={!selected}
                   />
                 }
@@ -2563,13 +3121,22 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   )
                 }))
           }
-          selectedKey={receiveEntry ? (receiveAssetId ?? undefined) : selected?.asset.asset.id}
+          selectedKey={
+            fixedDirection
+              ? fixedNearZecWithdraw
+                ? `near-confidential:${zcashAssetId}`
+                : (fixedAssetId ?? undefined)
+              : receiveEntry
+                ? (receiveAssetId ?? undefined)
+                : selected?.asset.asset.id
+          }
           rows={shieldAssetPicker ? providerAssetRows : pickerRows}
           adapter={transferAssetSearch}
           isDisabled={item => 'key' in item && Boolean(item.disabledReason)}
           toItem={item => {
             if ('key' in item) {
-              if (!confidentialAssetSource) return shieldTokenSelectionItem(item, balancesHidden)
+              if (!confidentialAssetSource || (fixedDirection && item.key === zcashAssetId))
+                return shieldTokenSelectionItem(item, balancesHidden)
               const row = shieldTokenSelectionItem(
                 { ...item, badgeBlockchain: undefined },
                 balancesHidden
@@ -2610,6 +3177,22 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           }}
           onSelect={item => {
             const key = 'key' in item ? item.key : item.asset.asset.id
+            if (fixedDirection) {
+              const row = providerAssetRows.find(candidate => candidate.key === key)
+              if (!row) return
+              setSelectedAssetId(row.assetId)
+              setPreferredReceiveProvider(
+                key === zcashAssetId && fixedZcashNativeAvailable
+                  ? 'zcash-shield'
+                  : 'near-confidential'
+              )
+              setDestinationAssetId(null)
+              setAmount('')
+              setMaxSelected(false)
+              setShieldError(null)
+              setAssetPickerOpen(false)
+              return
+            }
             if (
               receiveEntry
                 ? !receivePickerRows.some(item => item.key === key)
@@ -2774,13 +3357,23 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           </div>
         </DialogContent>
       </Dialog>
-      {receiveEntry && (
+      {(receiveEntry || canChooseFixedProvider) && (
         <ShieldProviderDialog
           open={providerPickerOpen}
           onClose={() => setProviderPickerOpen(false)}
-          selected={receiveProvider}
-          available={receiveProviders}
+          selected={fixedDirection ? fixedProvider : receiveProvider}
+          available={fixedDirection ? fixedAvailableProviders : receiveProviders}
           onSelect={provider => {
+            if (fixedDirection) {
+              if (!fixedAvailableProviders[provider]) return
+              setSelectedAssetId(zcashAssetId)
+              setPreferredReceiveProvider(provider)
+              setAmount('')
+              setMaxSelected(false)
+              setShieldError(null)
+              setProviderPickerOpen(false)
+              return
+            }
             if (!receiveProviders[provider]) return
             if (receiveAssetId) setSelectedAssetId(receiveAssetId)
             setPreferredReceiveProvider(provider)

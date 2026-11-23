@@ -1110,7 +1110,7 @@ export function ConfidentialSendForm({
               })()
             }
           ]}
-          afterRows={
+          quoteChanges={
             !refreshingReview && !needsNewQuote && !error && !uncertain ? (
               <QuoteReviewChanges
                 changes={reviewDescription.changes}

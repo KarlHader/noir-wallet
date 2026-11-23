@@ -282,8 +282,16 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
 }) => {
   await waitForBackgroundWalletInitialization(popup)
   const rpcMethods: string[] = []
+  const tokenBalances = new Map([
+    ['0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', 2_000_000n],
+    ['0xdac17f958d2ee523a2206206994597c13d831ec7', 3_000_000n]
+  ])
   await context.route(ethereumMainnetRpcRoute, async route => {
-    const request = route.request().postDataJSON() as { id: number; method: string }
+    const request = route.request().postDataJSON() as {
+      id: number
+      method: string
+      params: [{ to: string }?]
+    }
     rpcMethods.push(request.method)
     const result =
       request.method === 'eth_chainId'
@@ -291,7 +299,7 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
         : request.method === 'eth_getBalance'
           ? '0xde0b6b3a7640000'
           : request.method === 'eth_call'
-            ? `0x${2_000_000n.toString(16).padStart(64, '0')}`
+            ? `0x${(tokenBalances.get(request.params[0]!.to.toLowerCase()) ?? 0n).toString(16).padStart(64, '0')}`
             : null
     await route.fulfill({
       contentType: 'application/json',
@@ -328,17 +336,18 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
       status: 'ready',
       assets: [
         { metadata: { symbol: 'ETH' }, balance: { totalRaw: '1000000000000000000' } },
-        { metadata: { symbol: 'USDC' }, balance: { totalRaw: '2000000' } }
+        { metadata: { symbol: 'USDC' }, balance: { totalRaw: '2000000' } },
+        { metadata: { symbol: 'USDT' }, balance: { totalRaw: '3000000' } }
       ]
     }
   })
   await expect(requestPortfolio('read')).resolves.toMatchObject({
     result: {
       status: 'ready',
-      assets: [{ freshness: 'fresh' }, { freshness: 'fresh' }]
+      assets: [{ freshness: 'fresh' }, { freshness: 'fresh' }, { freshness: 'fresh' }]
     }
   })
-  expect(rpcMethods.sort()).toEqual(['eth_call', 'eth_chainId', 'eth_getBalance'])
+  expect(rpcMethods.sort()).toEqual(['eth_call', 'eth_call', 'eth_chainId', 'eth_getBalance'])
 
   await popup.goto(
     `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
@@ -358,6 +367,10 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
       {
         assetId: 'eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
         totalRaw: '2000000'
+      },
+      {
+        assetId: 'eip155:1/erc20:0xdac17f958d2ee523a2206206994597c13d831ec7',
+        totalRaw: '3000000'
       }
     ]
   })

@@ -13,6 +13,7 @@ import {
   projectExternalDepositResult
 } from '@/lib/analytics/operations'
 import {
+  externalShieldQuoteAmountRaw,
   hasExternalShieldDepositFunding,
   isExternalShieldDepositExpired,
   shouldAutoRefreshExternalShieldDeposit,
@@ -933,6 +934,7 @@ export class ConfidentialFundingCoordinator {
     const quote = minimumMode
       ? await this.options.api.quoteFlexibleDeposit({
           originAsset: input.source.protocolAssetId,
+          quoteAmountRaw: externalShieldQuoteAmountRaw(asset.metadata.decimals, token?.price),
           signerId: identity.address,
           refundTo: input.refundAddress,
           slippageBps

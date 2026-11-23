@@ -1,5 +1,20 @@
 import type { TransactionGraph, TransactionIntentSnapshot } from './transaction'
 
+export function isKnownNonMinedEvmFailure(graph: TransactionGraph): boolean {
+  const origin = graph.segments.find(segment => segment.role === 'origin')
+  return (
+    graph.root.status === 'failed' &&
+    origin?.status === 'failed' &&
+    (origin.failure?.code === 'expired' ||
+      origin.failure?.code === 'invalid' ||
+      origin.failure?.code === 'dropped') &&
+    origin.evidence?.blockHash === undefined &&
+    origin.evidence?.blockHeight === undefined &&
+    (origin.evidence?.confirmations ?? 0) === 0 &&
+    origin.evidence?.replacementTransactionHash === undefined
+  )
+}
+
 function intentWithoutFees(intent: TransactionIntentSnapshot): string {
   const { feeLimit: _feeLimit, evm: _evm, ...content } = intent
   return JSON.stringify(content)

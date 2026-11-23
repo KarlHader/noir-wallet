@@ -1037,7 +1037,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       searchParams.get('balanceDomain') === 'private' ||
       requestedCrossChainSourceMode === 'private')
   const [nativeIntentsCatalog, setNativeIntentsCatalog] = useState<readonly SwapToken[]>([])
-  const nativeIntentsCatalogScope = shieldNativeZecSwap
+  const nativeIntentsCatalogScope = shieldSwapSelected
     ? `${effectiveWalletId}:${effectiveAccountId}`
     : null
   const [settledNativeIntentsCatalogScope, setSettledNativeIntentsCatalogScope] = useState<
@@ -1115,22 +1115,18 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   }, [nativeConfidentialDestinations, nativeIntentsCatalog])
   const shieldCatalogTokens = useMemo(
     () =>
-      shieldNativeZecSwap
+      shieldSwapSelected
         ? nativeIntentsCatalog
         : mergeTokenCatalogs(
-            confidentialShieldSwapActive || privateCatalogRequested || shieldPickerReady
-              ? swap.sourceTokens
-              : swap.sourceTokens.filter(isZecToken),
-            confidentialShieldSwapActive || privateCatalogRequested || shieldPickerReady
+            privateCatalogRequested ? swap.sourceTokens : swap.sourceTokens.filter(isZecToken),
+            privateCatalogRequested
               ? swap.crossChainDestinationTokens
               : swap.crossChainDestinationTokens.filter(isZecToken)
           ),
     [
-      shieldNativeZecSwap,
+      shieldSwapSelected,
       nativeIntentsCatalog,
-      confidentialShieldSwapActive,
       privateCatalogRequested,
-      shieldPickerReady,
       swap.sourceTokens,
       swap.crossChainDestinationTokens
     ]
@@ -1645,6 +1641,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     },
     [privateSwapRequested, walletSourcesScope, destinationWalletActionMode.setMode]
   )
+  const privateFundingQuotePurpose = privateFundingRequestId
+    ? 'confidential-funding'
+    : 'public-private-move'
   const quotePurpose = crossChainWithdrawRequested
     ? 'private-cross-chain-withdraw'
     : publicPrivacySendRequested
@@ -1658,7 +1657,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             : crossChainSendRequested
               ? 'public-cross-chain-send'
               : isPrivateFunding
-                ? 'confidential-funding'
+                ? privateFundingQuotePurpose
                 : ordinarySwapRequested
                   ? 'wallet-swap'
                   : undefined
@@ -6924,7 +6923,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             amountPrefix={publicPrivacySendRequested ? '-' : ''}
             network={walletOwnedSource.chain.chain.displayName}
             rows={reviewRows}
-            afterRows={quoteChanges}
+            quoteChanges={quoteChanges}
             error={
               transferPreparationError ? (
                 <TransactionNotice message={transferPreparationError} className="mt-3" />
@@ -8110,9 +8109,13 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 activateShieldIntentsZecSwap()
               else {
                 setShieldZecSource('intents')
-                navigate(
-                  `/shield-swap?${new URLSearchParams({ provider: 'near-confidential', source: selectionId })}`
-                )
+                shieldSourceInitialized.current = true
+                const params = new URLSearchParams({
+                  source: selectionId,
+                  balanceDomain: 'shield',
+                  shieldZecSource: 'intents'
+                })
+                navigate(`/swap?${params}`, { replace: true })
               }
               setShieldZecPickerOpen(false)
             }}

@@ -15,7 +15,7 @@ import {
   ASSET_PRICE_SOURCE_ASSETS,
   getEvmNativeProtocolAssetId
 } from '@/config/asset-market-assets'
-import { NOIR_SWAP_REFERRAL } from '@/config/intents'
+import { NOIR_MOVE_REFERRAL, NOIR_PRIVATELY_REFERRAL, NOIR_SWAP_REFERRAL } from '@/config/intents'
 import { createInitialProductChainRegistry, getZcashChainId } from '@/core/chains/registry'
 import {
   getEvmRouteAssetIdentity,
@@ -47,6 +47,13 @@ export type PrivateQuotePurpose =
   | 'private-cross-chain-withdraw'
   | 'private-dapp-transfer'
   | 'public-private-send'
+  | 'public-private-move'
+
+export function rheaSwapReferral(purpose?: PrivateQuotePurpose): string {
+  if (purpose === 'public-private-send') return NOIR_PRIVATELY_REFERRAL
+  if (purpose === 'public-private-move') return NOIR_MOVE_REFERRAL
+  return NOIR_SWAP_REFERRAL
+}
 
 export function assertPrivateQuoteRoute(
   request: Pick<
@@ -119,7 +126,8 @@ export function assertPrivateQuoteRoute(
   if (
     purpose === 'wallet-swap' ||
     purpose === 'public-cross-chain-send' ||
-    purpose === 'confidential-funding'
+    purpose === 'confidential-funding' ||
+    purpose === 'public-private-move'
   ) {
     const chains = createInitialProductChainRegistry('mainnet').list()
     const chainId = (apiChainId: string) => {
@@ -149,7 +157,7 @@ export function assertPrivateQuoteRoute(
       }
       return
     }
-    if (purpose === 'confidential-funding') {
+    if (purpose === 'confidential-funding' || purpose === 'public-private-move') {
       if (
         !sourceIsPublic ||
         !destinationNetwork?.privateExecutionAddress ||
@@ -785,14 +793,17 @@ export function parseRheaSwapQuoteRequest(value: unknown): RheaSwapQuoteRequest 
   })
 }
 
-export function toRheaSwapProtocolRequest(value: RheaSwapQuoteRequest): QuoteRequest {
+export function toRheaSwapProtocolRequest(
+  value: RheaSwapQuoteRequest,
+  purpose?: PrivateQuotePurpose
+): QuoteRequest {
   const { quoteMode, ...quoteFields } = value
   const fast = quoteMode === 'fast'
   return Object.freeze({
     ...quoteFields,
     tokenIn: toRheaSwapProtocolAsset(value.tokenIn),
     tokenOut: toRheaSwapProtocolAsset(value.tokenOut),
-    extensions: Object.freeze({ referral: NOIR_SWAP_REFERRAL }),
+    extensions: Object.freeze({ referral: rheaSwapReferral(purpose) }),
     quoteWaitingTimeMs: fast ? 2_000 : 6_000,
     sameChainTimeoutMs: fast ? 1_000 : 1_500,
     crossChainTimeoutMs: fast ? 2_000 : 6_000

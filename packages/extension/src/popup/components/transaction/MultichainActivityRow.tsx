@@ -8,6 +8,7 @@ import { TokenIcon } from '../tokens/TokenIcon'
 import { ChainIcon } from '../common/ChainIcon'
 import {
   getActivityRowTextPresentation,
+  getActivitySendSubtitle,
   getActivityAccountRouteLabel,
   getActivityRouteTitle,
   getActivityStatusPresentation,
@@ -166,7 +167,11 @@ function RouteActivityRow({
       ? 'Zcash Shield'
       : 'Transparent'
     : presentation.destinationAccountMode
-  const subtitle = isSwap ? swapRoute : (destinationMode ?? presentation.destinationNetwork)
+  const subtitle = isSwap
+    ? swapRoute
+    : ((action === 'Send' ? getActivitySendSubtitle(item, presentation) : undefined) ??
+      destinationMode ??
+      presentation.destinationNetwork)
   const showStatus = item.status !== 'final'
   const failed = item.status === 'failed'
   const showCredit = presentation.isExternalDeposit || focus === 'destination'
@@ -362,7 +367,8 @@ export function MultichainActivityRow({
           sourceNetwork: resolvedNetworkName,
           destinationNetwork: resolvedNetworkName
         }
-      : undefined
+      : undefined,
+    chainMetadata
   )
   const showStatus = item.status !== 'final'
   const isCancelled = item.status === 'failed' && item.failureCode === 'user-rejected'

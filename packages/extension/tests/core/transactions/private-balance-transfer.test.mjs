@@ -26,6 +26,10 @@ import {
   shieldPortfolioBalances
 } from '../../../src/popup/services/shield-transfer.ts'
 import {
+  buildFixedShieldFundsRequest,
+  matchesFixedShieldFundsRecipient
+} from '../../../src/popup/services/shield-funds-route.ts'
+import {
   buildShieldSwapRequest,
   buildShieldSwapPreviewRequest,
   matchesShieldSwapReview
@@ -336,7 +340,7 @@ test('quotes both cross-chain transfer directions and rejects a same-chain build
     expiresAt: null
   }
   let request
-  let purpose = 'confidential-funding'
+  let purpose = 'public-private-move'
   let isCrossChain = true
   let transactionChain = 1
   const discarded = []
@@ -686,6 +690,37 @@ test('uses independently held Shield tokens without adding them to Public assets
     )
   ).toBe(zcashSource)
   const zcashRecipient = 't1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F'
+  const unshieldZec = buildFixedShieldFundsRequest({
+    ...zcashSource,
+    direction: 'unshield',
+    network: 'mainnet',
+    keyDomainId: 'wallet',
+    accountId: 'account',
+    amountRaw: '120000',
+    slippageBps: 50,
+    ownTransparentAddress: zcashRecipient
+  })
+  expect(unshieldZec).toMatchObject({
+    purpose: 'move',
+    externalRecipient: zcashRecipient,
+    source: { assetId: zcashAssetId },
+    destination: { assetId: zcashAssetId }
+  })
+  const reviewedRecipient = {
+    purpose: 'move',
+    destinationAddress: zcashRecipient,
+    externalRecipient: zcashRecipient
+  }
+  expect(matchesFixedShieldFundsRecipient(reviewedRecipient, unshieldZec, zcashRecipient)).toBe(
+    true
+  )
+  expect(
+    matchesFixedShieldFundsRecipient(
+      { ...reviewedRecipient, destinationAddress: zcashRecipient.toLowerCase() },
+      unshieldZec,
+      zcashRecipient
+    )
+  ).toBe(false)
   const nativeZecSwap = buildShieldSwapRequest({
     network: 'mainnet',
     keyDomainId: 'wallet',
@@ -858,6 +893,20 @@ test('binds a Shield ETH Move to the selected EVM destination asset', () => {
     chainName: 'eth',
     assetId: 'eip155:1/slip44:60',
     protocolAssetId: 'nep141:eth.omft.near'
+  })
+  const fixedUnshield = buildFixedShieldFundsRequest({
+    ...input,
+    direction: 'unshield',
+    destination
+  })
+  expect(fixedUnshield).toMatchObject({
+    sourceDomain: 'shield',
+    destinationDomain: 'public',
+    destination: {
+      chainId: source.chain.chain.id,
+      assetId: source.asset.asset.id,
+      protocolAssetId: source.managed.protocolAssetId
+    }
   })
   const fake = options.find(item => item.asset.asset.id === fakeAssetId)
   expect(fake).toBeDefined()

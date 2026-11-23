@@ -13,7 +13,11 @@ import {
 } from '@/popup/components/ui/dialog'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { TransactionResult, TransactionResultDetailRow } from './TransactionResult'
+import {
+  fullHeightTransactionDialogClassName,
+  TransactionResult,
+  TransactionResultDetailRow
+} from './TransactionResult'
 
 export interface TransactionReviewAsset {
   readonly assetId?: string
@@ -34,6 +38,7 @@ export function TransactionReviewDialog({
   title,
   titleId,
   description,
+  fullHeight = false,
   children
 }: {
   readonly open: boolean
@@ -41,6 +46,7 @@ export function TransactionReviewDialog({
   readonly title: string
   readonly titleId?: string
   readonly description: string
+  readonly fullHeight?: boolean
   readonly children: ReactNode
 }) {
   return (
@@ -51,7 +57,7 @@ export function TransactionReviewDialog({
         aria-label={titleId ? undefined : title}
         aria-labelledby={titleId}
         scroll="body"
-        className="gap-0 p-0"
+        className={cn('gap-0 p-0', fullHeight && fullHeightTransactionDialogClassName)}
       >
         <DialogTitle className="sr-only" aria-hidden={titleId ? true : undefined}>
           {title}
@@ -86,6 +92,7 @@ interface TransactionReviewViewProps {
   readonly exchange?: boolean
   readonly notice?: ReactNode
   readonly afterRows?: ReactNode
+  readonly quoteChanges?: ReactNode
   readonly error?: ReactNode
   readonly confirmLabel: string
   readonly confirmTone?: 'default' | 'warning'
@@ -126,6 +133,7 @@ export function SendReviewDialog({
       title="Confirm Send"
       titleId={titleId}
       description={description}
+      fullHeight={approving}
       onOpenChange={open => {
         if (!open && !approving) onCancel()
       }}
@@ -163,6 +171,7 @@ export function TransactionReviewView({
   exchange = false,
   notice,
   afterRows,
+  quoteChanges,
   error,
   confirmLabel,
   confirmTone = 'default',
@@ -180,6 +189,7 @@ export function TransactionReviewView({
       <TransactionResult
         status="loading"
         title="Transaction Submitting"
+        titleId={titleId}
         layout={figma ? 'single-asset' : 'default'}
         onClose={figma && showTitle ? onCancel : undefined}
         closeDisabled={cancelDisabled || confirming}
@@ -329,33 +339,34 @@ export function TransactionReviewView({
         {error}
       </div>
 
-      <DialogFooter
-        className={
-          figma ? 'page-footer grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2.5' : 'gap-3 p-5 pt-3'
-        }
-      >
-        <Button
-          variant="outline"
-          size={figma ? 'wallet' : 'default'}
-          className={figma ? 'border-white/10 bg-card' : undefined}
-          disabled={cancelDisabled || confirming}
-          onClick={onCancel}
+      <div className={figma ? 'page-footer' : 'shrink-0 p-5 pt-3'}>
+        {quoteChanges}
+        <DialogFooter
+          className={figma ? 'grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2.5' : 'gap-3'}
         >
-          Cancel
-        </Button>
-        <Button
-          size={figma ? 'wallet' : 'default'}
-          className={cn(
-            'text-center',
-            confirmTone === 'warning' && 'bg-warning text-black hover:bg-warning/90'
-          )}
-          disabled={confirmDisabled || preparing}
-          isLoading={preparing || confirming}
-          onClick={onConfirm}
-        >
-          {confirmLabel}
-        </Button>
-      </DialogFooter>
+          <Button
+            variant="outline"
+            size={figma ? 'wallet' : 'default'}
+            className={figma ? 'border-white/10 bg-card' : undefined}
+            disabled={cancelDisabled || confirming}
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+          <Button
+            size={figma ? 'wallet' : 'default'}
+            className={cn(
+              'text-center',
+              confirmTone === 'warning' && 'bg-warning text-black hover:bg-warning/90'
+            )}
+            disabled={confirmDisabled || preparing}
+            isLoading={preparing || confirming}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </Button>
+        </DialogFooter>
+      </div>
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../ui/button'
 import { DialogTitle } from '../ui/dialog'
-import { TransactionResult } from './TransactionResult'
+import { fullHeightTransactionDialogClassName, TransactionResult } from './TransactionResult'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { openModal } from '@/popup/provider/ModalManager'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
@@ -342,6 +342,7 @@ export function ConfidentialActivityView({
         {activityView ? (
           <ActivityTransactionBody
             view={activityView}
+            showAmountsAsDetails={display?.operation === 'send'}
             showDate={activityView.item.snapshot?.shield?.operation === 'cluster'}
           />
         ) : (
@@ -400,7 +401,9 @@ export function openConfidentialActivity(
   display?: ConfidentialActivityDisplay
 ): Promise<void> {
   return openModal<void>({
-    className: 'max-h-[calc(100dvh-1rem)] grid-rows-[minmax(0,1fr)_auto] gap-0 p-0',
+    ...(display?.operation === 'send'
+      ? { className: `${fullHeightTransactionDialogClassName} gap-0 p-0`, scroll: 'body' }
+      : { className: 'max-h-[calc(100dvh-1rem)] grid-rows-[minmax(0,1fr)_auto] gap-0 p-0' }),
     body: resolve => (
       <ConfidentialActivityView
         plan={plan}

@@ -33,6 +33,7 @@ import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/numbe
 import type { LedgerSigningPayload } from '@/core/worker/types'
 import { resolveEvmAddressRole } from '@/core/accounts/evm-address-role'
 import { parseEvmTransferIntent } from '@/infrastructure/chains/evm'
+import { isNoirPublicConfidentialTransferReferral } from '@/config/intents'
 
 import {
   projectZcashOperationEvent,
@@ -396,12 +397,13 @@ import {
   SOLANA_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
 import { deriveSoftwareEd25519NetworkMetadata } from './software-ed25519-metadata'
-import { dappManager } from '@/core/dapp/dapp-manager'
+import { connectionHasEvmAuthorization, dappManager } from '@/core/dapp/dapp-manager'
 import {
   DAppExecutionModeConfirmationRequiredError,
   DAppExecutionModeTransitionCoordinator,
   type DAppExecutionMode,
-  type DAppExecutionModeScope
+  type DAppExecutionModeScope,
+  type DAppExecutionModeState
 } from '@/core/dapp/dapp-execution-mode'
 import { dappExecutionModeCoordinator, dappExecutionModeRequestGate } from './dapp-execution-mode'
 import { createSolanaWalletRuntimeError } from '@/core/chains/solana'
@@ -738,6 +740,7 @@ async function requireCurrentPrivateSwapQuote(
     quote.scope.purpose === 'wallet-swap' ||
     quote.scope.purpose === 'public-cross-chain-send' ||
     quote.scope.purpose === 'confidential-funding' ||
+    quote.scope.purpose === 'public-private-move' ||
     dappPrivateAccount
       ? 'main'
       : 'private'
@@ -964,8 +967,8 @@ const currentDAppEvmNetworks = new CurrentDAppEvmNetworkCoordinator({
 
 async function notifyEvmAccountsChanged(): Promise<void> {
   const connections = await dappManager.getAllConnections()
-  await Promise.all(
-    connections.map(async connection => {
+  await Promise.allSettled(
+    connections.filter(connectionHasEvmAuthorization).map(async connection => {
       const handler = await evmDAppOrigins.get(connection.origin)
       await handler.notifyAccountsChanged(connection.origin)
     })
@@ -990,11 +993,31 @@ async function requireActiveDAppExecutionModeScope(): Promise<DAppExecutionModeS
   })
 }
 
-async function notifyDAppExecutionModeChanged(scope: DAppExecutionModeScope): Promise<void> {
+async function notifyDAppExecutionModeChanged(
+  scope: DAppExecutionModeScope,
+  state: DAppExecutionModeState
+): Promise<void> {
   dappHandler.cancelPendingApprovalsForContext(scope.keyDomainId, scope.accountId, 'evm')
-  await multichainRuntimeReady
-  await notifyEvmAccountsChanged()
-  await multichainSessionDAppHandler?.notifyAllSessionsChanged()
+  void multichainStartupReady
+    .then(() => multichainRuntimeReady)
+    .then(() =>
+      accountContextTransition.runActiveOperation(async () => {
+        const active = await requireActiveDAppExecutionModeScope()
+        if (
+          active.network !== scope.network ||
+          active.keyDomainId !== scope.keyDomainId ||
+          active.accountId !== scope.accountId ||
+          (await dappExecutionModeCoordinator.read(scope)).mode !== state.mode
+        ) {
+          return
+        }
+        await Promise.allSettled([
+          notifyEvmAccountsChanged(),
+          multichainSessionDAppHandler?.notifyAllSessionsChanged({ storedAuthorizationOnly: true })
+        ])
+      })
+    )
+    .catch(() => {})
 }
 
 const dappExecutionModeTransitionCoordinator = new DAppExecutionModeTransitionCoordinator(
@@ -3168,7 +3191,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             return accountContextTransition.runActiveOperation(async () => {
               try {
                 await requireCurrentPrivateSwapQuote(quoteHandle, record.sourceMode)
-                const { request } = await service.readQuoteSecurityContext(quoteHandle)
+                const { request, scope } = await service.readQuoteSecurityContext(quoteHandle)
                 const requestKey: unknown = JSON.parse(quoteRequestKey)
                 if (
                   !Array.isArray(requestKey) ||
@@ -3176,7 +3199,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   requestKey[0] !== record.sourceAssetId ||
                   requestKey[1] !== record.destinationAssetId ||
                   JSON.stringify(
-                    toRheaSwapProtocolRequest(parseRheaSwapQuoteRequest(requestKey[3]))
+                    toRheaSwapProtocolRequest(
+                      parseRheaSwapQuoteRequest(requestKey[3]),
+                      isNoirPublicConfidentialTransferReferral(request.extensions?.referral)
+                        ? scope?.purpose
+                        : undefined
+                    )
                   ) !== JSON.stringify(request)
                 )
                   return null
@@ -4440,7 +4468,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               if (
                 purpose === 'wallet-swap' ||
                 purpose === 'public-cross-chain-send' ||
-                purpose === 'confidential-funding'
+                purpose === 'confidential-funding' ||
+                purpose === 'public-private-move'
               ) {
                 if (privateSender) throw new Error('Swap source mode changed.')
                 const scope = {

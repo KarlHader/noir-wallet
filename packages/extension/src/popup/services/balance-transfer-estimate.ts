@@ -116,7 +116,7 @@ export async function estimateDirectTransfer(input: {
       ? input.destinationAsset
         ? 'private-cross-chain-withdraw'
         : 'private-transfer'
-      : 'confidential-funding'
+      : 'public-private-move'
   )
   try {
     input.signal.throwIfAborted()

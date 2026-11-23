@@ -76,7 +76,7 @@ export class IndexedDbStorageV2Repository implements StorageV2Repository {
 
   async getSnapshot(generationIdValue: StorageV2GenerationId): Promise<StorageV2Snapshot | null> {
     const generationId = parseStorageV2GenerationId(generationIdValue)
-    return runWithStorageV2Database(this.databaseName, database => {
+    return this.readExisting(database => {
       const transaction = database.transaction(STORAGE_V2_ALL_DATABASE_STORES, 'readonly')
       const source = readStorageV2SnapshotInTransaction(transaction, generationId)
       let snapshot: StorageV2Snapshot | null = null
@@ -327,32 +327,41 @@ export class IndexedDbStorageV2Repository implements StorageV2Repository {
     return snapshot
   }
 
-  private async readMetadata<T>(key: IDBValidKey, parse: EntityParser<T>): Promise<T | null> {
+  private async readExisting<T>(
+    operation: (database: IDBDatabase) => Promise<T>
+  ): Promise<T | null> {
     const database = await openExistingStorageV2Database(this.databaseName)
     if (!database) return null
     try {
-      return await new Promise<T | null>((resolve, reject) => {
-        const transaction = database.transaction(STORAGE_V2_DATABASE_STORES.metadata, 'readonly')
-        const request = transaction.objectStore(STORAGE_V2_DATABASE_STORES.metadata).get(key)
-        let result: T | null = null
-        let error: unknown
-        request.onsuccess = () => {
-          try {
-            if (request.result !== undefined) result = parse(request.result)
-          } catch (cause) {
-            error = cause
-            transaction.abort()
-          }
-        }
-        transaction.oncomplete = () => resolve(result)
-        transaction.onerror = () =>
-          reject(error ?? transaction.error ?? new Error('Storage V2 metadata read failed'))
-        transaction.onabort = () =>
-          reject(error ?? transaction.error ?? new Error('Storage V2 metadata read aborted'))
-      })
+      return await operation(database)
     } finally {
       database.close()
     }
+  }
+
+  private async readMetadata<T>(key: IDBValidKey, parse: EntityParser<T>): Promise<T | null> {
+    return this.readExisting(
+      database =>
+        new Promise<T | null>((resolve, reject) => {
+          const transaction = database.transaction(STORAGE_V2_DATABASE_STORES.metadata, 'readonly')
+          const request = transaction.objectStore(STORAGE_V2_DATABASE_STORES.metadata).get(key)
+          let result: T | null = null
+          let error: unknown
+          request.onsuccess = () => {
+            try {
+              if (request.result !== undefined) result = parse(request.result)
+            } catch (cause) {
+              error = cause
+              transaction.abort()
+            }
+          }
+          transaction.oncomplete = () => resolve(result)
+          transaction.onerror = () =>
+            reject(error ?? transaction.error ?? new Error('Storage V2 metadata read failed'))
+          transaction.onabort = () =>
+            reject(error ?? transaction.error ?? new Error('Storage V2 metadata read aborted'))
+        })
+    )
   }
 
   private async readEntity<T>(
@@ -361,8 +370,7 @@ export class IndexedDbStorageV2Repository implements StorageV2Repository {
     entityId: string,
     parse: EntityParser<T>
   ): Promise<T | null> {
-    return runWithStorageV2Database(
-      this.databaseName,
+    return this.readExisting(
       database =>
         new Promise<T | null>((resolve, reject) => {
           const transaction = database.transaction(storeName, 'readonly')

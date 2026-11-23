@@ -60,11 +60,11 @@ export interface IntentsProgressPresentation {
 
 function getSwapProcessingLabel(router: string | undefined, actionName: string): string {
   const name = router?.trim()
+  if (name && isInternalSwapProvider(name)) return 'Cross-chain'
   if (
     !name ||
     name.length > 32 ||
     !/^[a-zA-Z0-9 ._-]+$/.test(name) ||
-    isInternalSwapProvider(name) ||
     name.toLowerCase() === 'unknown'
   ) {
     return `${actionName} processing`

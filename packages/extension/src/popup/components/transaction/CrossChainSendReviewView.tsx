@@ -209,7 +209,7 @@ export function CrossChainSendReviewView({
           : []),
         { label: 'Provider', content: <RouteProviderLabel router={review.router} /> }
       ]}
-      afterRows={reviewedQuoteReady ? quoteChanges : undefined}
+      quoteChanges={reviewedQuoteReady ? quoteChanges : undefined}
       error={
         transferPreparationError ? (
           <TransactionNotice message={transferPreparationError} />

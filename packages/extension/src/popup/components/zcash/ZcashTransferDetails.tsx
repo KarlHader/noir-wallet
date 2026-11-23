@@ -87,6 +87,7 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
       open={review.open}
       title={`Confirm ${action.label}`}
       description="Review the amount, destination, and fee."
+      fullHeight={review.submitting}
       onOpenChange={review.onOpenChange}
     >
       <TransactionReviewView
@@ -161,7 +162,7 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
             )
           }
         ]}
-        afterRows={
+        quoteChanges={
           quote && (
             <QuoteReviewChanges
               changes={review.changes}

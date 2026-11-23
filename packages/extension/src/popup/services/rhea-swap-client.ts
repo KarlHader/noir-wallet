@@ -296,6 +296,7 @@ export function createRheaSwapClient(
         | 'private-transfer'
         | 'private-cross-chain-send'
         | 'private-cross-chain-withdraw'
+        | 'public-private-move'
         | 'public-private-send',
       zcashFundingSource?: 'transparent' | 'shielded'
     ): Promise<RheaSwapQuoteView> => {

@@ -457,7 +457,6 @@ export function SwapReviewView({
           )}
         </div>
 
-        {!quoteExpired && !quoteRefreshing && !preparationError && quoteChanges}
         {preparationError || (quoteExpired && !quoteRefreshing) ? (
           <TransactionNotice
             message={preparationError ?? 'Quote expired.'}
@@ -481,6 +480,7 @@ export function SwapReviewView({
 
       <div className="page-footer">
         {actionStatus}
+        {!quoteExpired && !quoteRefreshing && !preparationError && quoteChanges}
         <div className="flex gap-2.5">
           {onCancel && (
             <Button
