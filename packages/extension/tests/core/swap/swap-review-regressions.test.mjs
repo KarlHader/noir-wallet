@@ -142,13 +142,22 @@ function combinedSwapFixture(t) {
     }
   })
   const router = {
-    getPendingApproval: async () => ({
-      graph: graphs.get(approvalId),
-      review: {
-        payloadFingerprint: { digestHex: approvalFingerprint },
-        summary: summary(approval.transaction, '50000')
+    getPendingApproval: async id => {
+      const graph = graphs.get(id)
+      if (graph?.root.status !== 'prepared') return null
+      return {
+        graph,
+        review: {
+          payloadFingerprint: {
+            digestHex: id === approvalId ? approvalFingerprint : 'b'.repeat(64)
+          },
+          summary:
+            id === approvalId
+              ? summary(approval.transaction, '50000')
+              : summary(transaction, '450000')
+        }
       }
-    }),
+    },
     approve: async (id, _fingerprint, authorize) => {
       await authorize()
       if (id === approvalId) {
@@ -218,7 +227,10 @@ function combinedSwapFixture(t) {
       })
     },
     readAccount: async () => account,
-    readGraph: async (_scope, id) => graphs.get(id) ?? null,
+    readGraph: async (_scope, id) => {
+      const graph = graphs.get(id)
+      return graph?.root.status === 'prepared' ? null : (graph ?? null)
+    },
     validateQuote: async () => {},
     checkApproval: async () => {},
     schedule: async () => {}

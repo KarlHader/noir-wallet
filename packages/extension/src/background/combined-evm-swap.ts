@@ -249,7 +249,18 @@ export class CombinedEvmSwap {
     const quote = this.options.quote
     if (!router || !quote) return record
     const { input, scope } = record
-    let approval = await this.options.readGraph(scope, input.approvalId)
+    const readReviewedGraph = async (id: string, fingerprint: string) => {
+      const persisted = await this.options.readGraph(scope, id)
+      if (persisted) return persisted
+      const pending = await router.getPendingApproval(id)
+      return pending?.graph.root.id === id &&
+        pending.graph.root.scope.keyDomainId === scope.keyDomainId &&
+        pending.graph.root.scope.accountId === scope.accountId &&
+        pending.review.payloadFingerprint.digestHex === fingerprint
+        ? pending.graph
+        : null
+    }
+    let approval = await readReviewedGraph(input.approvalId, input.approvalFingerprint)
     if (
       approval &&
       ['signed', 'broadcast', 'confirming'].includes(origin(approval)?.status ?? '')
@@ -267,7 +278,7 @@ export class CombinedEvmSwap {
         status: 'approval-failed',
         message: 'Token approval failed. Start a new Swap.'
       })
-    const swap = record.swap && (await this.options.readGraph(scope, record.swap.id))
+    const swap = record.swap && (await readReviewedGraph(record.swap.id, record.swap.fingerprint))
     const swapOrigin = origin(swap || null)
     const swapHash = swapOrigin?.evidence?.transactionHash
     if (
