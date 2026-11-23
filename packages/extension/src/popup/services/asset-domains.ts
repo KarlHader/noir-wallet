@@ -16,6 +16,8 @@ import {
   summarizeNearConfidentialHoldings,
   type NearConfidentialSummary
 } from './near-confidential-holdings'
+import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import { readEnabledChainFeatureFlags } from '@/config/enabled-chain-feature-flags'
 
 export type AssetDomain = PortfolioDomain
 export type ShieldProvider = 'near-confidential' | 'zcash-shield'
@@ -139,10 +141,14 @@ export function buildShieldProviderGroups(
   prices: AssetPriceReadModel | null
 ): readonly ShieldProviderGroup[] {
   return (['near-confidential', 'zcash-shield'] as const).flatMap(id => {
+    const nearEnabled = readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG)
     const chains = model.chains.filter(chain =>
       id === 'near-confidential'
         ? chain.chain.network.kind === 'mainnet' &&
-          (chain.chain.family === 'evm' || chain.chain.family === 'near')
+          (chain.chain.family === 'evm' ||
+            (nearEnabled &&
+              chain.chain.family === 'near' &&
+              chain.chain.capabilities.transaction.status === 'available'))
         : chain.chain.family === 'zcash'
     )
     if (chains.length === 0) return []

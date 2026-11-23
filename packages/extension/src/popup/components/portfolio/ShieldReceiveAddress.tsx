@@ -295,24 +295,31 @@ export function ShieldReceiveAddress({
     }
   }
 
+  const nearRefund = currentRecord?.source.chainId.startsWith('near:') === true
   const refundAccount = currentRecord
     ? accountCatalog?.accounts.find(candidate =>
         candidate.networks.some(
           item =>
-            item.chain.id === currentRecord.source.chainId &&
+            (item.chain.id === currentRecord.source.chainId ||
+              (nearRefund && item.chain.family === 'evm')) &&
             (item.privateExecutionAddress?.toLowerCase() ===
               currentRecord.refundAddress.toLowerCase() ||
               item.addresses.some(
                 address =>
                   address.value === currentRecord.refundAddress ||
-                  (item.chain.family === 'evm' &&
+                  ((item.chain.family === 'evm' || nearRefund) &&
                     address.value.toLowerCase() === currentRecord.refundAddress.toLowerCase())
               ))
         )
       )
     : undefined
-  const refundNetwork = refundAccount?.networks.find(
-    item => item.chain.id === currentRecord?.source.chainId
+  const refundNetwork = refundAccount?.networks.find(item =>
+    nearRefund
+      ? item.chain.family === 'evm' &&
+        item.addresses.some(
+          address => address.value.toLowerCase() === currentRecord?.refundAddress.toLowerCase()
+        )
+      : item.chain.id === currentRecord?.source.chainId
   )
   const refundIsPrivate =
     Boolean(currentRecord) &&

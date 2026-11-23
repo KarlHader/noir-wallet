@@ -18,6 +18,11 @@ import {
   assertConfidentialQuoteBinding,
   assertFlexibleExternalDepositQuoteBinding
 } from '@/core/services/confidential-funding'
+import {
+  isNearConfidentialProtocolAsset,
+  NEAR_CONFIDENTIAL_DEPOSIT_MODE,
+  normalizeNearConfidentialQuote
+} from './confidential-near-quote'
 
 const REQUEST_TIMEOUT_MS = 30_000
 const APP_FEE_CACHE_MS = 5 * 60_000
@@ -911,21 +916,24 @@ export class ConfidentialFundingApi {
     if (!isWithdrawal && !isDeposit && !isInternalSwap) {
       throw new Error('Confidential quote route is invalid')
     }
+    const normalized = normalizeNearConfidentialQuote(input)
+    const nearSource = isNearConfidentialProtocolAsset(normalized.originAsset)
     const appFees = isWithdrawal || isInternalSwap ? await this.getConfidentialAppFees() : undefined
     const request = {
-      dry: input.dry,
+      dry: normalized.dry,
       swapType: 'EXACT_INPUT',
-      slippageTolerance: input.slippageBps,
-      originAsset: input.originAsset,
-      depositType: input.depositType,
-      destinationAsset: input.destinationAsset,
-      amount: input.amountRaw,
-      refundTo: input.refundTo ?? input.signerId,
-      refundType: input.refundType,
-      recipient: input.recipient,
-      recipientType: input.recipientType,
+      slippageTolerance: normalized.slippageBps,
+      originAsset: normalized.originAsset,
+      depositType: normalized.depositType,
+      destinationAsset: normalized.destinationAsset,
+      amount: normalized.amountRaw,
+      refundTo: normalized.refundTo ?? normalized.signerId,
+      refundType: normalized.refundType,
+      recipient: normalized.recipient,
+      recipientType: normalized.recipientType,
+      ...(nearSource ? { depositMode: NEAR_CONFIDENTIAL_DEPOSIT_MODE } : {}),
       deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
-      referral: input.referral,
+      referral: normalized.referral,
       quoteWaitingTimeMs: 0,
       ...(appFees ? { appFees } : {}),
       confidentiality: 'basic'
@@ -938,7 +946,7 @@ export class ConfidentialFundingApi {
           body: JSON.stringify({ ...request, dry: true, appFees: undefined })
         })
       )
-      assertConfidentialQuoteBinding(baseline, input)
+      assertConfidentialQuoteBinding(baseline, normalized)
       if (
         Object.entries(request).some(
           ([key, value]) =>
@@ -969,6 +977,9 @@ export class ConfidentialFundingApi {
       throw new Error('Confidential quote does not match the requested funding route')
     }
     assertQuoteAppFees(quote, appFees, providerFees)
+    if (nearSource && quote.quote.depositMemo) {
+      throw new Error('NEAR Shield quote must not include a memo')
+    }
     return quote
   }
 
@@ -977,18 +988,27 @@ export class ConfidentialFundingApi {
     readonly signerId: string
     readonly refundTo: string
   }): Promise<ConfidentialQuote> {
+    const normalized = normalizeNearConfidentialQuote({
+      originAsset: input.originAsset,
+      recipient: input.signerId,
+      refundTo: input.refundTo,
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      refundType: 'ORIGIN_CHAIN'
+    })
+    const nearSource = isNearConfidentialProtocolAsset(normalized.originAsset)
     const request = {
       dry: true,
       swapType: 'FLEX_INPUT',
       slippageTolerance: 0,
-      originAsset: input.originAsset,
+      originAsset: normalized.originAsset,
       depositType: 'ORIGIN_CHAIN',
       destinationAsset: input.originAsset,
       amount: '1',
-      refundTo: input.refundTo,
+      refundTo: normalized.refundTo ?? input.refundTo,
       refundType: 'ORIGIN_CHAIN',
-      recipient: input.signerId,
+      recipient: normalized.recipient,
       recipientType: 'CONFIDENTIAL_INTENTS',
+      ...(nearSource ? { depositMode: NEAR_CONFIDENTIAL_DEPOSIT_MODE } : {}),
       deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
       referral: NOIR_RECEIVE_REFERRAL,
       quoteWaitingTimeMs: 0,
@@ -1046,6 +1066,9 @@ export class ConfidentialFundingApi {
       recipientType: 'CONFIDENTIAL_INTENTS',
       slippageBps: 0
     })
+    if (nearSource && quote.quote.depositMemo) {
+      throw new Error('NEAR Shield quote must not include a memo')
+    }
     return quote
   }
 
@@ -1180,10 +1203,11 @@ export class ConfidentialFundingApi {
     if (!this.rheaAccessToken) {
       throw new Error('RHEA Swap is unavailable')
     }
+    // router=nearintents rejects an attached chain id. The argument stays local.
+    if (chainId.length > 128) throw new Error('Confidential status chain is invalid')
     const query = new URLSearchParams({
       orderId: depositAddress,
-      router: 'nearintents',
-      chainId
+      router: 'nearintents'
     })
     const value = await requestJson(
       `${this.config.rheaSwapApiUrl}/api/swap/order-status?${query.toString()}`,

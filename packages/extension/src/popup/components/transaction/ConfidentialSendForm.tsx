@@ -465,8 +465,9 @@ export function ConfidentialSendForm({
     return sortSendNetworks(
       [...chains.values()].map(chain => {
         const supported = supportedIds.has(chain.id)
-        const checkingRoute =
-          !supported && !catalogSettled && (chain.family === 'evm' || chain.family === 'zcash')
+        const routeFamily =
+          chain.family === 'evm' || chain.family === 'zcash' || chain.family === 'near'
+        const checkingRoute = !supported && !catalogSettled && routeFamily
         return {
           id: chain.id,
           name: chain.displayName,
@@ -477,7 +478,7 @@ export function ConfidentialSendForm({
             ? undefined
             : checkingRoute
               ? 'Checking route'
-              : chain.family === 'evm' || chain.family === 'zcash'
+              : routeFamily
                 ? 'No route available'
                 : 'Shield Send unavailable'
         }
@@ -1209,7 +1210,13 @@ export function ConfidentialSendForm({
       )}
       {recipient && !recipientValid && (
         <p role="alert" className="text-xs text-warning">
-          Enter a valid {destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address
+          Enter a valid{' '}
+          {destinationNetwork?.family === 'zcash'
+            ? 'Zcash'
+            : destinationNetwork?.family === 'near'
+              ? 'NEAR'
+              : 'EVM'}{' '}
+          address
         </p>
       )}
       {balanceErrorCode ? (

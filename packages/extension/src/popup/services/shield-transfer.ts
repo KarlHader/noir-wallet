@@ -27,6 +27,13 @@ import type {
   ConfidentialFundingReview
 } from '@/core/services/confidential-funding'
 import { getConfidentialAvailableForAsset } from '@/core/services/confidential-funding'
+import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import { readEnabledChainFeatureFlags } from '@/config/enabled-chain-feature-flags'
+import { parseNearAccountId } from '@/core/chains/near/identifiers'
+import {
+  NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
+  NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
+} from '@/background/confidential-near-quote'
 import type { TransferDomain } from './private-balance-transfer'
 import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
 import { formatIntentsConfirmationTime } from './confirmation-time-format'
@@ -220,7 +227,7 @@ export function listShieldFundingAssets(
   })
   const catalog = [...managedAssets.filter(asset => asset.management === 'evm'), ...native]
   const seen = new Set<string>()
-  return catalog.flatMap(managed => {
+  const listed = catalog.flatMap(managed => {
     if (seen.has(managed.protocolAssetId)) return []
     const chain =
       chains.get(managed.chainId) ??
@@ -241,6 +248,57 @@ export function listShieldFundingAssets(
     seen.add(managed.protocolAssetId)
     return [{ asset, chain, managed, marketAssetId: token.coingeckoId?.trim() || undefined }]
   })
+  return [...listed, ...nearShieldFundingAsset(model, chains, tokensByAssetId, network, seen)]
+}
+
+function nearShieldEnabled(): boolean {
+  return readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG)
+}
+
+function nearShieldFundingAsset(
+  model: PortfolioReadModel,
+  chains: ReadonlyMap<string, PortfolioChainView>,
+  tokensByAssetId: ReadonlyMap<string, SwapToken>,
+  network: Network,
+  seen: ReadonlySet<string>
+): readonly ShieldFundingAsset[] {
+  if (
+    !nearShieldEnabled() ||
+    network !== 'mainnet' ||
+    seen.has(NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+  ) {
+    return []
+  }
+  const chain = chains.get('near:mainnet')
+  const token = tokensByAssetId.get(NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+  if (
+    chain?.chain.family !== 'near' ||
+    chain.chain.capabilities.transaction.status !== 'available' ||
+    !token ||
+    isDeprecatedIntentsToken(token) ||
+    token.decimals !== 24
+  ) {
+    return []
+  }
+  const managed = {
+    assetId: NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
+    chainId: 'near:mainnet',
+    protocolAssetId: NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID,
+    blockchain: token.blockchain,
+    symbol: token.symbol,
+    decimals: token.decimals
+  }
+  const holding = confidentialHolding(model, NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+  const asset = fundingAssetView(model, managed, token.symbol, holding)
+  if (!asset || asset.metadata.decimals !== token.decimals) return []
+  return [
+    {
+      asset,
+      chain,
+      managed,
+      ...(token.coingeckoId?.trim() ? { marketAssetId: token.coingeckoId.trim() } : {})
+    }
+  ]
 }
 
 export function selectShieldWithdrawDestinationForNetwork(
@@ -273,6 +331,10 @@ export function shieldFundingAvailableRaw(
   asset: ShieldFundingAsset | null,
   balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
 ): string {
+  if (asset?.chain.chain.family === 'near') {
+    const raw = asset.asset.balance.confidentialRaw
+    if (typeof raw === 'string' && /^(?:0|[1-9][0-9]*)$/.test(raw)) return raw
+  }
   return asset && balances
     ? (getConfidentialAvailableForAsset(balances, asset.managed.protocolAssetId) ?? '0')
     : '0'
@@ -359,6 +421,25 @@ export function resolveShieldManagedAsset(
       )
   )
   if (catalogAsset) return catalogAsset
+  if (
+    nearShieldEnabled() &&
+    asset.asset.id === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID &&
+    asset.metadata.decimals === 24
+  ) {
+    const token = tokens.find(
+      item =>
+        item.assetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID &&
+        item.decimals === 24 &&
+        !isDeprecatedIntentsToken(item)
+    )
+    if (!token) return null
+    return Object.freeze({
+      assetId: asset.asset.id,
+      chainId: asset.asset.chainId,
+      protocolAssetId: NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID,
+      blockchain: token.blockchain
+    })
+  }
   if (asset.asset.kind !== 'native' || !asset.asset.chainId.startsWith('eip155:')) return null
   const chains = createInitialProductChainRegistry(network)
   const registry = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions(network))
@@ -404,6 +485,16 @@ function isShieldMoveDestination(
   network: Network
 ): boolean {
   if (!isValidShieldFundingAsset(source) || !isValidShieldFundingAsset(destination)) return false
+  if (source.chain.chain.family === 'near' || destination.chain.chain.family === 'near') {
+    return (
+      source.chain.chain.family === 'near' &&
+      destination.chain.chain.family === 'near' &&
+      source.chain.chain.id === destination.chain.chain.id &&
+      source.asset.asset.id === destination.asset.asset.id &&
+      source.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID &&
+      destination.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
+    )
+  }
   if (source.chain.chain.family !== 'evm' || destination.chain.chain.family !== 'evm') return false
   if (source.asset.asset.id === destination.asset.asset.id) {
     return source.managed.protocolAssetId === destination.managed.protocolAssetId
@@ -444,6 +535,15 @@ function isShieldSendDestination(
   network: Network
 ): boolean {
   if (!isValidShieldFundingAsset(source) || !isValidShieldFundingAsset(destination)) return false
+  if (source.chain.chain.family === 'near' || destination.chain.chain.family === 'near') {
+    return (
+      source.chain.chain.family === 'near' &&
+      destination.chain.chain.family === 'near' &&
+      source.asset.asset.id === destination.asset.asset.id &&
+      source.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID &&
+      destination.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
+    )
+  }
   const zcashChainId = getZcashChainId(network)
   if (source.chain.chain.family !== 'evm' && source.chain.chain.id !== zcashChainId) return false
   if (destination.chain.chain.id === zcashChainId) {
@@ -542,6 +642,13 @@ export function isShieldWithdrawRecipient(
       return false
     }
   }
+  if (destination.chain.chain.family === 'near') {
+    try {
+      return parseNearAccountId(recipient) === recipient
+    } catch {
+      return false
+    }
+  }
   return isAddress(recipient) && !/^0x0{40}$/i.test(recipient)
 }
 
@@ -608,7 +715,10 @@ export function buildExternalShieldWithdrawRequest(
     !isShieldWithdrawRecipient(input.recipient, input.destination, input.network) ||
     !/^[1-9]\d*$/.test(input.amountRaw) ||
     (input.source.chain.chain.family !== 'evm' &&
+      input.source.chain.chain.family !== 'near' &&
       input.source.chain.chain.id !== getZcashChainId(input.network)) ||
+    (input.source.chain.chain.family === 'near' &&
+      input.source.managed.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) ||
     !isShieldSendDestination(input.source, input.destination, input.network) ||
     input.source.asset.asset.id !== input.source.managed.assetId ||
     input.destination.asset.asset.id !== input.destination.managed.assetId ||
@@ -689,7 +799,10 @@ export function buildShieldTransferRequest(
     !(input.method === 'cluster'
       ? isClusterTransferRoute(input.from, input.to)
       : isShieldTransferRoute(input.from, input.to)) ||
-    input.chain.chain.family !== 'evm' ||
+    (input.method === 'cluster' && input.chain.chain.family !== 'evm') ||
+    (input.chain.chain.family !== 'evm' && input.chain.chain.family !== 'near') ||
+    (input.chain.chain.family === 'near' &&
+      input.managed.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) ||
     input.managed.assetId !== input.asset.asset.id ||
     input.managed.chainId !== input.chain.chain.id ||
     (input.destination !== undefined &&

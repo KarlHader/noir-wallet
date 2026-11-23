@@ -76,6 +76,7 @@ export function createConfidentialFundingGraph(input: {
     assetId: string
     amountRaw: string
     address: string
+    senderAddress?: string
     evmSenderAddress?: string
     feeAssetId?: string
     maximumFeeRaw?: string
@@ -177,7 +178,8 @@ export function createConfidentialFundingGraph(input: {
           : {}),
         sender: {
           chainId: input.source.chainId,
-          address: input.source.evmSenderAddress ?? input.source.address
+          address:
+            input.source.senderAddress ?? input.source.evmSenderAddress ?? input.source.address
         },
         ...(input.source.evm ? { evm: { schemaVersion: 1 as const, ...input.source.evm } } : {}),
         recipient: { chainId: input.destination.chainId, address: input.destination.address }

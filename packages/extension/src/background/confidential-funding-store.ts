@@ -1,5 +1,6 @@
 import type { Network } from '@/types'
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { parseNearAccountId } from '@/core/chains/near/identifiers'
 import { getZcashChainId } from '@/core/chains/registry'
 import { externalRecipientsMatch, isValidExternalRecipient } from './confidential-funding-recipient'
 import { withMetadataLock, withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
@@ -99,6 +100,17 @@ function sameSignedPayload(left: unknown, right: unknown): boolean {
   )
 }
 
+function isStoredConfidentialDestination(address: string, chainId: string): boolean {
+  if (chainId.startsWith('near:')) {
+    try {
+      return parseNearAccountId(address) === address
+    } catch {
+      return false
+    }
+  }
+  return /^0x[0-9a-fA-F]{40}$/.test(address)
+}
+
 function parsePlan(value: unknown): ConfidentialFundingPlan {
   if (
     !isRecord(value) ||
@@ -140,7 +152,7 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
     !/^0x[0-9a-f]{40}$/.test(plan.signerId) ||
     !/^[0-9a-f]{64}$/.test(plan.approvalFingerprint) ||
     (plan.externalRecipient === undefined
-      ? !/^0x[0-9a-fA-F]{40}$/.test(plan.destination.address)
+      ? !isStoredConfidentialDestination(plan.destination.address, plan.destination.chainId)
       : !isValidExternalRecipient(
           plan.destination.address,
           plan.destination.chainId,

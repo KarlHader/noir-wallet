@@ -16,6 +16,12 @@ import {
 import type { SwapToken } from '@/core/services/intents-api'
 import { resolveManagedIntentsCatalogAsset } from './intents-asset-manager-client'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import { readEnabledChainFeatureFlags } from '@/config/enabled-chain-feature-flags'
+import {
+  NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
+  NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
+} from '@/background/confidential-near-quote'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { formatBaseUnitDecimalAmount, formatDecimalAmount } from '@/lib/number-format'
 import Big from '@/lib/big'
@@ -37,6 +43,14 @@ const bundledAssetMappings = getAssetProtocolSourceMappings(
 
 export function depositSourceAssetId(token: SwapToken, network: ChainDefinition): string | null {
   if (depositTokenChainId(token) !== network.id) return null
+  if (
+    readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG) &&
+    network.id === 'near:mainnet' &&
+    token.assetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID &&
+    token.decimals === 24
+  ) {
+    return NEAR_CONFIDENTIAL_CHAIN_ASSET_ID
+  }
   const bundled = bundledAssetMappings.find(
     mapping =>
       mapping.protocolAssetId === token.assetId && mapping.assetId.startsWith(`${network.id}/`)
@@ -49,6 +63,7 @@ export function depositSourceAssetId(token: SwapToken, network: ChainDefinition)
 export function depositTokenChainId(token: SwapToken): string | null {
   const blockchain = token.blockchain.trim().toLowerCase()
   if (blockchain === 'zec' || blockchain === 'zcash') return getZcashChainId('mainnet')
+  if (blockchain === 'near') return DEFAULT_NETWORK === 'mainnet' ? 'near:mainnet' : null
   return resolveIntentsEvmChainId(
     blockchain,
     resolveEvmNetworkCatalog('mainnet', getActiveChainEndpointSettings())
@@ -62,7 +77,7 @@ export function depositSourceNetworks(): readonly ChainDefinition[] {
   )
   return createBuildAddressGatedChainRegistry(createInitialProductChainRegistry('mainnet', custom))
     .list()
-    .filter(chain => chain.family === 'evm' || chain.family === 'zcash')
+    .filter(chain => chain.family === 'evm' || chain.family === 'zcash' || chain.family === 'near')
 }
 
 export function availableDepositTokens(
@@ -136,6 +151,12 @@ export function defaultDepositRefundAddress(
   network: ChainDefinition | null,
   accountNetworks: readonly AccountNetworkView[]
 ): string {
+  if (network?.family === 'near') {
+    const evm = accountNetworks.find(item => item.chain.family === 'evm')
+    return (
+      evm?.addresses.find(address => address.privacy === 'transparent')?.value.toLowerCase() ?? ''
+    )
+  }
   const accountNetwork = accountNetworks.find(item => item.chain.id === network?.id)
   if (network?.family === 'evm' && accountNetwork?.privateExecutionAddress)
     return accountNetwork.privateExecutionAddress
@@ -149,7 +170,7 @@ export function depositRefundAddressError(
   if (!network) return 'Select a network'
   const value = address.trim()
   if (!value) return 'Enter a refund address'
-  if (network.family === 'evm') {
+  if (network.family === 'evm' || network.family === 'near') {
     return isAddress(value) && value.toLowerCase() !== zeroAddress
       ? null
       : 'Enter a valid EVM address'

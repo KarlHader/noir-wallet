@@ -106,8 +106,20 @@ import {
 import {
   EvmConfidentialDepositAdapter,
   isEvmConfidentialDepositIdentity,
-  type ConfidentialDepositAdapter
+  type ConfidentialDepositAdapter,
+  type NearConfidentialAccount
 } from './confidential-funding-adapters'
+import {
+  assertNearConfidentialDepositAddress,
+  isNearConfidentialProtocolAsset,
+  NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID,
+  normalizeNearConfidentialQuote
+} from './confidential-near-quote'
+import { parseNearAccountId } from '@/core/chains/near/identifiers'
+import {
+  parsePreparedNearIntentsDeposit,
+  type NearTransactionStatus
+} from '@/infrastructure/chains/near'
 import {
   ConfidentialFundingSigner,
   type ConfidentialSigningIdentity
@@ -120,6 +132,7 @@ import {
 import type { PrepareNativeZecIntentsSwapInput } from '@/core/services/native-zec-intents-swap'
 import type { QuoteBinding } from '@/types/wallet'
 
+const assertStoredConfidentialQuoteBinding = assertConfidentialQuoteBinding
 const SESSION_REFRESH_BUFFER_MS = 60_000
 const CLUSTER_DEPOSIT_PREFETCH_MS = 60_000
 const MAX_CLUSTER_DEPOSIT_PREFETCHES = 32
@@ -312,6 +325,12 @@ export interface ConfidentialFundingCoordinatorOptions {
   ) => Promise<void>
   readonly now?: () => number
   readonly createId?: () => string
+  readonly nearDeposit?: Readonly<{
+    resolveAccount(identity: ConfidentialSigningIdentity): Promise<NearConfidentialAccount>
+    adapter: ConfidentialDepositAdapter
+    broadcastSignedTransaction(rawTransaction: string): Promise<string>
+    getTransactionStatus(transactionHash: string, signerId: string): Promise<NearTransactionStatus>
+  }>
 }
 
 function isPositiveRaw(value: string): boolean {
@@ -434,16 +453,44 @@ function validQuoteTimeEstimateSeconds(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
+function reviewNearPreparedDeposit(plan: ConfidentialFundingPlan) {
+  const transfer = plan.preparedDeposit?.preparedTransfer
+  if (
+    !transfer ||
+    typeof transfer !== 'object' ||
+    (transfer as { kind?: unknown }).kind !== 'intents-deposit'
+  ) {
+    return null
+  }
+  try {
+    return parsePreparedNearIntentsDeposit(transfer)
+  } catch {
+    return null
+  }
+}
+
 function reviewFromPlan(
   plan: ConfidentialFundingPlan,
   assets: AssetRegistry
 ): ConfidentialFundingReview {
-  const prepared = plan.preparedDeposit
-    ? parsePreparedEvmTransfer(plan.preparedDeposit.preparedTransfer)
-    : null
-  const sourceFeeAsset = prepared
-    ? assets.list(parseChainId(plan.source.chainId).id).find(entry => entry.asset.kind === 'native')
-    : undefined
+  const nearKind =
+    reviewNearPreparedDeposit(plan) !== null ||
+    (plan.preparedDeposit?.preparedTransfer !== undefined &&
+      typeof plan.preparedDeposit.preparedTransfer === 'object' &&
+      plan.preparedDeposit.preparedTransfer !== null &&
+      (plan.preparedDeposit.preparedTransfer as { kind?: unknown }).kind === 'intents-deposit')
+  const nearPrepared = nearKind ? reviewNearPreparedDeposit(plan) : null
+  const prepared =
+    nearKind || !plan.preparedDeposit
+      ? null
+      : parsePreparedEvmTransfer(plan.preparedDeposit.preparedTransfer)
+  const sourceFeeAsset = nearPrepared
+    ? assets.list(parseChainId('near:mainnet').id).find(entry => entry.asset.kind === 'native')
+    : prepared
+      ? assets
+          .list(parseChainId(plan.source.chainId).id)
+          .find(entry => entry.asset.kind === 'native')
+      : undefined
   const quoteTimeEstimateSeconds =
     plan.operation === 'deposit'
       ? plan.depositQuote?.quote.timeEstimate
@@ -500,6 +547,15 @@ function reviewFromPlan(
                 0
               )
             : 0
+        }
+      : {}),
+    ...(nearPrepared && sourceFeeAsset
+      ? {
+          sourceNetworkFee: Object.freeze({
+            raw: nearPrepared.maximumFeeYocto,
+            symbol: sourceFeeAsset.metadata.symbol,
+            decimals: sourceFeeAsset.metadata.decimals
+          })
         }
       : {}),
     ...(prepared && sourceFeeAsset
@@ -653,11 +709,98 @@ export class ConfidentialFundingCoordinator {
     )
   }
 
-  private depositAdapter(identity: ConfidentialSigningIdentity): ConfidentialDepositAdapter {
+  private depositAdapter(
+    identity: ConfidentialSigningIdentity,
+    route: { readonly sourceChainId: string; readonly destinationChainId: string }
+  ): ConfidentialDepositAdapter {
     if (!isEvmConfidentialDepositIdentity(identity)) {
       throw new Error('Confidential funding requires an EVM signing chain')
     }
+    if (
+      parseChainId(route.sourceChainId).namespace === 'near' ||
+      parseChainId(route.destinationChainId).namespace === 'near'
+    ) {
+      const adapter = this.options.nearDeposit?.adapter
+      if (!adapter || adapter.kind !== 'near') {
+        throw new Error('NEAR Shield deposit is unavailable')
+      }
+      return adapter
+    }
     return this.evmDepositAdapter
+  }
+
+  private async quoteBound(
+    input: Parameters<ConfidentialFundingApi['quote']>[0]
+  ): Promise<ConfidentialQuote> {
+    const normalized = normalizeNearConfidentialQuote(input)
+    const quote = await this.options.api.quote(normalized)
+    if (isNearConfidentialProtocolAsset(normalized.originAsset) && quote.quote.depositMemo) {
+      throw new Error('NEAR Shield quote must not include a memo')
+    }
+    return quote
+  }
+
+  private assertQuoteBinding(
+    quote: ConfidentialQuote,
+    binding: Parameters<typeof assertConfidentialQuoteBinding>[1],
+    _now?: number
+  ): void {
+    assertStoredConfidentialQuoteBinding(quote, normalizeNearConfidentialQuote(binding), this.now())
+  }
+
+  private async requireNearAccount(
+    identity: ConfidentialSigningIdentity
+  ): Promise<NearConfidentialAccount> {
+    const resolve = this.options.nearDeposit?.resolveAccount
+    if (!resolve) throw new Error('NEAR Shield deposit is unavailable')
+    const account = await resolve(identity)
+    try {
+      if (parseNearAccountId(account.mainAccountId) !== account.mainAccountId) {
+        throw new Error('invalid')
+      }
+    } catch {
+      throw new Error('NEAR Shield deposit requires the active NEAR account')
+    }
+    return account
+  }
+
+  private async nearDepositRefundAccount(
+    identity: ConfidentialSigningIdentity,
+    sourceDomain: 'public' | 'private' | 'shield'
+  ): Promise<string> {
+    const account = await this.requireNearAccount(identity)
+    if (sourceDomain === 'private') {
+      if (!account.peaAccountId || account.peaAccountId === account.mainAccountId) {
+        throw new Error('NEAR Shield deposit requires an Incognito account')
+      }
+      return account.peaAccountId
+    }
+    return account.mainAccountId
+  }
+
+  private async fundingDestinationAddress(
+    input: {
+      readonly destination: { readonly chainId: string }
+      readonly destinationDomain?: 'public' | 'private' | 'shield'
+      readonly externalRecipient?: string
+    },
+    identity: ConfidentialSigningIdentity
+  ): Promise<string> {
+    if (input.externalRecipient) return input.externalRecipient
+    if (
+      parseChainId(input.destination.chainId).namespace === 'near' &&
+      (input.destinationDomain === 'public' || input.destinationDomain === 'private')
+    ) {
+      const account = await this.requireNearAccount(identity)
+      if (input.destinationDomain === 'private') {
+        if (!account.peaAccountId || account.peaAccountId === account.mainAccountId) {
+          throw new Error('NEAR Shield withdraw requires an Incognito account')
+        }
+        return account.peaAccountId
+      }
+      return account.mainAccountId
+    }
+    return input.destinationDomain === 'private' ? identity.peaAddress : identity.address
   }
 
   getPortfolioAssetDefinitions(model: PortfolioReadModel | null): readonly AssetDefinitionInput[] {
@@ -770,10 +913,12 @@ export class ConfidentialFundingCoordinator {
   ): Promise<ExternalShieldDeposit> {
     const chain = parseChainId(input.source.chainId)
     const isZcash = chain.id === getZcashChainId(this.options.network)
+    const isNear = chain.id === 'near:mainnet'
     const asset = this.options.assets.get(input.source.assetId)
     if (
       input.network !== this.options.network ||
-      (!isZcash && chain.namespace !== 'eip155') ||
+      (!isZcash && !isNear && chain.namespace !== 'eip155') ||
+      (isNear && input.source.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) ||
       parseAssetId(input.source.assetId).chainId !== chain.id ||
       !asset ||
       !this.hasExternalDepositAsset(input.source) ||
@@ -787,28 +932,32 @@ export class ConfidentialFundingCoordinator {
     const catalog = this.options.getProtocolTokens?.() ?? this.options.protocolTokens
     const token = catalog?.find(item => item.assetId === input.source.protocolAssetId)
     if (catalog) {
-      const tokenChainId = token
-        ? ['zec', 'zcash'].includes(token.blockchain.trim().toLowerCase())
+      if (!token) throw new Error('External Shield deposit asset catalog changed')
+      const blockchain = token.blockchain.trim().toLowerCase()
+      const tokenChainId =
+        blockchain === 'zec' || blockchain === 'zcash'
           ? getZcashChainId(this.options.network)
-          : resolveIntentsEvmChainId(token.blockchain, this.options.evmNetworks)
-        : null
+          : blockchain === 'near'
+            ? this.options.network === 'mainnet'
+              ? 'near:mainnet'
+              : null
+            : resolveIntentsEvmChainId(token.blockchain, this.options.evmNetworks)
       if (tokenChainId !== chain.id || token?.decimals !== asset.metadata.decimals) {
         throw new Error('External Shield deposit asset catalog changed')
       }
     }
+    const refundAddress = isNear ? input.refundAddress.trim().toLowerCase() : input.refundAddress
     if (isZcash) {
       if (
-        !parseZcashAddress(input.refundAddress, input.network).scheme.startsWith(
-          'zcash-transparent-'
-        )
+        !parseZcashAddress(refundAddress, input.network).scheme.startsWith('zcash-transparent-')
       ) {
         throw new Error('External Shield deposit requires a transparent Zcash refund address')
       }
-    } else if (!isAddress(input.refundAddress) || /^0x0{40}$/i.test(input.refundAddress)) {
+    } else if (!isAddress(refundAddress) || /^0x0{40}$/i.test(refundAddress)) {
       throw new Error('External Shield deposit refund address is invalid')
     }
     setStage('account')
-    const identityChain = isZcash ? this.options.evmNetworks[0]?.chainId : chain.id
+    const identityChain = isZcash || isNear ? this.options.evmNetworks[0]?.chainId : chain.id
     if (!identityChain) throw new Error('External Shield deposit Account has no EVM identity')
     const identity = await this.options.signer.resolveIdentity(parseChainId(identityChain).id)
     if (
@@ -842,7 +991,7 @@ export class ConfidentialFundingCoordinator {
           ? existing.amountMode !== 'minimum'
           : existing.amountMode === 'minimum' ||
             existing.source.amountRaw !== input.source.amountRaw) ||
-        existing.refundAddress !== input.refundAddress ||
+        existing.refundAddress !== refundAddress ||
         existing.signerId !== identity.address
       ) {
         throw new Error('External Shield deposit request ID was reused with different details')
@@ -868,15 +1017,15 @@ export class ConfidentialFundingCoordinator {
       ? await this.options.api.quoteFlexibleDeposit({
           originAsset: input.source.protocolAssetId,
           signerId: identity.address,
-          refundTo: input.refundAddress
+          refundTo: refundAddress
         })
-      : await this.options.api.quote({
+      : await this.quoteBound({
           referral: NOIR_RECEIVE_REFERRAL,
           originAsset: input.source.protocolAssetId,
           destinationAsset: input.source.protocolAssetId,
           amountRaw: input.source.amountRaw!,
           signerId: identity.address,
-          refundTo: input.refundAddress,
+          refundTo: refundAddress,
           recipient: identity.address,
           depositType: 'ORIGIN_CHAIN',
           refundType: 'ORIGIN_CHAIN',
@@ -890,7 +1039,7 @@ export class ConfidentialFundingCoordinator {
       destinationAsset: input.source.protocolAssetId,
       amountRaw,
       signerId: identity.address,
-      refundTo: input.refundAddress,
+      refundTo: refundAddress,
       recipient: identity.address,
       depositType: 'ORIGIN_CHAIN' as const,
       refundType: 'ORIGIN_CHAIN' as const,
@@ -898,11 +1047,14 @@ export class ConfidentialFundingCoordinator {
       slippageBps: minimumMode ? 0 : 50
     }
     if (minimumMode) assertFlexibleExternalDepositQuoteBinding(quote, binding, this.now())
-    else assertConfidentialQuoteBinding(quote, binding, this.now())
-    if (isZcash && quote.quoteRequest.refundTo !== input.refundAddress) {
+    else this.assertQuoteBinding(quote, binding)
+    if (isZcash && quote.quoteRequest.refundTo !== refundAddress) {
       throw new Error('External Shield quote changed its Zcash refund address')
     }
-    if (isZcash) {
+    if (isNear) {
+      if (quote.quote.depositMemo) throw new Error('NEAR Shield quote must not include a memo')
+      assertNearConfidentialDepositAddress(quote.quote.depositAddress)
+    } else if (isZcash) {
       parseZcashAddress(quote.quote.depositAddress, input.network)
     } else if (
       !isAddress(quote.quote.depositAddress) ||
@@ -961,8 +1113,8 @@ export class ConfidentialFundingCoordinator {
       sourceDecimals: asset.metadata.decimals,
       signerId: identity.address,
       depositAddress: quote.quote.depositAddress,
-      ...(quote.quote.depositMemo ? { depositMemo: quote.quote.depositMemo } : {}),
-      refundAddress: input.refundAddress,
+      ...(!isNear && quote.quote.depositMemo ? { depositMemo: quote.quote.depositMemo } : {}),
+      refundAddress,
       amountRaw,
       ...(minimumMode ? { amountMode: 'minimum' as const } : {}),
       expectedOutputRaw: quote.quote.amountOut,
@@ -1495,11 +1647,7 @@ export class ConfidentialFundingCoordinator {
         return this.previewClusterNetworkFee(input, sourceIdentity, sourceSigningChain)
       return this.previewCluster(input, sourceIdentity, destinationIdentity, sourceSigningChain)
     }
-    const recipient =
-      input.externalRecipient ??
-      (input.destinationDomain === 'private'
-        ? destinationIdentity.peaAddress
-        : destinationIdentity.address)
+    const recipient = await this.fundingDestinationAddress(input, destinationIdentity)
     const binding = {
       originAsset: input.source.protocolAssetId,
       destinationAsset: input.destination.protocolAssetId,
@@ -1514,12 +1662,12 @@ export class ConfidentialFundingCoordinator {
           : ('DESTINATION_CHAIN' as const),
       slippageBps: input.slippageBps
     }
-    const quote = await this.options.api.quote({
+    const quote = await this.quoteBound({
       ...binding,
       referral: withdrawalReferral(input),
       dry: true
     })
-    assertConfidentialQuoteBinding(quote, binding, this.now())
+    this.assertQuoteBinding(quote, binding, this.now())
     const currentIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
     this.assertSameAccount(sourceIdentity, currentIdentity)
     const requestDeadline = Date.parse(String(quote.quoteRequest.deadline ?? ''))
@@ -1555,12 +1703,12 @@ export class ConfidentialFundingCoordinator {
     const depositQuote =
       input.sourceDomain === 'shield'
         ? undefined
-        : await this.options.api.quote({
+        : await this.quoteBound({
             ...depositBinding,
             referral: NOIR_RECEIVE_REFERRAL,
             dry: true
           })
-    if (depositQuote) assertConfidentialQuoteBinding(depositQuote, depositBinding, this.now())
+    if (depositQuote) this.assertQuoteBinding(depositQuote, depositBinding)
     const previews = await this.prepareWithdrawPreviews({
       sourceAsset: input.source.protocolAssetId,
       destinationAsset: input.destination.protocolAssetId,
@@ -1664,7 +1812,7 @@ export class ConfidentialFundingCoordinator {
       referral
     })
     const validate = (quote: ConfidentialQuote) => {
-      assertConfidentialQuoteBinding(quote, binding, this.now())
+      this.assertQuoteBinding(quote, binding)
       if (
         quote.quoteRequest.dry !== false ||
         !isAddress(quote.quote.depositAddress) ||
@@ -1673,8 +1821,7 @@ export class ConfidentialFundingCoordinator {
         throw new Error('Confidential deposit quote has no destination')
       return quote
     }
-    const fetchQuote = () =>
-      this.options.api.quote({ ...binding, referral, dry: false }).then(validate)
+    const fetchQuote = () => this.quoteBound({ ...binding, referral, dry: false }).then(validate)
     const cache = this.clusterDepositPrefetches
     for (const [key, entry] of cache) {
       if (entry.expiresAt <= this.now()) cache.delete(key)
@@ -1749,7 +1896,10 @@ export class ConfidentialFundingCoordinator {
       plan => plan.phase === 'prepared' && plan.approvalExpiresAt <= this.now()
     )) {
       if (expired.preparedDeposit) {
-        await this.depositAdapter(sourceIdentity)
+        await this.depositAdapter(sourceIdentity, {
+          sourceChainId: expired.source.chainId,
+          destinationChainId: expired.destination.chainId
+        })
           .cancelDeposit({
             identity: sourceIdentity,
             commandId: expired.preparedDeposit.commandId
@@ -1799,7 +1949,10 @@ export class ConfidentialFundingCoordinator {
 
     for (const unsigned of sourcePlans.filter(plan => plan.phase === 'prepared')) {
       if (unsigned.preparedDeposit) {
-        await this.depositAdapter(sourceIdentity)
+        await this.depositAdapter(sourceIdentity, {
+          sourceChainId: unsigned.source.chainId,
+          destinationChainId: unsigned.destination.chainId
+        })
           .cancelDeposit({
             identity: sourceIdentity,
             commandId: unsigned.preparedDeposit.commandId
@@ -1835,7 +1988,7 @@ export class ConfidentialFundingCoordinator {
       : Object.freeze([])
     const baseline = getConfidentialAvailableForAsset(balances, input.source.protocolAssetId) ?? '0'
     const requiresDeposit = true
-    const depositQuote = await this.options.api.quote({
+    const depositQuote = await this.quoteBound({
       referral: NOIR_RECEIVE_REFERRAL,
       originAsset: input.source.protocolAssetId,
       destinationAsset: input.source.protocolAssetId,
@@ -1851,7 +2004,7 @@ export class ConfidentialFundingCoordinator {
     if (!depositQuote.quote.depositAddress) {
       throw new Error('Confidential deposit quote has no destination')
     }
-    assertConfidentialQuoteBinding(
+    this.assertQuoteBinding(
       depositQuote,
       {
         originAsset: input.source.protocolAssetId,
@@ -1877,7 +2030,11 @@ export class ConfidentialFundingCoordinator {
     })
 
     const preparedDeposit: ConfidentialFundingPlan['preparedDeposit'] = await this.depositAdapter(
-      sourceIdentity
+      sourceIdentity,
+      {
+        sourceChainId: input.source.chainId,
+        destinationChainId: input.destination.chainId
+      }
     ).prepareDeposit({
       identity: sourceIdentity,
       chainId: input.source.chainId,
@@ -1975,7 +2132,10 @@ export class ConfidentialFundingCoordinator {
         !this.confirmingByPlan.has(plan.planId)
     )) {
       if (expired.preparedDeposit) {
-        await this.depositAdapter(sourceIdentity)
+        await this.depositAdapter(sourceIdentity, {
+          sourceChainId: expired.source.chainId,
+          destinationChainId: expired.destination.chainId
+        })
           .cancelDeposit({
             identity: sourceIdentity,
             commandId: expired.preparedDeposit.commandId
@@ -2014,12 +2174,12 @@ export class ConfidentialFundingCoordinator {
       input.sourceDomain === 'private'
         ? sourceIdentity.peaAddress.toLowerCase()
         : sourceIdentity.address
-    const destinationAddress =
-      input.externalRecipient ??
-      (input.destinationDomain === 'private'
-        ? destinationIdentity.peaAddress
-        : destinationIdentity.address)
+    const destinationAddress = await this.fundingDestinationAddress(input, destinationIdentity)
     const isDeposit = input.operation === 'deposit'
+    const depositRefundTo =
+      isDeposit && parseChainId(input.source.chainId).namespace === 'near'
+        ? await this.nearDepositRefundAccount(sourceIdentity, input.sourceDomain)
+        : sourceAddress
     const isSwap = input.operation === 'swap'
     const isFrozenSwap = isSwap || input.purpose === 'native-zec-swap'
     if (!isDeposit) {
@@ -2030,7 +2190,7 @@ export class ConfidentialFundingCoordinator {
         baseline
       )
     }
-    const quote = await this.options.api.quote({
+    const quote = await this.quoteBound({
       originAsset: input.source.protocolAssetId,
       referral: input.operation === 'deposit' ? NOIR_RECEIVE_REFERRAL : withdrawalReferral(input),
       destinationAsset: isDeposit
@@ -2038,7 +2198,7 @@ export class ConfidentialFundingCoordinator {
         : input.destination.protocolAssetId,
       amountRaw: input.source.amountRaw,
       signerId: sourceIdentity.address,
-      ...(isDeposit ? { refundTo: sourceAddress } : {}),
+      ...(isDeposit ? { refundTo: depositRefundTo } : {}),
       recipient: isDeposit ? sourceIdentity.address : destinationAddress,
       depositType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
       refundType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
@@ -2046,7 +2206,7 @@ export class ConfidentialFundingCoordinator {
       slippageBps: input.slippageBps,
       dry: !isDeposit && !isFrozenSwap
     })
-    assertConfidentialQuoteBinding(
+    this.assertQuoteBinding(
       quote,
       {
         originAsset: input.source.protocolAssetId,
@@ -2055,7 +2215,7 @@ export class ConfidentialFundingCoordinator {
           : input.destination.protocolAssetId,
         amountRaw: input.source.amountRaw,
         signerId: sourceIdentity.address,
-        ...(isDeposit ? { refundTo: sourceAddress } : {}),
+        ...(isDeposit ? { refundTo: depositRefundTo } : {}),
         recipient: isDeposit ? sourceIdentity.address : destinationAddress,
         depositType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
         refundType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
@@ -2064,7 +2224,10 @@ export class ConfidentialFundingCoordinator {
       },
       this.now()
     )
-    if (isDeposit && !quote.quote.depositAddress) {
+    if (isDeposit && parseChainId(input.source.chainId).namespace === 'near') {
+      if (quote.quote.depositMemo) throw new Error('NEAR Shield quote must not include a memo')
+      assertNearConfidentialDepositAddress(quote.quote.depositAddress)
+    } else if (isDeposit && !quote.quote.depositAddress) {
       throw new Error('Confidential deposit quote has no destination')
     }
     if (isFrozenSwap && (quote.quoteRequest.dry !== false || !quote.quote.depositAddress)) {
@@ -2072,7 +2235,10 @@ export class ConfidentialFundingCoordinator {
     }
 
     const preparedDeposit = isDeposit
-      ? await this.depositAdapter(sourceIdentity).prepareDeposit({
+      ? await this.depositAdapter(sourceIdentity, {
+          sourceChainId: input.source.chainId,
+          destinationChainId: input.destination.chainId
+        }).prepareDeposit({
           identity: sourceIdentity,
           chainId: parseChainId(input.source.chainId).id,
           assetId: input.source.assetId,
@@ -2220,7 +2386,10 @@ export class ConfidentialFundingCoordinator {
       slippageBps: input.slippageBps
     })
     const preparedDeposit = depositQuote
-      ? await this.depositAdapter(sourceIdentity).prepareDeposit({
+      ? await this.depositAdapter(sourceIdentity, {
+          sourceChainId: input.source.chainId,
+          destinationChainId: input.destination.chainId
+        }).prepareDeposit({
           identity: sourceIdentity,
           chainId: parseChainId(input.source.chainId).id,
           assetId: input.source.assetId,
@@ -2410,7 +2579,7 @@ export class ConfidentialFundingCoordinator {
       if (Date.parse(String(plan.swapQuote.quoteRequest.deadline ?? '')) <= this.now()) {
         throw new Error('Shield swap quote has expired')
       }
-      assertConfidentialQuoteBinding(
+      this.assertQuoteBinding(
         plan.swapQuote,
         {
           originAsset: plan.source.protocolAssetId,
@@ -2435,7 +2604,10 @@ export class ConfidentialFundingCoordinator {
       } catch (error) {
         if (definitiveHistoryAuthRejection(error)) {
           if (plan.preparedDeposit) {
-            await this.depositAdapter(identity)
+            await this.depositAdapter(identity, {
+              sourceChainId: plan.source.chainId,
+              destinationChainId: plan.destination.chainId
+            })
               .cancelDeposit({ identity, commandId: plan.preparedDeposit.commandId })
               .catch(() => {})
           }
@@ -2489,7 +2661,10 @@ export class ConfidentialFundingCoordinator {
     if (!plan.preparedDeposit) throw new Error('Confidential funding deposit was not prepared')
     let signed: Awaited<ReturnType<ConfidentialDepositAdapter['confirmDeposit']>>
     try {
-      signed = await this.depositAdapter(identity).confirmDeposit({
+      signed = await this.depositAdapter(identity, {
+        sourceChainId: plan.source.chainId,
+        destinationChainId: plan.destination.chainId
+      }).confirmDeposit({
         identity,
         commandId: plan.preparedDeposit.commandId,
         preparedTransfer: plan.preparedDeposit.preparedTransfer,
@@ -2793,7 +2968,10 @@ export class ConfidentialFundingCoordinator {
       }
       if (plan.preparedDeposit) {
         const identity = await this.requirePlanIdentity(plan)
-        await this.depositAdapter(identity)
+        await this.depositAdapter(identity, {
+          sourceChainId: plan.source.chainId,
+          destinationChainId: plan.destination.chainId
+        })
           .cancelDeposit({ identity, commandId: plan.preparedDeposit.commandId })
           .catch(() => {})
       }
@@ -2923,7 +3101,10 @@ export class ConfidentialFundingCoordinator {
       if (this.confirmingByPlan.has(planId)) return plan
       const identity = await this.requirePlanIdentity(plan).catch(() => null)
       if (identity && plan.preparedDeposit) {
-        await this.depositAdapter(identity)
+        await this.depositAdapter(identity, {
+          sourceChainId: plan.source.chainId,
+          destinationChainId: plan.destination.chainId
+        })
           .cancelDeposit({
             identity,
             commandId: plan.preparedDeposit.commandId
@@ -2982,23 +3163,29 @@ export class ConfidentialFundingCoordinator {
       plan.preparedDeposit?.rawTransaction &&
       plan.preparedDeposit.transactionHash
     ) {
-      try {
-        await broadcastSignedEvmTransaction({
-          rawTransaction: plan.preparedDeposit.rawTransaction,
-          expectedTransactionHash: plan.preparedDeposit.transactionHash,
-          rpc: this.requireRpc(plan.source.chainId)
-        })
-      } catch (error) {
-        if (!(error instanceof Error && /already known|known transaction/i.test(error.message))) {
-          await this.scheduleMonitoring()
-          return plan
+      if (parseChainId(plan.source.chainId).namespace === 'near') {
+        const broadcast = await this.broadcastNearDeposit(plan)
+        if (broadcast.phase !== 'deposit-confirming') return broadcast
+        plan = broadcast
+      } else {
+        try {
+          await broadcastSignedEvmTransaction({
+            rawTransaction: plan.preparedDeposit.rawTransaction,
+            expectedTransactionHash: plan.preparedDeposit.transactionHash,
+            rpc: this.requireRpc(plan.source.chainId)
+          })
+        } catch (error) {
+          if (!(error instanceof Error && /already known|known transaction/i.test(error.message))) {
+            await this.scheduleMonitoring()
+            return plan
+          }
         }
+        const transactionHash = plan.preparedDeposit.transactionHash
+        plan = await this.updatePlan(plan, { phase: 'deposit-confirming' })
+        await this.applyGraphStatus(plan, 'origin', 'broadcast', {
+          transactionHash
+        })
       }
-      const transactionHash = plan.preparedDeposit.transactionHash
-      plan = await this.updatePlan(plan, { phase: 'deposit-confirming' })
-      await this.applyGraphStatus(plan, 'origin', 'broadcast', {
-        transactionHash
-      })
     }
 
     if (plan.requiresDeposit && plan.phase === 'deposit-confirming') {
@@ -3013,14 +3200,21 @@ export class ConfidentialFundingCoordinator {
       const replacementHash = sourceOrigin?.evidence?.replacementTransactionHash
       const transactionHash = replacementHash ?? plan.preparedDeposit?.transactionHash
       if (transactionHash && !replacementHash && sourceOrigin?.status !== 'final') {
-        const observation = await observeEvmTransaction(
-          transactionHash,
-          this.requireRpc(plan.source.chainId)
-        ).catch(() => null)
-        if (observation) {
-          await this.applyEvmObservation(plan, observation)
-          if (observation.status === 'failed') {
+        if (parseChainId(plan.source.chainId).namespace === 'near') {
+          const status = await this.observeNearDeposit(plan, transactionHash)
+          if (status === 'failed') {
             return this.updatePlan(plan, { phase: 'failed', errorStatus: 'DEPOSIT_REVERTED' })
+          }
+        } else {
+          const observation = await observeEvmTransaction(
+            transactionHash,
+            this.requireRpc(plan.source.chainId)
+          ).catch(() => null)
+          if (observation) {
+            await this.applyEvmObservation(plan, observation)
+            if (observation.status === 'failed') {
+              return this.updatePlan(plan, { phase: 'failed', errorStatus: 'DEPOSIT_REVERTED' })
+            }
           }
         }
       }
@@ -3213,9 +3407,17 @@ export class ConfidentialFundingCoordinator {
       (value.operation === 'withdraw' || value.operation === 'swap')
     const sourceIsEvm = sourceChain.namespace === 'eip155'
     const destinationIsEvm = destinationChain.namespace === 'eip155'
-    const sourceAllowed = sourceIsEvm || (shieldSpend && sourceChain.id === zcashChainId)
+    const sourceIsNear = sourceChain.id === 'near:mainnet'
+    const destinationIsNear = destinationChain.id === 'near:mainnet'
+    const nearRoute =
+      value.operation !== undefined &&
+      value.operation !== 'cluster' &&
+      (sourceIsNear || destinationIsNear)
+    const sourceAllowed =
+      sourceIsEvm || (nearRoute && sourceIsNear) || (shieldSpend && sourceChain.id === zcashChainId)
     const destinationAllowed =
       destinationIsEvm ||
+      (nearRoute && destinationIsNear) ||
       (shieldSpend &&
         value.operation === 'withdraw' &&
         value.destinationDomain === 'public' &&
@@ -3226,7 +3428,10 @@ export class ConfidentialFundingCoordinator {
     if (
       !sourceAllowed ||
       !destinationAllowed ||
-      (!sourceIsEvm && !destinationIsEvm && !(shieldSpend && destinationChain.id === zcashChainId))
+      (!sourceIsEvm &&
+        !destinationIsEvm &&
+        !nearRoute &&
+        !(shieldSpend && destinationChain.id === zcashChainId))
     ) {
       throw new Error('Confidential funding requires an EVM signing chain')
     }
@@ -3247,7 +3452,9 @@ export class ConfidentialFundingCoordinator {
             value.source.protocolAssetId === value.destination.protocolAssetId ||
             value.externalRecipient !== undefined)) ||
         (value.operation === 'cluster' &&
-          (!['public', 'private', 'shield'].includes(value.sourceDomain ?? '') ||
+          (sourceChain.namespace !== 'eip155' ||
+            destinationChain.namespace !== 'eip155' ||
+            !['public', 'private', 'shield'].includes(value.sourceDomain ?? '') ||
             !['public', 'private'].includes(value.destinationDomain ?? '') ||
             value.sourceDomain === value.destinationDomain ||
             sourceChain.id !== destinationChain.id ||
@@ -3287,7 +3494,14 @@ export class ConfidentialFundingCoordinator {
       (value.dedupKey !== undefined && !isBoundedLabel(value.dedupKey, 160)) ||
       (value.externalRecipient !== undefined &&
         (value.operation !== 'withdraw' ||
-          !isValidExternalRecipient(value.externalRecipient, destinationChain.id, value.network)))
+          !isValidExternalRecipient(
+            value.externalRecipient,
+            destinationChain.id,
+            value.network
+          ))) ||
+      (sourceIsNear && value.source.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) ||
+      (destinationIsNear &&
+        value.destination.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
     ) {
       throw new Error('Confidential funding request is invalid')
     }
@@ -3343,7 +3557,7 @@ export class ConfidentialFundingCoordinator {
       const amounts = splitConfidentialFundingAmount(input.spendRaw, count)
       const quotes = await Promise.all(
         amounts.map(amountRaw =>
-          this.options.api.quote({
+          this.quoteBound({
             referral: NOIR_SEND_REFERRAL,
             originAsset: input.sourceAsset,
             destinationAsset: input.destinationAsset,
@@ -3359,7 +3573,7 @@ export class ConfidentialFundingCoordinator {
         )
       )
       quotes.forEach((quote, index) => {
-        assertConfidentialQuoteBinding(
+        this.assertQuoteBinding(
           quote,
           {
             originAsset: input.sourceAsset,
@@ -3393,7 +3607,7 @@ export class ConfidentialFundingCoordinator {
     if (plan.operation === 'cluster') return this.signAndFreezeCluster(plan)
     const quotes = await Promise.all(
       plan.splitSourceAmounts.map(sourceAmountRaw =>
-        this.options.api.quote({
+        this.quoteBound({
           referral: NOIR_SEND_REFERRAL,
           originAsset: plan.source.protocolAssetId,
           destinationAsset: plan.destination.protocolAssetId,
@@ -3409,7 +3623,7 @@ export class ConfidentialFundingCoordinator {
       )
     )
     quotes.forEach((quote, sequence) => {
-      assertConfidentialQuoteBinding(
+      this.assertQuoteBinding(
         quote,
         {
           originAsset: plan.source.protocolAssetId,
@@ -3532,7 +3746,7 @@ export class ConfidentialFundingCoordinator {
     if (plan.frozenRequest) return plan
     const quotes = await Promise.all(
       plan.splitSourceAmounts.map(sourceAmountRaw =>
-        this.options.api.quote({
+        this.quoteBound({
           referral: NOIR_SEND_REFERRAL,
           originAsset: plan.source.protocolAssetId,
           destinationAsset: plan.destination.protocolAssetId,
@@ -3549,7 +3763,7 @@ export class ConfidentialFundingCoordinator {
     )
     const depositAddresses = new Set<string>()
     quotes.forEach((quote, sequence) => {
-      assertConfidentialQuoteBinding(
+      this.assertQuoteBinding(
         quote,
         {
           originAsset: plan.source.protocolAssetId,
@@ -3696,7 +3910,7 @@ export class ConfidentialFundingCoordinator {
       }
       const quote =
         frozenQuote ??
-        (await this.options.api.quote({
+        (await this.quoteBound({
           referral: withdrawalReferral(plan),
           originAsset: plan.source.protocolAssetId,
           destinationAsset: plan.destination.protocolAssetId,
@@ -3709,7 +3923,7 @@ export class ConfidentialFundingCoordinator {
           slippageBps: plan.slippageBps,
           dry: false
         }))
-      assertConfidentialQuoteBinding(
+      this.assertQuoteBinding(
         quote,
         {
           originAsset: plan.source.protocolAssetId,
@@ -4606,6 +4820,69 @@ export class ConfidentialFundingCoordinator {
     return balances
   }
 
+  private nearPreparedDeposit(plan: ConfidentialFundingPlan) {
+    const transfer = plan.preparedDeposit?.preparedTransfer
+    if (
+      !transfer ||
+      typeof transfer !== 'object' ||
+      (transfer as { kind?: unknown }).kind !== 'intents-deposit'
+    ) {
+      return null
+    }
+    try {
+      return parsePreparedNearIntentsDeposit(transfer)
+    } catch {
+      return null
+    }
+  }
+
+  private async broadcastNearDeposit(
+    plan: ConfidentialFundingPlan
+  ): Promise<ConfidentialFundingPlan> {
+    const bridge = this.options.nearDeposit
+    const rawTransaction = plan.preparedDeposit?.rawTransaction
+    const expectedHash = plan.preparedDeposit?.transactionHash
+    if (!bridge || !rawTransaction || !expectedHash) {
+      await this.scheduleMonitoring()
+      return plan
+    }
+    let transactionHash: string
+    try {
+      transactionHash = await bridge.broadcastSignedTransaction(rawTransaction)
+    } catch {
+      await this.scheduleMonitoring()
+      return plan
+    }
+    if (transactionHash !== expectedHash) {
+      await this.scheduleMonitoring()
+      return plan
+    }
+    const confirming = await this.updatePlan(plan, { phase: 'deposit-confirming' })
+    await this.applyGraphStatus(confirming, 'origin', 'broadcast', { transactionHash })
+    return confirming
+  }
+
+  private async observeNearDeposit(
+    plan: ConfidentialFundingPlan,
+    transactionHash: string
+  ): Promise<'failed' | 'final' | 'pending'> {
+    const bridge = this.options.nearDeposit
+    const signerId = this.nearPreparedDeposit(plan)?.signerId
+    if (!bridge || !signerId) return 'pending'
+    const status = await bridge
+      .getTransactionStatus(transactionHash, signerId)
+      .catch(() => ({ status: 'unknown' as const }))
+    if (status.status === 'final') {
+      await this.applyGraphStatus(plan, 'origin', 'final', { transactionHash })
+      return 'final'
+    }
+    if (status.status === 'failed') {
+      await this.applyGraphStatus(plan, 'origin', 'failed', undefined, 'reverted')
+      return 'failed'
+    }
+    return 'pending'
+  }
+
   private async ensureGraph(plan: ConfidentialFundingPlan): Promise<void> {
     if (!plan.requiresDeposit && !plan.requestFingerprint) return
     const scope = {
@@ -4616,7 +4893,11 @@ export class ConfidentialFundingCoordinator {
       scope,
       parseTransactionId(plan.transactionId)
     )
+    const nearDeposit =
+      this.nearPreparedDeposit(plan) !== null ||
+      parseChainId(plan.source.chainId).namespace === 'near'
     if (existing) {
+      if (nearDeposit) return
       const origin = existing.segments.find(segment => segment.role === 'origin')
       if (
         !plan.preparedDeposit?.transactionHash ||
@@ -4645,14 +4926,20 @@ export class ConfidentialFundingCoordinator {
       }
       return
     }
-    const prepared = plan.preparedDeposit
-      ? parsePreparedEvmTransfer(plan.preparedDeposit.preparedTransfer)
-      : null
-    const feeAsset = prepared
+    const nearPrepared = nearDeposit ? this.nearPreparedDeposit(plan) : null
+    const prepared =
+      nearDeposit || !plan.preparedDeposit
+        ? null
+        : parsePreparedEvmTransfer(plan.preparedDeposit.preparedTransfer)
+    const feeAsset = nearPrepared
       ? this.options.assets
-          .list(parseChainId(plan.source.chainId).id)
+          .list(parseChainId('near:mainnet').id)
           .find(entry => entry.asset.kind === 'native')?.asset.id
-      : undefined
+      : prepared
+        ? this.options.assets
+            .list(parseChainId(plan.source.chainId).id)
+            .find(entry => entry.asset.kind === 'native')?.asset.id
+        : undefined
     const graph = createConfidentialFundingGraph({
       planId: plan.planId,
       ...(plan.purpose === 'native-zec-swap' ? { purpose: plan.purpose } : {}),
@@ -4669,6 +4956,7 @@ export class ConfidentialFundingCoordinator {
         assetId: plan.source.assetId,
         amountRaw: plan.source.amountRaw,
         address: plan.source.address,
+        ...(nearPrepared ? { senderAddress: nearPrepared.signerId } : {}),
         ...(prepared
           ? {
               evmSenderAddress: prepared.from,
@@ -4688,6 +4976,12 @@ export class ConfidentialFundingCoordinator {
                   : {}),
                 unsignedTransaction: prepared.transaction
               }
+            }
+          : {}),
+        ...(feeAsset && nearPrepared
+          ? {
+              feeAssetId: feeAsset,
+              maximumFeeRaw: nearPrepared.maximumFeeYocto
             }
           : {}),
         ...(feeAsset && prepared
