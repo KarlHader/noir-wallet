@@ -12,6 +12,7 @@ import {
   NEAR_STORAGE_DEPOSIT_GAS,
   NEAR_STORAGE_DEPOSIT_YOCTO,
   NEAR_WRAP_DEPOSIT_GAS,
+  buildNearConfidentialFungibleDepositActions,
   buildNearIntentsDepositActions,
   nearAccountStorageReserveYocto,
   nearIntentsDepositMaximumYocto,
@@ -29,7 +30,9 @@ import {
   ChromeSessionNearPendingTransferStore,
   NearTransferOrchestrator,
   computeNearTransactionFingerprint,
+  parsePreparedNearConfidentialFungibleDeposit,
   parsePreparedNearTransfer,
+  prepareNearConfidentialFungibleDeposit,
   prepareNearIntentsDeposit
 } from '../../../../src/infrastructure/chains/near/index.ts'
 import { InMemoryTransactionRepository } from '../../../../src/infrastructure/persistence/repositories/index.ts'
@@ -582,4 +585,154 @@ test('exposes wrap and storage separately through an orchestrator review', async
     transactionId: approval.graph.root.id
   })
   expect(pending?.debit).toEqual(approval.debit)
+})
+
+const usdtContractId = 'usdt.tether-token.near'
+const usdtAssetId = `${chainId}/nep141:${usdtContractId}`
+
+test('builds a USDT deposit as ft_transfer without wrapping NEAR', () => {
+  const unregistered = buildNearConfidentialFungibleDepositActions({
+    contractId: usdtContractId,
+    depositAddress,
+    amountRaw: 100_000n,
+    recipientRegistered: false
+  })
+  expect(unregistered.receiverId).toBe(usdtContractId)
+  expect(unregistered.amountRaw).toBe(100_000n)
+  expect(unregistered.storageFeeYocto).toBe(NEAR_STORAGE_DEPOSIT_YOCTO)
+  expect(unregistered.actions.map(action => action.methodName)).toEqual([
+    'storage_deposit',
+    'ft_transfer'
+  ])
+  expect(unregistered.actions.some(action => action.methodName === 'near_deposit')).toBe(false)
+  expect(unregistered.actions[0]).toMatchObject({
+    args: { account_id: depositAddress, registration_only: true },
+    gas: NEAR_STORAGE_DEPOSIT_GAS.toString(),
+    depositYocto: NEAR_STORAGE_DEPOSIT_YOCTO.toString()
+  })
+  expect(unregistered.actions[1]).toMatchObject({
+    args: { receiver_id: depositAddress, amount: '100000' },
+    gas: NEAR_FT_TRANSFER_GAS.toString(),
+    depositYocto: NEAR_FT_TRANSFER_DEPOSIT_YOCTO.toString()
+  })
+  expect(Object.hasOwn(unregistered.actions[1].args, 'memo')).toBe(false)
+
+  const registered = buildNearConfidentialFungibleDepositActions({
+    contractId: usdtContractId,
+    depositAddress,
+    amountRaw: 100_000n,
+    recipientRegistered: true
+  })
+  expect(registered.storageFeeYocto).toBe(0n)
+  expect(registered.actions.map(action => action.methodName)).toEqual(['ft_transfer'])
+  expect(() =>
+    buildNearConfidentialFungibleDepositActions({
+      contractId: 'wrap.near',
+      depositAddress,
+      amountRaw: 100_000n,
+      recipientRegistered: true
+    })
+  ).toThrow(/fungible token/)
+})
+
+test('prepares a USDT confidential deposit from the token balance', async () => {
+  const state = {
+    calls: [],
+    balance: (20n * oneNear).toString(),
+    wrapped: '100000',
+    registered: new Map()
+  }
+  const prepared = await prepareNearConfidentialFungibleDeposit({
+    chainId,
+    accountIndex: 4,
+    assetId: usdtAssetId,
+    signerId,
+    publicKey,
+    depositAddress,
+    amountRaw: '100000',
+    rpc: rpc(state)
+  })
+  const gasUnits = NEAR_STORAGE_DEPOSIT_GAS + NEAR_FT_TRANSFER_GAS
+  const reserve = nearAccountStorageReserveYocto(storageUsage, storagePrice)
+  expect(prepared.kind).toBe('confidential-ft-deposit')
+  expect(prepared.assetId).toBe(usdtAssetId)
+  expect(prepared.tokenContractId).toBe(usdtContractId)
+  expect(prepared.amountRaw).toBe('100000')
+  expect(prepared.recipientId).toBe(depositAddress)
+  expect(prepared.storageFeeYocto).toBe(NEAR_STORAGE_DEPOSIT_YOCTO.toString())
+  expect(prepared.transaction.receiverId).toBe(usdtContractId)
+  expect(prepared.transaction.actions.map(action => action.methodName)).toEqual([
+    'storage_deposit',
+    'ft_transfer'
+  ])
+  expect(decodedArgs(prepared.transaction.actions[1])).toEqual({
+    receiver_id: depositAddress,
+    amount: '100000'
+  })
+  expect(prepared.estimatedFeeYocto).toBe((gasUnits * gasPrice).toString())
+  expect(prepared.maximumFeeYocto).toBe((gasUnits * minimumGasPrice).toString())
+  expect(prepared.totalRequiredYocto).toBe(
+    (
+      gasUnits * minimumGasPrice +
+      reserve +
+      NEAR_STORAGE_DEPOSIT_YOCTO +
+      NEAR_FT_TRANSFER_DEPOSIT_YOCTO
+    ).toString()
+  )
+  expect(state.calls).toEqual([
+    'attest',
+    `account:${signerId}`,
+    `key:${signerId}:${publicKey}`,
+    'gas-price',
+    'costs',
+    `balance:${usdtContractId}:${signerId}`,
+    `registered:${usdtContractId}:${depositAddress}`
+  ])
+  expect(parsePreparedNearConfidentialFungibleDeposit(prepared)).toEqual(prepared)
+  const tampered = structuredClone(prepared)
+  tampered.transaction.actions[0].methodName = 'near_deposit'
+  expect(() => parsePreparedNearConfidentialFungibleDeposit(tampered)).toThrow(/action/)
+
+  const registered = await prepareNearConfidentialFungibleDeposit({
+    chainId,
+    accountIndex: 4,
+    assetId: usdtAssetId,
+    signerId,
+    publicKey,
+    depositAddress,
+    amountRaw: '100000',
+    rpc: rpc({
+      ...state,
+      calls: [],
+      registered: new Map([[depositAddress, true]])
+    })
+  })
+  expect(registered.storageFeeYocto).toBe('0')
+  expect(registered.transaction.actions.map(action => action.methodName)).toEqual(['ft_transfer'])
+  expect(registered.transaction.receiverId).toBe(usdtContractId)
+
+  await expect(
+    prepareNearConfidentialFungibleDeposit({
+      chainId,
+      accountIndex: 4,
+      assetId: `${chainId}/nep141:wrap.near`,
+      signerId,
+      publicKey,
+      depositAddress,
+      amountRaw: '100000',
+      rpc: rpc({ ...state, calls: [] })
+    })
+  ).rejects.toThrow(/fungible token/)
+  await expect(
+    prepareNearConfidentialFungibleDeposit({
+      chainId,
+      accountIndex: 4,
+      assetId: usdtAssetId,
+      signerId,
+      publicKey,
+      depositAddress,
+      amountRaw: '100001',
+      rpc: rpc({ ...state, calls: [] })
+    })
+  ).rejects.toMatchObject({ code: 'insufficient-funds' })
 })

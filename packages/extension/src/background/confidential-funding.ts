@@ -25,7 +25,7 @@ import {
 import { loadActiveEvmPortfolioContext } from '@/infrastructure/chains/evm'
 import {
   createConfiguredNearRpcClient,
-  type PreparedNearIntentsDeposit
+  type PreparedNearConfidentialDeposit
 } from '@/infrastructure/chains/near'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 import { NearMultichainSigningClient } from '@/infrastructure/keyring/multichain/near-signing-client'
@@ -107,7 +107,7 @@ function createNearShieldDeposit(
     async prepare(input: {
       readonly identity: ConfidentialSigningIdentity
       readonly kind: 'near-transaction' | 'pea-near-transaction'
-      readonly prepared: PreparedNearIntentsDeposit
+      readonly prepared: PreparedNearConfidentialDeposit
     }) {
       return accountContextTransition.runActiveOperation(async () => {
         const keyDomainId = input.identity.context.chainAccount.scope.keyDomainId
@@ -143,7 +143,7 @@ function createNearShieldDeposit(
     async confirm(input: {
       readonly identity: ConfidentialSigningIdentity
       readonly commandId: string
-      readonly prepared: PreparedNearIntentsDeposit
+      readonly prepared: PreparedNearConfidentialDeposit
     }) {
       return accountContextTransition.runActiveOperation(async () => {
         const signed = await signer.confirm(

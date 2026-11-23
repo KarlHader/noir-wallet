@@ -212,6 +212,8 @@ test('NEAR Shield deposit preparation requires a 64-hex deposit address', async 
         kind: 'intents-deposit',
         recipientId: input.depositAddress,
         signerId: input.signerId,
+        amountRaw: input.amountRaw,
+        tokenContractId: 'wrap.near',
         memo: input.memo
       }
     }
@@ -240,6 +242,108 @@ test('NEAR Shield deposit preparation requires a 64-hex deposit address', async 
     adapter.prepareDeposit({ ...base, chainId: 'near:testnet', recipient: nearAccount })
   ).rejects.toThrow('NEAR mainnet')
   expect(prepared).toHaveLength(1)
+  await adapter.prepareDeposit({
+    ...base,
+    assetId: 'near:mainnet/nep141:wrap.near',
+    recipient: nearAccount
+  })
+  expect(prepared).toHaveLength(2)
+  expect(prepared[1].amountRaw).toBe('1')
+})
+
+test('NEAR Shield USDT deposit transfers the token contract instead of wrap.near', async () => {
+  const intents = []
+  const fungible = []
+  const usdtAssetId = 'near:mainnet/nep141:usdt.tether-token.near'
+  const account = {
+    accountIndex: 0,
+    mainAccountId: nearAccount,
+    publicKey: 'ed25519:11111111111111111111111111111111',
+    peaAccountId: 'b'.repeat(64)
+  }
+  const signing = {
+    prepare: async () => ({
+      commandId: 'command-one',
+      payloadFingerprint: 'c'.repeat(64),
+      expiresAt: 10_000
+    }),
+    confirm: async () => {
+      throw new Error('confirm was not expected')
+    },
+    cancel: async () => {}
+  }
+  const adapter = new NearConfidentialDepositAdapter(
+    { resolve: async () => account },
+    signing,
+    {},
+    async input => {
+      intents.push(input)
+      throw new Error('USDT deposit must not wrap NEAR')
+    },
+    async input => {
+      fungible.push(input)
+      return {
+        kind: 'confidential-ft-deposit',
+        recipientId: input.depositAddress,
+        amountRaw: input.amountRaw,
+        assetId: input.assetId,
+        tokenContractId: 'usdt.tether-token.near',
+        transaction: {
+          receiverId: 'usdt.tether-token.near',
+          actions: [{ type: 'functionCall', methodName: 'ft_transfer' }]
+        }
+      }
+    }
+  )
+  const identity = { address: lowercaseRecipient }
+  await adapter.prepareDeposit({
+    identity,
+    chainId: 'near:mainnet',
+    assetId: usdtAssetId,
+    amountRaw: '100000',
+    recipient: nearAccount,
+    sourceDomain: 'public'
+  })
+  expect(intents).toEqual([])
+  expect(fungible).toHaveLength(1)
+  expect(fungible[0]).toMatchObject({
+    assetId: usdtAssetId,
+    depositAddress: nearAccount,
+    amountRaw: '100000',
+    signerId: nearAccount
+  })
+  const rejected = new NearConfidentialDepositAdapter(
+    { resolve: async () => account },
+    signing,
+    {},
+    async () => {
+      throw new Error('USDT deposit must not wrap NEAR')
+    },
+    async input => ({
+      kind: 'confidential-ft-deposit',
+      recipientId: input.depositAddress,
+      amountRaw: input.amountRaw,
+      assetId: input.assetId,
+      tokenContractId: 'usdt.tether-token.near',
+      transaction: {
+        receiverId: 'usdt.tether-token.near',
+        actions: [
+          { type: 'functionCall', methodName: 'near_deposit' },
+          { type: 'functionCall', methodName: 'ft_transfer' }
+        ]
+      }
+    })
+  )
+  await expect(
+    rejected.prepareDeposit({
+      identity,
+      chainId: 'near:mainnet',
+      assetId: usdtAssetId,
+      amountRaw: '100000',
+      recipient: nearAccount,
+      sourceDomain: 'public'
+    })
+  ).rejects.toThrow('NEAR Shield deposit does not match its quote')
 })
 
 test('a failed NEAR Shield quote does not prepare a transfer', async () => {
@@ -351,4 +455,169 @@ test('a failed NEAR Shield quote does not prepare a transfer', async () => {
   expect(state.quotes[0].originAsset).toBe('nep141:wrap.near')
   expect(state.quotes[0].destinationAsset).toBe('nep141:wrap.near')
   expect(JSON.stringify(state.quotes[0])).not.toContain(`"recipient":"${checksummedRecipient}"`)
+})
+
+test('NEAR Incognito cluster preview quotes a same-chain move without an EVM signer', async () => {
+  const peaAccount = 'b'.repeat(64)
+  const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.near']
+  const chains = createInitialProductChainRegistry('mainnet')
+  const assets = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions('mainnet'))
+  const now = 1_000_000
+  const state = { quotes: [], plans: 0, identityChains: [] }
+  const coordinator = new ConfidentialFundingCoordinator({
+    network: 'mainnet',
+    api: {
+      async quote(input) {
+        state.quotes.push(input)
+        const deadline = new Date(now + 60_000).toISOString()
+        return {
+          correlationId: 'near-cluster',
+          quoteRequest: {
+            swapType: 'EXACT_INPUT',
+            confidentiality: 'basic',
+            originAsset: input.originAsset,
+            destinationAsset: input.destinationAsset,
+            amount: input.amountRaw,
+            refundTo: input.refundTo ?? input.signerId,
+            depositType: input.depositType,
+            refundType: input.refundType,
+            recipient: input.recipient,
+            recipientType: input.recipientType,
+            slippageTolerance: input.slippageBps,
+            deadline,
+            dry: input.dry
+          },
+          quote: {
+            amountIn: input.amountRaw,
+            amountOut: input.amountRaw,
+            minAmountOut: input.amountRaw,
+            depositAddress: nearAccount,
+            deadline
+          }
+        }
+      }
+    },
+    store: {
+      async getSession() {
+        return null
+      },
+      async putPlan() {
+        state.plans += 1
+      },
+      async listPlans() {
+        return []
+      }
+    },
+    signer: {
+      async resolveIdentity(chainId) {
+        state.identityChains.push(chainId)
+        return {
+          address: nearAccount,
+          peaAddress: peaAccount,
+          addressIndex: 0,
+          context: { chainAccount: { scope: { ...scope, chainId } } }
+        }
+      }
+    },
+    repository: new InMemoryTransactionRepository(),
+    assets,
+    evmNetworks: [],
+    assetMappings: Object.freeze([
+      { assetId: 'near:mainnet/slip44:397', protocolAssetId: 'nep141:wrap.near' }
+    ]),
+    now: () => now,
+    nearDeposit: {
+      async resolveAccount() {
+        return {
+          accountIndex: 0,
+          mainAccountId: nearAccount,
+          publicKey: 'ed25519:11111111111111111111111111111111',
+          peaAccountId: peaAccount,
+          walletSource: { kind: 'software' }
+        }
+      },
+      adapter: {
+        kind: 'near',
+        async prepareDeposit() {
+          throw new Error('cluster preview must not prepare a deposit')
+        },
+        async confirmDeposit() {
+          throw new Error('cluster preview must not confirm a deposit')
+        },
+        async cancelDeposit() {}
+      },
+      async broadcastSignedTransaction() {
+        throw new Error('cluster preview must not broadcast')
+      },
+      async getTransactionStatus() {
+        return { status: 'unknown' }
+      }
+    }
+  })
+  const route = {
+    network: 'mainnet',
+    ...scope,
+    operation: 'cluster',
+    sourceDomain: 'public',
+    destinationDomain: 'private',
+    source: {
+      chainId: 'near:mainnet',
+      chainName: 'near',
+      assetId: 'near:mainnet/slip44:397',
+      protocolAssetId: 'nep141:wrap.near',
+      amountRaw: '1000'
+    },
+    destination: {
+      chainId: 'near:mainnet',
+      chainName: 'near',
+      assetId: 'near:mainnet/slip44:397',
+      protocolAssetId: 'nep141:wrap.near'
+    },
+    slippageBps: 50
+  }
+  try {
+    await expect(
+      coordinator.preview({
+        ...route,
+        destination: {
+          ...route.destination,
+          chainId: 'eip155:1',
+          assetId: 'eip155:1/slip44:60'
+        }
+      })
+    ).rejects.toThrow('Confidential funding requires an EVM signing chain')
+    expect(state.quotes).toEqual([])
+
+    const preview = await coordinator.preview(route)
+    expect(preview).toEqual({
+      amountOutRaw: '1000',
+      minimumOutputRaw: '1000',
+      expiresAt: now + 60_000
+    })
+    expect(state.quotes).toHaveLength(4)
+    expect(state.quotes.every(quote => quote.dry === true)).toBe(true)
+    expect(state.quotes.slice(1)).toHaveLength(3)
+    expect(
+      state.quotes.slice(1).reduce((sum, quote) => sum + BigInt(quote.amountRaw), 0n)
+    ).toBe(1000n)
+    expect(state.quotes[0]).toMatchObject({
+      originAsset: 'nep141:wrap.near',
+      destinationAsset: 'nep141:wrap.near',
+      amountRaw: '1000',
+      signerId: nearAccount,
+      refundTo: nearAccount,
+      recipient: nearAccount,
+      depositType: 'ORIGIN_CHAIN',
+      recipientType: 'CONFIDENTIAL_INTENTS'
+    })
+    expect(state.quotes.slice(1).every(quote => quote.recipient === peaAccount)).toBe(true)
+    expect(
+      state.quotes.slice(1).every(quote => quote.depositType === 'CONFIDENTIAL_INTENTS')
+    ).toBe(true)
+    expect(state.identityChains.every(chainId => chainId === 'near:mainnet')).toBe(true)
+    expect(state.plans).toBe(0)
+  } finally {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+  }
 })

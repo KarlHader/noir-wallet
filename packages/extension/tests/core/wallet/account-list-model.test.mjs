@@ -93,6 +93,7 @@ test('switcher uses the retained selection until the native account is selected'
     retainedSelected.map(account => account.accountId),
     ['account-1']
   )
+  assert.equal(retainedSelected[0].walletSourceKind, 'software')
 
   const nativeSelected = buildAccountSwitcherGroups({
     ...input,
@@ -104,6 +105,10 @@ test('switcher uses the retained selection until the native account is selected'
   assert.deepEqual(
     nativeSelected.map(account => account.accountId),
     ['native-account']
+  )
+  assert.equal(
+    nativeSelected.find(account => account.accountId === 'native-account').walletSourceKind,
+    'software'
   )
 })
 
@@ -328,6 +333,10 @@ test('groups imported private keys while keeping their account identities and na
     })),
     [{ id: 'private-keys', name: 'Imported Private Keys', walletIds: ['sol-key', 'evm-key'] }]
   )
+  assert.deepEqual(
+    switcherGroups[0].accounts.map(account => account.walletSourceKind),
+    ['private-key', 'private-key']
+  )
   assert.equal(
     buildVisibleAccountList({ ...input, searchQuery: 'Imported Private Key' }).regularEntries
       .length,
@@ -394,6 +403,22 @@ test('keeps different hardware wallets separate and groups retained and native a
   assert.equal(
     filtered.regularEntries.find(entry => entry.walletId === 'wallet-1').accounts.length,
     1
+  )
+  const switcher = buildAccountSwitcherGroups({
+    wallets: [retained],
+    catalogAccounts: native,
+    accountDisplayNames: {},
+    currentWalletId: retained.id,
+    currentAccountId: 'account-1'
+  }).flatMap(group => group.accounts)
+  assert.equal(
+    switcher.find(account => account.walletId === 'wallet-1' && account.accountId === 'account-1')
+      .walletSourceKind,
+    'hardware'
+  )
+  assert.equal(
+    switcher.find(account => account.walletId === 'keystone').walletSourceKind,
+    'hardware'
   )
 })
 

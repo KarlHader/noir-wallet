@@ -1,4 +1,5 @@
 import { parseNearAccountId } from './identifiers'
+import { isNearFungibleContractId } from './near-portfolio-assets'
 
 const MAXIMUM_U128 = 340_282_366_920_938_463_463_374_607_431_768_211_455n
 const MAXIMUM_MEMO_LENGTH = 2_048
@@ -167,5 +168,58 @@ export function buildNearIntentsDepositActions(
     wrapAmountYocto: wrapAmount,
     storageFeeYocto: storageFee,
     nativeAttachedYocto: wrapAmount + storageFee + NEAR_FT_TRANSFER_DEPOSIT_YOCTO
+  })
+}
+
+export interface BuildNearConfidentialFungibleDepositActionsInput {
+  readonly contractId: string
+  readonly depositAddress: string
+  readonly amountRaw: bigint
+  readonly recipientRegistered: boolean
+}
+
+export interface NearConfidentialFungibleDepositPlan {
+  readonly receiverId: string
+  readonly actions: readonly NearIntentsDepositAction[]
+  readonly amountRaw: bigint
+  readonly storageFeeYocto: bigint
+  readonly nativeAttachedYocto: bigint
+}
+
+/** NEP-141 Shield deposit. Registers only the recipient, then transfers token units. */
+export function buildNearConfidentialFungibleDepositActions(
+  input: BuildNearConfidentialFungibleDepositActionsInput
+): NearConfidentialFungibleDepositPlan {
+  const contractId = parseNearAccountId(input.contractId, 'NEAR fungible token contract ID')
+  if (contractId === WRAP_NEAR_CONTRACT_ID || !isNearFungibleContractId(contractId)) {
+    throw new Error('NEAR confidential fungible deposit requires a NEAR fungible token')
+  }
+  const depositAddress = parseNearAccountId(input.depositAddress, 'NEAR fungible deposit address')
+  const amount = assertU128(input.amountRaw, 'NEAR fungible deposit amount')
+  if (amount === 0n) throw new Error('NEAR fungible deposit amount must be greater than zero')
+  assertBoolean(input.recipientRegistered, 'NEAR recipient registration')
+  const storageFee = input.recipientRegistered ? 0n : NEAR_STORAGE_DEPOSIT_YOCTO
+  const actions: NearIntentsDepositAction[] = []
+  if (!input.recipientRegistered) actions.push(storageDepositAction(depositAddress))
+  actions.push(
+    Object.freeze({
+      methodName: 'ft_transfer' as const,
+      args: Object.freeze({
+        receiver_id: depositAddress,
+        amount: amount.toString()
+      }),
+      gas: NEAR_FT_TRANSFER_GAS.toString(),
+      depositYocto: NEAR_FT_TRANSFER_DEPOSIT_YOCTO.toString()
+    })
+  )
+  if (actions.some(action => action.methodName === 'near_deposit')) {
+    throw new Error('NEAR confidential fungible deposit cannot wrap NEAR')
+  }
+  return Object.freeze({
+    receiverId: contractId,
+    actions: Object.freeze(actions),
+    amountRaw: amount,
+    storageFeeYocto: storageFee,
+    nativeAttachedYocto: storageFee + NEAR_FT_TRANSFER_DEPOSIT_YOCTO
   })
 }

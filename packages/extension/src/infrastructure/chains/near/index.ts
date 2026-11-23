@@ -62,9 +62,15 @@ export {
   type PreparedNearLendingSupply
 } from './near-lending-supply-preparer'
 export {
+  parsePreparedNearConfidentialDeposit,
+  parsePreparedNearConfidentialFungibleDeposit,
   parsePreparedNearIntentsDeposit,
+  prepareNearConfidentialFungibleDeposit,
   prepareNearIntentsDeposit,
+  type PreparedNearConfidentialDeposit,
+  type PreparedNearConfidentialFungibleDeposit,
   type PreparedNearIntentsDeposit,
+  type PrepareNearConfidentialFungibleDepositInput,
   type PrepareNearIntentsDepositInput
 } from './near-intents-deposit-preparer'
 export {

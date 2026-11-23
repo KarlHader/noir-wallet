@@ -1,6 +1,11 @@
 import type { ChainId } from '@/core/chains/domain'
-import { parseChainId, type AssetRegistry } from '@/core/chains/registry'
-import { nearPublicKeyFromImplicitAccountId } from '@/core/chains/near'
+import { parseAssetId, parseChainId, type AssetRegistry } from '@/core/chains/registry'
+import { nearPublicKeyFromImplicitAccountId, WRAP_NEAR_CONTRACT_ID } from '@/core/chains/near'
+import {
+  decodeNearContractId,
+  isNearFungibleContractId,
+  NEAR_MAINNET_NATIVE_ASSET_ID
+} from '@/core/chains/near/near-portfolio-assets'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
 import {
   buildEvmTransfer,
@@ -9,9 +14,13 @@ import {
   type PreparedEvmTransfer
 } from '@/infrastructure/chains/evm'
 import {
-  parsePreparedNearIntentsDeposit,
+  parsePreparedNearConfidentialDeposit,
+  prepareNearConfidentialFungibleDeposit,
   prepareNearIntentsDeposit,
+  type PreparedNearConfidentialDeposit,
+  type PreparedNearConfidentialFungibleDeposit,
   type PreparedNearIntentsDeposit,
+  type PrepareNearConfidentialFungibleDepositInput,
   type PrepareNearIntentsDepositInput
 } from '@/infrastructure/chains/near'
 import { assertNearConfidentialDepositAddress } from './confidential-near-quote'
@@ -30,7 +39,7 @@ export interface ConfidentialDepositPrepareInput {
 }
 
 export interface ConfidentialDepositConfirmation {
-  readonly prepared: PreparedEvmTransfer | PreparedNearIntentsDeposit
+  readonly prepared: PreparedEvmTransfer | PreparedNearConfidentialDeposit
   readonly rawTransaction: string
   readonly transactionHash: string
 }
@@ -51,7 +60,7 @@ export interface ConfidentialPreparedDeposit {
   readonly commandId: string
   readonly payloadFingerprint: string
   readonly expiresAt: number
-  readonly preparedTransfer: PreparedEvmTransfer | PreparedNearIntentsDeposit
+  readonly preparedTransfer: PreparedEvmTransfer | PreparedNearConfidentialDeposit
 }
 
 export interface ConfidentialDepositAdapter {
@@ -80,7 +89,7 @@ export interface NearConfidentialDepositSigning {
   prepare(input: {
     readonly identity: ConfidentialSigningIdentity
     readonly kind: 'near-transaction' | 'pea-near-transaction'
-    readonly prepared: PreparedNearIntentsDeposit
+    readonly prepared: PreparedNearConfidentialDeposit
   }): Promise<
     Readonly<{
       commandId: string
@@ -91,7 +100,7 @@ export interface NearConfidentialDepositSigning {
   confirm(input: {
     readonly identity: ConfidentialSigningIdentity
     readonly commandId: string
-    readonly prepared: PreparedNearIntentsDeposit
+    readonly prepared: PreparedNearConfidentialDeposit
   }): Promise<Readonly<{ rawTransaction: string; transactionHash: string }>>
   cancel(input: {
     readonly identity: ConfidentialSigningIdentity
@@ -175,6 +184,52 @@ export class EvmConfidentialDepositAdapter implements ConfidentialDepositAdapter
   }
 }
 
+function nearShieldDepositAsset(
+  assetId: string
+):
+  | Readonly<{ kind: 'wrap' }>
+  | Readonly<{ kind: 'fungible'; assetId: string; contractId: string }> {
+  const asset = parseAssetId(assetId)
+  if (asset.chainId !== 'near:mainnet') {
+    throw new Error('NEAR Shield deposit asset is not supported')
+  }
+  if (
+    asset.id === NEAR_MAINNET_NATIVE_ASSET_ID ||
+    (asset.namespace === 'nep141' &&
+      decodeNearContractId(asset.reference) === WRAP_NEAR_CONTRACT_ID)
+  ) {
+    return { kind: 'wrap' }
+  }
+  if (asset.namespace !== 'nep141') {
+    throw new Error('NEAR Shield deposit asset is not supported')
+  }
+  const contractId = decodeNearContractId(asset.reference)
+  if (!isNearFungibleContractId(contractId)) {
+    throw new Error('NEAR Shield deposit asset is not supported')
+  }
+  return { kind: 'fungible', assetId: asset.id, contractId }
+}
+
+function fungibleDepositMatchesQuote(
+  prepared: PreparedNearConfidentialFungibleDeposit,
+  amountRaw: string,
+  depositAddress: string,
+  assetId: string,
+  contractId: string
+): boolean {
+  return (
+    prepared.kind === 'confidential-ft-deposit' &&
+    prepared.recipientId === depositAddress &&
+    prepared.amountRaw === amountRaw &&
+    prepared.assetId === assetId &&
+    prepared.tokenContractId === contractId &&
+    prepared.transaction.receiverId === contractId &&
+    prepared.transaction.actions.every(
+      action => action.type === 'functionCall' && action.methodName !== 'near_deposit'
+    )
+  )
+}
+
 export class NearConfidentialDepositAdapter implements ConfidentialDepositAdapter {
   readonly kind = 'near' as const
 
@@ -186,7 +241,10 @@ export class NearConfidentialDepositAdapter implements ConfidentialDepositAdapte
     private readonly rpc: PrepareNearIntentsDepositInput['rpc'],
     private readonly prepareIntentsDeposit: (
       input: PrepareNearIntentsDepositInput
-    ) => Promise<PreparedNearIntentsDeposit> = prepareNearIntentsDeposit
+    ) => Promise<PreparedNearIntentsDeposit> = prepareNearIntentsDeposit,
+    private readonly prepareFungibleDeposit: (
+      input: PrepareNearConfidentialFungibleDepositInput
+    ) => Promise<PreparedNearConfidentialFungibleDeposit> = prepareNearConfidentialFungibleDeposit
   ) {}
 
   async prepareDeposit(
@@ -210,18 +268,17 @@ export class NearConfidentialDepositAdapter implements ConfidentialDepositAdapte
           : 'NEAR Shield deposit signer does not match the Main account'
       )
     }
-    const prepared = await this.prepareIntentsDeposit({
-      chainId: 'near:mainnet',
+    const publicKey = privateSource
+      ? nearPublicKeyFromImplicitAccountId(signerId)
+      : account.publicKey
+    const asset = nearShieldDepositAsset(input.assetId)
+    const prepared = await this.prepareShieldDeposit(input, {
       accountIndex: account.accountIndex,
       signerId,
-      publicKey: privateSource ? nearPublicKeyFromImplicitAccountId(signerId) : account.publicKey,
+      publicKey,
       depositAddress,
-      amountRaw: input.amountRaw,
-      rpc: this.rpc
+      asset
     })
-    if (prepared.recipientId !== depositAddress || prepared.memo !== undefined) {
-      throw new Error('NEAR Shield deposit does not match its quote')
-    }
     const signing = await this.signing.prepare({
       identity: input.identity,
       kind: privateSource ? 'pea-near-transaction' : 'near-transaction',
@@ -233,12 +290,70 @@ export class NearConfidentialDepositAdapter implements ConfidentialDepositAdapte
     })
   }
 
+  private async prepareShieldDeposit(
+    input: ConfidentialDepositPrepareInput,
+    binding: Readonly<{
+      accountIndex: number
+      signerId: string
+      publicKey: string
+      depositAddress: string
+      asset: ReturnType<typeof nearShieldDepositAsset>
+    }>
+  ): Promise<PreparedNearConfidentialDeposit> {
+    if (binding.asset.kind === 'wrap') {
+      const prepared = await this.prepareIntentsDeposit({
+        chainId: 'near:mainnet',
+        accountIndex: binding.accountIndex,
+        signerId: binding.signerId,
+        publicKey: binding.publicKey,
+        depositAddress: binding.depositAddress,
+        amountRaw: input.amountRaw,
+        rpc: this.rpc
+      })
+      if (
+        prepared.kind !== 'intents-deposit' ||
+        prepared.recipientId !== binding.depositAddress ||
+        prepared.memo !== undefined ||
+        prepared.amountRaw !== input.amountRaw ||
+        prepared.tokenContractId !== WRAP_NEAR_CONTRACT_ID
+      ) {
+        throw new Error('NEAR Shield deposit does not match its quote')
+      }
+      return prepared
+    }
+    const prepared = await this.prepareFungibleDeposit({
+      chainId: 'near:mainnet',
+      accountIndex: binding.accountIndex,
+      assetId: binding.asset.assetId,
+      signerId: binding.signerId,
+      publicKey: binding.publicKey,
+      depositAddress: binding.depositAddress,
+      amountRaw: input.amountRaw,
+      rpc: this.rpc
+    })
+    if (
+      !fungibleDepositMatchesQuote(
+        prepared,
+        input.amountRaw,
+        binding.depositAddress,
+        binding.asset.assetId,
+        binding.asset.contractId
+      )
+    ) {
+      throw new Error('NEAR Shield deposit does not match its quote')
+    }
+    return prepared
+  }
+
   async confirmDeposit(
     input: ConfidentialDepositConfirmInput
   ): Promise<ConfidentialDepositConfirmation> {
-    const prepared = parsePreparedNearIntentsDeposit(input.preparedTransfer)
+    const prepared = parsePreparedNearConfidentialDeposit(input.preparedTransfer)
     assertNearConfidentialDepositAddress(prepared.recipientId)
-    if (prepared.memo !== undefined || prepared.chainId !== 'near:mainnet') {
+    if (
+      prepared.chainId !== 'near:mainnet' ||
+      (prepared.kind === 'intents-deposit' && prepared.memo !== undefined)
+    ) {
       throw new Error('NEAR Shield deposit does not match its quote')
     }
     const account = await this.accounts.resolve(input.identity)

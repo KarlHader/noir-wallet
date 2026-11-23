@@ -42,6 +42,7 @@ export interface SwitcherAccount {
   readonly accountId: string
   readonly name: string
   readonly networks: readonly AccountNetworkView[]
+  readonly walletSourceKind: 'software' | 'private-key' | 'hardware'
   readonly active: boolean
 }
 
@@ -97,11 +98,13 @@ export function buildAccountSwitcherGroups(input: {
         createdAt: wallet.createdAt,
         accountIndex: account.derivationIndex
       })
+      const catalogAccount = catalogByKey.get(key)
       const item = {
         walletId: wallet.id,
         accountId: account.id,
         name: getAccountDisplayName(wallet.id, account.id, account.name, accountDisplayNames),
-        networks: catalogByKey.get(key)?.networks ?? [],
+        networks: catalogAccount?.networks ?? [],
+        walletSourceKind: catalogAccount?.walletSource.kind ?? 'software',
         active: wallet.id === currentWalletId && account.id === currentAccountId
       }
       if (account.isPinned) pinnedAccounts.push(item)
@@ -144,6 +147,7 @@ export function buildAccountSwitcherGroups(input: {
         accountDisplayNames
       ),
       networks: account.networks,
+      walletSourceKind: account.walletSource.kind,
       active: account.active && !hasRetainedSelection
     })
     groups.set(groupId, group)

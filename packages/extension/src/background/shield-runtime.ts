@@ -248,6 +248,11 @@ export function routeConfidentialFundingMessage(
   void operation
     .then(result => sendResponse({ result }))
     .catch(error => {
+      console.log(
+        '%c routeConfidentialFundingMessage error: %o',
+        'background:#f00;color:#fff;',
+        error
+      )
       console.error('[Confidential Funding] Request failed', {
         operation: message.type,
         errorName: error instanceof Error ? error.name : 'UnknownError',

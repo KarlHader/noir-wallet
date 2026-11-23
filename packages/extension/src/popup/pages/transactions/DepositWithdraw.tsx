@@ -1540,7 +1540,11 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   })
   const clusterQuoted = Boolean(canEstimateMethods && managedAsset && clusterEstimate.value)
   const clusterNetworkFee = useBalanceTransferEstimate({
-    enabled: clusterQuoted && Boolean(estimateAmountRaw) && !preparingShield,
+    enabled:
+      clusterQuoted &&
+      Boolean(estimateAmountRaw) &&
+      !preparingShield &&
+      selected?.chain.chain.family === 'evm',
     requestKey: `${clusterEstimateKey}:${JSON.stringify(evmMoveFee)}`,
     estimate: () =>
       confidentialFundingClient.previewClusterNetworkFee({
@@ -2654,6 +2658,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                 </div>
               )}
             {clusterSelected &&
+              selected?.chain.chain.family === 'evm' &&
               clusterNetworkFee &&
               clusterQuoted &&
               evmMoveFee.kind !== 'tier' && (
