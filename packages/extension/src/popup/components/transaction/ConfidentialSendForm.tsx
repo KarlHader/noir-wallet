@@ -28,7 +28,6 @@ import {
   SendRouteInfoCard
 } from '@/popup/components/transaction/SendInputCards'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import type { ShieldTokenPickerItem } from '@/popup/services/shield-transfer'
 import { sortSendAssetsByBalanceValue, sortSendNetworks } from '@/popup/services/send-asset-order'
@@ -37,6 +36,7 @@ import {
   TransactionReviewExchangeSummary,
   TransactionReviewView
 } from '@/popup/components/transaction/TransactionReviewView'
+import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { InlineError } from '@/popup/components/common/InlineError'
@@ -1021,23 +1021,24 @@ export function ConfidentialSendForm({
             />
           }
           rows={[
-            { label: 'From', content: 'Shield · NEAR Confidential' },
             {
-              label: 'Recipient',
-              content: prepared.review.destinationAddress
+              label: 'From',
+              content: (
+                <TransactionReviewParty
+                  accountName={activeAccount?.accountDisplayName}
+                  domain="shield"
+                  confidential
+                />
+              )
             },
             {
-              label: 'Network',
+              label: 'Recipient',
               content: (
-                <span className="inline-flex items-center gap-1.5">
-                  <ChainIcon
-                    chain={withdrawChainIconAlias(prepared.destination.chain.chain)}
-                    width={16}
-                    height={16}
-                    className="shrink-0 rounded-sm"
-                  />
-                  {prepared.destination.chain.chain.displayName}
-                </span>
+                <TransactionReviewParty
+                  address={prepared.review.destinationAddress}
+                  chain={prepared.destination.chain.chain}
+                  fullAddress
+                />
               )
             },
             {

@@ -125,6 +125,7 @@ import {
   shieldQuoteFeeRaw
 } from '@/popup/services/shield-transfer'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
+import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { homeActivityPath } from '@/popup/services/home-navigation'
 import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
@@ -245,10 +246,6 @@ function TransferBalanceOption({
   )
 }
 
-function formatMoveReviewAddress(address: string): string {
-  return address.length > 12 ? `${address.slice(0, 7)}...${address.slice(-5)}` : address
-}
-
 function MethodCard({
   title,
   detail,
@@ -279,7 +276,7 @@ function MethodCard({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'relative flex min-h-[180px] min-w-0 flex-col rounded-xl border bg-wallet-surface px-3 py-3 text-left text-xs leading-4 disabled:cursor-not-allowed disabled:opacity-50',
+        'relative flex min-w-0 flex-col rounded-xl border bg-wallet-surface px-3 py-3 text-left text-xs leading-4 disabled:cursor-not-allowed disabled:opacity-50 max-[359px]:px-2',
         selected ? 'border-primary/60' : 'border-white/10'
       )}
     >
@@ -302,7 +299,7 @@ function MethodCard({
         <span className="text-muted">Privacy</span>
         <span>{title === 'Cluster' ? 'Strong' : 'Standard'}</span>
       </span>
-      <span className="mt-2 flex min-h-8 justify-between gap-2">
+      <span className="mt-2 flex justify-between gap-1">
         <span className="shrink-0 text-muted">Time</span>
         <span className="min-w-0 text-right">
           {loading ? (
@@ -315,7 +312,7 @@ function MethodCard({
       <span className="mt-2 flex justify-between gap-2">
         <span className="text-muted">Quote difference</span>
         <span className="min-w-0 break-words text-right">
-          {loading ? <Skeleton className="ml-auto h-4 w-full max-w-24" /> : fee.routeDifference}
+          {loading ? <Skeleton className="ml-auto h-4 w-20 max-w-full" /> : fee.routeDifference}
         </span>
       </span>
       <span className="mt-2 flex justify-between gap-2">
@@ -2012,31 +2009,27 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
           rows={[
             {
               label: 'From',
-              content:
-                from === 'shield' ? (
-                  `${accountName} · Shield · NEAR Confidential`
-                ) : (
-                  <span>
-                    {accountName} · {domainLabel(from)} · {selected.chain.chain.displayName}
-                    <span className="ml-auto mt-1 block max-w-full font-mono text-xs">
-                      {formatMoveReviewAddress(activeShieldReview.sourceAddress)}
-                    </span>
-                  </span>
-                )
+              content: (
+                <TransactionReviewParty
+                  accountName={accountName}
+                  domain={from}
+                  confidential={from === 'shield'}
+                  address={from === 'shield' ? undefined : activeShieldReview.sourceAddress}
+                  chain={selected.chain.chain}
+                />
+              )
             },
             {
               label: 'To',
-              content:
-                to === 'shield' ? (
-                  `${accountName} · Shield · NEAR Confidential`
-                ) : (
-                  <span>
-                    {accountName} · {domainLabel(to)} · {targetAsset?.chain.chain.displayName}
-                    <span className="ml-auto mt-1 block max-w-full font-mono text-xs">
-                      {formatMoveReviewAddress(activeShieldReview.destinationAddress)}
-                    </span>
-                  </span>
-                )
+              content: (
+                <TransactionReviewParty
+                  accountName={accountName}
+                  domain={to}
+                  confidential={to === 'shield'}
+                  address={to === 'shield' ? undefined : activeShieldReview.destinationAddress}
+                  chain={targetAsset?.chain.chain ?? selected.chain.chain}
+                />
+              )
             },
             {
               label: 'Estimated receive',

@@ -1,13 +1,10 @@
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { ZcashSyncProgress } from '@/popup/components/zcash/ZcashSyncProgress'
-import {
-  SendRouteInfoCard,
-  SendRecipientAddress
-} from '@/popup/components/transaction/SendInputCards'
-import { formatSortAddress } from '@/lib/format'
+import { SendRouteInfoCard } from '@/popup/components/transaction/SendInputCards'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
-import { cn } from '@/lib/utils'
+import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
+import { ZcashFundingBadge } from './ZcashFundingBadge'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import {
   TransactionReviewDialog,
@@ -75,6 +72,7 @@ export function ZcashTransferSyncStatus({ sync }: { readonly sync: ZcashTransfer
 export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTransferState }) {
   const { review, networkName, action } = transfer
   const { quote } = review
+  const chain = { name: networkName, icon: 'zcash' }
   return (
     <TransactionReviewDialog
       open={review.open}
@@ -95,35 +93,24 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
           {
             label: review.selfTransfer ? 'From' : 'Send from',
             content: (
-              <span className="min-w-0 text-right">
-                <span className="flex items-center justify-end gap-1.5">
-                  {review.from.accountDisplayName}
-                  <span
-                    className={cn(
-                      'rounded px-1.5 py-0.5 text-xs',
-                      review.from.fundingSource === 'shielded'
-                        ? 'bg-primary/10 text-primary'
-                        : 'bg-white/10 text-muted'
-                    )}
-                  >
-                    {review.from.fundingSource === 'shielded' ? 'Shield' : 'Transparent'}
-                  </span>
-                </span>
-                <span
-                  className="block truncate text-xs font-normal leading-4 text-muted"
-                  title={review.from.address}
-                >
-                  {formatSortAddress(review.from.address)}
-                </span>
-              </span>
+              <TransactionReviewParty
+                accountName={review.from.accountDisplayName}
+                badge={<ZcashFundingBadge source={review.from.fundingSource} />}
+                address={review.from.address}
+                chain={chain}
+              />
             )
           },
           {
             label: review.selfTransfer ? 'To' : 'Recipient',
-            content: review.confidential ? (
-              'NEAR Confidential'
-            ) : (
-              <SendRecipientAddress address={review.to.address} name={review.to.name} />
+            content: (
+              <TransactionReviewParty
+                accountName={review.confidential ? undefined : review.to.name}
+                domain={review.confidential ? 'shield' : undefined}
+                confidential={review.confidential}
+                address={review.confidential ? undefined : review.to.address}
+                chain={chain}
+              />
             )
           },
           ...(review.confidential && quote
@@ -148,10 +135,6 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
                 }
               ]
             : []),
-          {
-            label: 'Network',
-            content: networkName
-          },
           ...(review.memo ? [{ label: 'Memo', content: review.memo }] : []),
           {
             label: 'Network fee',

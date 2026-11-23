@@ -204,7 +204,6 @@ function BitcoinTransfer({
         review: review && {
           ...review,
           asset: { symbol: 'BTC', nativeChain: 'bitcoin' },
-          networkBeforeSender: true,
           beforeFeeRows: [{ label: 'Inputs', content: review.inputCount }],
           afterTotalRows: [{ label: 'Address type', content: review.inputAddressType }],
           preparing: updatingFee,

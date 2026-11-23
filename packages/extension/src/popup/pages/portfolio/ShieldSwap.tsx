@@ -8,7 +8,7 @@ import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import { confidentialDestinationFormToken } from '@/popup/services/swap-page-model'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { classifyError } from '@/lib/errors'
-import { formatSortAddress, formatSymbol } from '@/lib/format'
+import { formatSymbol } from '@/lib/format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
@@ -38,6 +38,7 @@ import {
   TransactionReviewExchangeSummary,
   TransactionReviewView
 } from '@/popup/components/transaction/TransactionReviewView'
+import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { RouteProviderLabel } from '@/popup/components/transaction/RouteProviderLabel'
 import {
@@ -1031,23 +1032,22 @@ function ShieldSwapForm({
             },
             ...(prepared.request.externalRecipient
               ? [
-                  { label: 'Destination network', content: 'Zcash' },
                   {
                     label: 'Recipient',
                     content: (
-                      <span
-                        className="inline-flex items-center gap-2"
-                        title={prepared.request.externalRecipient}
-                      >
-                        <ZcashFundingBadge
-                          source={
-                            prepared.request.externalRecipient.startsWith('t')
-                              ? 'transparent'
-                              : 'shielded'
-                          }
-                        />
-                        <span>{formatSortAddress(prepared.request.externalRecipient)}</span>
-                      </span>
+                      <TransactionReviewParty
+                        address={prepared.request.externalRecipient}
+                        chain={{ name: 'Zcash', icon: 'zcash' }}
+                        badge={
+                          <ZcashFundingBadge
+                            source={
+                              prepared.request.externalRecipient.startsWith('t')
+                                ? 'transparent'
+                                : 'shielded'
+                            }
+                          />
+                        }
+                      />
                     )
                   }
                 ]

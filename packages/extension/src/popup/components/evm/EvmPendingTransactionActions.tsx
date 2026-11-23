@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ActivityItem } from '@/core/activity'
 import { parseTransactionId } from '@/core/transactions/domain'
-import { formatSortAddress } from '@/lib/format'
 import { formatBaseUnitAmount } from '@/lib/number-format'
 import { openMultichainHardwareSignTab } from '@/lib/hardware-tab'
 import { cn } from '@/lib/utils'
@@ -16,6 +15,7 @@ import { estimateNetworkFeeTierPreviews } from '@/popup/services/network-fee-pre
 import { toast } from '@/store/toast-store'
 import { Button } from '../ui/button'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
+import { TransactionReviewParty } from '../transaction/TransactionReviewParty'
 import {
   TransactionActionReview,
   TransactionActionRow,
@@ -166,9 +166,7 @@ function ReplacementReviewContent({
         </TransactionActionRow>
         {action === 'speed-up' && recipient && (
           <TransactionActionRow label="To">
-            <span className="font-mono" title={recipient}>
-              {formatSortAddress(recipient)}
-            </span>
+            <TransactionReviewParty address={recipient} />
           </TransactionActionRow>
         )}
       </TransactionActionRows>
