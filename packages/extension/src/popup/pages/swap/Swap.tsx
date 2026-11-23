@@ -360,10 +360,10 @@ type CrossChainSendOptions = {
   draft: CrossChainSendDraft & { walletId: string; accountId: string }
   originPath: string | null
   onBack: () => void
-  localDestination?: {
+  localDestinations?: readonly {
     option: { id: string; name: string; icon: string }
-    onSelect: () => void
-  }
+    onSelect: () => void | Promise<void>
+  }[]
   onReturn: (draft: CrossChainSendDraft, action: 'network' | 'asset' | 'shield') => void
 }
 
@@ -7238,10 +7238,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             : null,
         support: sendDestinationSupport
       })
-      const localDestination =
+      const localDestinations =
         crossChainSendScopeMatches && crossChainSendMode === 'public'
-          ? crossChainSend?.localDestination
-          : undefined
+          ? (crossChainSend?.localDestinations ?? [])
+          : []
       return (
         <CrossChainSendFormView
           shareForm={sharedSendLayout && crossChainSendMode === 'public'}
@@ -7255,16 +7255,17 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           destinationNameFallback={
             destinationChain?.chain.displayName ?? crossChainRouteDisplay?.destinationName
           }
-          destinationOptions={
-            localDestination ? [...destinationOptions, localDestination.option] : destinationOptions
-          }
+          destinationOptions={[
+            ...destinationOptions,
+            ...localDestinations
+              .map(item => item.option)
+              .filter(option => !destinationOptions.some(existing => existing.id === option.id))
+          ]}
           selectedDestinationChainId={requestedDestinationChainId}
           destinationNetworksLoading={destinationCatalogLoading}
           onSelectDestination={chainId => {
-            if (localDestination && chainId === localDestination.option.id) {
-              localDestination.onSelect()
-              return
-            }
+            const localDestination = localDestinations.find(item => item.option.id === chainId)
+            if (localDestination) return localDestination.onSelect()
             if (chainId === sourceDescriptor?.apiChainId) {
               returnFromCrossChainSend('network')
               return

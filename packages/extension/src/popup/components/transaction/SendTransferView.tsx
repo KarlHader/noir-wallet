@@ -58,7 +58,7 @@ export interface SendTransferViewState {
   readonly family: 'solana' | 'near' | 'bitcoin'
   readonly asset: Pick<
     SendFormAdapter['asset'],
-    'assetId' | 'symbol' | 'icon' | 'nativeChain' | 'blockchain'
+    'assetId' | 'symbol' | 'icon' | 'nativeChain' | 'blockchain' | 'onSelectAsset'
   >
   readonly networkName: string
   readonly recipientPlaceholder: string

@@ -62,6 +62,7 @@ interface NetworkSendFormProps {
     chainId: string,
     draft: Readonly<{ recipient: string; amount: string }>
   ) => void
+  readonly onSelectAsset?: (draft: Readonly<{ recipient: string; amount: string }>) => void
   readonly onSubmitted: (submission: SendTransferSubmission) => void
 }
 
@@ -113,6 +114,9 @@ export function NetworkSendForm(
           selection={selection}
           initialRecipient={initialRecipient}
           initialAmount={initialAmount}
+          destinationNetworks={props.destinationNetworks}
+          onSelectDestinationNetwork={props.onSelectDestinationNetwork}
+          onSelectAsset={props.onSelectAsset}
           onSubmitted={value => onSubmitted({ family: 'near', value })}
         />
       )
@@ -123,8 +127,19 @@ function NearSendBranch({
   selection,
   initialRecipient,
   initialAmount,
+  destinationNetworks = [],
+  onSelectDestinationNetwork,
+  onSelectAsset,
   onSubmitted
-}: Pick<NetworkSendFormProps, 'selection' | 'initialRecipient' | 'initialAmount'> & {
+}: Pick<
+  NetworkSendFormProps,
+  | 'selection'
+  | 'initialRecipient'
+  | 'initialAmount'
+  | 'destinationNetworks'
+  | 'onSelectDestinationNetwork'
+  | 'onSelectAsset'
+> & {
   readonly onSubmitted: (submission: NearTransferSubmission) => void
 }) {
   const [params] = useSearchParams()
@@ -140,6 +155,8 @@ function NearSendBranch({
   const assetId = selection.asset.asset.id
   const accountState = useNearSendAccount(chainId)
   const mainnetPrivateAsset = chainId === 'near:mainnet' && isNearPrivateSendAsset(assetId)
+  const publicNetworks = source === 'incognito' ? [] : destinationNetworks
+  const selectPublicNetwork = source === 'incognito' ? undefined : onSelectDestinationNetwork
   if (source === 'incognito' || (sendPrivately && mainnetPrivateAsset)) {
     return (
       <NearPrivateSendForm
@@ -148,6 +165,9 @@ function NearSendBranch({
         accountState={accountState}
         initialRecipient={draft.recipient}
         initialAmount={draft.amount}
+        destinationNetworks={publicNetworks}
+        onSelectDestinationNetwork={selectPublicNetwork}
+        onSelectAsset={onSelectAsset}
         onDraftChange={setDraft}
         onTogglePrivacy={source === 'incognito' ? undefined : () => setSendPrivately(false)}
         onSubmitted={onSubmitted}
@@ -157,12 +177,15 @@ function NearSendBranch({
   return (
     <ConfiguredTransfer
       key="near"
+      destinationNetworks={publicNetworks}
+      onSelectDestinationNetwork={selectPublicNetwork}
       config={{
         family: 'near',
         selection,
         initialRecipient: draft.recipient,
         initialAmount: draft.amount,
         onDraftChange: setDraft,
+        onSelectAsset,
         onSubmitted,
         parseRecipient: parseNearAccountId,
         recipientPlaceholder:

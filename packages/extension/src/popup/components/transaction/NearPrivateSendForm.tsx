@@ -5,6 +5,7 @@ import { parseNearAccountId } from '@/core/chains/near'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { postExactNearIntentsQuote } from '@/core/services/intents-api'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import type { ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import {
   SendFormActions,
@@ -104,6 +105,9 @@ export function NearPrivateSendForm({
   accountState,
   initialRecipient = '',
   initialAmount = '',
+  destinationNetworks = [],
+  onSelectDestinationNetwork,
+  onSelectAsset,
   onDraftChange,
   onTogglePrivacy,
   onSubmitted
@@ -113,6 +117,12 @@ export function NearPrivateSendForm({
   readonly accountState: ReturnType<typeof useNearSendAccount>
   readonly initialRecipient?: string
   readonly initialAmount?: string
+  readonly destinationNetworks?: readonly ChainSelectorOption[]
+  readonly onSelectDestinationNetwork?: (
+    chainId: string,
+    draft: Readonly<{ recipient: string; amount: string }>
+  ) => void
+  readonly onSelectAsset?: (draft: Readonly<{ recipient: string; amount: string }>) => void
   readonly onDraftChange?: (draft: { readonly recipient: string; readonly amount: string }) => void
   readonly onTogglePrivacy?: () => void
   readonly onSubmitted: (submission: NearTransferSubmission) => void
@@ -126,6 +136,7 @@ export function NearPrivateSendForm({
   const [preparing, setPreparing] = useState(false)
   const [approving, setApproving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const [review, setReview] = useState<{
     readonly prepared: NearTransferReview
     readonly recipient: string
@@ -177,6 +188,7 @@ export function NearPrivateSendForm({
     chain.chain.network.kind === 'testnet'
       ? 'alice.testnet or implicit account'
       : 'alice.near or implicit account'
+  const canSelectNetwork = Boolean(onSelectDestinationNetwork && destinationNetworks.length > 1)
 
   const selectRecipient = async () => {
     await openModal<string | undefined>({
@@ -338,7 +350,9 @@ export function NearPrivateSendForm({
       icon: asset.metadata.iconUrl,
       networkName,
       nativeChain: asset.asset.kind === 'native' ? 'near' : undefined,
-      blockchain: asset.asset.kind === 'token' ? 'near' : undefined
+      blockchain: asset.asset.kind === 'token' ? 'near' : undefined,
+      disabled: preparing || approving || review !== null,
+      onSelectAsset: onSelectAsset ? () => onSelectAsset({ recipient, amount }) : undefined
     },
     balance: {
       value: availableKnown
@@ -360,7 +374,12 @@ export function NearPrivateSendForm({
         setRecipient(value.trim())
       },
       placeholder,
-      network: { name: networkName },
+      network: {
+        name: networkName,
+        icon: destinationNetworks.find(option => option.id === chain.chain.id)?.icon ?? 'near',
+        onSelect: canSelectNetwork ? () => setNetworkPickerOpen(true) : undefined,
+        disabled: preparing || approving || review !== null
+      },
       onSelectRecipient: () => void selectRecipient(),
       feedback: recipient && !parsedRecipient && (
         <p className="px-1 text-xs text-danger">Enter a valid NEAR account ID.</p>
@@ -370,6 +389,21 @@ export function NearPrivateSendForm({
 
   return (
     <SendTransferScreen
+      destinationPicker={
+        canSelectNetwork
+          ? {
+              open: networkPickerOpen,
+              onOpenChange: setNetworkPickerOpen,
+              selectedId: chain.chain.id,
+              options: destinationNetworks,
+              onSelect: id => {
+                if (id !== chain.chain.id) {
+                  onSelectDestinationNetwork?.(id, { recipient, amount })
+                }
+              }
+            }
+          : undefined
+      }
       form={{
         adapter,
         footer: (

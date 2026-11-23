@@ -67,6 +67,7 @@ export interface SendTransferConfig<R extends TransferReview, S extends Transfer
     readonly amountRaw: string
   }) => string | null
   readonly onDraftChange?: (draft: { readonly recipient: string; readonly amount: string }) => void
+  readonly onSelectAsset?: (draft: { readonly recipient: string; readonly amount: string }) => void
   readonly privacy?: { readonly checked: boolean; readonly onChange: () => void }
 }
 
@@ -319,7 +320,10 @@ export function useSendTransfer<R extends TransferReview, S extends TransferSubm
       symbol: asset.metadata.symbol,
       icon: asset.metadata.iconUrl,
       nativeChain: asset.asset.kind === 'native' ? config.family : undefined,
-      blockchain: asset.asset.kind === 'token' ? config.family : undefined
+      blockchain: asset.asset.kind === 'token' ? config.family : undefined,
+      onSelectAsset: config.onSelectAsset
+        ? () => config.onSelectAsset?.({ recipient, amount: maxSelected ? '' : amount })
+        : undefined
     },
     networkName,
     recipientPlaceholder: config.recipientPlaceholder,

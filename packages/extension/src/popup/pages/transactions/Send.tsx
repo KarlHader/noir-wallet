@@ -96,6 +96,11 @@ import {
   hydrateEvmSendDestinationCatalogs,
   readEvmSendDestinationSupport
 } from '@/popup/services/evm-send-catalog'
+import {
+  buildPublicSendDestinationNetworks,
+  resolvePublicSendNetworkAction,
+  type PublicSendNetworkChain
+} from '@/popup/services/public-send-networks'
 import { getEnabledSwapChains } from '@/popup/services/swap-catalog-loading'
 import { listShieldTokenPickerNetworks } from '@/popup/services/shield-transfer'
 import { homeActivityPath } from '@/popup/services/home-navigation'
@@ -1182,15 +1187,14 @@ function SendAssetFlow() {
           switchesAsset: true
         }
       : null
-  const publicZcashDestinations =
-    currentSession.publicZcash && zcashNetworkOption
-      ? (storageV2Account?.networks ?? []).filter(
-          ({ chain }) =>
-            (chain.family === 'evm' || chain.family === 'solana') &&
-            isSelectableChainFamily(chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__) &&
-            chain.capabilities.transaction.status === 'available'
-        )
-      : []
+  const accountSendChains: readonly PublicSendNetworkChain[] = (
+    storageV2Account?.networks ?? []
+  ).map(({ chain }) => ({
+    id: chain.id,
+    family: chain.family,
+    displayName: chain.displayName,
+    transactionAvailable: chain.capabilities.transaction.status === 'available'
+  }))
   const currentReturnedDraft =
     returnedDraft?.key === sendEntryKey &&
     returnedDraft.draft.sourceAssetId === selection?.asset.asset.id
@@ -1248,34 +1252,61 @@ function SendAssetFlow() {
     destinationCacheAttempt
   ])
   const destinationNetworks = selection
-    ? sortSendNetworks(
-        [
-          ...[selection.chain.chain, ...destinationCandidates.map(item => item.chain.chain)].map(
-            chain => ({
-              chainId: chain.id,
-              name: chain.displayName,
-              icon: resolveChainIconAlias(chain.family, chain.displayName, chain.id),
-              switchesAsset: false
-            })
-          ),
-          ...(zcashNetworkOption &&
-          (selection.chain.chain.family === 'evm' || selection.chain.chain.family === 'solana')
-            ? [zcashNetworkOption]
-            : [])
-        ],
-        option => ({ id: option.chainId, name: option.name })
-      )
+    ? buildPublicSendDestinationNetworks({
+        source: {
+          id: selection.chain.chain.id,
+          family: selection.chain.chain.family,
+          displayName: selection.chain.chain.displayName,
+          transactionAvailable:
+            selection.chain.chain.capabilities.transaction.status === 'available'
+        },
+        accountChains: accountSendChains,
+        crossChainChains: destinationCandidates.map(item => ({
+          id: item.chain.chain.id,
+          family: item.chain.chain.family,
+          displayName: item.chain.chain.displayName,
+          transactionAvailable: item.chain.chain.capabilities.transaction.status === 'available'
+        })),
+        zcash: zcashNetworkOption,
+        enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
+      })
     : []
-  const selectDestinationNetwork = (
+  const zcashDestinationNetworks =
+    currentSession.publicZcash && zcashNetworkOption
+      ? buildPublicSendDestinationNetworks({
+          source: {
+            id: zcashNetworkOption.chainId,
+            family: 'zcash',
+            displayName: zcashNetworkOption.name,
+            transactionAvailable: true
+          },
+          accountChains: accountSendChains,
+          crossChainChains: [],
+          zcash: zcashNetworkOption,
+          enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
+        }).map(({ chainId, name, icon }) => ({ id: chainId, name, icon }))
+      : []
+  const selectDestinationNetwork = async (
     destinationChainId: string,
     draft: Readonly<{ recipient: string; amount: string }>
   ) => {
     if (!selection || !effectiveWalletId || !effectiveAccountId) return
-    if (destinationChainId === zcashNetworkOption?.chainId) {
+    const action = resolvePublicSendNetworkAction({
+      destinationChainId,
+      sourceChainId: selection.chain.chain.id,
+      options: destinationNetworks,
+      zcashChainId: zcashNetworkOption?.chainId ?? null,
+      crossChainChainIds: destinationCandidates.map(item => item.chain.chain.id)
+    })
+    if (action === 'zcash') {
       openPublicZcash()
       return
     }
-    if (!destinationCandidates.some(item => item.chain.chain.id === destinationChainId)) return
+    if (action === 'native') {
+      await selectNativePublicNetwork(destinationChainId)
+      return
+    }
+    if (action !== 'cross-chain') return
     const sourceAssetId = selection.asset.asset.id
     const availability = readEvmSendDestinationSupport({
       sourceAssetId,
@@ -1327,13 +1358,25 @@ function SendAssetFlow() {
     })
   }
 
-  const selectNetworkFromPublicZcash = async (chainId: string) => {
-    if (!publicZcashDestinations.some(item => item.chain.id === chainId)) return
+  const selectNativePublicNetwork = async (chainId: string) => {
+    const network = storageV2Account?.networks.find(item => item.chain.id === chainId)
+    const family = network?.chain.family
+    if (
+      !network ||
+      (family !== 'evm' && family !== 'solana' && family !== 'near') ||
+      !isSelectableChainFamily(family, __ENABLED_CHAIN_FEATURE_FLAGS__) ||
+      network.chain.capabilities.transaction.status !== 'available'
+    )
+      return
     const isNativeAsset = (entry: SendAsset['asset']) =>
       entry.asset.chainId === chainId && entry.asset.kind === 'native'
+    const applyNative = (asset: SendAsset) => {
+      setCrossChainSession(null)
+      selectAssetFromPublicZcash(asset)
+    }
     const cached = assets.find(({ asset }) => isNativeAsset(asset))
     if (cached) {
-      selectAssetFromPublicZcash(cached)
+      applyNative(cached)
       return
     }
     await refresh(false, { chainIds: [chainId], additionalChainIds: [chainId] })
@@ -1342,7 +1385,7 @@ function SendAssetFlow() {
     const chain = latest?.chains.find(item => item.chain.id === chainId)
     const asset = chain?.assets.find(isNativeAsset)
     if (!asset || !chain) throw new Error('Unable to load the asset for this network.')
-    selectAssetFromPublicZcash({ asset, chain })
+    applyNative({ asset, chain })
   }
 
   const selectReturnedSource = (
@@ -1644,14 +1687,36 @@ function SendAssetFlow() {
       <CrossChainSendAdapter
         draft={activeCrossChainSend.draft}
         originPath={originPath}
-        localDestination={
-          zcashNetworkOption
-            ? {
-                option: { ...zcashNetworkOption, id: zcashNetworkOption.chainId },
-                onSelect: openPublicZcash
-              }
-            : undefined
-        }
+        localDestinations={[
+          ...(zcashNetworkOption
+            ? [
+                {
+                  option: {
+                    id: zcashNetworkOption.chainId,
+                    name: zcashNetworkOption.name,
+                    icon: zcashNetworkOption.icon
+                  },
+                  onSelect: openPublicZcash
+                }
+              ]
+            : []),
+          ...accountSendChains.flatMap(chain =>
+            chain.family === 'near' &&
+            chain.transactionAvailable &&
+            isSelectableChainFamily('near', __ENABLED_CHAIN_FEATURE_FLAGS__)
+              ? [
+                  {
+                    option: {
+                      id: chain.id,
+                      name: chain.displayName,
+                      icon: resolveChainIconAlias(chain.family, chain.displayName, chain.id)
+                    },
+                    onSelect: () => selectNativePublicNetwork(chain.id)
+                  }
+                ]
+              : []
+          )
+        ]}
         onBack={returnToEntry}
         onReturn={(draft, action) => {
           setCrossChainSession(null)
@@ -1822,19 +1887,8 @@ function SendAssetFlow() {
             zcashFundingSelection?.key === sendEntryKey ? zcashFundingSelection : null
           }
           onStateChange={handleZcashStateChange}
-          destinationNetworks={
-            !shieldActive && zcashNetworkOption
-              ? [
-                  { ...zcashNetworkOption, id: zcashNetworkOption.chainId },
-                  ...publicZcashDestinations.map(({ chain }) => ({
-                    id: chain.id,
-                    name: chain.displayName,
-                    icon: resolveChainIconAlias(chain.family, chain.displayName, chain.id)
-                  }))
-                ]
-              : []
-          }
-          onSelectDestinationNetwork={selectNetworkFromPublicZcash}
+          destinationNetworks={!shieldActive && zcashNetworkOption ? zcashDestinationNetworks : []}
+          onSelectDestinationNetwork={selectNativePublicNetwork}
           onSelectAsset={fundingSource =>
             openSourcePicker(
               fundingSource === 'shielded' ? 'shield' : 'zcash-public',
@@ -1964,6 +2018,20 @@ function SendAssetFlow() {
                 }
               )}
               onSelectDestinationNetwork={selectDestinationNetwork}
+              onSelectAsset={
+                selection.chain.chain.family === 'near'
+                  ? draft =>
+                      setAssetPickerState({
+                        key: sendEntryKey,
+                        open: true,
+                        draft: {
+                          ...draft,
+                          destinationAssetId: selection.asset.asset.id,
+                          destinationChainId: selection.chain.chain.id
+                        }
+                      })
+                  : undefined
+              }
               onSubmitted={setSubmission}
             />
           ) : null}
