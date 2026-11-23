@@ -1,10 +1,6 @@
 import { mutateTransactions } from '@/lib/indexed-db'
 import type { Transaction } from '@/types'
-import {
-  isDuplicateWasmRow,
-  localShieldedSendHashSet,
-  localTxHashSet
-} from '@/lib/tx-history-dedup'
+import { isDuplicateWasmRow, localTxHashSet } from '@/lib/tx-history-dedup'
 import {
   mergeTransactionUpdate,
   synchronizeInternalTransferConfirmations,
@@ -44,10 +40,7 @@ export class TransactionRecorder {
       )
       const synchronizedTxs = synchronizeInternalTransferConfirmations(updatedTxs)
       const localHashes = localTxHashSet(synchronizedTxs)
-      const localShieldedSendHashes = localShieldedSendHashSet(synchronizedTxs)
-      return synchronizedTxs.filter(
-        tx => !isDuplicateWasmRow(tx, localHashes, localShieldedSendHashes)
-      )
+      return synchronizedTxs.filter(tx => !isDuplicateWasmRow(tx, localHashes))
     })
 
     this.broadcastTransactionUpdated(accountKey, transactionId)

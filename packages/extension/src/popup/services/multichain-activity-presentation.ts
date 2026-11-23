@@ -905,6 +905,9 @@ export function getActivityCancellationPresentation(
 
 export function getActivityStatusPresentation(item: ActivityItem): ActivityStatusPresentation {
   if (isPartiallyCompleted(item)) return { label: 'Partially completed', tone: 'warning' }
+  if (item.kind === 'approve' && (item.status === 'broadcast' || item.status === 'confirming')) {
+    return { label: 'Confirming', tone: 'neutral' }
+  }
   const evidence = findLatestOnchainEvidence(item)
   if (
     item.source === 'zcash-v1' &&

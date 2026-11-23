@@ -185,7 +185,7 @@ export interface EvmNetworkConfig {
   readonly historyApiUrl?: string
   readonly explorerUrl: string
   readonly usdcContract?: `0x${string}`
-  readonly historyErc20Assets?: readonly {
+  readonly bundledErc20Assets?: readonly {
     readonly contract: `0x${string}`
     readonly name: string
     readonly symbol: string
@@ -223,7 +223,15 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
         slip44Reference: '60'
       },
       explorerUrl: 'https://etherscan.io',
-      usdcContract: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+      usdcContract: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      bundledErc20Assets: [
+        {
+          contract: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+          name: 'Tether USD',
+          symbol: 'USDT',
+          decimals: 6
+        }
+      ]
     }),
     defineNetwork({
       networkMode: 'mainnet',
@@ -255,7 +263,7 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
         slip44Reference: '714'
       },
       explorerUrl: 'https://bscscan.com',
-      historyErc20Assets: [
+      bundledErc20Assets: [
         {
           contract: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
           name: 'USD Coin',
@@ -300,7 +308,15 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
         slip44Reference: '966'
       },
       explorerUrl: 'https://polygonscan.com',
-      usdcContract: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'
+      usdcContract: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+      bundledErc20Assets: [
+        {
+          contract: '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619',
+          name: 'Wrapped Ether',
+          symbol: 'WETH',
+          decimals: 18
+        }
+      ]
     })
   ] as const),
   testnet: Object.freeze([

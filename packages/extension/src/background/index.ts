@@ -18,6 +18,7 @@ import {
   parseSelectedNetworkFamilies
 } from '@/core/wallet/account-network-selection'
 import { setAccountNetworkSelection } from '@/lib/wallet-metadata-storage'
+import { COMBINED_EVM_SWAP_ALARM, CombinedEvmSwap } from './combined-evm-swap'
 import {
   saveSwapApprovalContinuation,
   readSwapApprovalContinuation,
@@ -83,7 +84,10 @@ import {
 } from '@/lib/indexed-db'
 import { isExternalActivityReceipt } from '@/core/activity/activity-notification'
 import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
-import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
+import {
+  IndexedDbStorageV2Repository,
+  IndexedDbTransactionRepository
+} from '@/infrastructure/persistence/repositories'
 import { observeTransactionGraphCommits } from '@/infrastructure/persistence/repositories/indexed-db-transaction-repository'
 import { ACTIVITY_RECEIPTS_ALARM, ActivityNotifications } from './activity-notifications'
 import {
@@ -223,6 +227,7 @@ import {
 } from '@/core/services/rhea-swap/rhea-swap-model'
 import {
   parseRheaSwapTransactionBinding,
+  parseTransactionId,
   type RheaSwapTransactionBinding
 } from '@/core/transactions/domain'
 import {
@@ -435,6 +440,7 @@ import {
   resolveSwapTokenAssetIds
 } from '@/core/services/intents-managed-assets'
 import { getBundledInitialProductAssetDefinitions } from '@/core/chains/registry'
+import { MAINNET_STARTER_PORTFOLIO_ASSET_IDS } from '@/core/chains/registry/product-chain-definitions'
 import {
   createIntentsWalletAssetCatalog,
   resolveIntentsWalletAsset,
@@ -621,6 +627,36 @@ const assetPriceRefreshes = new Map<
 >()
 let assetMarketHistoryService = createBackgroundAssetMarketHistoryService()
 const rheaSwapService = DEFAULT_NETWORK === 'mainnet' ? createBackgroundRheaSwapService() : null
+const combinedSwapRepository = new IndexedDbTransactionRepository()
+const combinedEvmSwap = new CombinedEvmSwap({
+  router: () => evmTransferRouter,
+  quote: rheaSwapService,
+  readAccount: async () => {
+    await rehydrateWalletStore()
+    const state = useWalletStore.getState()
+    return {
+      network: state.currentNetwork,
+      walletId: state.currentWalletId,
+      accountId: state.currentAccountId,
+      unlockEpoch:
+        networkRestartRequired || walletLockCleanupPending
+          ? null
+          : await credentialSession.getUnlockEpoch()
+    }
+  },
+  readGraph: (scope, id) => combinedSwapRepository.get(scope, parseTransactionId(id)),
+  validateQuote: async binding => {
+    await requireCurrentPrivateSwapQuote(binding.quoteHandle, 'main', binding)
+  },
+  checkApproval: async (scope, chainId) => {
+    await evmTransactionMonitor?.pollApprovalScope(chainId, scope)
+  },
+  schedule: async () => {
+    if (!(await chrome.alarms.get(COMBINED_EVM_SWAP_ALARM))) {
+      await chrome.alarms.create(COMBINED_EVM_SWAP_ALARM, { delayInMinutes: 0.5 })
+    }
+  }
+})
 const rheaSwapTransactionMonitor = rheaSwapService
   ? new RheaSwapTransactionMonitor(rheaSwapService, {
       loadZcashAccountScopes: getZcashAccountScopes,
@@ -1781,6 +1817,7 @@ async function readTokenDisplayPolicy(): Promise<TokenDisplayPolicy> {
     ),
     visibleAssetIds: new Set([
       ...(overrides?.visibleAssetIds ?? []),
+      ...(DEFAULT_NETWORK === 'mainnet' ? MAINNET_STARTER_PORTFOLIO_ASSET_IDS : []),
       ...userEvmAssetRecords.flatMap(record =>
         record.source === 'user-added' ? [record.assetId] : []
       ),
@@ -2439,7 +2476,9 @@ async function checkOffscreenHealth(): Promise<void> {
   }
 }
 
-async function requestPeriodicBalanceSync(): Promise<'scheduled' | 'idle' | 'skipped' | 'probe-failed'> {
+async function requestPeriodicBalanceSync(): Promise<
+  'scheduled' | 'idle' | 'skipped' | 'probe-failed'
+> {
   if (syncScheduler.isRunning()) return 'skipped'
   await Promise.all([rehydrateWalletStore(), useAccountDataStore.persist.rehydrate()])
   const { currentWalletId, currentNetwork } = useWalletStore.getState()
@@ -2536,6 +2575,10 @@ async function isWalletUiContextOpen(): Promise<boolean> {
 void trustedStorageAccessReady.then(() => initializeAnalyticsReporting()).catch(() => {})
 
 chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === COMBINED_EVM_SWAP_ALARM) {
+    void multichainStartupReady.then(() => combinedEvmSwap.poll()).catch(() => {})
+    return
+  }
   if (alarm.name === ANALYTICS_OUTBOX_ALARM) {
     void handleAnalyticsAlarm(alarm.name).catch(() => {})
     return
@@ -3053,6 +3096,28 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           success: false,
           error: error instanceof Error ? error.message : 'Zcash voting request failed'
         })
+      )
+    return true
+  }
+
+  if (
+    runtimeMessage.type === 'START_COMBINED_EVM_SWAP' ||
+    runtimeMessage.type === 'GET_COMBINED_EVM_SWAP'
+  ) {
+    if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'extension-page') {
+      sendResponse({ error: 'Unauthorized Swap sender' })
+      return true
+    }
+    void multichainStartupReady
+      .then(() => multichainRuntimeReady)
+      .then(() =>
+        runtimeMessage.type === 'START_COMBINED_EVM_SWAP'
+          ? combinedEvmSwap.start(runtimeMessage.input)
+          : combinedEvmSwap.get(parseTransactionId(runtimeMessage.transactionId))
+      )
+      .then(
+        result => sendResponse({ result }),
+        () => sendResponse({ error: 'Swap review is unavailable. Review the Swap again.' })
       )
     return true
   }

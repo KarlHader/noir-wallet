@@ -1,12 +1,11 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
+import { ZCASH_CHAIN_IDS } from '../../../../src/core/chains/registry/chain-ids.ts'
 import { mergeTransactionsWithTransparentReceives } from '../../../../src/core/wallet/transparent-history.ts'
-import {
-  isDuplicateWasmRow,
-  localShieldedSendHashSet,
-  localTxHashSet
-} from '../../../../src/lib/tx-history-dedup.ts'
+import { buildActivityReadModel } from '../../../../src/core/activity/index.ts'
+import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastructure/activity/zcash-v1-activity-source.ts'
+import { filterActivityItems } from '../../../../src/popup/services/activity-list-model.ts'
 
 function transaction(overrides) {
   return {
@@ -25,41 +24,37 @@ function transaction(overrides) {
   }
 }
 
-test('keeps one row when a shielded send is also indexed as a transparent receive', () => {
+test('shows a Shield send and its observed transparent receive in their own Activity modes', () => {
   const selfSend = transaction({})
   const receivedSide = transaction({
     id: 'rpc_treceive_self-transfer',
     type: 'receive',
     from: '',
-    fromType: 'transparent'
+    fromType: 'transparent',
+    amount: '0.0009'
   })
 
-  expect(mergeTransactionsWithTransparentReceives([selfSend], [receivedSide])).toEqual([selfSend])
+  const history = mergeTransactionsWithTransparentReceives([selfSend], [receivedSide])
+  const scope = { keyDomainId: 'wallet:activity', accountId: 'account:activity' }
+  const { items } = buildActivityReadModel({
+    scope,
+    localGraphs: [],
+    supplementalItems: history.map(entry => mapZcashV1TransactionToActivityItem(entry, scope))
+  })
+  const byDomain = domain =>
+    filterActivityItems({ items, domain, selectedChainIds: [ZCASH_CHAIN_IDS.mainnet] })
+
+  expect(byDomain('shield').map(item => item.id)).toEqual([selfSend.id])
+  expect(byDomain('public')).toMatchObject([
+    {
+      id: receivedSide.id,
+      kind: 'receive',
+      snapshot: { direction: 'incoming', primaryAmount: { amountRaw: '90000' } }
+    }
+  ])
 })
 
-test('suppresses only an exact transparent receive for a locally-created shielded send', () => {
-  const selfSend = transaction({})
-  const wasmReceive = transaction({
-    id: 'wasm_self-transfer',
-    type: 'receive',
-    from: '',
-    fromType: 'transparent'
-  })
-  const unrelated = transaction({
-    id: 'wasm_external',
-    txHash: 'external',
-    type: 'receive',
-    from: '',
-    fromType: 'transparent'
-  })
-  const allHashes = localTxHashSet([selfSend])
-  const shieldedSendHashes = localShieldedSendHashSet([selfSend])
-
-  expect(isDuplicateWasmRow(wasmReceive, allHashes, shieldedSendHashes)).toBe(true)
-  expect(isDuplicateWasmRow(unrelated, allHashes, shieldedSendHashes)).toBe(false)
-})
-
-test('suppresses the transparent receive side of an Unshield transaction', () => {
+test('preserves the transparent receive side of an Unshield transaction', () => {
   const unshield = transaction({ type: 'unshield' })
   const receivedSide = transaction({
     id: 'rpc_treceive_self-transfer',
@@ -68,5 +63,8 @@ test('suppresses the transparent receive side of an Unshield transaction', () =>
     fromType: 'transparent'
   })
 
-  expect(mergeTransactionsWithTransparentReceives([unshield], [receivedSide])).toEqual([unshield])
+  expect(mergeTransactionsWithTransparentReceives([unshield], [receivedSide])).toEqual([
+    unshield,
+    receivedSide
+  ])
 })

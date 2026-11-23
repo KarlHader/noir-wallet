@@ -67,7 +67,6 @@ import {
   resolveHomeAssetDomainDisplay,
   resolveHomePortfolioTotalStatus
 } from '../services/home-asset-breakdown'
-import { selectHomeActionSource } from '../services/asset-domains'
 import { buildShieldActionPath, selectShieldActions } from '../services/shield-action-selection'
 import { canSwapNativeShieldZec } from '../services/shield-swap-zec-sources'
 import { getPrivateTransferChainIds } from '../services/private-balance-transfer'
@@ -289,8 +288,6 @@ export function Home() {
     setFocusTransactionId(null)
     navigate.replace(homeAssetDomainPath(location.search, domain))
   }
-  const publicSendSource =
-    assetDomain === 'public' ? selectHomeActionSource(multichainPortfolio, 'public', 'send') : null
   const shieldActions = selectShieldActions({
     model: multichainPortfolio,
     prices: assetPrices,
@@ -308,18 +305,7 @@ export function Home() {
     keySource: currentWallet?.keySource
   })
   const openSend = () => {
-    const sendPath =
-      assetDomain === 'public' && publicSendSource
-        ? publicSendSource.chain.chain.family === 'zcash'
-          ? '/send?provider=zcash-shield&from=transparent'
-          : `/send?${new URLSearchParams({
-              mode: 'public',
-              assetId: publicSendSource.asset.asset.id,
-              ...(publicSendSource.chain.chain.family === 'evm' ? { sourceMode: 'main' } : {})
-            })}`
-        : isShieldView
-          ? buildShieldActionPath('send')
-          : '/send?mode=public'
+    const sendPath = isShieldView ? buildShieldActionPath('send') : '/send?mode=public'
     navigate.navigate(sendPath, {
       state: {
         initialPortfolio: multichainPortfolio,

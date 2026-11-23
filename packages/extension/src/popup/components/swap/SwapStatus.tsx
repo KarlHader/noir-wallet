@@ -171,7 +171,8 @@ export function SwapStatusDisplay({
       compact
     />
   )
-  const submittingOrigin = !!beforeSubmission && approvalProgress?.status === 'confirmed'
+  const submittingOrigin =
+    !!beforeSubmission && !beforeSubmission.error && approvalProgress?.status === 'confirmed'
   const sourceNetwork = originChainHint && formatChainName(originChainHint)
   const destinationNetwork = destinationChainHint && formatChainName(destinationChainHint)
   const fallbackSteps = approvalStep
@@ -184,7 +185,7 @@ export function SwapStatusDisplay({
                 ...step,
                 label: 'Origin transaction',
                 detail: sourceNetwork,
-                ...(submittingOrigin ? { state: 'active' as const, statusLabel: 'Preparing' } : {})
+                ...(submittingOrigin ? { state: 'active' as const, statusLabel: 'Submitting' } : {})
               }
             case 'intents':
               return { ...step, label: 'Cross-chain relay', detail: router }
@@ -310,16 +311,9 @@ export function SwapStatusDisplay({
                 onClick={beforeSubmission.onContinue}
                 disabled={beforeSubmission.continueDisabled}
               >
-                Continue Swap
+                Review New Quote
               </Button>
             )}
-            <Button
-              className="h-[45px] w-full"
-              onClick={onViewActivity}
-              disabled={viewActivityDisabled}
-            >
-              View Activity
-            </Button>
           </div>
         ) : resultAction === 'continue' && onResumeConfidentialFunding ? (
           <Button

@@ -269,11 +269,13 @@ import {
   type CombinedSwapFeeLimit
 } from '@/popup/services/rhea-evm-approval'
 import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-continuation-client'
+import type { CombinedEvmSwapProgress } from '@/background/combined-evm-swap'
+import type { RheaSwapTransactionBinding } from '@/core/transactions/domain'
 import type { SwapApprovalContinuation } from '@/background/swap-approval-continuation'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
 import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
-import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
+import { parseEvmFeeSelection, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import {
   createPrivateBalanceTransferReview,
   type PrivateBalanceTransferReview
@@ -335,6 +337,8 @@ type PendingRheaEvmAfterApproval = Readonly<{
   readonly combined?: {
     readonly limit: CombinedSwapFeeLimit
     readonly transaction: RheaSwapEvmCallView
+    readonly binding: RheaSwapTransactionBinding
+    readonly feeSelection: EvmFeeSelection
   }
 }>
 
@@ -1354,12 +1358,13 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     useState<PreparedQuoteDepositTransfer | null>(null)
   const [rheaSigningReview, setRheaSigningReview] = useState<PendingRheaSigningReview | null>(null)
   const [submittedApproval, setSubmittedApproval] = useState<SubmittedSwapApproval | null>(null)
-  const [combinedApprovalProgress, setCombinedApprovalProgress] = useState<{
-    readonly transactionId: string
-    readonly progress: SwapApprovalProgress
-    readonly continuing: boolean
-  } | null>(null)
+  const [combinedApprovalNetwork, setCombinedApprovalNetwork] = useState<Pick<
+    SwapApprovalProgress,
+    'chainId' | 'networkName'
+  > | null>(null)
   const [approvalError, setApprovalError] = useState<string | null>(null)
+  const [backgroundCombinedProgress, setBackgroundCombinedProgress] =
+    useState<CombinedEvmSwapProgress | null>(null)
   const [approvalToRestore, setApprovalToRestore] = useState<{
     record: SwapApprovalContinuation
     graph: TransactionGraph
@@ -2367,7 +2372,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     quoteRequestSequence.current += 1
     initializedPrivateFundingScope.current = null
     combinedSwapConsent.current = null
-    setCombinedApprovalProgress(null)
+    setCombinedApprovalNetwork(null)
+    setBackgroundCombinedProgress(null)
     initializedPrivateFundingAmountScope.current = null
     initializedCrossChainSendScope.current = null
     setHydratedCrossChainSendScope(null)
@@ -3958,6 +3964,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                       walletOwnedSource.networkFeeAsset.balance.availableRaw
                     )
                   : null
+              const swapFeeOptions = evmFeeOptions(false)
               pendingEvmAfterApproval = {
                 approval: Object.freeze({
                   token: requiredApproval.transaction.to,
@@ -3965,7 +3972,16 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                   amountRaw: requiredApproval.amountRaw
                 }),
                 ...(combinedFeeLimit
-                  ? { combined: { limit: combinedFeeLimit, transaction: plan.transaction } }
+                  ? {
+                      combined: {
+                        limit: combinedFeeLimit,
+                        transaction: plan.transaction,
+                        binding,
+                        feeSelection: parseEvmFeeSelection(
+                          swapFeeOptions.feeSelection ?? swapFeeOptions.feeTier
+                        )
+                      }
+                    }
                   : {})
               }
               prepared = Object.freeze({
@@ -4387,7 +4403,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       originChain?: string,
       activityTransactionId?: string,
       signedOrder?: boolean,
-      zcashTransaction?: { accountKey: string; transactionId?: string }
+      zcashTransaction?: { accountKey: string; transactionId?: string },
+      approvalProgress?: SwapApprovalProgress
     ) => {
       setIsPrivateFundingSubmitting(false)
       setResult(
@@ -4405,10 +4422,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           originChain: originChain || getChainFromAssetId(swap.tokenIn?.assetId || ''),
           originTxHash: txHash,
           activityTransactionId,
-          approvalProgress:
-            combinedApprovalProgress?.progress.status === 'confirmed'
-              ? combinedApprovalProgress.progress
-              : undefined,
+          approvalProgress,
           ...(zcashTransaction
             ? {
                 zcashAccountKey: zcashTransaction.accountKey,
@@ -4454,7 +4468,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     },
     [
       activityDomain,
-      combinedApprovalProgress,
       swap,
       quoteResult?.quoteHandle,
       nativeIntentsQuote,
@@ -5200,6 +5213,38 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       setIsSending(true)
       try {
         const requestSequence = quoteRequestSequence.current
+        const reviewedCombined = pendingRheaEvmAfterApproval?.combined
+        if (ordinarySwapRequested && reviewedCombined && preparedQuoteTransfer.family === 'evm') {
+          const { graph, review } = preparedQuoteTransfer.review
+          const input = {
+            approvalId: graph.root.id,
+            approvalFingerprint: review.payloadFingerprint.digestHex,
+            binding: reviewedCombined.binding,
+            feeBudgetWei: (
+              reviewedCombined.limit.approvalFeeWei + reviewedCombined.limit.swapFeeWei
+            ).toString(),
+            feeSelection: reviewedCombined.feeSelection
+          }
+          const progress = await swapApprovalContinuationClient
+            .startCombined(input)
+            .catch(async error => {
+              const existing = await swapApprovalContinuationClient
+                .getCombined(input.approvalId)
+                .catch(() => null)
+              if (!existing) throw error
+              return existing
+            })
+          pendingQuoteTransfer.current = null
+          setPreparedQuoteTransfer(null)
+          setPendingRheaEvmAfterApproval(null)
+          setBackgroundCombinedProgress(progress)
+          setCombinedApprovalNetwork({
+            chainId: preparedQuoteTransfer.source.chain.chain.id,
+            networkName: preparedQuoteTransfer.source.chain.chain.displayName
+          })
+          setViewStep('approval-pending')
+          return
+        }
         const submission = await quoteDepositTransferClient.approve(preparedQuoteTransfer)
         pendingQuoteTransfer.current = null
         setPreparedQuoteTransfer(null)
@@ -5300,21 +5345,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               feeLimit: combined.limit,
               transaction: combined.transaction,
               owner: preparedQuoteTransfer.source.refundAddress
-            }
-            if (ordinarySwapRequested && preparedQuoteTransfer.family === 'evm') {
-              const approvalOrigin = submission.value.graph.segments.find(
-                segment => segment.role === 'origin'
-              )
-              setCombinedApprovalProgress({
-                transactionId: submission.value.graph.root.id,
-                progress: {
-                  chainId: preparedQuoteTransfer.source.chain.chain.id,
-                  networkName: preparedQuoteTransfer.source.chain.chain.displayName,
-                  transactionHash: approvalOrigin?.evidence?.transactionHash,
-                  status: 'confirming'
-                },
-                continuing: true
-              })
             }
           }
           setSubmittedApproval({
@@ -5453,11 +5483,53 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     navigate
   ])
 
-  const markCombinedApprovalFailed = useCallback(() => {
-    setCombinedApprovalProgress(current =>
-      current ? { ...current, progress: { ...current.progress, status: 'failed' } } : null
+  const backgroundApprovalId = backgroundCombinedProgress?.approvalId
+  const backgroundApprovalPending =
+    backgroundCombinedProgress?.status === 'approving' ||
+    backgroundCombinedProgress?.status === 'submitting'
+  useEffect(() => {
+    if (!backgroundApprovalId || !backgroundApprovalPending) return
+    let active = true
+    let timer: number | undefined
+    const read = async () => {
+      const progress = await swapApprovalContinuationClient
+        .getCombined(backgroundApprovalId)
+        .catch(() => null)
+      if (!active) return
+      if (progress) setBackgroundCombinedProgress(progress)
+      if (!progress || progress.status === 'approving' || progress.status === 'submitting') {
+        timer = window.setTimeout(read, 1_000)
+      }
+    }
+    void read()
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [backgroundApprovalId, backgroundApprovalPending])
+
+  useEffect(() => {
+    if (backgroundCombinedProgress?.status !== 'broadcast' || !combinedApprovalNetwork) return
+    navigateToSwapResult(
+      backgroundCombinedProgress.swapHash,
+      getChainFromAssetId(swap.tokenIn?.assetId || ''),
+      backgroundCombinedProgress.swapId,
+      false,
+      undefined,
+      {
+        ...combinedApprovalNetwork,
+        status: 'confirmed',
+        transactionHash: backgroundCombinedProgress.approvalHash
+      }
     )
-  }, [])
+    setBackgroundCombinedProgress(null)
+    setCombinedApprovalNetwork(null)
+  }, [
+    backgroundCombinedProgress,
+    combinedApprovalNetwork,
+    navigateToSwapResult,
+    swap.tokenIn?.assetId
+  ])
 
   const handleContinueAfterApproval = useSwapApprovalContinuation({
     phase: viewStep,
@@ -5480,19 +5552,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     sequence: quoteRequestSequence,
     onPreparing: setIsPreparingReview,
     onError: setApprovalError,
-    onApprovalFailed: markCombinedApprovalFailed,
     onReady: ({ restoredQuote, reuseApprovedQuote }) => {
       if (!liveQuoteRequest) return
       if (!reuseApprovedQuote) combinedSwapConsent.current = null
-      setCombinedApprovalProgress(current =>
-        current
-          ? {
-              ...current,
-              progress: { ...current.progress, status: 'confirmed' },
-              continuing: Boolean(combinedSwapConsent.current)
-            }
-          : null
-      )
       if (restoredQuote && swap.tokenOut) {
         setQuoteResult(restoredQuote)
         setLiveQuoteKey(liveQuoteRequest.key)
@@ -5514,10 +5576,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     if (!consent || viewStep !== 'review' || isPreparingReview || isSending) return
     combinedSwapConsent.current = null
     const summary = preparedQuoteTransfer?.review.review.summary
-    const finishAutomaticContinuation = () =>
-      setCombinedApprovalProgress(current =>
-        current?.continuing ? { ...current, continuing: false } : current
-      )
     if (
       consent.scope !== walletSourcesScope ||
       consent.requestKey !== liveQuoteRequest?.key ||
@@ -5527,12 +5585,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       summary?.schema !== 'evm.transaction.v1' ||
       !canContinueCombinedSwap(summary, consent.feeLimit, consent.transaction, consent.owner)
     ) {
-      finishAutomaticContinuation()
       return
     }
-    void handleConfirmSwap().then(submitted => {
-      if (!submitted) finishAutomaticContinuation()
-    }, finishAutomaticContinuation)
+    void handleConfirmSwap().catch(() => {})
   }, [
     handleConfirmSwap,
     isPreparingReview,
@@ -6176,7 +6231,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const handleReturnToInput = useCallback(() => {
     if (feeConfirmationInFlight.current) return
     combinedSwapConsent.current = null
-    setCombinedApprovalProgress(null)
+    setCombinedApprovalNetwork(null)
+    setBackgroundCombinedProgress(null)
     setCustomReviewFee(null)
     quoteRequestSequence.current += 1
     resetQuoteReview()
@@ -6475,18 +6531,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
 
   const resumingApprovalReview =
     walletSourcesScope !== null && approvalReviewScope === walletSourcesScope
-  const showCombinedSwapProgress = Boolean(
-    combinedApprovalProgress &&
-    (viewStep === 'approval-pending' ||
-      (combinedApprovalProgress.continuing &&
-        (viewStep === 'review' || (!swap.quoteError && !transferPreparationError))))
-  )
+  const showCombinedSwapProgress = Boolean(backgroundCombinedProgress && combinedApprovalNetwork)
 
   // Render content based on view step
   const renderContent = () => {
-    if (showCombinedSwapProgress && combinedApprovalProgress && swap.tokenIn && swap.tokenOut) {
-      const canContinue =
-        Boolean(approvalError) && combinedApprovalProgress.progress.status !== 'failed'
+    if (backgroundCombinedProgress && combinedApprovalNetwork && swap.tokenIn && swap.tokenOut) {
+      const managed = backgroundCombinedProgress
       return (
         <SwapStatusDisplay
           network={currentNetwork}
@@ -6498,23 +6548,40 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           originChain={swap.tokenIn.blockchain}
           destinationChain={swap.tokenOut.blockchain}
           router={quoteResult?.router}
-          approvalProgress={combinedApprovalProgress.progress}
+          approvalProgress={{
+            ...combinedApprovalNetwork,
+            transactionHash: managed.approvalHash,
+            status:
+              managed.status === 'approving'
+                ? 'confirming'
+                : managed.status === 'approval-failed'
+                  ? 'failed'
+                  : 'confirmed'
+          }}
           beforeSubmission={{
             token: swap.tokenIn,
-            error: approvalError,
+            error: 'message' in managed ? managed.message : null,
             continueDisabled: isPreparingReview || !liveQuoteRequest || walletSourcesLoading,
-            onContinue: canContinue
-              ? () => {
-                  combinedSwapConsent.current = null
-                  void handleContinueAfterApproval()
-                }
-              : undefined
+            onContinue:
+              managed.status === 'review-required'
+                ? () => {
+                    setBackgroundCombinedProgress(null)
+                    setCombinedApprovalNetwork(null)
+                    setApprovalReviewScope(walletSourcesScope)
+                    resetQuoteReview()
+                    void refreshExpiredReview()
+                  }
+                : undefined
           }}
-          onClose={handleReturnToInput}
+          onClose={backgroundApprovalPending ? goBack : handleReturnToInput}
           onViewActivity={() =>
-            navigate(homeActivityPath(activityDomain, combinedApprovalProgress.transactionId))
+            navigate(
+              homeActivityPath(
+                activityDomain,
+                managed.status === 'broadcast' ? managed.swapId : undefined
+              )
+            )
           }
-          viewActivityDisabled={combinedApprovalProgress.progress.status === 'confirmed'}
         />
       )
     }

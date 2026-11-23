@@ -419,23 +419,12 @@ html[data-surface='side-panel'] #root {
   background-color: var(--dapp-bar-control);
 }
 
+.dapp-connection-bar:not([data-wallet-palette='public']) .dapp-connection-control {
+  color: var(--color-foreground);
+}
+
 .dapp-connection-control:is(:enabled):hover {
   background-color: color-mix(in srgb, var(--color-foreground) 8%, var(--dapp-bar-control));
-}
-
-.dapp-connection-mode-group {
-  display: flex;
-  flex-shrink: 0;
-  border-radius: 8px;
-  background: var(--dapp-bar-control);
-}
-
-.dapp-connection-mode-group .dapp-connection-control {
-  --dapp-bar-control: transparent;
-}
-
-.dapp-connection-mode-group > .dapp-connection-control:last-child {
-  width: 31px;
 }
 
 .home-mode-content :is(.wallet-interactive, .transition-colors) {

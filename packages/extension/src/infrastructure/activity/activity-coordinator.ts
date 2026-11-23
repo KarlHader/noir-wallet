@@ -7,6 +7,7 @@ import {
 import type { TransactionGraph } from '@/core/transactions/domain'
 import type { Transaction } from '@/types'
 import type { StorageV2ReadRepository, TransactionRepository } from '@/ports/repositories'
+import { normalizeTxHash } from '@/lib/tx-history-dedup'
 import {
   mapZcashSelfTransferReceipt,
   mapZcashV1TransactionToActivityItem
@@ -94,8 +95,9 @@ export class ActivityCoordinator {
       : storedLocalGraphs
     const destinationReceipts = new Map<string, Transaction[]>()
     for (const transaction of zcashTransactions) {
-      if (transaction.type !== 'receive' || !transaction.txHash) continue
-      const hash = transaction.txHash.toLowerCase()
+      if (transaction.type !== 'receive') continue
+      const hash = normalizeTxHash(transaction.txHash)
+      if (!hash) continue
       destinationReceipts.set(hash, [...(destinationReceipts.get(hash) ?? []), transaction])
     }
     const hasMore = options.protocolProvider
@@ -109,7 +111,7 @@ export class ActivityCoordinator {
       supplementalItems: Object.freeze([
         ...zcashTransactions.flatMap(transaction => {
           const matchingReceipts = destinationReceipts
-            .get(transaction.destinationTxHash?.toLowerCase() ?? '')
+            .get(normalizeTxHash(transaction.destinationTxHash))
             ?.filter(
               receipt =>
                 receipt.network === transaction.network &&
@@ -123,7 +125,16 @@ export class ActivityCoordinator {
             matchingReceipts?.length === 1 ? matchingReceipts[0] : undefined
           )
           const receipt = mapZcashSelfTransferReceipt(transaction, item)
-          return receipt ? [item, receipt] : [item]
+          if (!receipt) return [item]
+          const destinationPool = transaction.type === 'unshield' ? 'transparent' : 'shielded'
+          const observedReceipt = destinationReceipts
+            .get(normalizeTxHash(transaction.txHash))
+            ?.some(
+              observation =>
+                observation.network === transaction.network &&
+                observation.fromType === destinationPool
+            )
+          return observedReceipt ? [item] : [item, receipt]
         }),
         ...supplementalItems
       ]),

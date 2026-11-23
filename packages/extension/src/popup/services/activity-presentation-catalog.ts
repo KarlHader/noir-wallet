@@ -92,7 +92,7 @@ export function buildActivityPresentationCatalog({
   ])
   const catalogMetadata = new Map<string, ActivityAssetMetadata>()
   for (const chain of evmCatalog) {
-    for (const token of chain.historyErc20Assets ?? []) {
+    for (const token of chain.bundledErc20Assets ?? []) {
       const asset = parseAssetId(`${chain.chainId}/erc20:${token.contract}`)
       catalogMetadata.set(asset.id, {
         asset: { ...asset, kind: 'token' },

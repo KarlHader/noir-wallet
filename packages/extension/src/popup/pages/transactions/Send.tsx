@@ -16,6 +16,7 @@ import { formatSortAddress } from '@/lib/format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import type { TokenSelectionItem } from '@/popup/components/tokens/TokenPicker'
 import { TokenPicker } from '@/popup/components/tokens/TokenPicker'
+import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
@@ -107,6 +108,12 @@ import {
 type SendSubmission =
   | Readonly<{ family: 'evm'; value: EvmTransferSubmission }>
   | SendTransferSubmission
+
+interface SendSourcePicker {
+  mode: 'shield' | 'zcash-public'
+  provider: ShieldProvider
+  initial?: boolean
+}
 
 interface SendDomainSession {
   key: string
@@ -284,7 +291,7 @@ function AssetSelection({
   )
   if (!networkOptions.some(option => !option.disabled) && (loadingAdditional || additionalError)) {
     return (
-      <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
+      <div className="flex h-full min-h-0 flex-col pt-2">
         {toolbar}
         {loadingAdditional ? (
           <ListSkeleton label="Loading tokens" className="py-2" />
@@ -299,7 +306,7 @@ function AssetSelection({
     )
   }
   return (
-    <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
+    <div className="flex h-full min-h-0 flex-col pt-2">
       <TokenPicker
         toolbar={toolbar}
         networks={networkOptions.map(option => ({
@@ -792,9 +799,9 @@ function SendAssetFlow() {
       destinationChainId: string
     }
   } | null>(null)
-  const [sourcePicker, setSourcePicker] = useState<{
-    mode: 'shield' | 'zcash-public'
-    provider: ShieldProvider
+  const [sourcePickerState, setSourcePickerState] = useState<{
+    key: string
+    value: SendSourcePicker | null
   } | null>(null)
   const [nearSourceOptions, setNearSourceOptions] = useState<{
     key: string
@@ -918,7 +925,6 @@ function SendAssetFlow() {
   const assetPickerOpen = currentAssetPicker?.open ?? false
   const setAssetPickerOpen = (open: boolean) => setAssetPickerState({ key: sendEntryKey, open })
   useEffect(() => {
-    setSourcePicker(null)
     setNearSourceOptions(null)
     setZcashFundingSelection(null)
   }, [sendEntryKey])
@@ -985,6 +991,19 @@ function SendAssetFlow() {
               : null
         }
   const shieldActive = currentSession.source === 'shield'
+  const initialShieldPicker =
+    shieldActive &&
+    requestedSourceMode === 'shield' &&
+    !requestedAssetId &&
+    !searchParams.has('provider')
+  const sourcePicker: SendSourcePicker | null =
+    sourcePickerState?.key === sendEntryKey
+      ? sourcePickerState.value
+      : initialShieldPicker
+        ? { mode: 'shield', provider: currentSession.shieldProvider, initial: true }
+        : null
+  const setSourcePicker = (value: SendSourcePicker | null) =>
+    setSourcePickerState({ key: sendEntryKey, value })
   const zcashActive =
     ((shieldActive && currentSession.shieldProvider === 'zcash-shield') ||
       (!shieldActive && currentSession.publicZcash)) &&
@@ -1568,7 +1587,21 @@ function SendAssetFlow() {
   )
   const showPublicAssetPicker =
     !shieldActive &&
+    !sourcePicker &&
     (assetPickerOpen || (!selection && !currentSession.publicZcash && !preparingRequestedAsset))
+  const dismissAssetPicker = () => {
+    if (currentAssetPicker?.resumeCrossChain) {
+      startCrossChainSend(currentAssetPicker.resumeCrossChain)
+    } else if (selection || currentSession.publicZcash) {
+      setAssetPickerOpen(false)
+    } else {
+      returnToEntry()
+    }
+  }
+  const dismissSourcePicker = () => {
+    if (sourcePicker?.initial) returnToEntry()
+    else setSourcePicker(null)
+  }
   const switchSource = (
     sourceMode: 'main' | 'shield',
     assetId: string | null,
@@ -1681,98 +1714,78 @@ function SendAssetFlow() {
       {!(nearActive && shieldReviewing) && !(zcashActive && zcashReviewing) && (
         <PageHeader
           title={
-            sourcePicker || showPublicAssetPicker ? (
-              'Select Token'
-            ) : (
-              <TransactionModeDropdown
-                action="Send"
-                value={shieldActive ? 'shield' : 'public'}
-                options={availableShieldProviders.length > 0 ? ['public', 'shield'] : ['public']}
-                onChange={switchMode}
-                disabled={shieldBusy || shieldReviewing || zcashBusy || zcashReviewing}
-              />
-            )
+            <TransactionModeDropdown
+              action="Send"
+              value={shieldActive ? 'shield' : 'public'}
+              options={availableShieldProviders.length > 0 ? ['public', 'shield'] : ['public']}
+              onChange={switchMode}
+              disabled={shieldBusy || shieldReviewing || zcashBusy || zcashReviewing}
+            />
           }
           showBack
           backDisabled={shieldBusy || zcashBusy}
-          rightContent={
-            !sourcePicker && !showPublicAssetPicker ? (
-              <SwapSettingsButton disabled={shieldBusy || zcashBusy} />
-            ) : undefined
-          }
-          onBack={
-            sourcePicker
-              ? () => setSourcePicker(null)
-              : shieldActive
-                ? () => {
-                    if (!shieldBusy && !zcashBusy) returnToEntry()
-                  }
-                : assetPickerOpen && selection
-                  ? () => {
-                      if (currentAssetPicker?.resumeCrossChain)
-                        startCrossChainSend(currentAssetPicker.resumeCrossChain)
-                      else setAssetPickerOpen(false)
-                    }
-                  : selection
-                    ? returnToEntry
-                    : goBack
-          }
+          rightContent={<SwapSettingsButton disabled={shieldBusy || zcashBusy} />}
+          onBack={returnToEntry}
         />
       )}
-      {sourcePicker && !nearSourceVisible && (
-        <AssetSelection
-          key={`${sendEntryKey}:${sourcePicker.mode}:zcash`}
-          accountScope={effectiveAccount}
-          assets={assets}
-          chains={visibleModel?.chains ?? []}
-          zcashOnly={sourcePicker.mode === 'shield'}
-          zcashSources={zcashSources.filter(source =>
-            sourcePicker.mode === 'shield'
-              ? source.type === 'shielded'
-              : source.type === 'transparent'
+      {sourcePicker && (
+        <TokenSelectorDialog open onOpenChange={open => !open && dismissSourcePicker()}>
+          {!nearSourceVisible && (
+            <AssetSelection
+              key={`${sendEntryKey}:${sourcePicker.mode}:zcash`}
+              accountScope={effectiveAccount}
+              assets={assets}
+              chains={visibleModel?.chains ?? []}
+              zcashOnly={sourcePicker.mode === 'shield'}
+              zcashSources={zcashSources.filter(source =>
+                sourcePicker.mode === 'shield'
+                  ? source.type === 'shielded'
+                  : source.type === 'transparent'
+              )}
+              zcashEnabled={zcashEnabled}
+              zcashNetwork={currentNetwork}
+              zecPrice={zecPrice}
+              prices={assetPrices}
+              loadingAdditional={loadingSendAssets}
+              additionalError={sendAssetsError}
+              toolbar={sourcePickerToolbar}
+              onSelectZcash={source => {
+                selectZcash(source)
+                setSourcePicker(null)
+              }}
+              onSelect={asset => {
+                if (sourcePicker.mode === 'zcash-public') selectAssetFromPublicZcash(asset)
+                else switchSource('main', asset.asset.asset.id, '', undefined, '', asset)
+                setSourcePicker(null)
+              }}
+              onRetry={retrySendAssets}
+            />
           )}
-          zcashEnabled={zcashEnabled}
-          zcashNetwork={currentNetwork}
-          zecPrice={zecPrice}
-          prices={assetPrices}
-          loadingAdditional={loadingSendAssets}
-          additionalError={sendAssetsError}
-          toolbar={sourcePickerToolbar}
-          onSelectZcash={source => {
-            selectZcash(source)
-            setSourcePicker(null)
-          }}
-          onSelect={asset => {
-            if (sourcePicker.mode === 'zcash-public') selectAssetFromPublicZcash(asset)
-            else switchSource('main', asset.asset.asset.id, '', undefined, '', asset)
-            setSourcePicker(null)
-          }}
-          onRetry={retrySendAssets}
-        />
-      )}
-      {sourcePicker && nearSourceVisible && (
-        <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
-          <ShieldTokenPicker
-            key={sendEntryKey}
-            rows={nearPicker?.items ?? []}
-            balancesHidden={nearPicker?.balancesHidden ?? false}
-            networks={sourcePickerNetworks}
-            toolbar={sourcePickerToolbar}
-            selectedKey={
-              nearPicker?.items.find(item => item.assetId === nearPicker.selectedAssetId)?.key
-            }
-            onSelect={item => {
-              nearPicker?.onSelect(item.assetId)
-              setDomainSession({
-                ...currentSession,
-                source: 'shield',
-                shieldProvider: 'near-confidential'
-              })
-              setSourcePicker(null)
-            }}
-            emptyMessage={loadingSendAssets ? 'Loading tokens' : 'No tokens found'}
-          />
-        </div>
+          {nearSourceVisible && (
+            <div className="flex h-full min-h-0 flex-col pt-2">
+              <ShieldTokenPicker
+                key={sendEntryKey}
+                rows={nearPicker?.items ?? []}
+                balancesHidden={nearPicker?.balancesHidden ?? false}
+                networks={sourcePickerNetworks}
+                toolbar={sourcePickerToolbar}
+                selectedKey={
+                  nearPicker?.items.find(item => item.assetId === nearPicker.selectedAssetId)?.key
+                }
+                onSelect={item => {
+                  nearPicker?.onSelect(item.assetId)
+                  setDomainSession({
+                    ...currentSession,
+                    source: 'shield',
+                    shieldProvider: 'near-confidential'
+                  })
+                  setSourcePicker(null)
+                }}
+                emptyMessage={loadingSendAssets ? 'Loading tokens' : 'No tokens found'}
+              />
+            </div>
+          )}
+        </TokenSelectorDialog>
       )}
       {currentSession.shieldEntry && (
         <div
@@ -1973,22 +1986,24 @@ function SendAssetFlow() {
         </div>
       )}
       {showPublicAssetPicker && (
-        <AssetSelection
-          key={sendEntryKey}
-          accountScope={effectiveAccount}
-          assets={assets}
-          chains={visibleModel?.chains ?? []}
-          zcashSources={zcashSources.filter(source => source.type === 'transparent')}
-          zcashEnabled={zcashEnabled}
-          zcashNetwork={currentNetwork}
-          zecPrice={zecPrice}
-          prices={assetPrices}
-          loadingAdditional={loadingSendAssets}
-          additionalError={sendAssetsError}
-          onSelectZcash={source => selectReturnedSource(null, source)}
-          onRetry={retrySendAssets}
-          onSelect={asset => selectReturnedSource(asset)}
-        />
+        <TokenSelectorDialog open onOpenChange={open => !open && dismissAssetPicker()}>
+          <AssetSelection
+            key={sendEntryKey}
+            accountScope={effectiveAccount}
+            assets={assets}
+            chains={visibleModel?.chains ?? []}
+            zcashSources={zcashSources.filter(source => source.type === 'transparent')}
+            zcashEnabled={zcashEnabled}
+            zcashNetwork={currentNetwork}
+            zecPrice={zecPrice}
+            prices={assetPrices}
+            loadingAdditional={loadingSendAssets}
+            additionalError={sendAssetsError}
+            onSelectZcash={source => selectReturnedSource(null, source)}
+            onRetry={retrySendAssets}
+            onSelect={asset => selectReturnedSource(asset)}
+          />
+        </TokenSelectorDialog>
       )}
       {!shieldActive && preparingRequestedAsset && (
         <div className="page-content !px-4 pt-4">

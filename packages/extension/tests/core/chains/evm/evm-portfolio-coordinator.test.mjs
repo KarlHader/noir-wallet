@@ -9,7 +9,13 @@ import {
 import { EvmPortfolioCoordinator } from '../../../../src/infrastructure/chains/evm/index.ts'
 
 const chains = createEvmBitcoinChainRegistry('mainnet')
-const assets = createAssetRegistry(chains, getBundledEvmAssetDefinitions('mainnet'))
+const assets = createAssetRegistry(
+  chains,
+  getBundledEvmAssetDefinitions('mainnet').filter(
+    asset =>
+      asset.chainId === 'eip155:1' && (asset.kind === 'native' || asset.metadata.symbol === 'USDC')
+  )
+)
 const chainAccount = {
   id: 'chain-account:evm:portfolio',
   scope: {

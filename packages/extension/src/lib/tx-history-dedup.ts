@@ -22,8 +22,7 @@ export function isMultiStepZcashSend(
 }
 
 /**
- * Transparent receives are reconstructed from the node independently and have no
- * local counterpart, so they must never be collapsed as duplicates.
+ * Transparent receives describe the credit side even when a local send shares the txid.
  */
 export function isTransparentReceive(tx: Transaction): boolean {
   return tx.type === 'receive' && tx.fromType === 'transparent'
@@ -52,23 +51,6 @@ export function localTxHashSet(txs: Transaction[]): Set<string> {
   return hashes
 }
 
-/** Hashes of locally-created shielded sends that can reappear as a transparent receive. */
-export function localShieldedSendHashSet(txs: Transaction[]): Set<string> {
-  const hashes = new Set<string>()
-  for (const tx of txs) {
-    if (
-      tx.id.startsWith('wasm_') ||
-      (tx.type !== 'send' && tx.type !== 'unshield') ||
-      tx.fromType !== 'shielded'
-    ) {
-      continue
-    }
-    const hash = normalizeTxHash(tx.txHash)
-    if (hash) hashes.add(hash)
-  }
-  return hashes
-}
-
 /**
  * A WASM history row duplicates a local record when it shares the same txid and
  * is not a transparent receive. A swap/supply is a single on-chain send, so the
@@ -80,15 +62,10 @@ export function localShieldedSendHashSet(txs: Transaction[]): Set<string> {
  * suppressed.
  * Only exact txid matching is used — no amount/time/address fuzzy matching.
  */
-export function isDuplicateWasmRow(
-  tx: Transaction,
-  localHashes: Set<string>,
-  localShieldedSendHashes: Set<string> = new Set()
-): boolean {
+export function isDuplicateWasmRow(tx: Transaction, localHashes: ReadonlySet<string>): boolean {
   return (
     tx.id.startsWith('wasm_') &&
-    (isTransparentReceive(tx)
-      ? localShieldedSendHashes.has(normalizeTxHash(tx.txHash))
-      : localHashes.has(normalizeTxHash(tx.txHash)))
+    !isTransparentReceive(tx) &&
+    localHashes.has(normalizeTxHash(tx.txHash))
   )
 }

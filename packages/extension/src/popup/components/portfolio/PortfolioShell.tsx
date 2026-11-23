@@ -259,6 +259,7 @@ export function PortfolioShell({
     lowValueAssetGroups,
     sortedChains,
     networkOptions,
+    pendingStarterZcash,
     unavailableChains,
     hasPendingBalances
   } = useMemo(
@@ -432,6 +433,28 @@ export function PortfolioShell({
           />
         ) : view === 'assets' ? (
           <div className="pb-2">
+            {pendingStarterZcash && (
+              <button
+                type="button"
+                aria-label={`View ZEC details on ${pendingStarterZcash.chain.displayName}`}
+                className={cn(
+                  portfolioAssetRowClassName,
+                  'wallet-interactive hover:bg-foreground/[0.03] active:bg-foreground/[0.06] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary'
+                )}
+                onClick={() => selectAsset(`${pendingStarterZcash.chain.id}/slip44:133`)}
+              >
+                <PortfolioAssetRowContent
+                  icon={<TokenIcon symbol="ZEC" nativeChain="zcash" size={36} />}
+                  title={<p className="truncate text-base font-medium">ZEC</p>}
+                  subtitle={null}
+                  balance={
+                    <span className="text-xs text-muted" role="status">
+                      {balancesHidden ? '••••' : 'Syncing'}
+                    </span>
+                  }
+                />
+              </button>
+            )}
             {primaryAssetGroups.map(group => renderAssetGroup(group, 'assets:all'))}
             {separateConfidential.map(({ entry, chain }) => (
               <NearConfidentialHoldingRow

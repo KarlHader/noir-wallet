@@ -96,7 +96,9 @@ test('passive Confidential balance reads skip identity setup without a session',
 
   session = usableSession
   identityAccountId = 'account:other'
-  await expect(coordinator.refreshBalances(scope, false)).rejects.toThrow('Active Wallet Account changed')
+  await expect(coordinator.refreshBalances(scope, false)).rejects.toThrow(
+    'Active Wallet Account changed'
+  )
   expect(balanceReads).toBe(0)
 
   identityAccountId = scope.accountId
@@ -205,18 +207,18 @@ test.describe('confidential funding safety rules', () => {
     const network = getEvmNetworkConfigs('mainnet')
     for (const [chainId, blockchain, contractAddress, decimals, protocolAssetId] of [
       [
-        'eip155:1',
-        'eth',
-        '0xdac17f958d2ee523a2206206994597c13d831ec7',
+        'eip155:42161',
+        'arb',
+        '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
         6,
-        'nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near'
+        'nep141:arb-0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9.omft.near'
       ],
       [
-        'eip155:56',
-        'bsc',
-        '0x55d398326f99059ff775485246999027b3197955',
-        18,
-        'nep141:bnb-0x55d398326f99059ff775485246999027b3197955.omdep.near'
+        'eip155:137',
+        'pol',
+        '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+        6,
+        'nep141:polygon-0xc2132d05d31c914a87c6611c10748aeb04b58e8f.omft.near'
       ]
     ]) {
       const assetId = `${chainId}/erc20:${contractAddress}`
@@ -441,7 +443,9 @@ test.describe('confidential funding safety rules', () => {
         async withExternalDepositScope(_scope, operation) {
           const previous = metadataLockTail
           let release
-          metadataLockTail = new Promise(resolve => { release = resolve })
+          metadataLockTail = new Promise(resolve => {
+            release = resolve
+          })
           await previous
           metadataLockHeld = true
           let result

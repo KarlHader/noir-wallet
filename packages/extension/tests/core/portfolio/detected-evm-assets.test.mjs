@@ -184,7 +184,7 @@ test('manual discovery joins an in-flight request but bypasses the persisted aut
   expect(discoveryRequests).toBe(2)
 })
 
-test('backs off failed automatic discovery across worker restarts without blocking other chain sets', async () => {
+test('waits three minutes after each failed discovery and returns to one minute on success', async () => {
   const chains = createInitialProductChainRegistry('mainnet')
   const session = memoryDiscoverySession()
   const target = { address: ADDRESS, chainIds: ['eip155:1'] }
@@ -200,11 +200,14 @@ test('backs off failed automatic discovery across worker restarts without blocki
         available: true,
         discover: async (_address, chainIds) => {
           requests.push(chainIds)
-          if (unavailable) throw new Error('Discovery timed out')
+          if (unavailable) {
+            now += 10_000
+            throw new Error('Discovery timed out')
+          }
           return []
         }
       },
-      schedule: new EvmTokenDiscoverySchedule('mainnet', session),
+      schedule: new EvmTokenDiscoverySchedule('mainnet', session, () => now),
       resolveRpc: () => {
         throw new Error('No candidate metadata is needed')
       },
@@ -212,22 +215,27 @@ test('backs off failed automatic discovery across worker restarts without blocki
     })
 
   await createCoordinator().refresh([target])
-  now += 5 * minute
   const restarted = createCoordinator()
+  now += 3 * minute - 1
+  await restarted.refresh([target])
+  expect(requests).toEqual([['eip155:1']])
+  now += 1
   await restarted.refresh([target])
   await restarted.refresh([{ ...target, chainIds: ['eip155:137'] }])
-  expect(requests).toEqual([['eip155:1'], ['eip155:137']])
+  expect(requests).toEqual([['eip155:1'], ['eip155:1'], ['eip155:137']])
 
-  now += 5 * minute
-  await restarted.refresh([target])
-  now += 10 * minute
-  unavailable = false
+  now += 3 * minute - 10_000 - 1
   await restarted.refresh([target])
   expect(requests).toHaveLength(3)
-
-  now += 10 * minute
+  now += 1
+  unavailable = false
   await restarted.refresh([target])
-  now += 5 * minute
+  expect(requests).toHaveLength(4)
+
+  now += minute - 1
+  await restarted.refresh([target])
+  expect(requests).toHaveLength(4)
+  now += 1
   await restarted.refresh([target])
   expect(requests).toHaveLength(5)
 })

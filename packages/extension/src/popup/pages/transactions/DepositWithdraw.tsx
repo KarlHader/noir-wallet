@@ -2256,7 +2256,15 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     <div className="page-container" data-wallet-mode={receiveEntry ? 'public' : walletMode}>
       {(!nativeReceive || !nativeReceiveState.reviewing) && (
         <PageHeader
-          title={receiveEntry ? 'Receive' : actionLabel}
+          title={
+            receiveEntry
+              ? 'Receive'
+              : to === 'private'
+                ? 'Deposit to Incognito'
+                : from === 'private'
+                  ? 'Withdraw from Incognito'
+                  : actionLabel
+          }
           showBack
           onBack={goBack}
           backDisabled={nativeReceive && nativeReceiveState.busy}

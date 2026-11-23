@@ -102,6 +102,15 @@ export class BackgroundEvmTransactionMonitor {
     return this.poll(this.monitors.map(entry => Object.freeze({ ...entry, scopes })))
   }
 
+  async pollApprovalScope(chainId: string, scope: TransactionAccountScope): Promise<void> {
+    const entry = this.monitors.find(candidate => candidate.network.chainId === chainId)
+    if (!entry) return
+    const result = await entry.monitor.poll([scope])
+    if (result.applied > 0) {
+      void chrome.runtime.sendMessage({ type: 'TRANSACTION_UPDATED' }).catch(() => {})
+    }
+  }
+
   private async loadPersistedScopes(chainId: string): Promise<readonly TransactionAccountScope[]> {
     const snapshot = await readActiveStorageV2Snapshot(this.storageRepository)
     if (!snapshot) return Object.freeze([])

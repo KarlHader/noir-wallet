@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
+import { CombinedEvmSwap } from '../../../src/background/combined-evm-swap.ts'
 import { selectWalletOwnedQuoteAssetExecution } from '../../../src/popup/services/quote-deposit-transfer-client.ts'
 import {
   canContinueCombinedSwap,
@@ -54,6 +55,238 @@ import {
   createPublicPrivateSendPreviewKey,
   getPublicPrivateSendRouteCost
 } from '../../../src/popup/services/public-private-send-preview.ts'
+
+function combinedSwapFixture(t) {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 10_000 })
+  const owner = `0x${'1'.repeat(40)}`
+  const target = `0x${'2'.repeat(40)}`
+  const token = `0x${'3'.repeat(40)}`
+  const scope = { keyDomainId: 'wallet:combined', accountId: 'account:combined' }
+  const approvalId = 'tx:evm:combined-approve'
+  const approvalFingerprint = 'a'.repeat(64)
+  const swapId = 'tx:evm:combined-swap'
+  const approvalHash = `0x${'a'.repeat(64)}`
+  const swapHash = `0x${'b'.repeat(64)}`
+  const approval = {
+    transaction: { chainId: 42161, to: token, data: '0xdeadbeef', value: '0' },
+    spender: target,
+    amountRaw: '1000'
+  }
+  const transaction = { chainId: 42161, to: target, data: '0x1234', value: '0' }
+  const binding = {
+    schemaVersion: 1,
+    provider: 'rhea-cross-chain-dex',
+    kind: 'swap',
+    quoteHandle: 'rhea-quote:combined',
+    executionId: 'execution:combined',
+    router: 'test-router',
+    sourceTarget: target,
+    sender: owner,
+    originAmountRaw: '1000',
+    expiresAt: 100_000,
+    isCrossChain: false,
+    origin: {
+      chainId: 'eip155:42161',
+      assetId: `eip155:42161/erc20:${token}`,
+      protocolChainId: '42161',
+      protocolAssetId: token
+    },
+    destination: {
+      chainId: 'eip155:42161',
+      assetId: 'eip155:42161/slip44:60',
+      protocolChainId: '42161',
+      protocolAssetId: 'native',
+      recipient: owner,
+      expectedAmountRaw: '900',
+      minimumAmountRaw: '850'
+    }
+  }
+  const input = {
+    approvalId,
+    approvalFingerprint,
+    binding,
+    feeBudgetWei: '550000',
+    feeSelection: 'standard'
+  }
+  const account = {
+    network: 'mainnet',
+    walletId: scope.keyDomainId,
+    accountId: scope.accountId,
+    unlockEpoch: 'unlocked'
+  }
+  const graphs = new Map()
+  const storage = {}
+  const calls = []
+  let allowance = '0'
+  let delayedBroadcast = false
+  const setStatus = (id, kind, status, hash) => {
+    const graph = {
+      root: { id, scope, kind, status },
+      segments: [{ role: 'origin', status, evidence: hash ? { transactionHash: hash } : undefined }]
+    }
+    graphs.set(id, graph)
+    return graph
+  }
+  setStatus(approvalId, 'approve', 'prepared')
+  const summary = (call, maximumFeeWei) => ({
+    schema: 'evm.transaction.v1',
+    chainId: 'eip155:42161',
+    fields: {
+      from: owner,
+      to: call.to,
+      valueWei: call.value,
+      calldata: { encoding: 'hex', value: call.data },
+      maximumFeeWei,
+      maxFeePerGasWei: '1',
+      gasPriceWei: null
+    }
+  })
+  const router = {
+    getPendingApproval: async () => ({
+      graph: graphs.get(approvalId),
+      review: {
+        payloadFingerprint: { digestHex: approvalFingerprint },
+        summary: summary(approval.transaction, '50000')
+      }
+    }),
+    approve: async (id, _fingerprint, authorize) => {
+      await authorize()
+      if (id === approvalId) {
+        assert.ok(
+          Object.keys(storage).length,
+          'the reviewed intent survives before the approval broadcast'
+        )
+        calls.push('approve-token')
+        return {
+          status: 'broadcast',
+          graph: setStatus(approvalId, 'approve', 'broadcast', approvalHash)
+        }
+      }
+      calls.push('sign-swap')
+      assert.equal(id, swapId)
+      assert.ok(
+        Object.values(storage).some(item => item.swap?.id === id),
+        'the same swap ID is reserved before signing'
+      )
+      return delayedBroadcast
+        ? { status: 'signed-pending-broadcast', graph: setStatus(id, 'swap', 'signed', swapHash) }
+        : { status: 'broadcast', graph: setStatus(id, 'swap', 'broadcast', swapHash) }
+    },
+    prepareContractCall: async () => {
+      calls.push('prepare-swap')
+      return {
+        graph: setStatus(swapId, 'swap', 'prepared'),
+        review: {
+          payloadFingerprint: { digestHex: 'b'.repeat(64) },
+          summary: summary(transaction, '450000')
+        }
+      }
+    },
+    getTokenAllowance: async () => allowance,
+    resumeBroadcast: async id => {
+      assert.equal(id, swapId)
+      calls.push('retry-same-signed-swap')
+      return { status: 'broadcast', graph: setStatus(id, 'swap', 'broadcast', swapHash) }
+    }
+  }
+  const previousChrome = globalThis.chrome
+  globalThis.chrome = {
+    storage: {
+      session: {
+        get: async key => structuredClone(key === null ? storage : { [key]: storage[key] }),
+        set: async records => Object.assign(storage, structuredClone(records)),
+        remove: async key => delete storage[key]
+      }
+    }
+  }
+  t.after(() => {
+    globalThis.chrome = previousChrome
+  })
+  const options = {
+    router: () => router,
+    quote: {
+      readQuoteView: async () => ({ receivedAt: 10_000, expiresAt: binding.expiresAt }),
+      readPreparedBuild: async () => ({
+        amountIn: '1000',
+        estimatedOut: '900',
+        minAmountOut: '850'
+      }),
+      readEvmTransactionPlan: async () => ({
+        executionId: binding.executionId,
+        transaction,
+        approval
+      })
+    },
+    readAccount: async () => account,
+    readGraph: async (_scope, id) => graphs.get(id) ?? null,
+    validateQuote: async () => {},
+    checkApproval: async () => {},
+    schedule: async () => {}
+  }
+  return {
+    create: () => new CombinedEvmSwap(options),
+    input,
+    calls,
+    approveOnchain: () => setStatus(approvalId, 'approve', 'final', approvalHash),
+    failOnchain: () => setStatus(approvalId, 'approve', 'failed', approvalHash),
+    setAllowance: () => {
+      allowance = '1000'
+    },
+    delayBroadcast: () => {
+      delayedBroadcast = true
+    },
+    changeUnlock: () => {
+      account.unlockEpoch = 'different'
+    }
+  }
+}
+
+it('resumes an approved swap from background storage and retries only the same signed transaction', async t => {
+  const fixture = combinedSwapFixture(t)
+  const original = fixture.create()
+  assert.equal((await original.start(fixture.input)).status, 'approving')
+  fixture.approveOnchain()
+  fixture.delayBroadcast()
+  const resumed = fixture.create()
+  await resumed.poll()
+  assert.deepEqual(fixture.calls, ['approve-token'])
+  fixture.setAllowance()
+  await resumed.poll()
+  assert.equal((await resumed.get(fixture.input.approvalId)).status, 'submitting')
+  const restarted = fixture.create()
+  await Promise.all([restarted.poll(), restarted.poll()])
+  await restarted.poll()
+  assert.equal((await restarted.get(fixture.input.approvalId)).status, 'broadcast')
+  assert.deepEqual(fixture.calls, [
+    'approve-token',
+    'prepare-swap',
+    'sign-swap',
+    'retry-same-signed-swap'
+  ])
+})
+
+it('stops before signing when token approval fails, the quote expires or consent belongs to another unlock', async t => {
+  for (const scenario of ['failed', 'expired', 'locked']) {
+    await t.test(scenario, async subtest => {
+      const fixture = combinedSwapFixture(subtest)
+      await fixture.create().start(fixture.input)
+      if (scenario === 'failed') {
+        fixture.failOnchain()
+      } else {
+        fixture.approveOnchain()
+        fixture.setAllowance()
+        if (scenario === 'expired') subtest.mock.timers.setTime(fixture.input.binding.expiresAt)
+        else fixture.changeUnlock()
+      }
+      const resumed = fixture.create()
+      await resumed.poll()
+      const result = await resumed.get(fixture.input.approvalId)
+      assert.equal(result.status, scenario === 'failed' ? 'approval-failed' : 'review-required')
+      if (scenario === 'expired') assert.match(result.message, /quote expired/i)
+      assert.deepEqual(fixture.calls, ['approve-token'])
+    })
+  }
+})
 
 it('continues a combined approval only for the reviewed swap call within its fee ceiling', () => {
   const owner = `0x${'1'.repeat(40)}`
