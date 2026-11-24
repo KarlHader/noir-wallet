@@ -537,7 +537,7 @@ function ActivityTransactionAccountRoute({ view }: { readonly view: ActivityTran
   )
     return null
   return (
-    <DetailRow label={view.actionSide === 'none' ? 'Account' : 'Direction'}>
+    <DetailRow label="Direction">
       {swap.destinationFundingSource ? (
         <span className="text-sm">{getActivityAccountRouteLabel(swap)}</span>
       ) : (
