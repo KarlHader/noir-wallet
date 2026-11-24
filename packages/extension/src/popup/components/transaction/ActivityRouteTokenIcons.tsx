@@ -1,16 +1,11 @@
 import { cn } from '@/lib/utils'
-import { resolveEvmChainIconAlias } from '@/config/icons'
 import type { ActivityItem } from '@/core/activity'
 import { TokenIcon } from '../tokens/TokenIcon'
 import {
   hasMatchingActivityTokenIcons,
+  resolveActivityEvmAssetChainIconAlias,
   type ActivitySwapPresentation
 } from '@/popup/services/multichain-activity-presentation'
-
-function evmAssetChain(assetId?: string): string | undefined {
-  const network = /^(?:eip155|rhea):([1-9]\d*)\//.exec(assetId ?? '')?.[1]
-  return network ? resolveEvmChainIconAlias(`eip155:${network}`) : undefined
-}
 
 export function ActivityRouteTokenIcons({
   item,
@@ -24,8 +19,12 @@ export function ActivityRouteTokenIcons({
   const exchange = item.snapshot?.shield
     ? item.snapshot.shield.operation === 'swap'
     : item.kind === 'swap' && item.snapshot?.protocol?.userAction !== 'transfer'
-  const sourceChain = size === 'detail' ? evmAssetChain(route.source?.assetId) : undefined
-  const destinationChain = size === 'detail' ? evmAssetChain(route.destination?.assetId) : undefined
+  const sourceChain =
+    size === 'detail' ? resolveActivityEvmAssetChainIconAlias(route.source?.assetId) : undefined
+  const destinationChain =
+    size === 'detail'
+      ? resolveActivityEvmAssetChainIconAlias(route.destination?.assetId)
+      : undefined
   const singleAsset =
     !exchange || (sourceChain === destinationChain && hasMatchingActivityTokenIcons(route))
   const primaryAsset =

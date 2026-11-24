@@ -12,6 +12,7 @@ import { formatSortAddress, formatSymbol } from '@/lib/format'
 import { detectZcashAddressType } from '@/lib/zcash-memo'
 import { parseAssetId } from '@/core/chains/registry'
 import { ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { resolveEvmChainIconAlias } from '@/config/icons'
 import type {
   ActivityAssetMetadata,
   ActivityChainMetadata
@@ -246,6 +247,11 @@ export function hasMatchingActivityTokenIcons(route: ActivitySwapPresentation): 
   if (source.assetId === destination.assetId) return true
   if (source.symbol.toUpperCase() !== destination.symbol.toUpperCase()) return false
   return !source.iconUrl || !destination.iconUrl || source.iconUrl === destination.iconUrl
+}
+
+export function resolveActivityEvmAssetChainIconAlias(assetId?: string): string | undefined {
+  const network = /^(?:eip155|rhea):([1-9]\d*)\//.exec(assetId ?? '')?.[1]
+  return network ? resolveEvmChainIconAlias(`eip155:${network}`) : undefined
 }
 
 export function buildActivityExecutionAddressModes(
