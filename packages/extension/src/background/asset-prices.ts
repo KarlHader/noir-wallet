@@ -3,7 +3,11 @@ import {
   getAssetMarketChangeSourceMappings,
   getAssetMarketHistorySourceMappings
 } from '@/core/prices/asset-market-source-mappings'
-import { getAssetPriceSourceMappings } from '@/core/prices/asset-market-mappings'
+import {
+  getAssetPriceSourceMappings,
+  getBundledMarketPriceFallback,
+  type AssetPriceSourceMapping
+} from '@/core/prices/asset-market-mappings'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import type { EvmNetworkConfig } from '@/config/networks'
 import { getUserAssetDexPoolDiscoveryPolicy } from '@/config/user-asset-market-policy'
@@ -243,11 +247,21 @@ export function createBackgroundAssetPriceService(
     )
   )
   const registeredAssetIds = new Set(assets.list().map(entry => entry.asset.id as string))
-  const priceMappings = new Map(
+  const priceMappings = new Map<string, AssetPriceSourceMapping>(
     getAssetPriceSourceMappings(DEFAULT_NETWORK, assets).map(mapping => [mapping.assetId, mapping])
   )
   for (const mapping of protocolPriceMappings) {
-    if (registeredAssetIds.has(mapping.assetId)) priceMappings.set(mapping.assetId, mapping)
+    if (!registeredAssetIds.has(mapping.assetId)) continue
+    const bundled = priceMappings.get(mapping.assetId)
+    const fallbackSourceAssetId =
+      DEFAULT_NETWORK === 'mainnet' && bundled
+        ? getBundledMarketPriceFallback(bundled.marketAssetId, mapping.sourceAssetId)
+        : undefined
+    priceMappings.set(mapping.assetId, {
+      ...mapping,
+      marketAssetId: bundled?.marketAssetId ?? mapping.marketAssetId,
+      ...(fallbackSourceAssetId ? { fallbackSourceAssetId } : {})
+    })
   }
   const defiLlamaMarketMappings = Object.freeze(
     [...priceMappings.values()].flatMap(mapping =>

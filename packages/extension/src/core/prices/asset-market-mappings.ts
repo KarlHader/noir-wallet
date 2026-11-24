@@ -26,11 +26,63 @@ interface AssetMarketMapping {
 
 export interface AssetPriceSourceMapping extends AssetMarketMapping {
   readonly sourceAssetId: string
+  readonly fallbackSourceAssetId?: string
 }
 
 export interface AssetProtocolSourceMapping {
   readonly assetId: string
   readonly protocolAssetId: string
+}
+
+const BUNDLED_ERC20_PRICES: Readonly<
+  Record<string, { marketAssetId: MarketAssetId; sourceAssetId: string }>
+> = {
+  'eip155:1:USDT': {
+    marketAssetId: MARKET_ASSETS.usdt,
+    sourceAssetId: ASSET_PRICE_SOURCE_ASSETS.usdt
+  },
+  'eip155:56:USDC': {
+    marketAssetId: MARKET_ASSETS.usdc,
+    sourceAssetId: EVM_USDC_PROTOCOL_ASSET_BY_CHAIN_ID['eip155:56']!
+  },
+  'eip155:56:USDT': {
+    marketAssetId: MARKET_ASSETS.usdt,
+    sourceAssetId: 'nep141:bnb-0x55d398326f99059ff775485246999027b3197955.omdep.near'
+  },
+  'eip155:137:WETH': {
+    marketAssetId: MARKET_ASSETS.weth,
+    sourceAssetId: 'nep141:pol-0x7ceb23fd6bc0add59e62ac25578270cff1b9f619.omdep.near'
+  }
+}
+
+export function getBundledMarketPriceFallback(
+  marketAssetId: MarketAssetId,
+  sourceAssetId: string
+): string | undefined {
+  const alternate =
+    marketAssetId === MARKET_ASSETS.usdc
+      ? BUNDLED_ERC20_PRICES['eip155:56:USDC']?.sourceAssetId
+      : marketAssetId === MARKET_ASSETS.usdt
+        ? BUNDLED_ERC20_PRICES['eip155:56:USDT']?.sourceAssetId
+        : undefined
+  const canonical = PRICE_SOURCE_BY_MARKET_ASSET[marketAssetId]
+  return canonical === sourceAssetId ? alternate : canonical
+}
+
+function marketPriceMapping(
+  mapping: AssetMarketMapping,
+  sourceAssetId: string,
+  network: Network
+): AssetPriceSourceMapping {
+  const fallbackSourceAssetId =
+    network === 'mainnet'
+      ? getBundledMarketPriceFallback(mapping.marketAssetId, sourceAssetId)
+      : undefined
+  return Object.freeze({
+    ...mapping,
+    sourceAssetId,
+    ...(fallbackSourceAssetId ? { fallbackSourceAssetId } : {})
+  })
 }
 
 export function getAssetMarketMappings(
@@ -93,14 +145,27 @@ export function getAssetPriceSourceMappings(
   network: Network,
   assets: AssetRegistry
 ): readonly AssetPriceSourceMapping[] {
-  return Object.freeze(
-    getAssetMarketMappings(network, assets).map(mapping =>
-      Object.freeze({
-        ...mapping,
-        sourceAssetId: PRICE_SOURCE_BY_MARKET_ASSET[mapping.marketAssetId]
-      })
-    )
+  const mappings = getAssetMarketMappings(network, assets).map(mapping =>
+    marketPriceMapping(mapping, PRICE_SOURCE_BY_MARKET_ASSET[mapping.marketAssetId]!, network)
   )
+  if (network !== 'mainnet') return Object.freeze(mappings)
+  const mappedIds = new Set(mappings.map(mapping => mapping.assetId))
+  const bundledTokens = getEvmNetworkConfigs(network).flatMap(evm =>
+    (evm.bundledErc20Assets ?? []).flatMap(({ symbol, contract }) => {
+      const assetId = `${evm.chainId}/erc20:${contract.toLowerCase()}`
+      const asset = assets.resolve(assetId)
+      const price = BUNDLED_ERC20_PRICES[`${evm.chainId}:${symbol}`]
+      if (!price || asset?.source !== 'bundled' || mappedIds.has(assetId)) return []
+      return [
+        marketPriceMapping(
+          { assetId: asset.asset.id, marketAssetId: price.marketAssetId },
+          price.sourceAssetId,
+          network
+        )
+      ]
+    })
+  )
+  return Object.freeze([...mappings, ...bundledTokens])
 }
 
 export function getAssetProtocolSourceMappings(
