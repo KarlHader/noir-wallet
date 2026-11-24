@@ -11,6 +11,28 @@ import {
 import { EvmWalletClientError } from '../../../src/popup/services/evm-wallet-client.ts'
 import { BitcoinWalletClientError } from '../../../src/popup/services/bitcoin-wallet-client.ts'
 import { TransferMaximumEstimateCache } from '../../../src/popup/services/transfer-maximum-cache.ts'
+import { quickShieldSpendableRaw } from '../../../src/popup/services/quick-shield.ts'
+import { quickShieldMaximum } from '../../../src/popup/services/quick-shield-maximum.ts'
+
+test('quick Shield reserves gas from spendable public funds and rejects incomplete domain balances', () => {
+  const asset = {
+    asset: { chainId: 'eip155:1' },
+    balance: { totalRaw: '1000', mainRaw: '800', privateRaw: '200', availableRaw: '600' }
+  }
+  const assetRaw = BigInt(quickShieldSpendableRaw(asset))
+  expect(quickShieldMaximum({ native: true, assetRaw, gasRaw: assetRaw }, '40')).toBe('560')
+  expect(quickShieldMaximum({ native: false, assetRaw, gasRaw: 40n }, '40')).toBe('600')
+  expect(() => quickShieldMaximum({ native: false, assetRaw, gasRaw: 39n }, '40')).toThrow()
+  expect(
+    quickShieldSpendableRaw({ ...asset, balance: { ...asset.balance, availableRaw: '900' } })
+  ).toBe('800')
+  expect(
+    quickShieldSpendableRaw({ ...asset, balance: { ...asset.balance, mainRaw: undefined } })
+  ).toBeNull()
+  expect(
+    quickShieldSpendableRaw({ ...asset, balance: { ...asset.balance, availableRaw: null } })
+  ).toBeNull()
+})
 
 const maximum = amountRaw => ({
   amountRaw,

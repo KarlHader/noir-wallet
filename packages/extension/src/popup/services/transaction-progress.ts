@@ -9,6 +9,7 @@ import {
 import type { IntentsProgressEntry } from '@/lib/intents-progress'
 import type { Transaction } from '@/types/wallet'
 import { WALLET_CONFIG } from '@/config/wallet'
+import { isInternalSwapProvider } from './swap-provider-presentation'
 
 export { getZcashIntentsOriginStatus } from '@/lib/cross-chain-transaction'
 
@@ -59,6 +60,7 @@ export interface IntentsProgressPresentation {
 
 function getSwapProcessingLabel(router: string | undefined, actionName: string): string {
   const name = router?.trim()
+  if (name && isInternalSwapProvider(name)) return 'Cross-chain'
   if (
     !name ||
     name.length > 32 ||

@@ -10,6 +10,11 @@ import {
 import type { MarketAssetId } from '@/core/prices'
 import { MARKET_ASSETS } from '@/config/asset-market-assets'
 import type { Network } from '@/types'
+import {
+  EVM_NATIVE_MARKET_ASSET_BY_CHAIN_ID,
+  getEvmNativeProtocolAssetId
+} from '@/config/asset-market-assets'
+import { getRetiredEvmNetworkIdentities } from '@/config/networks'
 
 const PRODUCT_NETWORKS = Object.freeze(['mainnet', 'testnet'] as const satisfies readonly Network[])
 const bundledAssetIds = new Set<string>()
@@ -31,6 +36,12 @@ for (const network of PRODUCT_NETWORKS) {
     const marketAssetId = bundledMarketAssetIds.get(mapping.assetId)
     if (marketAssetId) protocolMarketAssetIds.set(mapping.protocolAssetId, marketAssetId)
   }
+}
+
+for (const { chainId } of getRetiredEvmNetworkIdentities('mainnet')) {
+  const protocolAssetId = getEvmNativeProtocolAssetId(chainId)
+  const marketAssetId = EVM_NATIVE_MARKET_ASSET_BY_CHAIN_ID[chainId]
+  if (protocolAssetId && marketAssetId) protocolMarketAssetIds.set(protocolAssetId, marketAssetId)
 }
 
 export function isBundledWalletAsset(assetId: string): boolean {

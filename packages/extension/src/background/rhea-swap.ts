@@ -14,6 +14,7 @@ import {
   RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
   getPrivateWithdrawAsset,
   parseRheaSwapQuoteRequest,
+  rheaSwapReferral,
   toRheaSwapProtocolRequest,
   type RheaSwapQuoteSessionRecord,
   type RheaSwapQuoteSessionStore,
@@ -23,10 +24,13 @@ import {
 import type { TransactionGraph } from '@/core/transactions/domain'
 import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/config/extension'
+import { getConfidentialFundingNetworkConfig, NOIR_SWAP_REFERRAL } from '@/config/intents'
 import { RHEA_SWAP_TRANSACTION_MONITOR_ALARM } from './rhea-swap-transaction-monitor'
 import type { FundingSource, QuoteBinding } from '@/types/wallet'
 import { safeBig } from '@/lib/big'
 import { PersistentRheaSwapCatalogCache } from '@/infrastructure/persistence/rhea-swap-catalog-cache'
+import { ConfidentialFundingApi } from './confidential-funding-api'
+import { PublicConfidentialTransfer } from './public-confidential-transfer'
 
 export async function readRheaZcashTransferDeadline(
   binding: QuoteBinding | undefined,
@@ -147,9 +151,13 @@ function parseStoredRequest(value: unknown): QuoteRequest {
     recipient: value.recipient,
     confidentiality: value.confidentiality
   })
-  // Existing quotes retain their timing budgets when defaults change.
+  const extensions = value.extensions
+  if (!isRecord(extensions) || typeof extensions.referral !== 'string') {
+    throw new Error('Stored RHEA Swap referral is invalid')
+  }
   const normalized = Object.freeze({
     ...toRheaSwapProtocolRequest(parsed),
+    extensions: Object.freeze({ referral: extensions.referral }),
     quoteWaitingTimeMs: readStoredQuoteTiming(value.quoteWaitingTimeMs),
     sameChainTimeoutMs: readStoredQuoteTiming(value.sameChainTimeoutMs),
     crossChainTimeoutMs: readStoredQuoteTiming(value.crossChainTimeoutMs)
@@ -219,9 +227,17 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
         privateSwapScope.purpose !== 'private-cross-chain-send' &&
         privateSwapScope.purpose !== 'private-cross-chain-withdraw' &&
         privateSwapScope.purpose !== 'private-dapp-transfer' &&
+        privateSwapScope.purpose !== 'public-private-move' &&
         privateSwapScope.purpose !== 'public-private-send'))
   ) {
     throw new Error('Stored Private Swap scope is invalid')
+  }
+  const referral = request.extensions?.referral
+  const expectedReferral = rheaSwapReferral(
+    privateSwapScope?.purpose as Parameters<typeof rheaSwapReferral>[0]
+  )
+  if (referral !== expectedReferral && referral !== NOIR_SWAP_REFERRAL) {
+    throw new Error('Stored RHEA Swap referral does not match its route')
   }
   const quoteRaw = value.quoteRaw as SwapQuoteDataRaw
   normalizeQuote(request, quoteRaw, value.receivedAt as number)
@@ -339,6 +355,7 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
                     | 'private-cross-chain-send'
                     | 'private-cross-chain-withdraw'
                     | 'private-dapp-transfer'
+                    | 'public-private-move'
                     | 'public-private-send'
                 })
           })
@@ -495,11 +512,19 @@ export function createBackgroundRheaSwapService(): RheaSwapService | null {
     service = null
     return service
   }
+  const confidentialConfig = getConfidentialFundingNetworkConfig('mainnet')
   const client = new RheaSwapCatalogClient({
     baseUrl: 'https://api.rhea.finance',
     apiKey: accessToken,
     timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-    tokenListCacheTtlMs: RHEA_SWAP_TOKEN_CATALOG_TTL_MS
+    tokenListCacheTtlMs: RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
+    ...(confidentialConfig
+      ? {
+          publicConfidentialTransfer: new PublicConfidentialTransfer(
+            new ConfidentialFundingApi(confidentialConfig, '', accessToken)
+          )
+        }
+      : {})
   })
   service = new RheaSwapService(client, new ChromeRheaSwapQuoteStore())
   return service

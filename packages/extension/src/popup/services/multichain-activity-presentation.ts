@@ -33,6 +33,7 @@ import { getActivityInteractionPresentation } from '@/popup/services/activity-in
 import { getActivityAddressAlias } from '@/popup/services/activity-address-alias'
 import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
 import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
+import { isInternalSwapProvider } from '@/popup/services/swap-provider-presentation'
 import {
   getLifecycleStatusPresentation,
   type TransactionPresentationTone
@@ -483,6 +484,61 @@ export function getActivityTransferRecipient(item: ActivityItem): string | undef
   return item.snapshot?.recipient?.address
 }
 
+export function getActivitySendSubtitle(
+  item: ActivityItem,
+  route?: ActivitySwapPresentation | null,
+  chainMetadata?: ReadonlyMap<string, ActivityChainMetadata>
+): string | undefined {
+  const snapshot = item.snapshot
+  const protocol = snapshot?.protocol
+  const recipient = getActivityTransferRecipient(item)
+  const sourceChainId = protocol?.origin?.chainId ?? snapshot?.sender?.chainId
+  const destinationChainId = protocol?.destination.chainId ?? snapshot?.recipient?.chainId
+  if (
+    item.kind === 'shield' ||
+    snapshot?.shield?.destinationDomain === 'shield' ||
+    route?.destinationFundingSource === 'shielded' ||
+    route?.destinationNetwork === 'NEAR Confidential' ||
+    (recipient &&
+      (destinationChainId === ZCASH_CHAIN_IDS.mainnet ||
+        destinationChainId === ZCASH_CHAIN_IDS.testnet) &&
+      detectZcashAddressType(recipient) === 'shielded')
+  ) {
+    return 'Shield'
+  }
+  if (route?.destinationAccountMode === 'Confidential') return 'Incognito Deposit'
+  if (
+    route?.sourceAccountMode === 'Confidential' ||
+    (sourceChainId &&
+      sourceChainId === destinationChainId &&
+      ((protocol?.provider === 'rhea-cross-chain-dex' && protocol.isCrossChain) ||
+        (item.source === 'zcash-v1' && item.segments.some(segment => segment.role === 'relay'))))
+  ) {
+    return 'Privately'
+  }
+
+  const sourceNetwork =
+    (chainMetadata && resolveActivityChainMetadata(sourceChainId, chainMetadata)?.displayName) ??
+    route?.sourceNetwork
+  const destinationNetwork =
+    (chainMetadata &&
+      resolveActivityChainMetadata(destinationChainId, chainMetadata)?.displayName) ??
+    route?.destinationNetwork
+  if (
+    sourceNetwork &&
+    destinationNetwork &&
+    sourceNetwork !== 'Unknown network' &&
+    destinationNetwork !== 'Unknown network' &&
+    sourceNetwork !== destinationNetwork
+  ) {
+    const label = (name: string) => (name === 'Ethereum' ? 'Eth' : name)
+    return `From ${label(sourceNetwork)} to ${label(destinationNetwork)}`
+  }
+  return recipient
+    ? `To ${getActivityAddressAlias(destinationChainId, recipient) ?? formatSortAddress(recipient)}`
+    : undefined
+}
+
 export function getActivitySwapSourceMethodLabel(
   item: ActivityItem,
   sourceSymbol?: string
@@ -602,7 +658,10 @@ function getActivitySegmentLabel(segment: ActivitySegment, item?: ActivityItem):
     case 'origin':
       return isSignedOrderOrigin(segment) ? 'Order submitted' : 'Origin transaction'
     case 'relay': {
-      return isIntentsRelaySegment(segment, item) ? 'Intents processing' : 'Cross-chain relay'
+      if (segment.target.kind !== 'onchain' && isInternalSwapProvider(segment.target.provider)) {
+        return 'Crosschain'
+      }
+      return isIntentsRelaySegment(segment, item) ? 'Intents processing' : 'Cross-chain'
     }
     case 'destination':
       return segment.target.kind === 'protocol' ? 'Protocol position' : 'Destination transaction'
@@ -681,6 +740,7 @@ export function getActivityDetailTitle(
 
 function isConfidentialFundingActivity(item: ActivityItem): boolean {
   return (
+    item.kind !== 'receive' &&
     !item.snapshot?.shield &&
     item.segments.some(
       segment =>
@@ -910,6 +970,9 @@ export function getActivityCancellationPresentation(
 
 export function getActivityStatusPresentation(item: ActivityItem): ActivityStatusPresentation {
   if (isPartiallyCompleted(item)) return { label: 'Partially completed', tone: 'warning' }
+  if (item.kind === 'approve' && (item.status === 'broadcast' || item.status === 'confirming')) {
+    return { label: 'Confirming', tone: 'neutral' }
+  }
   const evidence = findLatestOnchainEvidence(item)
   if (
     item.source === 'zcash-v1' &&
@@ -1073,7 +1136,9 @@ export function getActivityProgressSteps(
         detail:
           segment.target.kind === 'onchain'
             ? chainName(segment.target.chainId)
-            : segment.target.provider,
+            : isInternalSwapProvider(segment.target.provider)
+              ? undefined
+              : segment.target.provider,
         state,
         statusLabel: signedOrderSubmitted
           ? 'Submitted'
@@ -1118,16 +1183,17 @@ export function getActivityRowTextPresentation(
   networkName: string,
   chainId?: string,
   perspective: ActivityPerspective = {},
-  route?: ActivitySwapPresentation | null
+  route?: ActivitySwapPresentation | null,
+  chainMetadata?: ReadonlyMap<string, ActivityChainMetadata>
 ): ActivityRowTextPresentation {
   const interaction = getActivityInteractionPresentation(item, chainId)
   const title = interaction?.title ?? getActivityTitle(item, chainId, perspective, route)
   const symbol = formatSymbol(primarySymbol)
   const counterSymbol = formatSymbol(rawCounterSymbol)
   const sender = item.snapshot?.sender?.address
-  const recipient = getActivityTransferRecipient(item)
   const direction = item.snapshot?.direction
   const isIncoming = item.kind === 'receive' || direction === 'incoming'
+  const action = getActivityAction(item, perspective, route)
 
   if (item.kind === 'shield') {
     return {
@@ -1138,7 +1204,7 @@ export function getActivityRowTextPresentation(
         : symbol
           ? `Shielded ${symbol}`
           : 'Shielded',
-      subtitle: 'Transparent → Shielded'
+      subtitle: action.label === 'Send' ? 'Shield' : 'Transparent → Shielded'
     }
   }
 
@@ -1170,20 +1236,23 @@ export function getActivityRowTextPresentation(
   }
 
   const incomingPerspective =
-    getActivityAction(item, perspective, route).side === 'destination' ||
-    (getActivityAction(item, perspective, route).side === 'none' && isIncoming)
-  const counterparty = incomingPerspective ? sender : recipient
+    action.side === 'destination' || (action.side === 'none' && isIncoming)
+  const counterparty = incomingPerspective ? sender : getActivityTransferRecipient(item)
   const counterpartyChainId = incomingPerspective
     ? item.snapshot?.sender?.chainId
     : item.snapshot?.recipient?.chainId
   const counterpartyLabel = incomingPerspective ? 'From' : 'To'
+  const defaultSubtitle = counterparty
+    ? `${counterpartyLabel}: ${getActivityAddressAlias(counterpartyChainId, counterparty) ?? formatSortAddress(counterparty)}`
+    : networkName
   return {
     title: symbol
-      ? `${item.kind === 'transfer' && perspective.viewedDomain ? getActivityAction(item, perspective, route).label : title} ${symbol}`
+      ? `${item.kind === 'transfer' && perspective.viewedDomain ? action.label : title} ${symbol}`
       : title,
-    subtitle: counterparty
-      ? `${counterpartyLabel}: ${getActivityAddressAlias(counterpartyChainId, counterparty) ?? formatSortAddress(counterparty)}`
-      : networkName
+    subtitle:
+      item.kind === 'transfer' && action.label === 'Send' && !incomingPerspective
+        ? (getActivitySendSubtitle(item, route, chainMetadata) ?? defaultSubtitle)
+        : defaultSubtitle
   }
 }
 

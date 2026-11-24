@@ -1,4 +1,5 @@
 import type { BitcoinPsbtSummary } from '@/core/keyring/domain'
+import { formatInsufficientBalance } from '@/lib/format'
 import { BitcoinWalletClientError } from './bitcoin-wallet-client'
 
 type BitcoinSigningInput = BitcoinPsbtSummary['fields']['inputs'][number]
@@ -15,7 +16,7 @@ export function getBitcoinSendPrepareError(error: unknown): string {
   }
   if (error.code === 'expired') return 'The review expired. Prepare the transfer again.'
   if (error.code === 'insufficient-funds') {
-    return 'The confirmed Bitcoin balance cannot cover the amount and network fee.'
+    return formatInsufficientBalance('BTC')
   }
   if (error.code === 'invalid-request') return 'Check the amount and Bitcoin address.'
   return 'The transfer could not be prepared. Please try again.'

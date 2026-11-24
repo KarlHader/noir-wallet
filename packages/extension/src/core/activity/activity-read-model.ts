@@ -2,7 +2,9 @@ import { parseAccountId } from '@/core/accounts/domain'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import {
   isEvmSpeedUpReplacement,
+  isKnownNonMinedEvmFailure,
   parseTransactionGraph,
+  parseTransactionId,
   parseTransactionIntentSnapshot,
   parseTransactionSegmentEvidence,
   parseTransactionSegmentTarget,
@@ -359,6 +361,15 @@ function assertItem(item: ActivityItem, scope: ActivityScope): void {
     throw new Error('Invalid Activity cancellation status')
   }
   if (
+    item.evmReplacement &&
+    (item.source !== 'wallet-v2' ||
+      item.kind === 'cancel' ||
+      item.evmReplacement.id === item.id ||
+      !item.segments.some(isEvmOrigin))
+  ) {
+    throw new Error('Invalid Activity EVM replacement')
+  }
+  if (
     !Number.isSafeInteger(item.createdAt) ||
     item.createdAt < 0 ||
     !Number.isSafeInteger(item.updatedAt) ||
@@ -466,7 +477,8 @@ function parseActivityItem(value: unknown, scope: ActivityScope): ActivityItem {
         'reconfirming',
         'accountMode',
         'assetDomains',
-        'cancellationStatus'
+        'cancellationStatus',
+        'evmReplacement'
       ]
     ) ||
     typeof value.source !== 'string' ||
@@ -532,10 +544,29 @@ function parseActivityItem(value: unknown, scope: ActivityScope): ActivityItem {
     ...(value.reconfirming === true ? { reconfirming: true as const } : {}),
     ...(value.cancellationStatus === undefined
       ? {}
-      : { cancellationStatus: value.cancellationStatus })
+      : { cancellationStatus: value.cancellationStatus }),
+    ...(value.evmReplacement === undefined
+      ? {}
+      : { evmReplacement: parseActivityEvmReplacement(value.evmReplacement) })
   })
   assertItem(item, scope)
   return item
+}
+
+function parseActivityEvmReplacement(value: unknown): NonNullable<ActivityItem['evmReplacement']> {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['id', 'action', 'status']) ||
+    (value.action !== 'cancel' && value.action !== 'speed-up') ||
+    (value.status !== 'signed' && value.status !== 'broadcast' && value.status !== 'confirming')
+  ) {
+    throw new Error('Invalid Activity EVM replacement')
+  }
+  return Object.freeze({
+    id: parseTransactionId(value.id),
+    action: value.action,
+    status: value.status
+  })
 }
 
 function isActivityCancellationStatus(
@@ -616,6 +647,12 @@ export function buildActivityReadModel(input: {
     privateAddressValues.map(address => address.toLowerCase())
   )
   const confirmedSpeedUps = new Map<string, TransactionGraph[]>()
+  const activeReplacements = new Map<string, TransactionGraph>()
+  const replacementUpdates = new Map<string, number>()
+  const failedCancellationHashes = new Map<string, Set<string>>()
+  const hiddenEvmReplacements = new Set<string>()
+  const hiddenEvmReplacementKeys = new Set<string>()
+  const originals = new Map(input.localGraphs.map(graph => [graph.root.id, graph]))
   const cancellations = new Map<
     string,
     Map<
@@ -629,11 +666,40 @@ export function buildActivityReadModel(input: {
   for (const graph of input.localGraphs) {
     const { id, kind, scope: graphScope, relation, status, createdAt } = graph.root
     if (relation?.kind !== 'replacement-of') continue
+    const origin = graph.segments.find(isEvmOrigin)
+    if (id === relation.transactionId || !scopesMatch(graphScope, scope) || !origin) continue
+    const original = originals.get(relation.transactionId)
+    const originalOrigin = original?.segments.find(isEvmOrigin)
+    if (
+      original &&
+      originalOrigin?.target.kind === 'onchain' &&
+      origin.target.kind === 'onchain' &&
+      originalOrigin.target.chainId === origin.target.chainId &&
+      (kind === 'cancel' || isEvmSpeedUpReplacement(original, graph)) &&
+      origin.evidence?.transactionHash
+    ) {
+      replacementUpdates.set(
+        original.root.id,
+        Math.max(
+          replacementUpdates.get(original.root.id) ?? original.root.updatedAt,
+          graph.root.updatedAt
+        )
+      )
+      if (status === 'signed' || status === 'broadcast' || status === 'confirming') {
+        const previous = activeReplacements.get(original.root.id)
+        if (!previous || createdAt > previous.root.createdAt) {
+          activeReplacements.set(original.root.id, graph)
+        }
+      }
+    }
+    hiddenEvmReplacements.add(id)
+    for (const key of itemIdentityKeys(
+      mapTransactionGraphToActivityItem(graph, privateExecutionAddresses)
+    )) {
+      if (key.startsWith('hash:')) hiddenEvmReplacementKeys.add(key)
+    }
     if (kind === 'cancel') {
-      const origin = graph.segments.find(isEvmOrigin)
       if (
-        id !== relation.transactionId &&
-        scopesMatch(graphScope, scope) &&
         origin?.target.kind === 'onchain' &&
         origin.evidence?.transactionHash &&
         isActivityCancellationStatus(status)
@@ -643,6 +709,15 @@ export function buildActivityReadModel(input: {
         if (!previous || createdAt > previous.createdAt) {
           byChain.set(origin.target.chainId, { status, createdAt })
           cancellations.set(relation.transactionId, byChain)
+        }
+        if (
+          originalOrigin?.target.kind === 'onchain' &&
+          originalOrigin.target.chainId === origin.target.chainId &&
+          isKnownNonMinedEvmFailure(graph)
+        ) {
+          const hashes = failedCancellationHashes.get(relation.transactionId) ?? new Set<string>()
+          hashes.add(origin.evidence.transactionHash)
+          failedCancellationHashes.set(relation.transactionId, hashes)
         }
       }
       continue
@@ -654,6 +729,7 @@ export function buildActivityReadModel(input: {
   }
   const candidates = [
     ...input.localGraphs
+      .filter(graph => !hiddenEvmReplacements.has(graph.root.id))
       .map(graph => {
         const originalItem = mapTransactionGraphToActivityItem(graph, privateExecutionAddresses)
         const origin = graph.segments.find(segment => segment.role === 'origin')
@@ -661,10 +737,46 @@ export function buildActivityReadModel(input: {
           origin?.target.kind === 'onchain' && graph.root.kind !== 'cancel'
             ? cancellations.get(graph.root.id)?.get(origin.target.chainId)
             : undefined
-        const item = cancellation
+        let item = cancellation
           ? Object.freeze({ ...originalItem, cancellationStatus: cancellation.status })
           : originalItem
+        const replacementUpdatedAt = replacementUpdates.get(graph.root.id)
+        if (replacementUpdatedAt !== undefined && replacementUpdatedAt > item.updatedAt) {
+          item = Object.freeze({ ...item, updatedAt: replacementUpdatedAt })
+        }
         const replacementHash = origin?.evidence?.replacementTransactionHash
+        if (
+          origin?.status === 'broadcast' &&
+          replacementHash &&
+          failedCancellationHashes.get(graph.root.id)?.has(replacementHash)
+        ) {
+          item = Object.freeze({
+            ...item,
+            segments: Object.freeze(
+              item.segments.map(segment => {
+                if (segment.id !== origin.id || !segment.evidence) return segment
+                const { replacementTransactionHash: _failedHash, ...evidence } = segment.evidence
+                return Object.freeze({ ...segment, evidence: Object.freeze(evidence) })
+              })
+            )
+          })
+        }
+        const activeReplacement = activeReplacements.get(graph.root.id)?.root
+        if (
+          activeReplacement?.status === 'signed' ||
+          activeReplacement?.status === 'broadcast' ||
+          activeReplacement?.status === 'confirming'
+        ) {
+          item = Object.freeze({
+            ...item,
+            evmReplacement: Object.freeze({
+              id: activeReplacement.id,
+              action:
+                activeReplacement.kind === 'cancel' ? ('cancel' as const) : ('speed-up' as const),
+              status: activeReplacement.status
+            })
+          })
+        }
         if (origin?.status !== 'final' || !replacementHash || !item.snapshot) return item
         const replacement = confirmedSpeedUps.get(graph.root.id)?.find(candidate => {
           const replacementOrigin = candidate.segments.find(segment => segment.role === 'origin')
@@ -691,7 +803,11 @@ export function buildActivityReadModel(input: {
         })
       })
       .filter(item => !isUnbroadcastUserCancellation(item)),
-    ...supplementalItems
+    ...supplementalItems.filter(
+      item =>
+        !scopesMatch(item.scope, scope) ||
+        !itemIdentityKeys(item).some(key => hiddenEvmReplacementKeys.has(key))
+    )
   ]
   for (const item of candidates) assertItem(item, scope)
   candidates.sort(

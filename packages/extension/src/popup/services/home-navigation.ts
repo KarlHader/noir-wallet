@@ -48,10 +48,10 @@ export function resolveWalletEntryRoute(hash: string): string {
   if (params.get('tab') !== 'activity') return '/'
   const domain = params.get('domain')
   const transactionId = params.get('transactionId')
-  if (!transactionId) return EXTENSION_ACTIVITY_ROUTE
+  if (!transactionId && !domain) return EXTENSION_ACTIVITY_ROUTE
   return homeActivityPath(
     domain === 'shield' || domain === 'private' ? domain : 'public',
-    transactionId
+    transactionId ?? undefined
   )
 }
 
@@ -65,8 +65,10 @@ export function clearHomeTransactionFocus(search: string): string | null {
 
 export function homeTabPath(search: string, tab: HomeDefaultTab): string {
   const params = new URLSearchParams(search)
+  const domain = resolveHomeAssetDomain(search)
+  params.set('domain', domain)
   params.delete('transactionId')
-  if (isHomeSecondaryTab(tab, resolveHomeAssetDomain(search))) {
+  if (isHomeSecondaryTab(tab, domain)) {
     params.set('tab', tab)
   } else {
     params.delete('tab')
@@ -90,7 +92,9 @@ export function clearHomeActivityAssetFilter(search: string): string {
 export function resolveHomeAssetDomain(search: string): HomeAssetDomain {
   const params = new URLSearchParams(search)
   const domain = params.get('domain')
-  return domain === 'private' || domain === 'shield' ? domain : 'public'
+  if (domain === 'public' || domain === 'private' || domain === 'shield') return domain
+  const tab = params.get('tab')
+  return tab === 'activity' || tab === 'dapp' ? 'public' : 'shield'
 }
 
 export function homeAssetDomainPath(search: string, domain: HomeAssetDomain): string {
@@ -98,8 +102,7 @@ export function homeAssetDomainPath(search: string, domain: HomeAssetDomain): st
   params.delete('transactionId')
   params.delete('assetId')
   params.delete('mode')
-  if (domain === 'public') params.delete('domain')
-  else params.set('domain', domain)
+  params.set('domain', domain)
   if (resolveHomeDefaultTab(params.toString()) === 'assets') params.delete('tab')
   const remaining = params.toString()
   return remaining ? `/?${remaining}` : '/'

@@ -36,7 +36,7 @@ export function TransactionNotice({
       role={role}
       data-transaction-notice={tone}
       className={cn(
-        'min-h-9 min-w-0 rounded-lg px-3 py-[9px] text-center text-sm leading-[18px] [overflow-wrap:anywhere]',
+        'min-h-8 min-w-0 rounded-lg px-3 py-2 text-left text-xs leading-4 [overflow-wrap:anywhere]',
         className,
         styles[tone]
       )}

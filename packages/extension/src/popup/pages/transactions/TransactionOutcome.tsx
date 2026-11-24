@@ -65,7 +65,7 @@ import { getNativeZecIntentsSwapStatus } from '@/popup/services/native-zec-inten
 const RHEA_STATUS_RECHECK_INTERVAL_MS = 15_000
 
 export function TransactionOutcome() {
-  const { navigate, goBack, goBackSteps } = useNavigate()
+  const { navigate, goBack, goBackIfPrevious, goBackSteps } = useNavigate()
   const location = useLocation()
   const { requestSpeedUp, speedUpSheet } = useSpeedUp()
   const {
@@ -611,8 +611,10 @@ export function TransactionOutcome() {
       sendOriginHistory.entryKey.length > 0 &&
       typeof sendOriginHistory.sendKey === 'string' &&
       sendOriginHistory.sendKey.length > 0
+    const returnedToAssetDetail =
+      data.type === 'swap' && path.startsWith('/asset-detail?') && goBackIfPrevious(path)
     if (returnToPreviousEntry) goBackSteps(2)
-    else navigate(path, { replace: true })
+    else if (!returnedToAssetDetail) navigate(path, { replace: true })
     clear()
     if (saveRecipient) void offerSaveRecipient(saveRecipient)
   }

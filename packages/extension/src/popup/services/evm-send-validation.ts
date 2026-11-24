@@ -1,5 +1,6 @@
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import { parseZcashAddress } from '@/core/address-book/address-book'
+import { formatInsufficientBalance } from '@/lib/format'
 import { EvmWalletClientError } from './evm-wallet-client'
 
 export type EvmSendSourceMode = 'main' | 'private'
@@ -260,7 +261,7 @@ export function parsePublicPrivateEvmSwapRoute(
 export function getEvmTokenFeeBalanceError(
   assetKind: 'native' | 'token',
   nativeAvailableRaw: string | undefined,
-  nativeSymbol: string
+  nativeSymbol?: string
 ): string | null {
   if (
     assetKind !== 'token' ||
@@ -268,7 +269,7 @@ export function getEvmTokenFeeBalanceError(
   ) {
     return null
   }
-  return `Insufficient ${nativeSymbol} balance.`
+  return formatInsufficientBalance(nativeSymbol)
 }
 
 export function getEvmTransferBalanceError(input: {
@@ -277,32 +278,36 @@ export function getEvmTransferBalanceError(input: {
   readonly maximumFeeRaw: string
   readonly assetAvailableRaw: string
   readonly nativeAvailableRaw: string
-  readonly nativeSymbol: string
+  readonly nativeSymbol?: string
 }): string | null {
   if (
     input.assetKind === 'native' &&
     BigInt(input.transferAmountRaw) + BigInt(input.maximumFeeRaw) > BigInt(input.assetAvailableRaw)
   ) {
-    return `Leave enough ${input.nativeSymbol} available for the maximum network fee.`
+    return formatInsufficientBalance(input.nativeSymbol)
   }
   if (
     input.assetKind === 'token' &&
     BigInt(input.nativeAvailableRaw) < BigInt(input.maximumFeeRaw)
   ) {
-    return `Not enough ${input.nativeSymbol} is available for the maximum network fee.`
+    return formatInsufficientBalance(input.nativeSymbol)
   }
   return null
 }
 
-export function resolveEvmNativeMaximumAmount(availableRaw: string, maximumFeeRaw: string): string {
+export function resolveEvmNativeMaximumAmount(
+  availableRaw: string,
+  maximumFeeRaw: string,
+  nativeSymbol?: string
+): string {
   if (!/^(0|[1-9][0-9]*)$/.test(availableRaw) || !/^(0|[1-9][0-9]*)$/.test(maximumFeeRaw)) {
     throw new Error('Invalid EVM maximum amount input')
   }
   const maximum = BigInt(availableRaw) - BigInt(maximumFeeRaw)
-  if (maximum <= 0n) throw new Error('The native balance does not cover the maximum network fee')
+  if (maximum <= 0n) throw new Error(formatInsufficientBalance(nativeSymbol))
   return maximum.toString()
 }
-export function getEvmSendPrepareError(error: unknown, sourceMode: EvmSendSourceMode): string {
+export function getEvmSendPrepareError(error: unknown, nativeSymbol?: string): string {
   if (!(error instanceof EvmWalletClientError)) {
     return 'The transfer could not be prepared. Please try again.'
   }
@@ -321,9 +326,7 @@ export function getEvmSendPrepareError(error: unknown, sourceMode: EvmSendSource
   if (error.code === 'asset-unavailable') return 'This asset is unavailable for sending.'
   if (error.code === 'invalid-request') return 'Check the amount and recipient address.'
   if (error.code === 'insufficient-funds') {
-    return sourceMode === 'private'
-      ? 'The Confidential address does not have enough native balance for the amount and maximum network fee.'
-      : 'The Public account does not have enough native balance for the amount and maximum network fee.'
+    return formatInsufficientBalance(nativeSymbol)
   }
   return 'The transfer could not be prepared. Please try again.'
 }

@@ -424,7 +424,7 @@ test.describe('Background EVM dApp handler', () => {
       binding: { walletId: 'wallet-1', accountId: 'account-1' }
     })
     const bsc = harness({
-      network: BUILTIN_EVM_NETWORKS.mainnet[1],
+      network: BUILTIN_EVM_NETWORKS.mainnet.find(network => network.chainId === 'eip155:56'),
       manager,
       loadActiveContext: async () => ({
         ...account,

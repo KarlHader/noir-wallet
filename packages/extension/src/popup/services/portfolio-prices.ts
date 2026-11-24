@@ -89,11 +89,12 @@ export interface PortfolioFiatSummary {
 
 export function getPortfolioAssetUsdValue(
   asset: PortfolioAssetView,
-  prices: AssetPriceReadModel | null
+  prices: AssetPriceReadModel | null,
+  amountRaw = asset.balance.totalRaw
 ): string | null {
   const quote = findAssetPrice(prices, asset.asset.id)
   if (!quote) return null
-  return new Big(formatBaseUnitDecimalAmount(asset.balance.totalRaw, asset.metadata.decimals))
+  return new Big(formatBaseUnitDecimalAmount(amountRaw, asset.metadata.decimals))
     .times(quote.priceUsd)
     .toFixed()
 }

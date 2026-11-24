@@ -236,7 +236,7 @@ export function OnchainTransactionResult({
         }
       >
         <div className="w-full">
-          <ActivityTransactionBody view={activityView} />
+          <ActivityTransactionBody view={activityView} showAmountsAsDetails />
           {status === 'failed' && presentation.tone === 'error' && (
             <TransactionResultDetailRow label="Reason">
               {getOnchainTransactionFailureLabel(activity?.failureCode)}

@@ -7,6 +7,7 @@ import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets
 import { getCachedTokens, type SwapToken } from '@/core/services/intents-api'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { classifyError } from '@/lib/errors'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatShieldSymbol } from '@/lib/format'
 import { useWalletStore } from '@/store/wallet-store'
@@ -503,7 +504,7 @@ export function ConfidentialSendForm({
           amount,
           decimals: source.asset.metadata.decimals,
           availableRaw,
-          sourceLabel: 'Shield'
+          symbol: source.asset.metadata.symbol
         })
       : null
   const recipientValid = isShieldWithdrawRecipient(recipient.trim(), destination, network)
@@ -1110,7 +1111,7 @@ export function ConfidentialSendForm({
               })()
             }
           ]}
-          afterRows={
+          quoteChanges={
             !refreshingReview && !needsNewQuote && !error && !uncertain ? (
               <QuoteReviewChanges
                 changes={reviewDescription.changes}
@@ -1125,7 +1126,7 @@ export function ConfidentialSendForm({
             error || (needsNewQuote && !refreshingReview) ? (
               <TransactionNotice
                 className="mt-3"
-                message={error ?? 'Quote expired.'}
+                message={error ? classifyError(error).userMessage : 'Quote expired.'}
                 tone={error ? 'error' : 'muted'}
               />
             ) : undefined
@@ -1193,7 +1194,7 @@ export function ConfidentialSendForm({
         <TransactionNotice message={amountState.error} tone="warning" />
       ) : error ? (
         <TransactionNotice
-          message={error}
+          message={classifyError(error).userMessage}
           onRetry={() => void refreshBalances()}
           retrying={connecting || recoveryPending}
         />
@@ -1202,7 +1203,7 @@ export function ConfidentialSendForm({
           message={
             previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
               ? 'Shield balances need to be updated.'
-              : (previewNotice ?? previewError)
+              : (previewNotice ?? classifyError(previewError).userMessage)
           }
           tone={previewNotice ? 'muted' : 'warning'}
           onRetry={

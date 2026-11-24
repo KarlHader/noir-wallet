@@ -24,7 +24,7 @@ const USDT0_SEND_GROUP = 'protocol:usdt0' as const
 const SOLANA_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 const bnbUsdcContract = getEvmNetworkConfigs('mainnet')
   .find(network => network.chainId === 'eip155:56')
-  ?.historyErc20Assets?.find(asset => asset.symbol === 'USDC')
+  ?.bundledErc20Assets?.find(asset => asset.symbol === 'USDC')
   ?.contract.toLowerCase()
 // USDT0 deployments: https://docs.usdt0.to/technical-documentation/deployments
 // Ethereum's USDT is the source asset held by the OFT Adapter.

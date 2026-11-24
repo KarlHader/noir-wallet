@@ -515,6 +515,48 @@ test('first-party session reads connect every enabled network and synchronize ac
   }
 })
 
+test('notifications based on stored authorization update the mode address without granting accounts', async () => {
+  const privateAddress = '0x3333333333333333333333333333333333333333'
+  const executionAccounts = [address]
+  const { handler, manager, state, other, events, getWrites } = firstPartyFixture({
+    executionAccounts
+  })
+  const origin = 'https://app.zknoir.com'
+  await handler.request({ method: 'wallet_getSession' }, origin, {})
+  const writes = getWrites()
+  const revision = await manager.getAuthorizationRevision(origin)
+  executionAccounts[0] = privateAddress
+  state.snapshot = {
+    ...state.snapshot,
+    identity: 'incognito-generation',
+    executionMode: 'private',
+    accounts: {
+      ...state.snapshot.accounts,
+      [ethereum]: [
+        ...state.snapshot.accounts[ethereum],
+        { reference: other, address: '0x2222222222222222222222222222222222222222' }
+      ]
+    }
+  }
+
+  await handler.notifyAllSessionsChanged({ storedAuthorizationOnly: true })
+
+  expect(events).toHaveLength(1)
+  expect(events[0]).toEqual([
+    origin,
+    'multichain',
+    'wallet_sessionChanged',
+    expect.objectContaining({
+      scopes: expect.objectContaining({
+        [ethereum]: expect.objectContaining({ accounts: [`${ethereum}:${privateAddress}`] })
+      })
+    })
+  ])
+  expect((await manager.getEvmAuthorization(origin)).accounts).toEqual([reference])
+  expect(await manager.getAuthorizationRevision(origin)).toBe(revision)
+  expect(getWrites()).toBe(writes)
+})
+
 test('official Connect all skips connection approval while third-party Connect retains it', async () => {
   const { handler, manager, approvals, zcash } = firstPartyFixture()
   const request = {

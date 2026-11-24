@@ -249,6 +249,38 @@ test.describe('Activity coordinator', () => {
     ).toEqual({ assetId: destinationAsset, amountRaw: '144660' })
   })
 
+  test('uses the observed transparent credit for Unshield when present and the settled fallback otherwise', async () => {
+    const unshield = zcashTransaction({
+      id: 'tx_unshield',
+      type: 'unshield',
+      settledSelfTransferAmount: '0.49',
+      confirmations: 4
+    })
+    const receipt = zcashTransaction({
+      id: `rpc_treceive_${unshield.txHash}`,
+      type: 'receive',
+      fromType: 'transparent',
+      amount: '0.49',
+      confirmations: 5,
+      timestamp: unshield.timestamp - 1
+    })
+    const read = async transactions =>
+      new ActivityCoordinator({
+        storageRepository: storage(),
+        transactionRepository: new InMemoryTransactionRepository(),
+        loadZcashTransactions: async () => transactions
+      }).readActive()
+    const readCredits = async transactions =>
+      (await read(transactions)).items.filter(item => item.kind === 'receive')
+
+    expect(await readCredits([unshield, receipt])).toMatchObject([
+      { id: receipt.id, assetDomains: ['public'] }
+    ])
+    expect(await readCredits([unshield])).toMatchObject([
+      { id: `receive:${unshield.id}`, assetDomains: ['public'] }
+    ])
+  })
+
   test('returns null without an active generation or Account', async () => {
     const repository = await repositoryWithEvmTransfer()
     const noPointer = new ActivityCoordinator({

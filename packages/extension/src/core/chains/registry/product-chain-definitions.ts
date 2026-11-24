@@ -286,13 +286,46 @@ export function getEvmAssetDefinitions(config: EvmNetworkConfig): readonly Asset
             verification: 'trusted' as const
           })
         ]
-      : [])
+      : []),
+    ...(config.bundledErc20Assets ?? []).map(({ contract, ...metadata }) =>
+      Object.freeze({
+        chainId: config.chainId,
+        namespace: 'erc20',
+        reference: contract,
+        kind: 'token' as const,
+        metadata,
+        source: 'bundled' as const,
+        verification: 'trusted' as const
+      })
+    )
   ])
 }
 
 export function getBundledEvmAssetDefinitions(network: Network): readonly AssetDefinitionInput[] {
   return Object.freeze(getEvmNetworkConfigs(network).flatMap(getEvmAssetDefinitions))
 }
+
+const starterEvmAssets = getBundledEvmAssetDefinitions('mainnet')
+export const MAINNET_STARTER_PORTFOLIO_ASSET_IDS = Object.freeze([
+  `${ZCASH_CHAIN_IDS.mainnet}/slip44:133`,
+  ...[
+    ['eip155:56', 'BNB'],
+    ['eip155:1', 'ETH'],
+    ['eip155:56', 'USDC'],
+    ['eip155:56', 'USDT'],
+    ['eip155:1', 'USDC'],
+    ['eip155:1', 'USDT'],
+    ['eip155:42161', 'ETH'],
+    ['eip155:8453', 'ETH'],
+    ['eip155:137', 'WETH']
+  ].map(([chainId, symbol]) => {
+    const asset = starterEvmAssets.find(
+      item => item.chainId === chainId && item.metadata.symbol === symbol
+    )
+    if (!asset) throw new Error(`Unknown starter portfolio asset: ${chainId} ${symbol}`)
+    return `${asset.chainId}/${asset.namespace}:${asset.reference.toLowerCase()}`
+  })
+])
 
 export function getBundledBitcoinAssetDefinitions(
   network: Network

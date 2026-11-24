@@ -78,7 +78,7 @@ export function buildTrackedErc20Assets(config: EvmNetworkConfig) {
           })
         ]
       : []),
-    ...(config.historyErc20Assets ?? []).map(asset =>
+    ...(config.bundledErc20Assets ?? []).map(asset =>
       Object.freeze({
         assetId: `${config.chainId}/erc20:${asset.contract.toLowerCase()}`,
         contract: asset.contract.toLowerCase(),

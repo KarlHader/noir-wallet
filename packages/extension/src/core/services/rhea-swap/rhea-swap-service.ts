@@ -39,6 +39,7 @@ import { isRheaIntentsRoute } from '@/core/transactions/domain/protocol'
 import { readRheaDestinationHash } from './rhea-order-status'
 import { getRheaSwapQuoteDeadline, isRheaSwapQuoteFresh } from './rhea-swap-quote-validity'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
+import { isNoirPublicConfidentialTransferReferral } from '@/config/intents'
 
 const MAXIMUM_SESSION_RECORDS = 16
 
@@ -156,7 +157,13 @@ export type RheaSwapProtocolClient = Pick<
   | 'submitOrderRaw'
   | 'reportRaw'
   | 'getOrderStatusRaw'
->
+> &
+  Partial<
+    Pick<
+      import('./rhea-swap-catalog-client').RheaSwapCatalogClient,
+      'getPublicConfidentialTransferStatus'
+    >
+  >
 
 export interface RheaSwapCatalogResult {
   readonly tokens: readonly RheaSwapToken[]
@@ -242,7 +249,10 @@ export class RheaSwapService {
   ): Promise<RheaSwapQuoteView> {
     if (this.clearingSessions) throw new Error('RHEA Swap sessions are being cleared')
     const epoch = this.sessionEpoch
-    const request = toRheaSwapProtocolRequest(parseRheaSwapQuoteRequest(value))
+    const request = toRheaSwapProtocolRequest(
+      parseRheaSwapQuoteRequest(value),
+      privateSwapScope?.purpose
+    )
     if (request.fromChain === 'zcash' && privateSwapScope) {
       const expectedFundingSource = request.sender.startsWith('u1') ? 'shielded' : 'transparent'
       if (
@@ -814,7 +824,15 @@ export class RheaSwapService {
     const record = await this.requireSession(quoteHandle)
     const submission = record.submission
     if (!submission) throw new Error('RHEA Swap has not been submitted')
-    const status = await this.readOrderObservation(submission, signal)
+    let status: SwapOrderStatusDataRaw
+    if (isNoirPublicConfidentialTransferReferral(record.request.extensions?.referral)) {
+      if (!this.client.getPublicConfidentialTransferStatus || !submission.orderId) {
+        throw new Error('Confidential transfer order is unavailable')
+      }
+      status = await this.client.getPublicConfidentialTransferStatus(submission.orderId, signal)
+    } else {
+      status = await this.readOrderObservation(submission, signal)
+    }
     return Object.freeze({
       quoteHandle: record.quoteHandle,
       orderId: record.submission.orderId,
@@ -842,22 +860,48 @@ export class RheaSwapService {
       orderId === null
         ? undefined
         : { orderId, router, ...(statusChainId === null ? {} : { chainId: statusChainId }) }
+    let incompleteOrder: SwapOrderStatusDataRaw | undefined
     if (orderQuery && (intents || recordId === undefined)) {
       try {
         const observation = readSettlement(
           await this.client.getOrderStatusRaw(orderQuery, { signal })
         )
-        if (observation) return observation
+        if (observation) {
+          const status = normalizeOrderStatus(observation)
+          if (
+            !intents ||
+            recordId === undefined ||
+            status === 'failed' ||
+            status === 'refunded' ||
+            status === 'expired' ||
+            (status === 'completed' && readRheaDestinationHash(observation))
+          ) {
+            return observation
+          }
+          incompleteOrder = observation
+        }
       } catch (error) {
         if (signal?.aborted || recordId === undefined) throw error
       }
     }
     if (recordId !== undefined) {
-      const observation = readSettlement(
-        await this.client.getOrderStatusRaw({ recordId }, { signal })
-      )
-      if (observation) return observation
+      try {
+        const observation = readSettlement(
+          await this.client.getOrderStatusRaw({ recordId }, { signal })
+        )
+        if (
+          observation &&
+          (!incompleteOrder ||
+            (normalizeOrderStatus(observation) === 'completed' &&
+              readRheaDestinationHash(observation)))
+        ) {
+          return observation
+        }
+      } catch (error) {
+        if (signal?.aborted || !incompleteOrder) throw error
+      }
     }
+    if (incompleteOrder) return incompleteOrder
     if (orderQuery === undefined && recordId === undefined) {
       throw new Error('RHEA Swap has no order status key')
     }

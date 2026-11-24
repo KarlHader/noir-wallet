@@ -26,7 +26,8 @@ import { projectPortfolioForDomain, type AssetDomain } from '@/popup/services/as
 
 const FAST_TRANSACTION_RECHECK_INTERVAL_MS = 5_000
 
-interface MultichainPortfolioPanelProps {
+export interface MultichainPortfolioPanelProps {
+  listHeader?: ComponentProps<typeof PortfolioShell>['listHeader']
   domain?: AssetDomain
   walletId: string | null
   accountId: string | null
@@ -42,6 +43,7 @@ interface MultichainPortfolioPanelProps {
   onSelectAsset?: (assetId: string) => void
   onSelectConfidentialAsset?: (tokenId: string) => void
   onManageTokens?: () => void
+  onShieldForAsset?: ComponentProps<typeof PortfolioShell>['onShieldForAsset']
 }
 
 function PortfolioState({
@@ -65,6 +67,7 @@ function PortfolioState({
 }
 
 export function MultichainPortfolioPanel({
+  listHeader,
   domain = 'all',
   walletId,
   accountId,
@@ -79,7 +82,8 @@ export function MultichainPortfolioPanel({
   onRetryPrices,
   onSelectAsset,
   onSelectConfidentialAsset,
-  onManageTokens
+  onManageTokens,
+  onShieldForAsset
 }: MultichainPortfolioPanelProps) {
   const scopeKey = JSON.stringify([walletId ?? '', accountId ?? ''])
   const network = useWalletStore(state => state.currentNetwork)
@@ -214,6 +218,7 @@ export function MultichainPortfolioPanel({
 
   return (
     <PortfolioShell
+      listHeader={listHeader}
       model={domainModel!}
       sourceModel={visibleModel}
       network={network}
@@ -237,9 +242,11 @@ export function MultichainPortfolioPanel({
         )
       }
       onSelectAsset={onSelectAsset}
+      onShieldForAsset={domain === 'public' ? onShieldForAsset : undefined}
       onSelectConfidentialAsset={onSelectConfidentialAsset}
       onRefresh={() => void load(true)}
       onManageTokens={onManageTokens}
     />
   )
 }
+import type { ComponentProps } from 'react'

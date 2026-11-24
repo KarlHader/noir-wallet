@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { ChainDefinition } from '@/core/chains/registry'
 import type { SwapToken } from '@/core/services/intents-api'
@@ -53,6 +53,7 @@ export interface ShieldReceiveAddressProps {
   readonly zcashAddress?: string
   readonly slippageBps: number
   readonly enabled: boolean
+  readonly inline?: boolean
 }
 
 function chainIcon(chain: ChainDefinition): string {
@@ -80,7 +81,8 @@ export function ShieldReceiveAddress({
   asset,
   zcashAddress,
   slippageBps,
-  enabled
+  enabled,
+  inline = false
 }: ShieldReceiveAddressProps) {
   const walletId = account?.walletId ?? ''
   const accountId = account?.accountId ?? ''
@@ -162,17 +164,18 @@ export function ShieldReceiveAddress({
     return request
   }, [])
 
+  const visible = inline || open
   useEffect(() => {
-    if (!open || !currentRecord) return
+    if (!visible || !currentRecord) return
     const timer = window.setInterval(
       () => setNow(Date.now()),
       currentRecord.phase === 'awaiting-payment' ? 10_000 : 20_000
     )
     return () => window.clearInterval(timer)
-  }, [open, currentRecord?.depositId, currentRecord?.phase])
+  }, [visible, currentRecord?.depositId, currentRecord?.phase])
 
   useEffect(() => {
-    if (!open || !currentRecord || !shouldAutoRefreshExternalShieldDeposit(currentRecord)) return
+    if (!visible || !currentRecord || !shouldAutoRefreshExternalShieldDeposit(currentRecord)) return
     const depositId = currentRecord.depositId
     const requestScope = scope
     let active = true
@@ -208,7 +211,7 @@ export function ShieldReceiveAddress({
       active = false
       if (timeout !== undefined) window.clearTimeout(timeout)
     }
-  }, [open, currentRecord?.depositId, currentRecord?.phase, scope, refreshRecord])
+  }, [visible, currentRecord?.depositId, currentRecord?.phase, scope, refreshRecord])
 
   const createAddress = async () => {
     if (busyRef.current || !canGenerate) return
@@ -275,6 +278,13 @@ export function ShieldReceiveAddress({
     }
   }
 
+  const createInlineAddress = useEffectEvent(() => {
+    if (!error) void createAddress()
+  })
+  useEffect(() => {
+    if (inline && canGenerate && provider === 'near-confidential') createInlineAddress()
+  }, [inline, canGenerate, provider, scope])
+
   const checkStatus = async () => {
     if (!currentRecord || refreshing) return
     const depositId = currentRecord.depositId
@@ -284,7 +294,7 @@ export function ShieldReceiveAddress({
     setCheckError(null)
     try {
       const updated = await refreshRecord(depositId, true)
-      if (!mounted.current || scopeRef.current !== requestScope || !open) return
+      if (!mounted.current || scopeRef.current !== requestScope || !visible) return
       if (updated.depositId !== depositId || !sameScope(updated, network, walletId, accountId))
         throw new Error('Deposit status response scope mismatch')
       setRecord(previous =>
@@ -339,6 +349,356 @@ export function ShieldReceiveAddress({
     account?.networks.find(item => item.chain.family === 'zcash')?.chain.displayName ??
     'Zcash'
 
+  const statusAction = currentRecord && (
+    <button
+      type="button"
+      aria-label="Check deposit status"
+      title="Check deposit status"
+      onClick={() => void checkStatus()}
+      disabled={refreshing}
+      aria-busy={refreshing || undefined}
+      className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-wallet-secondary hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-45"
+    >
+      <Icon
+        icon="lucide:scan-search"
+        width={17}
+        height={17}
+        className={refreshing ? 'animate-spin' : undefined}
+      />
+    </button>
+  )
+  const addressContent = (
+    <ReceivingAddressLayout
+      onClose={inline ? undefined : () => setOpen(false)}
+      qrSize={160}
+      headerAction={statusAction}
+      identity={
+        inline ? undefined : (
+          <div className="flex flex-col items-center gap-4">
+            <div className="flex items-center gap-5">
+              {currentRecord ? (
+                <TokenIcon
+                  assetId={currentRecord.source.assetId}
+                  symbol={formatShieldSymbol(symbol)}
+                  icon={asset ? resolveSwapTokenIconUrl(asset.token) : undefined}
+                  blockchain={sourceChain ? chainIcon(sourceChain) : undefined}
+                  size={40}
+                />
+              ) : (
+                <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zcash" size={40} />
+              )}
+              <Icon icon="lucide:arrow-right" width={20} className="text-muted" />
+              <ShieldProviderLogo provider={provider} size={40} />
+            </div>
+            <p className="text-center text-base text-muted">
+              {symbol} on {SHIELD_PROVIDERS[provider].name}
+            </p>
+          </div>
+        )
+      }
+      beforeQr={
+        currentRecord && canPay && !payment?.hasDeposit ? (
+          <p className="text-center text-base font-medium">
+            {currentRecord.amountMode === 'minimum' ? 'Send at least' : 'Send exactly'}{' '}
+            {(currentRecord.amountMode === 'minimum'
+              ? formatMinimumDepositPaymentAmount
+              : formatDepositAmount)(currentRecord.amountRaw, currentRecord.sourceDecimals)}{' '}
+            {symbol}
+          </p>
+        ) : undefined
+      }
+      qrValue={currentRecord ? (canPay ? currentRecord.depositAddress : undefined) : zcashAddress}
+      qrLabel={
+        currentRecord
+          ? 'One-time receiving address QR code'
+          : 'Zcash shielded receiving address QR code'
+      }
+      warning={
+        (!currentRecord || canPay) && (
+          <TransactionNotice
+            tone="warning"
+            message={`Only send ${symbol} on ${displayNetwork}. Using a different asset or network can result in loss of funds.`}
+          />
+        )
+      }
+    >
+      {inline && statusAction && <div className="mt-2 self-end">{statusAction}</div>}
+      {currentRecord ? (
+        <div className="mt-7 w-full text-sm">
+          {canPay && (
+            <>
+              <p
+                className="text-warning"
+                title={`Valid until ${new Date(currentRecord.expiresAt).toLocaleString()}`}
+              >
+                One-time receive address
+              </p>
+              <div className="mt-2 flex min-h-12 items-center gap-2 rounded-lg bg-wallet-surface px-3">
+                <span
+                  className="min-w-0 flex-1 truncate font-mono"
+                  title={currentRecord.depositAddress}
+                >
+                  {formatSortAddress(currentRecord.depositAddress)}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Copy address"
+                  disabled={!canPayShieldDeposit(currentRecord, now)}
+                  onClick={() => {
+                    if (canPayShieldDeposit(currentRecord, Date.now()))
+                      void copyToClipboard(
+                        currentRecord.depositAddress,
+                        `deposit-address:${currentRecord.depositId}`
+                      )
+                  }}
+                  className="wallet-interactive flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-wallet-selected px-3 disabled:opacity-45"
+                >
+                  <CopyFeedbackIcon
+                    copied={isCopied(`deposit-address:${currentRecord.depositId}`)}
+                    width={14}
+                  />
+                  {isCopied(`deposit-address:${currentRecord.depositId}`) ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              {currentRecord.depositMemo && (
+                <div className="mt-2 flex min-h-11 items-center gap-2 rounded-lg bg-wallet-surface px-3">
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-xs"
+                    title={currentRecord.depositMemo}
+                  >
+                    Memo: {currentRecord.depositMemo}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Copy memo"
+                    disabled={!canPayShieldDeposit(currentRecord, now)}
+                    onClick={() => {
+                      if (
+                        currentRecord.depositMemo &&
+                        canPayShieldDeposit(currentRecord, Date.now())
+                      )
+                        void copyToClipboard(
+                          currentRecord.depositMemo,
+                          `deposit-memo:${currentRecord.depositId}`
+                        )
+                    }}
+                    className="wallet-interactive flex h-8 shrink-0 items-center gap-1 rounded-lg bg-wallet-selected px-2 disabled:opacity-45"
+                  >
+                    <CopyFeedbackIcon
+                      copied={isCopied(`deposit-memo:${currentRecord.depositId}`)}
+                      width={14}
+                    />
+                    {isCopied(`deposit-memo:${currentRecord.depositId}`) ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          <div className="mt-6 flex items-start justify-between gap-3">
+            <span className="flex shrink-0 items-center gap-1 text-muted">
+              Refund address
+              <button
+                type="button"
+                aria-label="About refund address"
+                aria-expanded={showRefundInfo}
+                title="About refund address"
+                onClick={() => setShowRefundInfo(value => !value)}
+                className="wallet-interactive flex size-5 items-center justify-center rounded-full"
+              >
+                <Icon icon="lucide:circle-help" width={15} height={15} />
+              </button>
+            </span>
+            <span className="min-w-0 text-right">
+              {refundAccount && (
+                <span className="flex items-center justify-end gap-2">
+                  <span className="truncate">{refundAccount.accountDisplayName}</span>
+                  <span className="shrink-0 text-xs text-muted">
+                    {refundIsPrivate
+                      ? 'Incognito'
+                      : refundNetwork?.chain.family === 'zcash'
+                        ? 'Transparent'
+                        : 'Public'}
+                  </span>
+                </span>
+              )}
+              <span
+                className="mt-1 block truncate font-mono text-xs text-muted"
+                title={currentRecord.refundAddress}
+              >
+                {formatSortAddress(currentRecord.refundAddress)}
+              </span>
+            </span>
+          </div>
+          {showRefundInfo && (
+            <p className="mt-2 text-xs text-muted">
+              If this deposit cannot complete, funds return to this address on the sending network.
+            </p>
+          )}
+          {(!canPay || payment?.hasDeposit) && (
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <h2
+                role="status"
+                className={`text-base font-medium ${hasDepositSettlementShortfall(currentRecord) ? 'text-warning' : ''}`}
+              >
+                {depositStatusLabel(currentRecord, now)}
+              </h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setRecord(null)
+                  setOpen(false)
+                  setError(null)
+                  pendingRequest.current = null
+                }}
+                className="wallet-interactive text-sm text-primary hover:underline"
+              >
+                New address
+              </button>
+            </div>
+          )}
+          {currentRecord.phase === 'awaiting-payment' &&
+            hasExternalShieldDepositFunding(currentRecord) &&
+            now >= currentRecord.expiresAt && (
+              <p role="status" className="mt-1 text-xs text-muted">
+                Payment window closed
+              </p>
+            )}
+          {(!canPay || payment?.hasDeposit || currentRecord.settledOutputRaw) && (
+            <div className="mt-5 space-y-2 border-t border-white/10 pt-4">
+              {!canPay && (
+                <p className="flex justify-between gap-4">
+                  <span className="text-muted">Amount</span>
+                  <span className="break-all text-right">
+                    {formatDepositAmount(
+                      payment?.paymentAmountRaw ?? currentRecord.amountRaw,
+                      currentRecord.sourceDecimals
+                    ) ?? '-'}{' '}
+                    {symbol}
+                  </span>
+                </p>
+              )}
+              {payment?.hasDeposit && currentRecord.phase === 'awaiting-payment' && (
+                <>
+                  <p className="flex justify-between gap-4">
+                    <span className="text-muted">Deposited</span>
+                    <span className="break-all text-right">
+                      {formatDepositAmount(
+                        currentRecord.depositedAmountRaw ?? '0',
+                        currentRecord.sourceDecimals
+                      ) ?? '-'}{' '}
+                      {symbol}
+                    </span>
+                  </p>
+                  <p className="flex justify-between gap-4">
+                    <span className="text-muted">Remaining</span>
+                    <span className="break-all text-right">
+                      {formatDepositAmount(payment.remainingRaw, currentRecord.sourceDecimals) ??
+                        '-'}{' '}
+                      {symbol}
+                    </span>
+                  </p>
+                </>
+              )}
+              {!canPay && (
+                <>
+                  <p className="flex justify-between gap-4">
+                    <span className="text-muted">Estimated receive</span>
+                    <span className="break-all text-right">
+                      {formatDepositAmount(
+                        currentRecord.expectedOutputRaw,
+                        currentRecord.sourceDecimals
+                      ) ?? '-'}{' '}
+                      {symbol}
+                    </span>
+                  </p>
+                  <p className="flex justify-between gap-4">
+                    <span className="text-muted">Minimum receive</span>
+                    <span className="break-all text-right">
+                      {formatDepositAmount(
+                        currentRecord.minimumOutputRaw,
+                        currentRecord.sourceDecimals
+                      ) ?? '-'}{' '}
+                      {symbol}
+                    </span>
+                  </p>
+                </>
+              )}
+              {currentRecord.settledOutputRaw && (
+                <p className="flex justify-between gap-4">
+                  <span className="text-muted">Received</span>
+                  <span className="break-all text-right">
+                    {formatDepositAmount(
+                      currentRecord.settledOutputRaw,
+                      currentRecord.sourceDecimals
+                    ) ?? '-'}{' '}
+                    {symbol}
+                  </span>
+                </p>
+              )}
+            </div>
+          )}
+          {checked && (
+            <p role="status" className="mt-3 text-xs text-muted">
+              Checked: {depositStatusLabel(currentRecord, now)}
+            </p>
+          )}
+          <TransactionNotice
+            message={checkError}
+            onRetry={checkError ? () => void checkStatus() : undefined}
+            retrying={refreshing}
+            className="mt-3"
+          />
+        </div>
+      ) : (
+        <div className="mt-8 w-full">
+          <p className="mb-2 text-base text-muted">Receive address</p>
+          <div className="flex min-h-12 items-center gap-2 rounded-lg bg-wallet-surface px-3">
+            <span className="min-w-0 flex-1 truncate font-mono text-sm" title={zcashAddress}>
+              {zcashAddress ? formatSortAddress(zcashAddress) : ''}
+            </span>
+            <button
+              type="button"
+              aria-label="Copy Zcash shielded address"
+              disabled={!zcashAddress}
+              onClick={() =>
+                zcashAddress && void copyToClipboard(zcashAddress, 'zcash-shield-address')
+              }
+              className="wallet-interactive flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-wallet-selected px-3 disabled:opacity-45"
+            >
+              <CopyFeedbackIcon copied={isCopied('zcash-shield-address')} width={16} />
+              {isCopied('zcash-shield-address') ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </div>
+      )}
+    </ReceivingAddressLayout>
+  )
+
+  if (inline) {
+    return (
+      <>
+        {currentRecord || (provider === 'zcash-shield' && zcashAddress) ? (
+          addressContent
+        ) : (
+          <div className="mt-5">
+            {error ? (
+              <TransactionNotice
+                message={error}
+                onRetry={() => void createAddress()}
+                retrying={busy}
+              />
+            ) : (
+              <p role="status" className="text-center text-sm text-muted">
+                {canGenerate ? 'Generating receive address…' : 'Receiving address unavailable'}
+              </p>
+            )}
+          </div>
+        )}
+        <CopyToast show={showToast} />
+      </>
+    )
+  }
+
   return (
     <>
       <button
@@ -362,334 +722,7 @@ export function ShieldReceiveAddress({
           <DialogDescription className="sr-only">
             Address and QR code for the selected asset
           </DialogDescription>
-          <ReceivingAddressLayout
-            onClose={() => setOpen(false)}
-            qrSize={160}
-            headerAction={
-              currentRecord && (
-                <button
-                  type="button"
-                  aria-label="Check deposit status"
-                  title="Check deposit status"
-                  onClick={() => void checkStatus()}
-                  disabled={refreshing}
-                  aria-busy={refreshing || undefined}
-                  className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-wallet-secondary hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-45"
-                >
-                  <Icon
-                    icon="lucide:scan-search"
-                    width={17}
-                    height={17}
-                    className={refreshing ? 'animate-spin' : undefined}
-                  />
-                </button>
-              )
-            }
-            identity={
-              <div className="flex flex-col items-center gap-4">
-                <div className="flex items-center gap-5">
-                  {currentRecord ? (
-                    <TokenIcon
-                      assetId={currentRecord.source.assetId}
-                      symbol={formatShieldSymbol(symbol)}
-                      icon={asset ? resolveSwapTokenIconUrl(asset.token) : undefined}
-                      blockchain={sourceChain ? chainIcon(sourceChain) : undefined}
-                      size={40}
-                    />
-                  ) : (
-                    <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zcash" size={40} />
-                  )}
-                  <Icon icon="lucide:arrow-right" width={20} className="text-muted" />
-                  <ShieldProviderLogo provider={provider} size={40} />
-                </div>
-                <p className="text-center text-base text-muted">
-                  {symbol} on {SHIELD_PROVIDERS[provider].name}
-                </p>
-              </div>
-            }
-            beforeQr={
-              currentRecord && canPay && !payment?.hasDeposit ? (
-                <p className="text-center text-base font-medium">
-                  {currentRecord.amountMode === 'minimum' ? 'Send at least' : 'Send exactly'}{' '}
-                  {(currentRecord.amountMode === 'minimum'
-                    ? formatMinimumDepositPaymentAmount
-                    : formatDepositAmount)(
-                    currentRecord.amountRaw,
-                    currentRecord.sourceDecimals
-                  )}{' '}
-                  {symbol}
-                </p>
-              ) : undefined
-            }
-            qrValue={
-              currentRecord ? (canPay ? currentRecord.depositAddress : undefined) : zcashAddress
-            }
-            qrLabel={
-              currentRecord
-                ? 'One-time receiving address QR code'
-                : 'Zcash shielded receiving address QR code'
-            }
-            warning={
-              (!currentRecord || canPay) && (
-                <TransactionNotice
-                  tone="warning"
-                  message={`Only send ${symbol} on ${displayNetwork}. Using a different asset or network can result in loss of funds.`}
-                />
-              )
-            }
-          >
-            {currentRecord ? (
-              <div className="mt-7 w-full text-sm">
-                {canPay && (
-                  <>
-                    <p
-                      className="text-warning"
-                      title={`Valid until ${new Date(currentRecord.expiresAt).toLocaleString()}`}
-                    >
-                      One-time receive address
-                    </p>
-                    <div className="mt-2 flex min-h-12 items-center gap-2 rounded-lg bg-wallet-surface px-3">
-                      <span
-                        className="min-w-0 flex-1 truncate font-mono"
-                        title={currentRecord.depositAddress}
-                      >
-                        {formatSortAddress(currentRecord.depositAddress)}
-                      </span>
-                      <button
-                        type="button"
-                        aria-label="Copy address"
-                        disabled={!canPayShieldDeposit(currentRecord, now)}
-                        onClick={() => {
-                          if (canPayShieldDeposit(currentRecord, Date.now()))
-                            void copyToClipboard(
-                              currentRecord.depositAddress,
-                              `deposit-address:${currentRecord.depositId}`
-                            )
-                        }}
-                        className="wallet-interactive flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-wallet-selected px-3 disabled:opacity-45"
-                      >
-                        <CopyFeedbackIcon
-                          copied={isCopied(`deposit-address:${currentRecord.depositId}`)}
-                          width={14}
-                        />
-                        {isCopied(`deposit-address:${currentRecord.depositId}`) ? 'Copied' : 'Copy'}
-                      </button>
-                    </div>
-                    {currentRecord.depositMemo && (
-                      <div className="mt-2 flex min-h-11 items-center gap-2 rounded-lg bg-wallet-surface px-3">
-                        <span
-                          className="min-w-0 flex-1 truncate font-mono text-xs"
-                          title={currentRecord.depositMemo}
-                        >
-                          Memo: {currentRecord.depositMemo}
-                        </span>
-                        <button
-                          type="button"
-                          aria-label="Copy memo"
-                          disabled={!canPayShieldDeposit(currentRecord, now)}
-                          onClick={() => {
-                            if (
-                              currentRecord.depositMemo &&
-                              canPayShieldDeposit(currentRecord, Date.now())
-                            )
-                              void copyToClipboard(
-                                currentRecord.depositMemo,
-                                `deposit-memo:${currentRecord.depositId}`
-                              )
-                          }}
-                          className="wallet-interactive flex h-8 shrink-0 items-center gap-1 rounded-lg bg-wallet-selected px-2 disabled:opacity-45"
-                        >
-                          <CopyFeedbackIcon
-                            copied={isCopied(`deposit-memo:${currentRecord.depositId}`)}
-                            width={14}
-                          />
-                          {isCopied(`deposit-memo:${currentRecord.depositId}`) ? 'Copied' : 'Copy'}
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )}
-                <div className="mt-6 flex items-start justify-between gap-3">
-                  <span className="flex shrink-0 items-center gap-1 text-muted">
-                    Refund address
-                    <button
-                      type="button"
-                      aria-label="About refund address"
-                      aria-expanded={showRefundInfo}
-                      title="About refund address"
-                      onClick={() => setShowRefundInfo(value => !value)}
-                      className="wallet-interactive flex size-5 items-center justify-center rounded-full"
-                    >
-                      <Icon icon="lucide:circle-help" width={15} height={15} />
-                    </button>
-                  </span>
-                  <span className="min-w-0 text-right">
-                    {refundAccount && (
-                      <span className="flex items-center justify-end gap-2">
-                        <span className="truncate">{refundAccount.accountDisplayName}</span>
-                        <span className="shrink-0 text-xs text-muted">
-                          {refundIsPrivate
-                            ? 'Incognito'
-                            : refundNetwork?.chain.family === 'zcash'
-                              ? 'Transparent'
-                              : 'Public'}
-                        </span>
-                      </span>
-                    )}
-                    <span
-                      className="mt-1 block truncate font-mono text-xs text-muted"
-                      title={currentRecord.refundAddress}
-                    >
-                      {formatSortAddress(currentRecord.refundAddress)}
-                    </span>
-                  </span>
-                </div>
-                {showRefundInfo && (
-                  <p className="mt-2 text-xs text-muted">
-                    If this deposit cannot complete, funds return to this address on the sending
-                    network.
-                  </p>
-                )}
-                {(!canPay || payment?.hasDeposit) && (
-                  <div className="mt-5 flex items-center justify-between gap-3">
-                    <h2
-                      role="status"
-                      className={`text-base font-medium ${hasDepositSettlementShortfall(currentRecord) ? 'text-warning' : ''}`}
-                    >
-                      {depositStatusLabel(currentRecord, now)}
-                    </h2>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRecord(null)
-                        setOpen(false)
-                        setError(null)
-                        pendingRequest.current = null
-                      }}
-                      className="wallet-interactive text-sm text-primary hover:underline"
-                    >
-                      New address
-                    </button>
-                  </div>
-                )}
-                {currentRecord.phase === 'awaiting-payment' &&
-                  hasExternalShieldDepositFunding(currentRecord) &&
-                  now >= currentRecord.expiresAt && (
-                    <p role="status" className="mt-1 text-xs text-muted">
-                      Payment window closed
-                    </p>
-                  )}
-                {(!canPay || payment?.hasDeposit || currentRecord.settledOutputRaw) && (
-                  <div className="mt-5 space-y-2 border-t border-white/10 pt-4">
-                    {!canPay && (
-                      <p className="flex justify-between gap-4">
-                        <span className="text-muted">Amount</span>
-                        <span className="break-all text-right">
-                          {formatDepositAmount(
-                            payment?.paymentAmountRaw ?? currentRecord.amountRaw,
-                            currentRecord.sourceDecimals
-                          ) ?? '-'}{' '}
-                          {symbol}
-                        </span>
-                      </p>
-                    )}
-                    {payment?.hasDeposit && currentRecord.phase === 'awaiting-payment' && (
-                      <>
-                        <p className="flex justify-between gap-4">
-                          <span className="text-muted">Deposited</span>
-                          <span className="break-all text-right">
-                            {formatDepositAmount(
-                              currentRecord.depositedAmountRaw ?? '0',
-                              currentRecord.sourceDecimals
-                            ) ?? '-'}{' '}
-                            {symbol}
-                          </span>
-                        </p>
-                        <p className="flex justify-between gap-4">
-                          <span className="text-muted">Remaining</span>
-                          <span className="break-all text-right">
-                            {formatDepositAmount(
-                              payment.remainingRaw,
-                              currentRecord.sourceDecimals
-                            ) ?? '-'}{' '}
-                            {symbol}
-                          </span>
-                        </p>
-                      </>
-                    )}
-                    {!canPay && (
-                      <>
-                        <p className="flex justify-between gap-4">
-                          <span className="text-muted">Estimated receive</span>
-                          <span className="break-all text-right">
-                            {formatDepositAmount(
-                              currentRecord.expectedOutputRaw,
-                              currentRecord.sourceDecimals
-                            ) ?? '-'}{' '}
-                            {symbol}
-                          </span>
-                        </p>
-                        <p className="flex justify-between gap-4">
-                          <span className="text-muted">Minimum receive</span>
-                          <span className="break-all text-right">
-                            {formatDepositAmount(
-                              currentRecord.minimumOutputRaw,
-                              currentRecord.sourceDecimals
-                            ) ?? '-'}{' '}
-                            {symbol}
-                          </span>
-                        </p>
-                      </>
-                    )}
-                    {currentRecord.settledOutputRaw && (
-                      <p className="flex justify-between gap-4">
-                        <span className="text-muted">Received</span>
-                        <span className="break-all text-right">
-                          {formatDepositAmount(
-                            currentRecord.settledOutputRaw,
-                            currentRecord.sourceDecimals
-                          ) ?? '-'}{' '}
-                          {symbol}
-                        </span>
-                      </p>
-                    )}
-                  </div>
-                )}
-                {checked && (
-                  <p role="status" className="mt-3 text-xs text-muted">
-                    Checked: {depositStatusLabel(currentRecord, now)}
-                  </p>
-                )}
-                <TransactionNotice
-                  message={checkError}
-                  onRetry={checkError ? () => void checkStatus() : undefined}
-                  retrying={refreshing}
-                  className="mt-3"
-                />
-              </div>
-            ) : (
-              <div className="mt-8 w-full">
-                <p className="mb-2 text-base text-muted">Receive address</p>
-                <div className="flex min-h-12 items-center gap-2 rounded-lg bg-wallet-surface px-3">
-                  <span className="min-w-0 flex-1 truncate font-mono text-sm" title={zcashAddress}>
-                    {zcashAddress ? formatSortAddress(zcashAddress) : ''}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Copy Zcash shielded address"
-                    disabled={!zcashAddress}
-                    onClick={() =>
-                      zcashAddress && void copyToClipboard(zcashAddress, 'zcash-shield-address')
-                    }
-                    className="wallet-interactive flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-wallet-selected px-3 disabled:opacity-45"
-                  >
-                    <CopyFeedbackIcon copied={isCopied('zcash-shield-address')} width={16} />
-                    {isCopied('zcash-shield-address') ? 'Copied' : 'Copy'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </ReceivingAddressLayout>
+          {addressContent}
         </DialogContent>
       </Dialog>
       <CopyToast show={showToast} />

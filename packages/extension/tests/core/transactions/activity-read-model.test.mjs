@@ -240,7 +240,7 @@ function supplemental({
 }
 
 test.describe('Activity read model', () => {
-  test('keeps a signed EVM cancellation separate from the original confirmed transaction', () => {
+  test('projects a signed EVM cancellation on the original confirmed transaction only', () => {
     const original = graph({ id: 'transaction:confirmed-original' })
     original.root.status = 'final'
     original.segments[0].status = 'final'
@@ -257,8 +257,12 @@ test.describe('Activity read model', () => {
     expect(readOriginal([original, cancellation])).toMatchObject({
       status: 'final',
       cancellationStatus: 'signed',
+      evmReplacement: { id: cancellation.root.id, action: 'cancel', status: 'signed' },
       segments: [{ status: 'final', evidence: { transactionHash: evmHash } }]
     })
+    expect(
+      buildActivityReadModel({ scope, localGraphs: [original, cancellation] }).items
+    ).toHaveLength(1)
 
     const unrelatedChain = structuredClone(cancellation)
     unrelatedChain.segments[0].target.chainId = arbitrumChainId
@@ -393,6 +397,7 @@ test.describe('Activity read model', () => {
         item => item.id === original.root.id
       )
     const model = buildActivityReadModel({ scope, localGraphs: [original, replacement] })
+    expect(model.items).toHaveLength(1)
     const item = model.items.find(candidate => candidate.id === original.root.id)
     expect(item?.snapshot?.feeLimit?.amountRaw).toBe('2520000')
     expect(item?.snapshot?.evm?.maxFeePerGasWei).toBe('120')

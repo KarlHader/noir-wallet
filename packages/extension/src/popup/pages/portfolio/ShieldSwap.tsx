@@ -10,7 +10,7 @@ import {
 } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
-import { getCachedTokens, type SwapToken } from '@/core/services/intents-api'
+import type { SwapToken } from '@/core/services/intents-api'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
@@ -61,7 +61,6 @@ import {
   type PrepareConfidentialFundingRequest
 } from '@/popup/services/confidential-funding-client'
 import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-manager-client'
-import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
 import { findSavedSwapToken, isSameSwapAsset } from '@/popup/services/swap-token-selection'
 import {
   getSwapQuoteFailureMessage,
@@ -147,7 +146,7 @@ function ShieldSwapForm({
   active,
   portfolio: model,
   portfolioLoading,
-  tokens: parentTokens,
+  tokens,
   sharedPair,
   preferenceScope,
   onRefreshPortfolio,
@@ -192,7 +191,6 @@ function ShieldSwapForm({
   const mounted = useRef(false)
   const status = model ? 'ready' : portfolioLoading ? 'loading' : 'error'
   const hidden = useSettingsStore(state => state.balancesHidden)
-  const [directoryTokens, setDirectoryTokens] = useState<readonly SwapToken[] | null>(null)
   const [fromId, setFromId] = useState<string | null>(routeSourceAssetId)
   const [toId, setToId] = useState<string | null>(routeDestinationAssetId)
   const [amount, setAmount] = useState('')
@@ -201,30 +199,6 @@ function ShieldSwapForm({
   const [picker, setPicker] = useState<'from' | 'to' | null>(null)
   const fromPickerReady = useTokenSelectorReady(active && picker === 'from')
   const toPickerReady = useTokenSelectorReady(active && picker === 'to')
-  useEffect(() => {
-    if (!active) return
-    let current = true
-    const load = async () => {
-      try {
-        const cached = await swapTokenCatalogClient.readCached()
-        if (!current) return
-        if (cached.length > 0) setDirectoryTokens(previous => previous ?? cached)
-        const refreshed = await swapTokenCatalogClient.refresh()
-        if (current && refreshed.length > 0) setDirectoryTokens(refreshed)
-      } catch {
-        // The local catalog remains usable while its refresh is unavailable.
-      }
-    }
-    void load()
-    return () => {
-      current = false
-    }
-  }, [active])
-  const tokens = useMemo(() => {
-    const available = directoryTokens ?? getCachedTokens()
-    const directoryIds = new Set(available.map(token => token.assetId))
-    return [...available, ...parentTokens.filter(token => !directoryIds.has(token.assetId))]
-  }, [parentTokens, directoryTokens])
   const managedAssets = useMemo(() => resolveManagedIntentsCatalog(tokens), [tokens])
   const [prepared, setPrepared] = useState<Readonly<{
     review: ConfidentialFundingReview
@@ -421,7 +395,6 @@ function ShieldSwapForm({
     nativeZecDestination && !nativeZecRecipient ? 'Zcash receive address unavailable' : null
   const canReverse =
     reverseUnavailableReason === null &&
-    !sameAssetNativeDestination &&
     Boolean(to && sourceChoices.some(asset => asset.asset.asset.id === to.asset.asset.id))
   const previewRequest = useMemo(() => {
     if (
@@ -468,16 +441,14 @@ function ShieldSwapForm({
     error: previewError,
     retry: retryPreview
   } = useConfidentialFundingPreview(active ? previewRequest : null, scopeKey)
-  const noSharedRoute = Boolean(
-    sharedPair &&
+  const noRoute = Boolean(
     Number(amount) > 0 &&
     !portfolioLoading &&
     model &&
-    (!from ||
-      !to ||
-      (!nativeZecDestination && from.managed.protocolAssetId === to.managed.protocolAssetId))
+    tokens.length > 0 &&
+    (!from || !to || (validAmount && !previewRequest && !reverseUnavailableReason))
   )
-  const previewNotice = getSwapQuoteNotice(noSharedRoute ? SWAP_QUOTE_DISPLAY_ERROR : previewError)
+  const previewNotice = getSwapQuoteNotice(noRoute ? SWAP_QUOTE_DISPLAY_ERROR : previewError)
   const previewOutput =
     preview && to
       ? formatBaseUnitDecimalAmount(preview.amountOutRaw, to.asset.metadata.decimals)
@@ -1012,12 +983,13 @@ function ShieldSwapForm({
       prepared.to.asset.metadata.decimals
     )
     const feeAmount =
-      prepared.review.quoteWithdrawFeeRaw === undefined
+      !prepared.review.quoteWithdrawFeeRaw || prepared.review.quoteWithdrawFeeRaw === '0'
         ? null
         : formatBaseUnitAmount(
             prepared.review.quoteWithdrawFeeRaw,
             prepared.to.asset.metadata.decimals
           )
+    const feePercent = (prepared.review.quoteAppFeeBps ?? 0) / 100
     const currentRate = formatShieldSwapPreviewRate(
       prepared.amount,
       prepared.review.expectedOutputRaw,
@@ -1111,28 +1083,26 @@ function ShieldSwapForm({
             },
             ...(showReviewMore
               ? [
-                  ...(prepared.review.quoteAppFeeBps === undefined
-                    ? []
-                    : [
+                  ...(feePercent > 0 || feeAmount !== null
+                    ? [
                         {
-                          label: 'Service fee',
-                          content: `${(prepared.review.quoteAppFeeBps / 100).toString()}%`
-                        }
-                      ]),
-                  ...(feeAmount === null
-                    ? []
-                    : [
-                        {
-                          label: 'Fees',
+                          label: 'Fee',
                           content: (
-                            <AmountDisplay
-                              value={feeAmount}
-                              symbol={formatShieldSymbol(prepared.to.asset.metadata.symbol)}
-                              profile="fee"
-                            />
+                            <>
+                              {feePercent > 0 && `${feePercent}%`}
+                              {feePercent > 0 && feeAmount !== null && ' + '}
+                              {feeAmount !== null && (
+                                <AmountDisplay
+                                  value={feeAmount}
+                                  symbol={formatShieldSymbol(prepared.to.asset.metadata.symbol)}
+                                  profile="fee"
+                                />
+                              )}
+                            </>
                           )
                         }
-                      ]),
+                      ]
+                    : []),
                   {
                     label: 'Slippage',
                     content: `${(prepared.request.slippageBps / 100).toString()}%`
@@ -1152,17 +1122,19 @@ function ShieldSwapForm({
                 ]
               : [])
           ]}
+          quoteChanges={
+            !refreshingReview && !needsNewQuote && !error && !uncertain ? (
+              <QuoteReviewChanges
+                changes={reviewDescription.changes}
+                output={{
+                  decimals: prepared.to.asset.metadata.decimals,
+                  symbol: formatShieldSymbol(prepared.to.asset.metadata.symbol)
+                }}
+              />
+            ) : undefined
+          }
           afterRows={
             <div className="pt-3">
-              {!refreshingReview && !needsNewQuote && !error && !uncertain && (
-                <QuoteReviewChanges
-                  changes={reviewDescription.changes}
-                  output={{
-                    decimals: prepared.to.asset.metadata.decimals,
-                    symbol: formatShieldSymbol(prepared.to.asset.metadata.symbol)
-                  }}
-                />
-              )}
               <div className="flex items-center justify-between gap-3">
                 <button
                   type="button"
@@ -1183,7 +1155,7 @@ function ShieldSwapForm({
             error || (needsNewQuote && !refreshingReview) ? (
               <TransactionNotice
                 className="mt-3"
-                message={error ?? 'Quote expired.'}
+                message={error ? classifyError(error).userMessage : 'Quote expired.'}
                 tone={error ? 'error' : 'muted'}
               />
             ) : undefined
@@ -1301,7 +1273,7 @@ function ShieldSwapForm({
                 <div className="mt-1.5 space-y-1.5 text-muted">
                   {preview.appFeeBps !== undefined && (
                     <div className="flex items-center justify-between gap-2">
-                      <span>Service fee</span>
+                      <span>Fee</span>
                       <span className="text-foreground">{preview.appFeeBps / 100}%</span>
                     </div>
                   )}
@@ -1322,7 +1294,10 @@ function ShieldSwapForm({
           <TransactionNotice
             className="mt-3"
             tone={error ? 'error' : 'warning'}
-            message={classifyError(error || balanceError).userMessage}
+            message={
+              classifyError(error || balanceError, { source: from?.asset.metadata.symbol })
+                .userMessage
+            }
             onRetry={balanceError && !error ? () => void refreshBalances() : undefined}
             retrying={connecting}
           />
@@ -1340,13 +1315,16 @@ function ShieldSwapForm({
             role="alert"
             message={visibleAmountError}
           />
-        ) : !previewLoading && (noSharedRoute || previewError) ? (
+        ) : !previewLoading && (noRoute || previewError) ? (
           <TransactionNotice
             className="mt-3"
             tone={previewNotice ? 'muted' : 'warning'}
-            message={previewNotice ?? classifyError(previewError).userMessage}
+            message={
+              previewNotice ??
+              classifyError(previewError, { source: from?.asset.metadata.symbol }).userMessage
+            }
             onRetry={
-              noSharedRoute
+              noRoute
                 ? undefined
                 : previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
                   ? () => void refreshBalances()

@@ -131,7 +131,7 @@ test.describe('Transparent history transaction cache', () => {
     }
   })
 
-  test('repairs a stale local shielded self-transfer without duplicating its receive side', () => {
+  test('repairs a stale local shielded send while preserving the scanned transparent receive', () => {
     const staleSend = walletTransaction({
       status: 'confirming',
       confirmations: 2,
@@ -153,7 +153,8 @@ test.describe('Transparent history transaction cache', () => {
       status: 'success',
       confirmations: 3
     })
-    expect(merged.transactions).toHaveLength(1)
+    expect(merged.transactions[1]).toEqual(wasmReceive)
+    expect(merged.transactions).toHaveLength(2)
   })
 
   test('repairs failed local sends from mature WASM history but preserves unrelated terminal records', () => {
@@ -225,7 +226,7 @@ test.describe('Transparent history transaction cache', () => {
     expect(recovered[0]).not.toHaveProperty('failureReason')
   })
 
-  test('keeps one row for a confirmed shielded self-transfer', () => {
+  test('keeps one transparent receive alongside its send when RPC history is temporarily absent', () => {
     const confirmedSend = walletTransaction({
       status: 'success',
       confirmations: 3,
@@ -239,18 +240,23 @@ test.describe('Transparent history transaction cache', () => {
       confirmations: 2,
       requiredConfirmations: 3
     })
-    const staleWasmReceive = {
+    const freshWasmReceive = {
       ...staleReceive,
-      id: `wasm_${confirmedSend.txHash}`
+      id: `wasm_${confirmedSend.txHash}`,
+      status: 'success' as const,
+      confirmations: 4
     }
 
     const merged = mergeTransactionsWithWasmHistory(
       [confirmedSend, staleReceive],
-      [staleWasmReceive],
-      [staleReceive]
+      [freshWasmReceive],
+      []
     )
 
-    expect(merged.transactions).toEqual([confirmedSend])
+    expect(merged.transactions).toEqual([
+      { ...confirmedSend, confirmations: 4 },
+      { ...staleReceive, status: 'success', confirmations: 4 }
+    ])
   })
 
   test('does not apply an unrelated send confirmation to an external receive', () => {

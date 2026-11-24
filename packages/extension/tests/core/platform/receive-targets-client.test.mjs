@@ -123,7 +123,7 @@ test.describe('Receive targets Popup client', () => {
       address: 'bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu'
     })
 
-    expect(targets.length).toBeGreaterThan(8)
+    expect(targets).toHaveLength(6)
     const client = createReceiveTargetsClient(async () => result({ targets }), mainnetChains)
 
     const received = await client.getAdditionalTargets({ keyDomainId, accountId })
@@ -132,7 +132,7 @@ test.describe('Receive targets Popup client', () => {
     expect(received.targets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          chain: expect.objectContaining({ displayName: 'Monad' }),
+          chain: expect.objectContaining({ displayName: 'Polygon' }),
           kind: 'evm'
         }),
         expect.objectContaining({

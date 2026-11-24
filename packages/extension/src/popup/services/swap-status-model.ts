@@ -4,7 +4,7 @@ import type {
 } from '@/core/services/confidential-funding'
 import type { TransactionResultCopy, TransactionResultStatus } from '@/lib/transaction-status-copy'
 import {
-  getEvmNetworkConfigs,
+  getKnownEvmNetworkIdentities,
   getNearNetworkConfig,
   getSolanaNetworkConfig
 } from '@/config/networks'
@@ -63,7 +63,7 @@ export function getSwapTransactionReference(
       : inferredChain || normalizedHint || ''
   const rheaHint =
     network === 'mainnet' && chainId?.startsWith('rhea:') ? normalizedHint : undefined
-  const configuredChain = getEvmNetworkConfigs(network).find(chain =>
+  const configuredChain = getKnownEvmNetworkIdentities(network).find(chain =>
     chainId && !rheaHint ? chain.chainId === chainId : chain.iconChain === (rheaHint ?? legacyChain)
   )
   const nativeChainId =

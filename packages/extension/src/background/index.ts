@@ -18,6 +18,7 @@ import {
   parseSelectedNetworkFamilies
 } from '@/core/wallet/account-network-selection'
 import { setAccountNetworkSelection } from '@/lib/wallet-metadata-storage'
+import { COMBINED_EVM_SWAP_ALARM, CombinedEvmSwap } from './combined-evm-swap'
 import {
   saveSwapApprovalContinuation,
   readSwapApprovalContinuation,
@@ -32,6 +33,7 @@ import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/numbe
 import type { LedgerSigningPayload } from '@/core/worker/types'
 import { resolveEvmAddressRole } from '@/core/accounts/evm-address-role'
 import { parseEvmTransferIntent } from '@/infrastructure/chains/evm'
+import { isNoirPublicConfidentialTransferReferral } from '@/config/intents'
 
 import {
   projectZcashOperationEvent,
@@ -83,7 +85,10 @@ import {
 } from '@/lib/indexed-db'
 import { isExternalActivityReceipt } from '@/core/activity/activity-notification'
 import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
-import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
+import {
+  IndexedDbStorageV2Repository,
+  IndexedDbTransactionRepository
+} from '@/infrastructure/persistence/repositories'
 import { observeTransactionGraphCommits } from '@/infrastructure/persistence/repositories/indexed-db-transaction-repository'
 import { ACTIVITY_RECEIPTS_ALARM, ActivityNotifications } from './activity-notifications'
 import {
@@ -225,6 +230,7 @@ import {
 } from '@/core/services/rhea-swap/rhea-swap-model'
 import {
   parseRheaSwapTransactionBinding,
+  parseTransactionId,
   type RheaSwapTransactionBinding
 } from '@/core/transactions/domain'
 import {
@@ -393,12 +399,13 @@ import {
   SOLANA_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
 import { deriveSoftwareEd25519NetworkMetadata } from './software-ed25519-metadata'
-import { dappManager } from '@/core/dapp/dapp-manager'
+import { connectionHasEvmAuthorization, dappManager } from '@/core/dapp/dapp-manager'
 import {
   DAppExecutionModeConfirmationRequiredError,
   DAppExecutionModeTransitionCoordinator,
   type DAppExecutionMode,
-  type DAppExecutionModeScope
+  type DAppExecutionModeScope,
+  type DAppExecutionModeState
 } from '@/core/dapp/dapp-execution-mode'
 import { dappExecutionModeCoordinator, dappExecutionModeRequestGate } from './dapp-execution-mode'
 import { createSolanaWalletRuntimeError } from '@/core/chains/solana'
@@ -437,6 +444,7 @@ import {
   resolveSwapTokenAssetIds
 } from '@/core/services/intents-managed-assets'
 import { getBundledInitialProductAssetDefinitions } from '@/core/chains/registry'
+import { MAINNET_STARTER_PORTFOLIO_ASSET_IDS } from '@/core/chains/registry/product-chain-definitions'
 import {
   createIntentsWalletAssetCatalog,
   resolveIntentsWalletAsset,
@@ -623,6 +631,36 @@ const assetPriceRefreshes = new Map<
 >()
 let assetMarketHistoryService = createBackgroundAssetMarketHistoryService()
 const rheaSwapService = DEFAULT_NETWORK === 'mainnet' ? createBackgroundRheaSwapService() : null
+const combinedSwapRepository = new IndexedDbTransactionRepository()
+const combinedEvmSwap = new CombinedEvmSwap({
+  router: () => evmTransferRouter,
+  quote: rheaSwapService,
+  readAccount: async () => {
+    await rehydrateWalletStore()
+    const state = useWalletStore.getState()
+    return {
+      network: state.currentNetwork,
+      walletId: state.currentWalletId,
+      accountId: state.currentAccountId,
+      unlockEpoch:
+        networkRestartRequired || walletLockCleanupPending
+          ? null
+          : await credentialSession.getUnlockEpoch()
+    }
+  },
+  readGraph: (scope, id) => combinedSwapRepository.get(scope, parseTransactionId(id)),
+  validateQuote: async binding => {
+    await requireCurrentPrivateSwapQuote(binding.quoteHandle, 'main', binding)
+  },
+  checkApproval: async (scope, chainId) => {
+    await evmTransactionMonitor?.pollApprovalScope(chainId, scope)
+  },
+  schedule: async () => {
+    if (!(await chrome.alarms.get(COMBINED_EVM_SWAP_ALARM))) {
+      await chrome.alarms.create(COMBINED_EVM_SWAP_ALARM, { delayInMinutes: 0.5 })
+    }
+  }
+})
 const rheaSwapTransactionMonitor = rheaSwapService
   ? new RheaSwapTransactionMonitor(rheaSwapService, {
       loadZcashAccountScopes: getZcashAccountScopes,
@@ -720,6 +758,7 @@ async function requireCurrentPrivateSwapQuote(
     quote.scope.purpose === 'wallet-swap' ||
     quote.scope.purpose === 'public-cross-chain-send' ||
     quote.scope.purpose === 'confidential-funding' ||
+    quote.scope.purpose === 'public-private-move' ||
     dappPrivateAccount
       ? 'main'
       : 'private'
@@ -946,8 +985,8 @@ const currentDAppEvmNetworks = new CurrentDAppEvmNetworkCoordinator({
 
 async function notifyEvmAccountsChanged(): Promise<void> {
   const connections = await dappManager.getAllConnections()
-  await Promise.all(
-    connections.map(async connection => {
+  await Promise.allSettled(
+    connections.filter(connectionHasEvmAuthorization).map(async connection => {
       const handler = await evmDAppOrigins.get(connection.origin)
       await handler.notifyAccountsChanged(connection.origin)
     })
@@ -972,11 +1011,31 @@ async function requireActiveDAppExecutionModeScope(): Promise<DAppExecutionModeS
   })
 }
 
-async function notifyDAppExecutionModeChanged(scope: DAppExecutionModeScope): Promise<void> {
+async function notifyDAppExecutionModeChanged(
+  scope: DAppExecutionModeScope,
+  state: DAppExecutionModeState
+): Promise<void> {
   dappHandler.cancelPendingApprovalsForContext(scope.keyDomainId, scope.accountId, 'evm')
-  await multichainRuntimeReady
-  await notifyEvmAccountsChanged()
-  await multichainSessionDAppHandler?.notifyAllSessionsChanged()
+  void multichainStartupReady
+    .then(() => multichainRuntimeReady)
+    .then(() =>
+      accountContextTransition.runActiveOperation(async () => {
+        const active = await requireActiveDAppExecutionModeScope()
+        if (
+          active.network !== scope.network ||
+          active.keyDomainId !== scope.keyDomainId ||
+          active.accountId !== scope.accountId ||
+          (await dappExecutionModeCoordinator.read(scope)).mode !== state.mode
+        ) {
+          return
+        }
+        await Promise.allSettled([
+          notifyEvmAccountsChanged(),
+          multichainSessionDAppHandler?.notifyAllSessionsChanged({ storedAuthorizationOnly: true })
+        ])
+      })
+    )
+    .catch(() => {})
 }
 
 const dappExecutionModeTransitionCoordinator = new DAppExecutionModeTransitionCoordinator(
@@ -1839,6 +1898,7 @@ async function readTokenDisplayPolicy(): Promise<TokenDisplayPolicy> {
     ),
     visibleAssetIds: new Set([
       ...(overrides?.visibleAssetIds ?? []),
+      ...(DEFAULT_NETWORK === 'mainnet' ? MAINNET_STARTER_PORTFOLIO_ASSET_IDS : []),
       ...userEvmAssetRecords.flatMap(record =>
         record.source === 'user-added' ? [record.assetId] : []
       ),
@@ -2596,6 +2656,10 @@ async function isWalletUiContextOpen(): Promise<boolean> {
 void trustedStorageAccessReady.then(() => initializeAnalyticsReporting()).catch(() => {})
 
 chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === COMBINED_EVM_SWAP_ALARM) {
+    void multichainStartupReady.then(() => combinedEvmSwap.poll()).catch(() => {})
+    return
+  }
   if (alarm.name === ANALYTICS_OUTBOX_ALARM) {
     void handleAnalyticsAlarm(alarm.name).catch(() => {})
     return
@@ -3118,6 +3182,28 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   }
 
   if (
+    runtimeMessage.type === 'START_COMBINED_EVM_SWAP' ||
+    runtimeMessage.type === 'GET_COMBINED_EVM_SWAP'
+  ) {
+    if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'extension-page') {
+      sendResponse({ error: 'Unauthorized Swap sender' })
+      return true
+    }
+    void multichainStartupReady
+      .then(() => multichainRuntimeReady)
+      .then(() =>
+        runtimeMessage.type === 'START_COMBINED_EVM_SWAP'
+          ? combinedEvmSwap.start(runtimeMessage.input)
+          : combinedEvmSwap.get(parseTransactionId(runtimeMessage.transactionId))
+      )
+      .then(
+        result => sendResponse({ result }),
+        () => sendResponse({ error: 'Swap review is unavailable. Review the Swap again.' })
+      )
+    return true
+  }
+
+  if (
     runtimeMessage.type === 'SAVE_SWAP_APPROVAL_CONTINUATION' ||
     runtimeMessage.type === 'GET_SWAP_APPROVAL_CONTINUATION' ||
     runtimeMessage.type === 'CONTINUE_SWAP_AFTER_APPROVAL' ||
@@ -3163,7 +3249,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             return accountContextTransition.runActiveOperation(async () => {
               try {
                 await requireCurrentPrivateSwapQuote(quoteHandle, record.sourceMode)
-                const { request } = await service.readQuoteSecurityContext(quoteHandle)
+                const { request, scope } = await service.readQuoteSecurityContext(quoteHandle)
                 const requestKey: unknown = JSON.parse(quoteRequestKey)
                 if (
                   !Array.isArray(requestKey) ||
@@ -3171,7 +3257,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   requestKey[0] !== record.sourceAssetId ||
                   requestKey[1] !== record.destinationAssetId ||
                   JSON.stringify(
-                    toRheaSwapProtocolRequest(parseRheaSwapQuoteRequest(requestKey[3]))
+                    toRheaSwapProtocolRequest(
+                      parseRheaSwapQuoteRequest(requestKey[3]),
+                      isNoirPublicConfidentialTransferReferral(request.extensions?.referral)
+                        ? scope?.purpose
+                        : undefined
+                    )
                   ) !== JSON.stringify(request)
                 )
                   return null
@@ -4438,7 +4529,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               if (
                 purpose === 'wallet-swap' ||
                 purpose === 'public-cross-chain-send' ||
-                purpose === 'confidential-funding'
+                purpose === 'confidential-funding' ||
+                purpose === 'public-private-move'
               ) {
                 if (privateSender || nearPrivateSender) throw new Error('Swap source mode changed.')
                 const scope = {

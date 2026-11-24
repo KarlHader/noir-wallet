@@ -625,9 +625,19 @@ export class BackgroundEvmTransferController {
 
   async approve(
     transactionIdValue: string,
-    payloadFingerprint: string
+    payloadFingerprint: string,
+    authorizeInternalSigning?: () => Promise<void>
   ): Promise<EvmTransferApprovalResult> {
-    return this.approveWithGuard(transactionIdValue, payloadFingerprint)
+    return this.approveWithGuard(
+      transactionIdValue,
+      payloadFingerprint,
+      authorizeInternalSigning &&
+        (async context => {
+          if (context.keyDomainSource.kind === 'hardware')
+            throw new Error('Hardware signature is required')
+          await authorizeInternalSigning()
+        })
+    )
   }
 
   async approveForDApp(

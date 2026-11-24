@@ -54,13 +54,33 @@ test('maps every bundled priced asset to a bounded trusted history source', () =
     const assets = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions(network))
     const expectedMappings = getAssetMarketMappings(network, assets)
     const mappings = createMappings(network)
-    expect(mappings).toHaveLength(expectedMappings.length)
+    const contractMappings = mappings.filter(
+      mapping => mapping.fallback.source === 'coingecko-contract'
+    )
+    const marketMappings = mappings.filter(
+      mapping => mapping.fallback.source !== 'coingecko-contract'
+    )
+    expect(marketMappings).toHaveLength(expectedMappings.length)
     expect(new Set(mappings.map(mapping => mapping.assetId)).size).toBe(mappings.length)
-    expect(new Set(mappings.map(mapping => mapping.marketAssetId))).toEqual(
+    expect(new Set(marketMappings.map(mapping => mapping.marketAssetId))).toEqual(
       new Set(expectedMappings.map(mapping => mapping.marketAssetId))
     )
+    expect(contractMappings.map(mapping => mapping.assetId)).toEqual(
+      network === 'mainnet'
+        ? [
+            'eip155:1/erc20:0xdac17f958d2ee523a2206206994597c13d831ec7',
+            'eip155:56/erc20:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
+            'eip155:56/erc20:0x55d398326f99059ff775485246999027b3197955',
+            'eip155:137/erc20:0x7ceb23fd6bc0add59e62ac25578270cff1b9f619'
+          ]
+        : []
+    )
+    for (const { assetId, fallback, primary } of contractMappings) {
+      expect(`${fallback.chainId}/erc20:${fallback.contractAddress}`).toBe(assetId)
+      expect(primary).toBeNull()
+    }
     expect(
-      mappings.every(
+      marketMappings.every(
         mapping =>
           (mapping.primary === null ||
             (mapping.primary.network.length > 0 && mapping.primary.poolAddress.length > 0)) &&

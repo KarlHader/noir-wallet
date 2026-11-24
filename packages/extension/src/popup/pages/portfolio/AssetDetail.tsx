@@ -85,6 +85,7 @@ import { BitcoinAccountTypeSelector } from '@/popup/components/bitcoin/BitcoinAc
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
 import { buildShieldActionPath, SHIELD_ACTIONS } from '@/popup/services/shield-action-selection'
+import { shieldFundsPath } from '@/popup/services/shield-funds-route'
 import { canSwapNativeShieldZec } from '@/popup/services/shield-swap-zec-sources'
 import type { KeySource } from '@/types/wallet'
 import type { AssetDomain, ShieldProvider } from '@/popup/services/asset-domains'
@@ -128,6 +129,15 @@ export function AssetDetail() {
   })
   const effectiveWalletId = effectiveAccount?.walletId ?? null
   const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const sendOriginHistory = effectiveAccount
+    ? {
+        originPath: sendOriginPath,
+        network: currentNetwork,
+        walletId: effectiveAccount.walletId,
+        accountId: effectiveAccount.accountId,
+        entryKey: location.key
+      }
+    : undefined
   const zcashSendScopeQuery =
     effectiveWalletId && effectiveAccountId
       ? `&sourceWalletId=${encodeURIComponent(effectiveWalletId)}&sourceAccountId=${encodeURIComponent(effectiveAccountId)}`
@@ -529,7 +539,8 @@ export function AssetDetail() {
     }
     if (chain.chain.family === 'zcash') {
       navigate(
-        `/send?provider=zcash-shield&from=transparent&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
+        `/send?provider=zcash-shield&from=transparent&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`,
+        { state: { sendOriginHistory } }
       )
       return
     }
@@ -553,7 +564,8 @@ export function AssetDetail() {
         walletId: effectiveWalletId,
         accountId: effectiveAccountId,
         network: currentNetwork,
-        endpointRuntimeKey: chainEndpointRuntimeKey
+        endpointRuntimeKey: chainEndpointRuntimeKey,
+        sendOriginHistory
       }
     })
   }
@@ -695,7 +707,8 @@ export function AssetDetail() {
         disabled: unavailable,
         onClick: () =>
           navigate(
-            `/send?provider=zcash-shield&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
+            `/send?provider=zcash-shield&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`,
+            { state: { sendOriginHistory } }
           )
       },
       {
@@ -706,9 +719,9 @@ export function AssetDetail() {
       },
       {
         action: 'deposit' as const,
-        label: 'Deposit',
+        label: 'Shield',
         disabled: unavailable,
-        onClick: () => handleShieldAction('receive', 'zcash-shield')
+        onClick: () => asset && navigate(shieldFundsPath('shield', asset.asset.id, 'zcash-shield'))
       },
       {
         action: 'swap' as const,
@@ -739,7 +752,8 @@ export function AssetDetail() {
         assetId: asset.asset.id,
         account: effectiveAccount,
         originPath: sendOriginPath
-      })
+      }),
+      action === 'send' ? { state: { sendOriginHistory } } : undefined
     )
   }
 

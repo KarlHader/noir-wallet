@@ -65,7 +65,8 @@ export interface BackgroundEvmTransferRouteController {
   ) => Promise<string>
   readonly approve: (
     transactionIdValue: string,
-    payloadFingerprint: string
+    payloadFingerprint: string,
+    authorizeInternalSigning?: () => Promise<void>
   ) => Promise<EvmTransferApprovalResult>
   readonly prepareCancel: (
     originalTransactionIdValue: string,
@@ -405,10 +406,15 @@ export class BackgroundEvmTransferRouter {
 
   async approve(
     transactionIdValue: string,
-    payloadFingerprint: string
+    payloadFingerprint: string,
+    authorizeInternalSigning?: () => Promise<void>
   ): Promise<EvmTransferApprovalResult> {
     const routed = await this.requirePendingController(transactionIdValue)
-    return routed.controller.approve(routed.transactionId, payloadFingerprint)
+    return routed.controller.approve(
+      routed.transactionId,
+      payloadFingerprint,
+      authorizeInternalSigning
+    )
   }
 
   async getExternalSigningRequest(

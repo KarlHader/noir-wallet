@@ -3,7 +3,12 @@ import { Icon } from '@iconify/react'
 import type { AddressType, FundingSource } from '@/types'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { RheaSwapRouteView } from '@/core/services/rhea-swap'
-import { formatChainName, formatSortAddress, formatSymbol } from '@/lib/format'
+import {
+  formatChainName,
+  formatInsufficientBalance,
+  formatSortAddress,
+  formatSymbol
+} from '@/lib/format'
 import {
   formatBaseUnitDecimalAmount,
   formatFeeAmount,
@@ -630,6 +635,7 @@ export function SwapInputView({
   onGetQuote
 }: SwapInputViewProps) {
   const amountErrorId = useId()
+  const recipientErrorId = useId()
   const [showRefundAddress, setShowRefundAddress] = useState(false)
   const [recipientSelectorOpen, setRecipientSelectorOpen] = useState(false)
   const [routesOpen, setRoutesOpen] = useState(false)
@@ -642,10 +648,7 @@ export function SwapInputView({
       : undefined)
   const balanceValidationMessage =
     hasInsufficientFunds && !recipientError
-      ? insufficientMessage ||
-        (feeIsApproximate
-          ? 'Insufficient balance'
-          : `Insufficient balance (Fee: ${networkFee} ZEC)`)
+      ? (insufficientMessage ?? formatInsufficientBalance(tokenIn?.symbol ?? tokenInSymbol))
       : undefined
   const hasQuoteDetails = Boolean(estimatedOut) && rate !== '...' && rate !== '0'
   const quoteNotice = getSwapQuoteNotice(quoteError)
@@ -801,28 +804,6 @@ export function SwapInputView({
           />
         )}
 
-        {balanceValidationMessage ? (
-          <TransactionNotice
-            id={amountErrorId}
-            message={balanceValidationMessage}
-            tone="warning"
-            role="alert"
-            className="mt-2"
-          />
-        ) : recipientError ? null : catalogError ? (
-          <TransactionNotice
-            message="Unable to load assets"
-            onRetry={onRetryTokenCatalog}
-            className="mt-2"
-          />
-        ) : !isQuoting && quoteError ? (
-          <TransactionNotice
-            message={quoteNotice ?? quoteError}
-            tone={quoteNotice ? 'muted' : onRetryQuote ? 'warning' : 'error'}
-            onRetry={onRetryQuote}
-            className="mt-2"
-          />
-        ) : null}
         {onEnableReceiveNetwork && (
           <Button
             type="button"
@@ -849,10 +830,10 @@ export function SwapInputView({
                   onChange={onRecipientAddressChange}
                   onSelectRecipient={onSelectRecipientFromWallet}
                   invalid={Boolean(recipientError)}
+                  describedBy={
+                    recipientError && !recipientSelectorOpen ? recipientErrorId : undefined
+                  }
                 />
-                {recipientError && !recipientSelectorOpen && (
-                  <TransactionNotice message={recipientError} className="mt-2" />
-                )}
               </div>
             )}
           </div>
@@ -913,6 +894,32 @@ export function SwapInputView({
             )}
           </div>
         )}
+        {balanceValidationMessage ? (
+          <TransactionNotice
+            id={amountErrorId}
+            message={balanceValidationMessage}
+            tone="warning"
+            role="alert"
+            className="mt-2"
+          />
+        ) : recipientError ? (
+          !recipientSelectorOpen && (
+            <TransactionNotice id={recipientErrorId} message={recipientError} className="mt-2" />
+          )
+        ) : catalogError ? (
+          <TransactionNotice
+            message="Unable to load assets"
+            onRetry={onRetryTokenCatalog}
+            className="mt-2"
+          />
+        ) : !isQuoting && quoteError ? (
+          <TransactionNotice
+            message={quoteNotice ?? quoteError}
+            tone={quoteNotice ? 'muted' : onRetryQuote ? 'warning' : 'error'}
+            onRetry={onRetryQuote}
+            className="mt-2"
+          />
+        ) : null}
       </div>
 
       <div className="page-footer">
@@ -954,8 +961,15 @@ export function SwapInputView({
                     : undefined
                 }
                 invalid={Boolean(recipientError)}
+                describedBy={recipientError ? recipientErrorId : undefined}
               />
-              {recipientError && <TransactionNotice message={recipientError} className="mt-2" />}
+              {recipientError && (
+                <TransactionNotice
+                  id={recipientErrorId}
+                  message={recipientError}
+                  className="mt-2"
+                />
+              )}
             </div>
           )}
           <DialogFooter className="p-5">

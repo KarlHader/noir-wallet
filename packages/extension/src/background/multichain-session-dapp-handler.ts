@@ -408,12 +408,14 @@ export class BackgroundMultichainSessionDAppHandler {
     }
   }
 
-  async notifyAllSessionsChanged(): Promise<void> {
+  async notifyAllSessionsChanged(
+    options: { readonly storedAuthorizationOnly?: boolean } = {}
+  ): Promise<void> {
     const connections = await this.options.manager.getAllConnections()
     await Promise.all(
       connections
         .filter(connection => connection.caip25Session !== undefined)
-        .map(connection => this.notifySessionChanged(connection.origin))
+        .map(connection => this.notifySessionChanged(connection.origin, options))
     )
   }
 
@@ -463,8 +465,13 @@ export class BackgroundMultichainSessionDAppHandler {
     return result
   }
 
-  async notifySessionChanged(origin: string): Promise<void> {
-    const session = await this.getSession(origin)
+  async notifySessionChanged(
+    origin: string,
+    options: { readonly storedAuthorizationOnly?: boolean } = {}
+  ): Promise<void> {
+    const session = options.storedAuthorizationOnly
+      ? await this.getStoredSession(origin)
+      : await this.getSession(origin)
     await this.options.approval
       .broadcastProviderEvent(
         origin,
@@ -876,7 +883,10 @@ export class BackgroundMultichainSessionDAppHandler {
 
   private async getSession(origin: string): Promise<Caip25Session | null> {
     const automatic = await this.getFirstPartySession(origin)
-    if (automatic !== undefined) return automatic
+    return automatic === undefined ? this.getStoredSession(origin) : automatic
+  }
+
+  private async getStoredSession(origin: string): Promise<Caip25Session | null> {
     const revision = await this.options.manager.getAuthorizationRevision(origin)
     const stored = await this.options.manager.getCaip25Session(origin)
     if (!stored) return null

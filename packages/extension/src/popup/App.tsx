@@ -50,6 +50,7 @@ import { ExportPrivateKey } from './pages/account/ExportPrivateKey'
 // Transaction Pages
 import { Send } from './pages/transactions/Send'
 import { DepositWithdraw } from './pages/transactions/DepositWithdraw'
+import { ShieldFundsPage, UnshieldFundsPage } from './pages/transactions/ShieldFunds'
 import { TransactionOutcome } from './pages/transactions/TransactionOutcome'
 import { AssetDetail } from './pages/portfolio/AssetDetail'
 import { ShieldProviderDetail } from './pages/portfolio/ShieldProviderDetail'
@@ -199,6 +200,8 @@ function AppRoutes() {
       <Route path="/unlock" element={<Unlock />} />
       <Route path="/send" element={<Send multiChainEnabled={multichainSendEnabled} />} />
       <Route path="/transfer" element={<DepositWithdraw />} />
+      <Route path="/shield" element={<ShieldFundsPage />} />
+      <Route path="/unshield" element={<UnshieldFundsPage />} />
       <Route path="/transaction-result" element={<TransactionOutcome />} />
       <Route path="/asset-detail" element={<AssetDetail />} />
       <Route path="/account-list" element={<AccountList />} />

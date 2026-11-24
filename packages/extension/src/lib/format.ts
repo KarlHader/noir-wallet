@@ -92,6 +92,11 @@ export function formatShieldSymbol(symbol?: string) {
   return displaySymbol === 'wNEAR' ? 'NEAR' : displaySymbol
 }
 
+export function formatInsufficientBalance(symbol?: string): string {
+  const displaySymbol = formatSymbol(symbol)
+  return displaySymbol ? `Insufficient ${displaySymbol} balance` : 'Insufficient balance'
+}
+
 const explorerUrls: Record<string, string> = {
   near: 'https://nearblocks.io',
   solana: 'https://solscan.io',

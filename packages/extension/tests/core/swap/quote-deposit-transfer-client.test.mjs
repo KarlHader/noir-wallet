@@ -918,7 +918,7 @@ test.describe('quote deposit transfer client', () => {
         ]
       ])
       source.asset.balance.availableRaw = '100'
-      await expect(client.estimateMaximum(input)).rejects.toThrow('does not cover')
+      await expect(client.estimateMaximum(input)).rejects.toThrow('Insufficient ETH balance')
       expect(calls.at(-1)[0].calldata).toBe(transaction.data)
       await expect(
         client.estimateMaximum({ ...input, evmTransaction: { ...transaction, chainId: 56 } })
@@ -1565,7 +1565,7 @@ test.describe('quote deposit transfer client', () => {
     })
   })
 
-  test('binds the live Optimism ETH to Monad MON route used by REF-13100', () => {
+  test('binds the Optimism ETH to Monad MON route with the configured destination', () => {
     const source = {
       family: 'evm',
       sourceAssetId: 'nep245:v2_1.omni.hot.tg:10_11111111111111111111',
@@ -1589,6 +1589,13 @@ test.describe('quote deposit transfer client', () => {
     const deadline = '2026-08-28T07:49:25.501Z'
     const binding = createNearIntentsSwapBinding({
       source,
+      destination: {
+        sourceAssetId: 'nep245:v2_1.omni.hot.tg:143_11111111111111111111',
+        asset: {
+          asset: { id: MONAD_ASSET_ID, chainId: MONAD_CHAIN_ID, kind: 'native' },
+          metadata: { symbol: 'MON', decimals: 18 }
+        }
+      },
       tokenIn: token(source.sourceAssetId, 'op', 18),
       tokenOut: token('nep245:v2_1.omni.hot.tg:143_11111111111111111111', 'monad', 18),
       amountInRaw: '100000000000000',

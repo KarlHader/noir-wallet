@@ -42,6 +42,34 @@ import { Tooltip } from '@/popup/components/ui/tooltip'
 export const portfolioAssetRowClassName =
   'flex min-h-[72px] w-full min-w-0 items-center gap-[9px] px-4 py-2.5 text-left'
 
+function PortfolioAssetActions({
+  symbol,
+  onShield,
+  children
+}: {
+  readonly symbol: string
+  readonly onShield?: (trigger: HTMLButtonElement) => void
+  readonly children: ReactNode
+}) {
+  if (!onShield) return children
+  return (
+    <div className="portfolio-shield-row relative min-w-0">
+      {children}
+      <button
+        type="button"
+        aria-label={`Shield ${formatSymbol(symbol)}`}
+        aria-haspopup="dialog"
+        onClick={event => onShield(event.currentTarget)}
+        className="portfolio-shield-action wallet-interactive absolute top-1/2 right-4 z-10 inline-flex h-11 -translate-y-1/2 items-center rounded-full text-xs font-semibold text-primary focus-visible:outline-2 focus-visible:outline-primary"
+      >
+        <span className="flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1.5">
+          <Icon icon="lucide:shield" width={14} aria-hidden="true" /> Shield
+        </span>
+      </button>
+    </div>
+  )
+}
+
 export function PortfolioAssetRowContent({
   icon,
   title,
@@ -60,7 +88,9 @@ export function PortfolioAssetRowContent({
         <div className="flex min-w-0 items-center gap-1.5">{title}</div>
         {subtitle}
       </div>
-      <div className="min-w-0 max-w-[142px] shrink-0 text-right">{balance}</div>
+      <div className="portfolio-row-balance min-w-0 max-w-[142px] shrink-0 text-right">
+        {balance}
+      </div>
     </>
   )
 }
@@ -76,6 +106,7 @@ interface PortfolioAssetGroupCardProps {
   readonly directAsset?: boolean
   readonly onToggle?: () => void
   readonly onSelectAsset?: (assetId: string) => void
+  readonly onShield?: (trigger: HTMLButtonElement) => void
   readonly swapCatalog?: readonly SwapToken[]
 }
 
@@ -89,6 +120,7 @@ interface PortfolioAssetBalanceRowProps {
   readonly pricesLoading?: boolean
   readonly showUnitPrice?: boolean
   readonly onSelectAsset?: (assetId: string) => void
+  readonly onShield?: (trigger: HTMLButtonElement) => void
   readonly swapCatalog?: readonly SwapToken[]
 }
 
@@ -225,6 +257,7 @@ function PortfolioAssetBalanceRow({
   pricesLoading = false,
   showUnitPrice = true,
   onSelectAsset,
+  onShield,
   swapCatalog
 }: PortfolioAssetBalanceRowProps) {
   const amount = assetAmount(entry.asset)
@@ -240,70 +273,72 @@ function PortfolioAssetBalanceRow({
 
   return (
     <div>
-      <button
-        type="button"
-        aria-label={`View ${formatSymbol(entry.asset.metadata.symbol)} details on ${entry.chain.chain.displayName}`}
-        onClick={() => onSelectAsset?.(entry.asset.asset.id)}
-        className={cn(
-          'wallet-interactive flex min-h-[72px] w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
-          !balancesHidden && pendingAmount.gt(0) && 'pb-0'
-        )}
-      >
-        {leading === 'chain' ? (
-          <ChainIcon
-            chain={chainAlias}
-            width={24}
-            height={24}
-            className="shrink-0 rounded-[6px]"
-            showTooltip={false}
-          />
-        ) : (
-          <TokenIcon
-            {...portfolioTokenIconProps(entry.asset, swapCatalog, chainAlias)}
-            size={32}
-            className="shrink-0"
-          />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <p className="truncate text-base font-medium">
-              {leading === 'chain'
-                ? entry.chain.chain.displayName
-                : formatSymbol(entry.asset.metadata.symbol)}
-            </p>
-            {domain === 'public' && entry.chain.chain.family === 'zcash' && (
-              <ZcashFundingBadge source="transparent" />
-            )}
-          </div>
-          {showUnitPrice && (
-            <UnitPrice
-              price={quote?.priceUsd ?? zec?.mergedHolding?.entry.priceUsd ?? null}
-              percent24h={quote?.marketChange?.percent24h}
-              changeFreshness={quote?.marketChange?.freshness}
-              loading={pricesLoading}
+      <PortfolioAssetActions symbol={entry.asset.metadata.symbol} onShield={onShield}>
+        <button
+          type="button"
+          aria-label={`View ${formatSymbol(entry.asset.metadata.symbol)} details on ${entry.chain.chain.displayName}`}
+          onClick={() => onSelectAsset?.(entry.asset.asset.id)}
+          className={cn(
+            'wallet-interactive flex min-h-[72px] w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
+            !balancesHidden && pendingAmount.gt(0) && 'pb-0'
+          )}
+        >
+          {leading === 'chain' ? (
+            <ChainIcon
+              chain={chainAlias}
+              width={24}
+              height={24}
+              className="shrink-0 rounded-[6px]"
+              showTooltip={false}
+            />
+          ) : (
+            <TokenIcon
+              {...portfolioTokenIconProps(entry.asset, swapCatalog, chainAlias)}
+              size={32}
+              className="shrink-0"
             />
           )}
-        </div>
-        <div className="max-w-[132px] shrink-0 text-right">
-          {!balancesHidden && fiat === null && pricesLoading ? (
-            <Skeleton className="ml-auto h-4 w-16" />
-          ) : (
-            <p className="break-all text-base font-medium">
-              {balancesHidden
-                ? '••••'
-                : fiat === null
-                  ? formatFiatAmount('0', { showSign: true })
-                  : formatFiatAmount(fiat, { showSign: true })}
-            </p>
-          )}
-          <PortfolioAssetQuantity
-            balancesHidden={balancesHidden}
-            amount={amount.plus(zec?.amount ?? '0')}
-            symbol={entry.asset.metadata.symbol}
-            providerBalances={getMergedZecProviderBalances([entry], zec, domain ?? 'all')}
-          />
-        </div>
-      </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <p className="truncate text-base font-medium">
+                {leading === 'chain'
+                  ? entry.chain.chain.displayName
+                  : formatSymbol(entry.asset.metadata.symbol)}
+              </p>
+              {domain === 'public' && entry.chain.chain.family === 'zcash' && (
+                <ZcashFundingBadge source="transparent" />
+              )}
+            </div>
+            {showUnitPrice && (
+              <UnitPrice
+                price={quote?.priceUsd ?? zec?.mergedHolding?.entry.priceUsd ?? null}
+                percent24h={quote?.marketChange?.percent24h}
+                changeFreshness={quote?.marketChange?.freshness}
+                loading={pricesLoading}
+              />
+            )}
+          </div>
+          <div className="portfolio-row-balance max-w-[132px] shrink-0 text-right">
+            {!balancesHidden && fiat === null && pricesLoading ? (
+              <Skeleton className="ml-auto h-4 w-16" />
+            ) : (
+              <p className="break-all text-base font-medium">
+                {balancesHidden
+                  ? '••••'
+                  : fiat === null
+                    ? formatFiatAmount('0', { showSign: true })
+                    : formatFiatAmount(fiat, { showSign: true })}
+              </p>
+            )}
+            <PortfolioAssetQuantity
+              balancesHidden={balancesHidden}
+              amount={amount.plus(zec?.amount ?? '0')}
+              symbol={entry.asset.metadata.symbol}
+              providerBalances={getMergedZecProviderBalances([entry], zec, domain ?? 'all')}
+            />
+          </div>
+        </button>
+      </PortfolioAssetActions>
       {!balancesHidden && (
         <PendingAssetAmount
           amount={pendingAmount}
@@ -329,6 +364,7 @@ export function PortfolioAssetGroupCard({
   directAsset = false,
   onToggle,
   onSelectAsset,
+  onShield,
   swapCatalog
 }: PortfolioAssetGroupCardProps) {
   const totalAmount = group.entries.reduce(
@@ -357,91 +393,93 @@ export function PortfolioAssetGroupCard({
 
   return (
     <article className="overflow-hidden">
-      <button
-        type="button"
-        aria-label={
-          directAsset
-            ? `View ${formatSymbol(group.symbol)} details on ${group.entries[0]?.chain.chain.displayName}`
-            : `${expanded ? 'Collapse' : 'Expand'} ${formatSymbol(group.symbol)} networks`
-        }
-        aria-expanded={directAsset ? undefined : expanded}
-        onClick={() =>
-          directAsset ? onSelectAsset?.(group.entries[0].asset.asset.id) : onToggle?.()
-        }
-        className={cn(
-          portfolioAssetRowClassName,
-          'wallet-interactive hover:bg-foreground/[0.03] active:bg-foreground/[0.06] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
-          !balancesHidden && pendingAmount.gt(0) && 'pb-0'
-        )}
-      >
-        <PortfolioAssetRowContent
-          icon={
-            <TokenIcon
-              {...(representativeAsset
-                ? portfolioTokenIconProps(representativeAsset, swapCatalog, chainBadge)
-                : {
-                    assetId: group.representativeAssetId,
-                    symbol: formatSymbol(group.symbol),
-                    icon: group.iconUrl,
-                    blockchain: chainBadge
-                  })}
-              size={32}
-              className="shrink-0"
-            />
+      <PortfolioAssetActions symbol={group.symbol} onShield={onShield}>
+        <button
+          type="button"
+          aria-label={
+            directAsset
+              ? `View ${formatSymbol(group.symbol)} details on ${group.entries[0]?.chain.chain.displayName}`
+              : `${expanded ? 'Collapse' : 'Expand'} ${formatSymbol(group.symbol)} networks`
           }
-          title={
-            <>
-              <p className="truncate text-base font-medium">{formatSymbol(group.symbol)}</p>
-              {domain === 'public' &&
-                group.entries.every(entry => entry.chain.chain.family === 'zcash') && (
-                  <ZcashFundingBadge source="transparent" />
-                )}
-              {!group.bundled && (
-                <span className="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[9px] text-muted">
-                  Custom
-                </span>
-              )}
-            </>
+          aria-expanded={directAsset ? undefined : expanded}
+          onClick={() =>
+            directAsset ? onSelectAsset?.(group.entries[0].asset.asset.id) : onToggle?.()
           }
-          subtitle={
-            <UnitPrice
-              price={unitQuote?.priceUsd ?? zec?.mergedHolding?.entry.priceUsd ?? null}
-              percent24h={unitQuote?.percent24h}
-              changeFreshness={unitQuote?.changeFreshness}
-              loading={pricesLoading}
-            />
-          }
-          balance={
-            <>
-              {!balancesHidden && fiat === null && pricesLoading ? (
-                <Skeleton className="ml-auto h-4 w-16" />
-              ) : (
-                <p className="break-all text-base font-medium [[data-wallet-palette=public]_&]:font-semibold">
-                  {balancesHidden
-                    ? '••••'
-                    : fiat === null
-                      ? formatFiatAmount('0', { showSign: true })
-                      : formatFiatAmount(fiat, { showSign: true })}
-                </p>
-              )}
-              <PortfolioAssetQuantity
-                balancesHidden={balancesHidden}
-                amount={totalAmount.plus(zec?.amount ?? '0')}
-                symbol={group.symbol}
-                providerBalances={getMergedZecProviderBalances(group.entries, zec, domain)}
+          className={cn(
+            portfolioAssetRowClassName,
+            'wallet-interactive hover:bg-foreground/[0.03] active:bg-foreground/[0.06] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
+            !balancesHidden && pendingAmount.gt(0) && 'pb-0'
+          )}
+        >
+          <PortfolioAssetRowContent
+            icon={
+              <TokenIcon
+                {...(representativeAsset
+                  ? portfolioTokenIconProps(representativeAsset, swapCatalog, chainBadge)
+                  : {
+                      assetId: group.representativeAssetId,
+                      symbol: formatSymbol(group.symbol),
+                      icon: group.iconUrl,
+                      blockchain: chainBadge
+                    })}
+                size={32}
+                className="shrink-0"
               />
-            </>
-          }
-        />
-        {!directAsset && (
-          <Icon
-            icon="lucide:chevron-down"
-            width={15}
-            height={15}
-            className={cn('shrink-0 text-muted transition-transform', expanded && 'rotate-180')}
+            }
+            title={
+              <>
+                <p className="truncate text-base font-medium">{formatSymbol(group.symbol)}</p>
+                {domain === 'public' &&
+                  group.entries.every(entry => entry.chain.chain.family === 'zcash') && (
+                    <ZcashFundingBadge source="transparent" />
+                  )}
+                {!group.bundled && (
+                  <span className="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[9px] text-muted">
+                    Custom
+                  </span>
+                )}
+              </>
+            }
+            subtitle={
+              <UnitPrice
+                price={unitQuote?.priceUsd ?? zec?.mergedHolding?.entry.priceUsd ?? null}
+                percent24h={unitQuote?.percent24h}
+                changeFreshness={unitQuote?.changeFreshness}
+                loading={pricesLoading}
+              />
+            }
+            balance={
+              <>
+                {!balancesHidden && fiat === null && pricesLoading ? (
+                  <Skeleton className="ml-auto h-4 w-16" />
+                ) : (
+                  <p className="break-all text-base font-medium [[data-wallet-palette=public]_&]:font-semibold">
+                    {balancesHidden
+                      ? '••••'
+                      : fiat === null
+                        ? formatFiatAmount('0', { showSign: true })
+                        : formatFiatAmount(fiat, { showSign: true })}
+                  </p>
+                )}
+                <PortfolioAssetQuantity
+                  balancesHidden={balancesHidden}
+                  amount={totalAmount.plus(zec?.amount ?? '0')}
+                  symbol={group.symbol}
+                  providerBalances={getMergedZecProviderBalances(group.entries, zec, domain)}
+                />
+              </>
+            }
           />
-        )}
-      </button>
+          {!directAsset && (
+            <Icon
+              icon="lucide:chevron-down"
+              width={15}
+              height={15}
+              className={cn('shrink-0 text-muted transition-transform', expanded && 'rotate-180')}
+            />
+          )}
+        </button>
+      </PortfolioAssetActions>
       {!balancesHidden && (
         <PendingAssetAmount amount={pendingAmount} symbol={formatSymbol(group.symbol)} />
       )}

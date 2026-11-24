@@ -231,14 +231,17 @@ export function useEvmSendTransfer({
     candidate =>
       candidate.asset.chainId === asset.asset.chainId && candidate.asset.kind === 'native'
   )
-  const nativeSymbol = evmNative?.metadata.symbol ?? 'Native asset'
+  const nativeCurrencySymbol =
+    evmNative?.metadata.symbol ??
+    chain.assets.find(item => item.asset.kind === 'native')?.metadata.symbol
+  const nativeSymbol = nativeCurrencySymbol ?? 'Native asset'
   const nativeDecimals = evmNative?.metadata.decimals ?? 18
   const domainNativeAvailableRaw = resolveEvmSendAvailableRaw(evmNative?.balance, sourceMode)
   const nativeAvailableRaw = domainNativeAvailableRaw ?? '0'
   const tokenFeeBalanceError = getEvmTokenFeeBalanceError(
     asset.asset.kind,
     nativeAvailableRaw,
-    nativeSymbol
+    nativeCurrencySymbol
   )
   const sourceAddress = sourceMode === 'private' ? privateSourceAddress : mainSourceAddress
   const accountContextKey = JSON.stringify([
@@ -919,7 +922,7 @@ export function useEvmSendTransfer({
         maximumFeeRaw: feeRaw,
         assetAvailableRaw: availableRaw,
         nativeAvailableRaw,
-        nativeSymbol
+        nativeSymbol: nativeCurrencySymbol
       })
       if (balanceError) {
         await rejectPrepared(value)
@@ -940,7 +943,7 @@ export function useEvmSendTransfer({
       })
     } catch (prepareError) {
       if (reviewAttempt.current.isCurrent(attempt) && currentIntent.current === intentKey)
-        setError(getEvmSendPrepareError(prepareError, sourceMode))
+        setError(getEvmSendPrepareError(prepareError, nativeCurrencySymbol))
     } finally {
       if (reviewAttempt.current.isCurrent(attempt)) setPreparing(false)
     }
@@ -987,7 +990,8 @@ export function useEvmSendTransfer({
         }
         nextAmountRaw = resolveEvmNativeMaximumAmount(
           availableRaw,
-          probe.review.summary.fields.maximumFeeWei
+          probe.review.summary.fields.maximumFeeWei,
+          nativeCurrencySymbol
         )
       }
 
@@ -1008,7 +1012,7 @@ export function useEvmSendTransfer({
         maximumFeeRaw: nextSummary.fields.maximumFeeWei,
         assetAvailableRaw: availableRaw,
         nativeAvailableRaw,
-        nativeSymbol
+        nativeSymbol: nativeCurrencySymbol
       })
       if (balanceError) throw new Error(balanceError)
 
@@ -1049,7 +1053,10 @@ export function useEvmSendTransfer({
         await evmWalletClient.rejectTransfer(replacement.graph.root.id).catch(() => {})
       }
       const message =
-        cause instanceof Error ? cause.message : getEvmSendPrepareError(cause, sourceMode)
+        !(cause instanceof Error) ||
+        (cause instanceof EvmWalletClientError && cause.code === 'insufficient-funds')
+          ? getEvmSendPrepareError(cause, nativeCurrencySymbol)
+          : cause.message
       if (reviewAttempt.current.isCurrent(attempt) && currentIntent.current === current.intentKey) {
         setError(message)
         throw new Error(message)
@@ -1102,7 +1109,7 @@ export function useEvmSendTransfer({
         pendingReview.current = null
         setReview(null)
       }
-      setError(getEvmSendPrepareError(approveError, review.sourceMode))
+      setError(getEvmSendPrepareError(approveError, nativeCurrencySymbol))
     } finally {
       setApproving(false)
     }

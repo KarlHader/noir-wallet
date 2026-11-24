@@ -73,8 +73,7 @@ export function StandardTransactionResult({
   const baseConfig = getStandardTransactionResultCopy(step, { error, shield })
   const title = customTitle || baseConfig.title
   const description = customDescription || baseConfig.description
-  const submittingOnly = phaseLayout && step === 'pending' && !error
-  const detailsOnly =
+  const showStatusDetail =
     phaseLayout && (step === 'submitted' || step === 'confirming' || step === 'success')
 
   const footer =
@@ -107,11 +106,8 @@ export function StandardTransactionResult({
       description={step === 'failed' ? undefined : description}
       layout="single-asset"
       onClose={onDone}
-      showStatus={!detailsOnly}
-      bodyClassName={detailsOnly ? 'mt-0' : undefined}
       footer={footer}
     >
-      {detailsOnly && <h2 className="sr-only">{title}</h2>}
       {step === 'failed' && (description || error || failureAction?.retry) && (
         <TransactionNotice
           message={description || error || title}
@@ -120,8 +116,12 @@ export function StandardTransactionResult({
           retryLabel={failureAction?.label}
         />
       )}
-      {submittingOnly ? null : activityView ? (
-        <ActivityTransactionBody view={activityView} showDate={showTime} />
+      {activityView ? (
+        <ActivityTransactionBody
+          view={activityView}
+          showDate={showTime}
+          showAmountsAsDetails={phaseLayout}
+        />
       ) : (
         step !== 'failed' && (
           <div className="w-full">
@@ -154,7 +154,7 @@ export function StandardTransactionResult({
               {DEFAULT_NETWORK === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
             </TransactionResultDetailRow>
 
-            {detailsOnly && (
+            {showStatusDetail && (
               <TransactionResultDetailRow label="Status">
                 {step === 'success'
                   ? 'Confirmed'

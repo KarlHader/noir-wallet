@@ -13,6 +13,7 @@ import {
 } from '@/core/keyring/ports'
 import {
   hasDestinationSettlementEvidence,
+  isKnownNonMinedEvmFailure,
   parseTransactionEventId,
   parseTransactionGraph,
   parseTransactionId,
@@ -337,7 +338,6 @@ export class EvmTransferOrchestrator {
       (segment?.status !== 'broadcast' && segment?.status !== 'confirming') ||
       hasDestinationSettlementEvidence(original.segments) ||
       !segment?.evidence?.transactionHash ||
-      segment.evidence.replacementTransactionHash !== undefined ||
       !evm ||
       !sender ||
       sender.chainId !== input.chainAccount.scope.chainId ||
@@ -345,6 +345,7 @@ export class EvmTransferOrchestrator {
     ) {
       throw new EvmTransactionError('stale-nonce', 'Pending EVM transaction cannot be replaced')
     }
+    await this.assertOriginalReplacementLinkRetryable(original, input.chainAccount.scope.chainId)
     if (input.action === 'speed-up') {
       if (
         original.root.kind === 'cancel' ||
@@ -415,30 +416,64 @@ export class EvmTransferOrchestrator {
   }
 
   private async assertNoExistingReplacement(
-    action: 'cancel' | 'speed-up',
     scope: TransactionAccountScope,
     chainId: ChainId,
-    originalTransactionId: TransactionId
+    originalTransactionId: TransactionId,
+    sender: string
   ): Promise<void> {
     const isConflict = (graph: TransactionGraph | null) =>
       graph?.root.relation?.kind === 'replacement-of' &&
       graph.root.relation.transactionId === originalTransactionId &&
-      (action === 'speed-up' || graph.root.kind === 'cancel')
+      (graph.root.status !== 'failed' ||
+        (graph.segments.some(segment => segment.evidence?.transactionHash !== undefined) &&
+          !isKnownNonMinedEvmFailure(graph)))
     const existing = await this.repository.list({
       scope,
       chainId,
-      statuses: ['prepared', 'approved', 'signed', 'broadcast', 'confirming', 'final'],
+      statuses: ['prepared', 'approved', 'signed', 'broadcast', 'confirming', 'final', 'failed'],
       limit: 200
     })
-    if (existing.some(isConflict)) {
-      if (action === 'cancel') throw new Error('A cancellation replacement already exists')
-      throw new EvmTransactionError('stale-nonce', 'An EVM replacement already exists')
-    }
-    for (const pending of await this.pendingStore.list()) {
-      if (isConflict(await this.pendingStore.getReviewGraph(pending.transactionId))) {
-        if (action === 'cancel') throw new Error('A cancellation replacement already exists')
+    const { active } = await this.listUnexpiredPendingTransfers(chainId, sender)
+    for (const pending of active) {
+      if (!scopesMatch(pending.scope, scope)) continue
+      const review =
+        (await this.repository.get(scope, pending.transactionId)) ??
+        (await this.pendingStore.getReviewGraph(pending.transactionId))
+      if (isConflict(review)) {
         throw new EvmTransactionError('stale-nonce', 'An EVM replacement already exists')
       }
+    }
+    if (existing.some(isConflict)) {
+      throw new EvmTransactionError('stale-nonce', 'An EVM replacement already exists')
+    }
+  }
+
+  private async assertOriginalReplacementLinkRetryable(
+    original: TransactionGraph,
+    chainId: ChainId
+  ): Promise<void> {
+    const hash = original.segments.find(segment => segment.role === 'origin')?.evidence
+      ?.replacementTransactionHash
+    if (!hash) return
+    const failed = await this.repository.list({
+      scope: original.root.scope,
+      chainId,
+      statuses: ['failed'],
+      limit: 200
+    })
+    if (
+      !failed.some(
+        graph =>
+          graph.root.kind === 'cancel' &&
+          graph.root.relation?.kind === 'replacement-of' &&
+          graph.root.relation.transactionId === original.root.id &&
+          graph.segments.some(
+            segment => segment.role === 'origin' && segment.evidence?.transactionHash === hash
+          ) &&
+          isKnownNonMinedEvmFailure(graph)
+      )
+    ) {
+      throw new EvmTransactionError('stale-nonce', 'The original EVM transaction is unavailable')
     }
   }
 
@@ -465,13 +500,13 @@ export class EvmTransferOrchestrator {
     if (
       !segment ||
       (segment.status !== 'broadcast' && segment.status !== 'confirming') ||
-      segment.evidence?.replacementTransactionHash !== undefined ||
       !transactionHash ||
       !evm ||
       !sender
     ) {
       throw new Error('Pending EVM transaction does not contain replacement metadata')
     }
+    await this.assertOriginalReplacementLinkRetryable(original, input.chainAccount.scope.chainId)
     const executionAccount = input.executionAccount
     const activeSender = (
       executionAccount ??
@@ -483,12 +518,6 @@ export class EvmTransferOrchestrator {
     ) {
       throw new Error('Pending EVM transaction does not belong to the active signer')
     }
-    await this.assertNoExistingReplacement(
-      'cancel',
-      scope,
-      input.chainAccount.scope.chainId,
-      originalTransactionId
-    )
     return this.prepare({
       chainAccount: input.chainAccount,
       intent: Object.freeze({
@@ -537,7 +566,6 @@ export class EvmTransferOrchestrator {
       (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
       (segment?.status !== 'broadcast' && segment?.status !== 'confirming') ||
       !transactionHash ||
-      segment.evidence?.replacementTransactionHash !== undefined ||
       !unsignedTransaction ||
       !sender ||
       sender.chainId !== input.chainAccount.scope.chainId ||
@@ -548,13 +576,8 @@ export class EvmTransferOrchestrator {
     ) {
       throw new EvmTransactionError('stale-nonce', 'Pending EVM transaction cannot be sped up')
     }
+    await this.assertOriginalReplacementLinkRetryable(original, input.chainAccount.scope.chainId)
     await this.checkSpeedUpAllowed(original)
-    await this.assertNoExistingReplacement(
-      'speed-up',
-      scope,
-      input.chainAccount.scope.chainId,
-      originalTransactionId
-    )
     return this.prepare({
       chainAccount: input.chainAccount,
       intent: {
@@ -645,6 +668,15 @@ export class EvmTransferOrchestrator {
     const isSpeedUp = input.speedUpOf !== undefined
     const isNonceRecovery = input.nonceRecoveryNonce !== undefined
     const isContractCall = 'calldata' in input.intent
+    const originalId = input.replacementOf?.transactionId ?? input.speedUpOf?.root.id
+    if (originalId) {
+      await this.assertNoExistingReplacement(
+        normalizeScope(input.chainAccount.scope),
+        input.chainAccount.scope.chainId,
+        originalId,
+        sender
+      )
+    }
     if (input.nearIntentsBinding && input.rheaSwapBinding) {
       throw new Error('EVM transaction cannot bind multiple protocols')
     }
@@ -985,32 +1017,41 @@ export class EvmTransferOrchestrator {
     sender: string,
     signal?: AbortSignal
   ): Promise<{ nextNonce: bigint; gapHighest: bigint | null; uncertainHead: boolean }> {
-    const persisted = await this.repository.list({
-      scope,
-      chainId,
-      statuses: ['signed', 'broadcast', 'confirming'],
-      limit: 200
-    })
-    const candidates = persisted.flatMap(graph => {
+    const [persisted, terminal] = await Promise.all([
+      this.repository.list({
+        scope,
+        chainId,
+        statuses: ['signed', 'broadcast', 'confirming'],
+        limit: 200
+      }),
+      this.repository.list({ scope, chainId, statuses: ['final', 'failed'], limit: 200 })
+    ])
+    const candidates = [
+      ...persisted,
+      ...terminal.filter(graph => graph.root.status === 'failed')
+    ].flatMap(graph => {
       const nonce = this.graphNonce(graph, chainId, sender)
       if (nonce === null) return []
       const origin = graph.segments.find(segment => segment.role === 'origin')
-      return [{ nonce, hash: origin?.evidence?.transactionHash }]
+      const evidence = origin?.evidence
+      if (graph.root.status === 'failed' && (!evidence?.transactionHash || evidence.blockHash))
+        return []
+      return [
+        {
+          nonce,
+          hash: evidence?.transactionHash,
+          knownNonMined: isKnownNonMinedEvmFailure(graph)
+        }
+      ]
     })
     const observe = async (rpc: EvmNonceQueueRpc) => {
       const queue = await this.observeNonceQueue(rpc, sender, candidates, signal)
-      const finalized = await this.repository.list({
-        scope,
-        chainId,
-        statuses: ['final'],
-        limit: 200
-      })
-      for (const graph of finalized) {
+      for (const graph of terminal) {
         if (this.graphNonce(graph, chainId, sender) !== queue.nextNonce) continue
         const origin = graph.segments.find(segment => segment.role === 'origin')
         const evidence = origin?.evidence
         if (
-          origin?.status !== 'final' ||
+          (origin?.status !== 'final' && origin?.status !== 'failed') ||
           !evidence?.transactionHash ||
           !evidence.blockHash ||
           evidence.blockHeight === undefined
@@ -1019,8 +1060,7 @@ export class EvmTransferOrchestrator {
         }
         const receipt = await rpc.getTransactionReceipt(evidence.transactionHash, signal)
         if (
-          receipt?.status === 'success' &&
-          receipt.transactionHash === evidence.transactionHash &&
+          receipt?.transactionHash === evidence.transactionHash &&
           receipt.blockHash === evidence.blockHash &&
           BigInt(receipt.blockNumber) === BigInt(evidence.blockHeight)
         ) {
@@ -1046,7 +1086,7 @@ export class EvmTransferOrchestrator {
   private async observeNonceQueue(
     rpc: EvmNonceQueueRpc,
     sender: string,
-    candidates: readonly { nonce: bigint; hash: string | undefined }[],
+    candidates: readonly { nonce: bigint; hash: string | undefined; knownNonMined: boolean }[],
     signal?: AbortSignal
   ): Promise<{ nextNonce: bigint; gapHighest: bigint | null; uncertainHead: boolean }> {
     const pendingNonce = BigInt(await rpc.getPendingNonce(sender, signal))
@@ -1066,14 +1106,19 @@ export class EvmTransferOrchestrator {
     const remaining = candidates.filter(candidate => candidate.nonce >= initialNextNonce)
     for (let offset = 0; offset < remaining.length; offset += 4) {
       const observations = await Promise.all(
-        remaining.slice(offset, offset + 4).map(async ({ nonce, hash }) => {
+        remaining.slice(offset, offset + 4).map(async ({ nonce, hash, knownNonMined }) => {
           if (!hash) return { nonce, status: 'unknown' }
           const location = await rpc.getTransactionLocation(hash, signal)
           if (location.status !== 'unknown') return { nonce, status: location.status }
           const receipt = await rpc.getTransactionReceipt(hash, signal)
           return {
             nonce,
-            status: receipt?.transactionHash === hash.toLowerCase() ? 'included' : 'unknown'
+            status:
+              receipt?.transactionHash === hash.toLowerCase()
+                ? 'included'
+                : knownNonMined
+                  ? 'absent'
+                  : 'unknown'
           }
         })
       )
@@ -1115,12 +1160,6 @@ export class EvmTransferOrchestrator {
     protectedTransactionId?: TransactionId
   ): Promise<string> {
     const queue = await this.readNonceQueue(scope, chainId, sender, signal)
-    if (queue.gapHighest !== null) {
-      throw new EvmTransactionError(
-        'nonce-recovery-required',
-        `Resolve EVM nonce ${queue.nextNonce} before preparing another transaction`
-      )
-    }
     if (queue.uncertainHead) {
       throw nonceQueueUnavailable()
     }
@@ -1150,6 +1189,15 @@ export class EvmTransferOrchestrator {
       const nonce = BigInt(pending.prepared.transaction.nonce)
       if (pending.transactionId === protectedTransactionId && nonce !== queue.nextNonce) {
         throw new EvmTransactionError('stale-nonce', 'The next EVM nonce changed. Review again')
+      }
+      if (queue.gapHighest !== null && pending.transactionId !== protectedTransactionId) {
+        if (nonce === queue.nextNonce) {
+          throw new EvmTransactionError(
+            'stale-nonce',
+            'Review the existing transaction at this nonce first'
+          )
+        }
+        continue
       }
       if (nonce >= nonceFloor) nonceFloor = nonce + 1n
     }
@@ -1453,11 +1501,11 @@ export class EvmTransferOrchestrator {
         !originalHash ||
         (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
         hasDestinationSettlementEvidence(original.segments) ||
-        (origin.status !== 'broadcast' && origin.status !== 'confirming') ||
-        origin.evidence?.replacementTransactionHash !== undefined
+        (origin.status !== 'broadcast' && origin.status !== 'confirming')
       ) {
         throw new EvmTransactionError('stale-nonce', 'The original EVM transaction is unavailable')
       }
+      await this.assertOriginalReplacementLinkRetryable(original, prepared.chainId)
       await this.rpc.assertExpectedChain(signal)
       await assertEvmReplacementNonceAvailable(
         this.rpc,
@@ -1489,7 +1537,6 @@ export class EvmTransferOrchestrator {
         (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
         hasDestinationSettlementEvidence(original.segments) ||
         (origin.status !== 'broadcast' && origin.status !== 'confirming') ||
-        origin.evidence?.replacementTransactionHash !== undefined ||
         (original.root.intent?.protocol !== undefined &&
           original.root.intent.protocol.expiresAt <= this.now()) ||
         !isEvmSpeedUpReplacement(original, graph) ||
@@ -1498,6 +1545,7 @@ export class EvmTransferOrchestrator {
       ) {
         throw new EvmTransactionError('stale-nonce', 'The original EVM transaction is unavailable')
       }
+      await this.assertOriginalReplacementLinkRetryable(original, prepared.chainId)
       await this.checkSpeedUpAllowed(original)
       await this.rpc.assertExpectedChain(signal)
       await assertEvmReplacementNonceAvailable(
@@ -1723,6 +1771,11 @@ export class EvmTransferOrchestrator {
     currentGraph?: TransactionGraph
   ): Promise<EvmTransferSubmission> {
     const signedGraph = await this.persistSignedGraph(pending, currentGraph)
+    const origin = signedGraph.segments.find(segment => segment.id === pending.segmentId)
+    if (origin?.status === 'failed' || origin?.status === 'final') {
+      await this.pendingStore.delete(pending.transactionId)
+      throw new EvmTransactionError('stale-nonce', 'The signed EVM transaction is already terminal')
+    }
     let accepted = false
     try {
       await broadcastSignedEvmTransaction({
@@ -1743,9 +1796,6 @@ export class EvmTransferOrchestrator {
       transactionHash: pending.transactionHash
     })
     await this.pendingStore.delete(pending.transactionId)
-    if (graph.root.kind === 'cancel' && graph.root.relation?.kind === 'replacement-of') {
-      await this.markOriginalReplacementBroadcast(graph, pending.transactionHash).catch(() => {})
-    }
     await Promise.all([
       Promise.resolve(this.onBroadcastAccepted?.(graph, currentGraph === undefined)).catch(
         () => {}
@@ -1753,51 +1803,6 @@ export class EvmTransferOrchestrator {
       Promise.resolve(this.onMonitoringRequired?.()).catch(() => {})
     ])
     return Object.freeze({ status: 'broadcast', graph })
-  }
-
-  private async markOriginalReplacementBroadcast(
-    cancellation: TransactionGraph,
-    replacementTransactionHash: string
-  ): Promise<void> {
-    const relation = cancellation.root.relation
-    if (relation?.kind !== 'replacement-of') return
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const original = await this.repository.get(cancellation.root.scope, relation.transactionId)
-      const segment = original?.segments.find(candidate => candidate.role === 'origin')
-      if (
-        !original ||
-        !segment ||
-        original.root.status === 'final' ||
-        original.root.status === 'failed'
-      ) {
-        return
-      }
-      const observedAt = this.now()
-      const result = await this.repository.applySegmentEvent({
-        scope: original.root.scope,
-        transactionId: original.root.id,
-        segmentId: segment.id,
-        event: Object.freeze({
-          id: parseTransactionEventId(`event:evm:${this.createId()}`),
-          status: segment.status,
-          cause: 'progress' as const,
-          observedAt,
-          evidence: Object.freeze({
-            ...(segment.evidence?.transactionHash === undefined
-              ? {}
-              : { transactionHash: segment.evidence.transactionHash }),
-            ...(segment.evidence?.externalReference === undefined
-              ? {}
-              : { externalReference: segment.evidence.externalReference }),
-            replacementTransactionHash
-          })
-        }),
-        expectedRootRevision: original.root.revision,
-        expectedSegmentRevision: segment.revision
-      })
-      if (result.status !== 'revision-conflict') return
-    }
-    throw new Error('EVM cancellation replacement link could not be persisted')
   }
 
   private async failAwaitingApproval(

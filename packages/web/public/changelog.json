@@ -116,7 +116,7 @@
     "1.0.30": {
       "changes": [
         "More reliable wallet syncing with automatic recovery when a Zcash connection is unavailable.",
-        "Lending prices now stay aligned with RHEA’s latest market data.",
+        "Lending prices now stay aligned with the latest market data.",
         "Update notifications are less intrusive and open release notes only when you choose to view them."
       ]
     },

@@ -1,6 +1,7 @@
 import { Icon } from '@iconify/react'
 import { TransactionNotice } from './TransactionNotice'
 import type { ComponentProps, ReactNode } from 'react'
+import { formatInsufficientBalance } from '@/lib/format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { ChainSelector } from '../common/ChainSelector'
 import {
@@ -136,8 +137,11 @@ export function SendTransferView({
             invalid: state.recipientInvalid,
             network: { name: networkName, ...networkSelection?.trigger },
             onSelectRecipient: () => void state.selectRecipient(),
-            feedback: state.recipientInvalid && (
-              <TransactionNotice message={state.invalidRecipientMessage} />
+            notice: state.recipientInvalid && (
+              <TransactionNotice
+                id={`${family}-send-recipient-error`}
+                message={state.invalidRecipientMessage}
+              />
             )
           }
         },
@@ -177,7 +181,7 @@ export function SendTransferView({
                 tone={state.error ? 'error' : 'warning'}
                 message={
                   state.error ??
-                  (state.insufficientBalance ? `Insufficient ${asset.symbol} balance.` : null)
+                  (state.insufficientBalance ? formatInsufficientBalance(asset.symbol) : null)
                 }
               />
             )}

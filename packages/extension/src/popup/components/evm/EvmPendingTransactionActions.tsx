@@ -202,8 +202,8 @@ export function EvmPendingTransactionActions({
   const [busy, setBusy] = useState<PendingAction | null>(null)
   const [submittedFor, setSubmittedFor] = useState<{
     id: string
-    action: PendingAction
-    status: 'broadcast' | 'signed-pending-broadcast'
+    updatedAt: number
+    replacement: NonNullable<ActivityItem['evmReplacement']>
   } | null>(null)
   const [unavailableFor, setUnavailableFor] = useState<string | null>(null)
   const mounted = useRef(true)
@@ -221,6 +221,54 @@ export function EvmPendingTransactionActions({
   const originKey = getReplacementOriginKey(item, evmChainIds)
   const origin = item.segments.find(segment => segment.role === 'origin')
   const cancellationStatus = item.cancellationStatus
+  const localReplacement =
+    submittedFor?.id === item.id && submittedFor.updatedAt === item.updatedAt
+      ? submittedFor.replacement
+      : undefined
+  const replacement =
+    item.evmReplacement?.status === 'signed' &&
+    localReplacement?.id === item.evmReplacement.id &&
+    localReplacement.status === 'broadcast'
+      ? localReplacement
+      : (item.evmReplacement ?? localReplacement)
+  if (replacement && item.status !== 'final' && item.status !== 'failed') {
+    const retry = async () => {
+      if (busy || !accountMatches) return
+      setBusy(replacement.action)
+      try {
+        const submission = await evmWalletClient.resumeTransfer(parseTransactionId(replacement.id))
+        if (mounted.current && latest.current.item.id === item.id) {
+          setSubmittedFor({
+            id: item.id,
+            updatedAt: item.updatedAt,
+            replacement: {
+              ...replacement,
+              status: submission.status === 'broadcast' ? 'broadcast' : 'signed'
+            }
+          })
+        }
+      } catch (error) {
+        if (mounted.current && latest.current.item.id === item.id) {
+          toast.error(error instanceof Error ? error.message : 'Broadcast retry failed')
+        }
+      } finally {
+        if (mounted.current) setBusy(null)
+      }
+    }
+    return replacement.status === 'signed' && accountMatches ? (
+      <Button
+        className={cn('h-[45px] w-full', className)}
+        isLoading={busy !== null}
+        onClick={() => void retry()}
+      >
+        Retry broadcast
+      </Button>
+    ) : (
+      <p role="status" className={cn('text-center text-xs text-muted', className)}>
+        {replacement.action === 'cancel' ? 'Cancellation pending' : 'Speed up pending'}
+      </p>
+    )
+  }
   if (cancellationStatus && cancellationStatus !== 'failed') return null
   const cancellationPending =
     !cancellationStatus &&
@@ -239,16 +287,6 @@ export function EvmPendingTransactionActions({
     )
   }
   if (!canCancel && !canSpeedUp) return null
-  if (!cancellationStatus && submittedFor?.id === item.id)
-    return (
-      <p role="status" className={cn('text-center text-xs text-muted', className)}>
-        {submittedFor.action === 'speed-up'
-          ? 'Speed up pending'
-          : submittedFor.status === 'broadcast'
-            ? 'Cancellation pending'
-            : 'Cancellation submission unconfirmed'}
-      </p>
-    )
   if (originKey !== null && unavailableFor === originKey)
     return (
       <p role="status" className={cn('text-center text-xs text-muted', className)}>
@@ -382,8 +420,16 @@ export function EvmPendingTransactionActions({
         window.close()
         return
       }
-      if ((submission.status === 'broadcast' || action === 'cancel') && stillCurrent()) {
-        setSubmittedFor({ id: item.id, action, status: submission.status })
+      if (stillCurrent()) {
+        setSubmittedFor({
+          id: item.id,
+          updatedAt: item.updatedAt,
+          replacement: {
+            id: submission.graph.root.id,
+            action,
+            status: submission.status === 'broadcast' ? 'broadcast' : 'signed'
+          }
+        })
       }
     } catch (error) {
       if (review) await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
@@ -415,7 +461,7 @@ export function EvmPendingTransactionActions({
       )}
       {canCancel && (
         <Button
-          variant="outline"
+          variant="destructive"
           className="h-[45px] w-full"
           disabled={busy !== null}
           isLoading={busy === 'cancel'}

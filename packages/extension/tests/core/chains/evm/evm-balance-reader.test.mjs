@@ -21,7 +21,13 @@ import {
 
 const chainId = parseChainId('eip155:1').id
 const chains = createEvmBitcoinChainRegistry('mainnet')
-const assets = createAssetRegistry(chains, getBundledEvmAssetDefinitions('mainnet'))
+const assets = createAssetRegistry(
+  chains,
+  getBundledEvmAssetDefinitions('mainnet').filter(
+    asset =>
+      asset.chainId === 'eip155:1' && (asset.kind === 'native' || asset.metadata.symbol === 'USDC')
+  )
+)
 const account = {
   id: 'chain-account:evm:0',
   scope: {

@@ -52,13 +52,30 @@ export interface IntentsAppFee {
   fee: number
 }
 
+const NOIR_APP_FEE_RECIPIENT = 'noir_swap.near'
 /** Swap app fee: 0.35% (35 bps), collected to noir's swap account. */
-export const NOIR_SWAP_APP_FEES: IntentsAppFee[] = [{ recipient: 'noir_swap.near', fee: 35 }]
+export const NOIR_SWAP_APP_FEES: IntentsAppFee[] = [{ recipient: NOIR_APP_FEE_RECIPIENT, fee: 35 }]
 export const NOIR_SWAP_REFERRAL = 'noir_swap'
 export const NOIR_SEND_REFERRAL = 'noir_send'
 export const NOIR_RECEIVE_REFERRAL = 'noir_receive'
+export const NOIR_PRIVATELY_REFERRAL = 'noir_privately'
+export const NOIR_MOVE_REFERRAL = 'noir_move'
+export const NOIR_PUBLIC_CONFIDENTIAL_TRANSFER_APP_FEES: readonly IntentsAppFee[] = [
+  { recipient: NOIR_APP_FEE_RECIPIENT, fee: 2 }
+]
+
+export type NoirPublicConfidentialTransferReferral =
+  | typeof NOIR_PRIVATELY_REFERRAL
+  | typeof NOIR_MOVE_REFERRAL
+
+export function isNoirPublicConfidentialTransferReferral(
+  referral: unknown
+): referral is NoirPublicConfidentialTransferReferral {
+  return referral === NOIR_PRIVATELY_REFERRAL || referral === NOIR_MOVE_REFERRAL
+}
 
 export type NoirIntentsReferral =
   | typeof NOIR_SWAP_REFERRAL
   | typeof NOIR_SEND_REFERRAL
   | typeof NOIR_RECEIVE_REFERRAL
+  | NoirPublicConfidentialTransferReferral
