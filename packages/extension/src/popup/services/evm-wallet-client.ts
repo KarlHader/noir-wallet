@@ -29,6 +29,7 @@ import {
   type TransactionId,
   type NearIntentsTransactionBinding,
   type RheaSwapTransactionBinding,
+  NETWORK_FEE_TIERS,
   type NetworkFeeTier
 } from '@/core/transactions/domain'
 import {
@@ -298,11 +299,13 @@ function parseFeeEstimate(
   ]
   const hasAmountIndependent = Object.prototype.hasOwnProperty.call(record, 'amountIndependent')
   const hasFeeModel = Object.prototype.hasOwnProperty.call(record, 'transactionType')
+  const hasTierPreviews = Object.prototype.hasOwnProperty.call(record, 'tierMaximumFeeWei')
   assertExactKeys(
     record,
     [
       ...expectedKeys,
       ...(hasFeeModel ? ['transactionType', 'gasPriceWei'] : []),
+      ...(hasTierPreviews ? ['tierMaximumFeeWei'] : []),
       ...(hasAmountIndependent ? ['amountIndependent'] : [])
     ],
     'EVM fee estimate'
@@ -348,6 +351,19 @@ function parseFeeEstimate(
   }
   if (record.amountIndependent === true && (!nativeTransfer || gasLimit !== 21_000n)) {
     throw new Error('Invalid EVM amount-independent estimate')
+  }
+  if (hasTierPreviews) {
+    const tiers = readRecord(record.tierMaximumFeeWei, 'EVM fee tier previews')
+    for (const [tier, fee] of Object.entries(tiers)) {
+      if (
+        !NETWORK_FEE_TIERS.some(known => known === tier) ||
+        typeof fee !== 'string' ||
+        !/^[1-9][0-9]{0,77}$/.test(fee)
+      ) {
+        throw new Error('Invalid EVM fee tier preview')
+      }
+    }
+    record.tierMaximumFeeWei = Object.freeze(tiers)
   }
   return Object.freeze(record) as unknown as EvmFeeEstimate
 }

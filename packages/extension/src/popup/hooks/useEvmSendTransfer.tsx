@@ -18,7 +18,7 @@ import { openModal } from '@/popup/provider/ModalManager'
 import { useNavigate } from '@/popup/provider/Router'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import { DEFAULT_NETWORK_FEE_TIER } from '@/core/transactions/domain'
-import { estimateNetworkFeeTierPreviews } from '@/popup/services/network-fee-presentation'
+import { getEvmFeeTierPreviews } from '@/popup/services/network-fee-presentation'
 import { areEvmFeeSelectionsEqual, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
 import { useEvmConfirmationEstimate } from '@/popup/hooks/useEvmConfirmationEstimate'
@@ -759,9 +759,9 @@ export function useEvmSendTransfer({
     [estimateSelectedFee, feeSelection]
   )
   const loadTierPreviews = useCallback(
-    () =>
-      estimateNetworkFeeTierPreviews(
-        async tier => (await estimateSelectedFee({ kind: 'tier', tier })).amountRaw,
+    async () =>
+      getEvmFeeTierPreviews(
+        (await estimateSelectedFee(feeSelection)).details,
         { decimals: nativeDecimals, symbol: nativeSymbol },
         feeSelection.kind === 'tier' ? feeSelection.tier : undefined
       ),

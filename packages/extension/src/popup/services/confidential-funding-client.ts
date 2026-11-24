@@ -18,7 +18,7 @@ import { parseZcashAddress } from '@/core/address-book/address-book'
 import { formatBaseUnitAmount } from '@/lib/number-format'
 import { formatSymbol } from '@/lib/format'
 import { evmWalletClient } from './evm-wallet-client'
-import { estimateNetworkFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
+import { getEvmFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
 export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
@@ -486,7 +486,7 @@ export const externalShieldDepositClient = createExternalShieldDepositClient()
 
 export const confidentialFundingClient = createConfidentialFundingClient()
 
-export function previewReviewedConfidentialDepositFeeTiers(
+export async function previewReviewedConfidentialDepositFeeTiers(
   review: ConfidentialFundingReview,
   assetId: string,
   reviewedTier?: NetworkFeeTier
@@ -497,20 +497,14 @@ export function previewReviewedConfidentialDepositFeeTiers(
     !sourceNetworkFee ||
     (sourceDomain !== 'public' && sourceDomain !== 'private')
   ) {
-    return Promise.resolve({})
+    return {}
   }
   const executionMode = sourceDomain === 'public' ? 'main' : 'private'
-  return estimateNetworkFeeTierPreviews(
-    async feeTier =>
-      (
-        await evmWalletClient.estimateTransferFee(
-          { assetId, recipient: depositAddress, amountRaw: sourceAmountRaw },
-          { executionMode, feeTier }
-        )
-      ).maximumFeeWei,
-    sourceNetworkFee,
-    reviewedTier
+  const estimate = await evmWalletClient.estimateTransferFee(
+    { assetId, recipient: depositAddress, amountRaw: sourceAmountRaw },
+    { executionMode, feeTier: reviewedTier ?? 'low' }
   )
+  return getEvmFeeTierPreviews(estimate, sourceNetworkFee, reviewedTier)
 }
 
 export async function previewClusterNetworkFeeTiers(

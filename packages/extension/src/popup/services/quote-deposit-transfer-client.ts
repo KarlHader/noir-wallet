@@ -45,7 +45,7 @@ import type {
   EvmWalletClient
 } from './evm-wallet-client'
 import { evmWalletClient } from './evm-wallet-client'
-import { estimateNetworkFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
+import { getEvmFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
 import type {
   BitcoinTransferReview,
   BitcoinTransferApprovalResult,
@@ -120,33 +120,27 @@ export async function loadQuoteDepositEvmFeePreviews(
   if (!transaction) return {}
 
   const { source } = prepared
-  return estimateNetworkFeeTierPreviews(
-    async tier => {
-      const options = { feeTier: tier, executionMode }
-      const estimate =
-        transaction.input === '0x' && source.asset.asset.kind === 'native'
-          ? await evmWalletClient.estimateTransferFee(
-              {
-                assetId: source.asset.asset.id,
-                recipient: transaction.to,
-                amountRaw: transaction.value
-              },
-              options
-            )
-          : await evmWalletClient.estimateContractCallFee(
-              {
-                chainId: source.chain.chain.id,
-                contractAddress: transaction.to,
-                valueRaw: transaction.value,
-                calldata: transaction.input
-              },
-              options
-            )
-      return estimate.maximumFeeWei
-    },
-    source.networkFeeAsset.metadata,
-    reviewedTier
-  )
+  const options = { feeTier: reviewedTier ?? 'low', executionMode } as const
+  const estimate =
+    transaction.input === '0x' && source.asset.asset.kind === 'native'
+      ? await evmWalletClient.estimateTransferFee(
+          {
+            assetId: source.asset.asset.id,
+            recipient: transaction.to,
+            amountRaw: transaction.value
+          },
+          options
+        )
+      : await evmWalletClient.estimateContractCallFee(
+          {
+            chainId: source.chain.chain.id,
+            contractAddress: transaction.to,
+            valueRaw: transaction.value,
+            calldata: transaction.input
+          },
+          options
+        )
+  return getEvmFeeTierPreviews(estimate, source.networkFeeAsset.metadata, reviewedTier)
 }
 
 export interface QuoteDepositMaximum {
