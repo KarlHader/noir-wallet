@@ -8,7 +8,6 @@ import {
 } from '../transaction/TransactionResult'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { TransactionNotice } from '../transaction/TransactionNotice'
-import { TokenIcon } from '../tokens/TokenIcon'
 import { formatChainName } from '@/lib/format'
 import { isZcashDestination } from '@/lib/cross-chain-transaction'
 import { WALLET_CONFIG } from '@/config/wallet'
@@ -33,7 +32,6 @@ import {
   type SwapApprovalProgress
 } from '@/popup/services/transaction-progress'
 import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
-import type { SwapToken } from '@/core/services/intents-api'
 import { TransactionProgressSteps } from '../transaction/TransactionProgressSteps'
 import { TransactionReferenceValue } from '../transaction/TransactionReferenceValue'
 import {
@@ -73,7 +71,6 @@ interface SwapStatusDisplayProps {
   activityItem?: ActivityItem | null
   approvalProgress?: SwapApprovalProgress
   beforeSubmission?: {
-    readonly token: SwapToken
     readonly error?: string | null
     readonly onContinue?: () => void
     readonly continueDisabled?: boolean
@@ -339,22 +336,19 @@ export function SwapStatusDisplay({
       {activityView ? (
         <ActivityTransactionBody
           view={activityView}
-          showAmountsAsDetails={isSend}
+          showAmountsAsDetails
           precedingProgress={
             approvalStep ? { step: approvalStep, reference: approvalReference } : undefined
           }
         />
       ) : beforeSubmission ? (
         <>
-          <div className="flex flex-col items-center py-7 text-center">
-            <TokenIcon token={beforeSubmission.token} size={40} showChainBadge={false} />
-            <div className="mt-4 max-w-full break-all text-3xl font-bold tabular-nums">
-              <AmountDisplay value={amountIn} prefix="−" symbol={tokenInSymbol} />
-            </div>
-            <div className="mt-1 max-w-full break-all text-sm text-muted tabular-nums">
-              Expected <AmountDisplay value={amountOut} prefix="+" symbol={tokenOutSymbol} />
-            </div>
-          </div>
+          <TransactionResultDetailRow label="Amount">
+            <AmountDisplay value={amountIn} prefix="−" symbol={tokenInSymbol} />
+          </TransactionResultDetailRow>
+          <TransactionResultDetailRow label="Expected receive">
+            <AmountDisplay value={amountOut} symbol={tokenOutSymbol} />
+          </TransactionResultDetailRow>
           {sourceNetwork && destinationNetwork && (
             <TransactionResultDetailRow label="Route">
               {sourceNetwork} → {destinationNetwork}

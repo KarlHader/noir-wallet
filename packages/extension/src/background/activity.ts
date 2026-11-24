@@ -1,6 +1,6 @@
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
-  isExternalShieldDepositAutoHidden,
+  hasExternalShieldDepositFunding,
   isLegacyShieldWithdrawActivityGraph,
   projectExternalShieldDepositActivityGraph,
   projectLegacyShieldWithdrawActivityGraph,
@@ -852,13 +852,16 @@ export function createBackgroundActivityCoordinator(
         )
         .map(record => [record.transactionId, record] as const)
     )
-    const now = Date.now()
     const projectedGraphs: TransactionGraph[] = []
     for (const graph of recoveredGraphs) {
       const record = externalByTransactionId.get(graph.root.id)
+      if (
+        graph.root.status === 'created' &&
+        graph.root.id.startsWith('tx:confidential-external:') &&
+        (!record || !hasExternalShieldDepositFunding(record))
+      )
+        continue
       if (record) {
-        if (graph.root.status === 'created' && isExternalShieldDepositAutoHidden(record, now))
-          continue
         projectedGraphs.push(projectExternalShieldDepositActivityGraph(graph, record))
         continue
       }

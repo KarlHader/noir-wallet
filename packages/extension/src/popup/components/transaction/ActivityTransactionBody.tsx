@@ -894,6 +894,66 @@ export function ActivityTransactionProgress({
   )
 }
 
+function ActivityTransactionAmountDetails({ view }: { readonly view: ActivityTransactionView }) {
+  const { swap } = view
+  const destination = swap?.hideDestinationCredit ? null : swap?.destination
+  const receiveLabel = view.isShieldSend
+    ? 'Recipient receives'
+    : swap?.destinationIsSettled
+      ? 'Received'
+      : 'Expected receive'
+  if (swap && (swap.isExternalDeposit || view.actionSide === 'destination')) {
+    const credit = view.isRefunded ? swap.source : (swap.destination ?? swap.source)
+    return credit ? (
+      <DetailRow label={view.isRefunded ? 'Refund' : receiveLabel}>
+        <AmountDisplay
+          value={credit.exact}
+          symbol={credit.symbol}
+          prefix={view.isRefunded ? '' : '+'}
+          className="text-sm"
+        />
+      </DetailRow>
+    ) : null
+  }
+  if (!swap && !view.amount && view.showChanges && view.changes.length > 0) {
+    const singleChange = view.changes.length === 1
+    return view.changes.map(change => (
+      <DetailRow
+        key={`${change.direction}:${change.assetId}`}
+        label={singleChange ? 'Amount' : change.direction === 'incoming' ? 'Received' : 'Sent'}
+      >
+        <AmountDisplay
+          value={change.value}
+          symbol={change.symbol}
+          prefix={change.direction === 'incoming' ? '+' : '−'}
+          className="text-sm"
+        />
+      </DetailRow>
+    ))
+  }
+  const amount = swap?.source
+    ? { value: swap.source.exact, symbol: swap.source.symbol, prefix: '−' }
+    : view.amount
+  return (
+    <>
+      {amount && (
+        <DetailRow label="Amount">
+          <AmountDisplay {...amount} className="text-sm" />
+        </DetailRow>
+      )}
+      {destination && !view.isRefunded && (
+        <DetailRow label={receiveLabel}>
+          <AmountDisplay
+            value={destination.exact}
+            symbol={destination.symbol}
+            className="text-sm"
+          />
+        </DetailRow>
+      )}
+    </>
+  )
+}
+
 export function ActivityTransactionBody({
   view,
   precedingProgress,
@@ -907,33 +967,11 @@ export function ActivityTransactionBody({
   readonly showAccountRoute?: boolean
   readonly showAmountsAsDetails?: boolean
 }) {
-  const amount = view.swap?.source
-    ? { value: view.swap.source.exact, symbol: view.swap.source.symbol, prefix: '−' }
-    : view.amount
-  const destination = view.swap?.hideDestinationCredit ? null : view.swap?.destination
   return (
     <>
       {!showAmountsAsDetails && <ActivityTransactionHero view={view} />}
       <div className="mb-6 space-y-4">
-        {showAmountsAsDetails && amount && (
-          <DetailRow label="Amount">
-            <AmountDisplay
-              value={amount.value}
-              symbol={amount.symbol}
-              prefix={amount.prefix}
-              className="text-sm"
-            />
-          </DetailRow>
-        )}
-        {showAmountsAsDetails && destination && !view.isRefunded && (
-          <DetailRow label={view.swap?.destinationIsSettled ? 'Received' : 'Expected receive'}>
-            <AmountDisplay
-              value={destination.exact}
-              symbol={destination.symbol}
-              className="text-sm"
-            />
-          </DetailRow>
-        )}
+        {showAmountsAsDetails && <ActivityTransactionAmountDetails view={view} />}
         <ActivityTransactionRoute view={view} />
         {showDate && (
           <DetailRow label="Date">

@@ -65,6 +65,7 @@ interface SwapReviewViewProps {
   priceImpact: number
   arrivalEstimate?: string
   isLoading?: boolean
+  submitting?: boolean
   preparationError?: string | null
   onRetryPreparation?: () => void
   /** Selected fee tier (read-only display on review). */
@@ -133,6 +134,7 @@ export function SwapReviewView({
   onCancel,
   onConfirm,
   isLoading,
+  submitting,
   preparationError,
   onRetryPreparation,
   feeTier,
@@ -201,29 +203,40 @@ export function SwapReviewView({
   return (
     <>
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-6">
-        <div className="space-y-3 px-1">
-          <QuoteAssetRow
-            direction="pay"
-            loading={quoteRefreshing}
-            token={tokenIn}
-            amount={amountIn}
-            fiatValue={fromFiat}
-            account={{ ...sourceAccount, address: sourceAddress, badge: sourceBadge }}
-            showAccountDetails={!onRefreshQuote}
-          />
-          <div className="flex h-3 items-center pl-4 text-muted/60" aria-hidden="true">
-            <ReviewDownTriangle />
+        {submitting ? (
+          <div>
+            <DetailItem label="Amount">
+              <AmountDisplay value={amountIn} symbol={formatSymbol(tokenIn.symbol)} prefix="−" />
+            </DetailItem>
+            <DetailItem label="Expected receive">
+              <AmountDisplay value={amountOut} symbol={formatSymbol(tokenOut.symbol)} />
+            </DetailItem>
           </div>
-          <QuoteAssetRow
-            direction="receive"
-            token={tokenOut}
-            amount={amountOut}
-            fiatValue={toFiat}
-            account={{ ...destinationAccount, address: destinationAddress }}
-            loading={quoteRefreshing}
-            showAccountDetails={!onRefreshQuote}
-          />
-        </div>
+        ) : (
+          <div className="space-y-3 px-1">
+            <QuoteAssetRow
+              direction="pay"
+              loading={quoteRefreshing}
+              token={tokenIn}
+              amount={amountIn}
+              fiatValue={fromFiat}
+              account={{ ...sourceAccount, address: sourceAddress, badge: sourceBadge }}
+              showAccountDetails={!onRefreshQuote}
+            />
+            <div className="flex h-3 items-center pl-4 text-muted/60" aria-hidden="true">
+              <ReviewDownTriangle />
+            </div>
+            <QuoteAssetRow
+              direction="receive"
+              token={tokenOut}
+              amount={amountOut}
+              fiatValue={toFiat}
+              account={{ ...destinationAccount, address: destinationAddress }}
+              loading={quoteRefreshing}
+              showAccountDetails={!onRefreshQuote}
+            />
+          </div>
+        )}
 
         <div className="mt-5 border-t border-border/60">
           <DetailItem label="Network">

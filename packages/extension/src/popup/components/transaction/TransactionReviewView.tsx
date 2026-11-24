@@ -89,7 +89,7 @@ interface TransactionReviewViewProps {
   readonly network: string
   readonly rows: readonly TransactionReviewRow[]
   readonly summary?: ReactNode
-  readonly exchange?: boolean
+  readonly submissionDestination?: TransactionReviewRow
   readonly notice?: ReactNode
   readonly afterRows?: ReactNode
   readonly quoteChanges?: ReactNode
@@ -168,7 +168,7 @@ export function TransactionReviewView({
   network,
   rows,
   summary,
-  exchange = false,
+  submissionDestination,
   notice,
   afterRows,
   quoteChanges,
@@ -195,16 +195,27 @@ export function TransactionReviewView({
         closeDisabled={cancelDisabled || confirming}
       >
         <div>
-          {exchange && summary ? (
-            summary
-          ) : (
-            <TransactionResultDetailRow label="Amount">
-              <AmountDisplay value={amount} symbol={asset?.symbol} />
+          <TransactionResultDetailRow label="Amount">
+            <AmountDisplay value={amount} symbol={asset?.symbol} prefix={amountPrefix} />
+          </TransactionResultDetailRow>
+          {submissionDestination && (
+            <TransactionResultDetailRow label={submissionDestination.label}>
+              {submissionDestination.content}
             </TransactionResultDetailRow>
           )}
           {rows
             .filter(row =>
-              ['From', 'To', 'Send from', 'Network', 'Recipient', 'Send To'].includes(row.label)
+              [
+                'From',
+                'To',
+                'Send from',
+                'Network',
+                'Recipient',
+                'Send To',
+                'Recipient receives',
+                'Expected receive',
+                'Estimated receive'
+              ].includes(row.label)
             )
             .map((row, index) => (
               <TransactionResultDetailRow key={`${row.label}-${index}`} label={row.label}>
