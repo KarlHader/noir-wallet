@@ -1,13 +1,52 @@
 import Big from '@/lib/big'
 import { excludeDeprecatedConfidentialAssets } from '@/core/services/confidential-funding/confidential-funding-portfolio'
 import type { PortfolioAssetView, PortfolioBalanceView, PortfolioReadModel } from '@/core/portfolio'
-import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import {
+  getBundledInitialProductAssetDefinitions,
+  getZcashChainId,
+  parseAssetId
+} from '@/core/chains/registry'
+import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
+import type { Network, ZcashBalance } from '@/types'
 import { formatDisplayTokenAmount } from '@/popup/services/portfolio-format'
 import {
   getAssetDomainRaw,
   getAssetShieldProvider,
   type AssetDomain
 } from '@/popup/services/asset-domains'
+
+export function getNativeZcashDetailFallback(
+  network: Network,
+  assetId: string,
+  cachedBalance: ZcashBalance | null
+): PortfolioAssetView | null {
+  if (assetId !== `${getZcashChainId(network)}/slip44:133`) return null
+  const definition = getBundledInitialProductAssetDefinitions(network).find(
+    item => item.chainId === getZcashChainId(network) && item.kind === 'native'
+  )
+  if (!definition) return null
+  const raw = (value: string | undefined) => parseDisplayUnitAmount(value ?? '0', 8)
+  return {
+    asset: { ...parseAssetId(assetId), kind: definition.kind },
+    metadata: definition.metadata,
+    source: definition.source,
+    chainAccountIds: [],
+    freshness: 'stale',
+    updatedAt: 0,
+    balance: {
+      totalRaw: raw(cachedBalance?.total),
+      availableRaw: raw(
+        cachedBalance?.available ?? cachedBalance?.spendable ?? cachedBalance?.shielded
+      ),
+      spendableRaw: raw(cachedBalance?.spendable ?? cachedBalance?.shielded),
+      pendingRaw: raw(cachedBalance?.pending?.total),
+      shieldedRaw: raw(cachedBalance?.shielded),
+      transparentRaw: raw(cachedBalance?.transparent),
+      shieldedPendingRaw: raw(cachedBalance?.pending?.shielded),
+      transparentPendingRaw: raw(cachedBalance?.pending?.transparent)
+    }
+  }
+}
 
 export function sumZcashDetailBalanceRaw(
   nativeRaw: string | null,
@@ -30,7 +69,7 @@ export function getAssetDetailBalanceFiat(
 
 export function getAssetDetailCategories(
   asset: PortfolioAssetView,
-  model: PortfolioReadModel,
+  model: PortfolioReadModel | null,
   privateEligible: boolean,
   priceUsd?: string
 ): {
@@ -38,10 +77,10 @@ export function getAssetDetailCategories(
   raw: Record<AssetDomain, string | null>
   fiat: Record<AssetDomain, string | null>
 } {
-  const visibleModel = excludeDeprecatedConfidentialAssets(model)
+  const visibleModel = model ? excludeDeprecatedConfidentialAssets(model) : null
   if (visibleModel !== model) {
     model = visibleModel
-    asset = model.assets.find(candidate => candidate.asset.id === asset.asset.id) ?? asset
+    asset = model?.assets.find(candidate => candidate.asset.id === asset.asset.id) ?? asset
   }
   const evm = asset.asset.chainId.startsWith('eip155:')
   const zcash = getAssetShieldProvider(asset) === 'zcash-shield'
@@ -53,7 +92,7 @@ export function getAssetDetailCategories(
   }
   let shieldPriceUsd: string | undefined
 
-  if (evm && model.confidential?.status === 'ready') {
+  if (evm && model?.confidential?.status === 'ready') {
     const candidates = model.confidential.assets.filter(entry => entry.assetId === asset.asset.id)
     if (
       candidates.length === 1 &&

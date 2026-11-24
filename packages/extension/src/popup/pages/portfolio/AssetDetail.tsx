@@ -25,11 +25,13 @@ import { formatSortAddress, formatSymbol } from '@/lib/format'
 import {
   getAssetDetailBalanceFiat,
   getAssetDetailCategories,
+  getNativeZcashDetailFallback,
   getZcashPrivacyBalanceDisplay,
   sumZcashDetailBalanceRaw
 } from '@/popup/services/asset-detail-balance'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { useWalletStore } from '@/store/wallet-store'
+import { useAccountDataStore } from '@/store/account-data-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { PageTabsList, PageTabsTrigger } from '@/popup/components/common/PageTabs'
@@ -43,6 +45,7 @@ import {
 } from '@/popup/components/common/CopyToast'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import zecLendingArtwork from '@/images/zec-lending.webp'
+import zcashChainIcon from '@/images/zcash-chain.svg'
 import { AssetDetailBalanceRow } from './AssetDetailBalanceRow'
 import { withConfidentialAssetPrices } from '@/popup/services/portfolio-prices'
 import { PrivateAddressWarningDialog } from '@/popup/components/account/PrivateAddressWarningDialog'
@@ -237,15 +240,29 @@ export function AssetDetail() {
 
   const visibleModel = model
   const requestedChainId = requestedAsset?.chainId ?? null
-  const requestedChainEnabled =
+  const requestedAccountNetwork =
     requestedChainId !== null &&
     storageV2Account?.walletId === effectiveWalletId &&
     storageV2Account.accountId === effectiveAccountId &&
-    storageV2Account.networks.some(network => network.chain.id === requestedChainId)
+    storageV2Account.networks.find(network => network.chain.id === requestedChainId)
+  const requestedChainEnabled = Boolean(requestedAccountNetwork)
+  const cachedZcashBalance = useAccountDataStore(state =>
+    effectiveWalletId && effectiveAccountId
+      ? state.getBalance(currentNetwork, effectiveWalletId, effectiveAccountId)
+      : null
+  )
   const nativeAsset = visibleModel?.assets.find(item => item.asset.id === requestedAssetId)
+  const zcashFallback = useMemo(
+    () =>
+      !nativeAsset && requestedAccountNetwork && requestedAssetId
+        ? getNativeZcashDetailFallback(currentNetwork, requestedAssetId, cachedZcashBalance)
+        : null,
+    [nativeAsset, requestedAccountNetwork, requestedAssetId, currentNetwork, cachedZcashBalance]
+  )
+  const waitingForNativeZcash = Boolean(zcashFallback && !cachedZcashBalance)
   const confidentialOnlyDetail = useMemo(
     () =>
-      nativeAsset || !requestedAssetId
+      nativeAsset || zcashFallback || !requestedAssetId
         ? null
         : resolveNearConfidentialZecDetail({
             model: visibleModel,
@@ -256,6 +273,7 @@ export function AssetDetail() {
           }),
     [
       nativeAsset,
+      zcashFallback,
       visibleModel,
       currentNetwork,
       effectiveWalletId,
@@ -263,13 +281,20 @@ export function AssetDetail() {
       requestedAssetId
     ]
   )
-  const asset = nativeAsset ?? confidentialOnlyDetail?.asset ?? null
+  const asset = nativeAsset ?? zcashFallback ?? confidentialOnlyDetail?.asset ?? null
   const chain =
     confidentialOnlyDetail?.chain ??
     visibleModel?.chains.find(item => item.chain.id === asset?.asset.chainId) ??
-    null
+    (zcashFallback && requestedAccountNetwork
+      ? {
+          chain: requestedAccountNetwork.chain,
+          status: 'loading' as const,
+          assets: [],
+          errorCodes: []
+        }
+      : null)
   const assetRefreshKey =
-    !asset && visibleModel && requestedChainEnabled && portfolioScopeKey
+    (!asset || zcashFallback) && visibleModel && requestedChainEnabled && portfolioScopeKey
       ? JSON.stringify([portfolioScopeKey, requestedAssetId, assetRetry])
       : null
   useEffect(() => {
@@ -316,7 +341,7 @@ export function AssetDetail() {
     visibleModel?.confidential?.status !== 'ready' &&
     settledConfidentialScope !== portfolioScopeKey
   const categories =
-    asset && visibleModel
+    asset && !waitingForNativeZcash
       ? getAssetDetailCategories(
           asset,
           visibleModel,
@@ -872,7 +897,8 @@ export function AssetDetail() {
   const displayRaw = confidentialOnlyDetail
     ? (nearConfidentialZec?.availableRaw ?? null)
     : isZcashAsset && hasConfidentialCapability && (detailMode === 'all' || detailMode === 'shield')
-      ? sumZcashDetailBalanceRaw(nativeRaw, nearConfidentialZec?.availableRaw ?? null)
+      ? (sumZcashDetailBalanceRaw(nativeRaw, nearConfidentialZec?.availableRaw ?? null) ??
+        nativeRaw)
       : nativeRaw
   const detailAmount =
     displayRaw === null ? '—' : formatDisplayTokenAmount(displayRaw, asset.metadata.decimals)
@@ -1096,13 +1122,24 @@ export function AssetDetail() {
       <TabsContent value={detailMode} className="page-content pb-5 pt-0">
         <section className="flex flex-col items-center py-5 text-center">
           <div data-testid="asset-detail-token-icon">
-            <TokenIcon
-              assetId={asset.asset.id}
-              symbol={formatSymbol(asset.metadata.symbol)}
-              icon={asset.metadata.iconUrl}
-              blockchain={chainAlias}
-              size={52}
-            />
+            {isZcashAsset && !confidentialOnlyDetail ? (
+              <div className="relative inline-block size-[52px]">
+                <img src={zcashChainIcon} alt="ZEC" className="size-full rounded-full" />
+                <img
+                  src={zcashChainIcon}
+                  alt="Zcash"
+                  className="absolute -bottom-0.5 -right-0.5 size-[45%] rounded-[20%] ring-1 ring-background"
+                />
+              </div>
+            ) : (
+              <TokenIcon
+                assetId={asset.asset.id}
+                symbol={formatSymbol(asset.metadata.symbol)}
+                icon={asset.metadata.iconUrl}
+                blockchain={chainAlias}
+                size={52}
+              />
+            )}
           </div>
           <p
             className="mt-4 max-w-full break-all text-[26px] font-medium leading-tight"
@@ -1398,11 +1435,7 @@ export function AssetDetail() {
                 actions={zcashActions('transparent')}
                 subtitle={renderBalanceAddress(publicAddress, 'Transparent')}
                 balance={
-                  zcashDisplay ? (
-                    `${zcashDisplay.transparent} ZEC`
-                  ) : (
-                    <Skeleton className="h-4 w-20" />
-                  )
+                  zcashDisplay && !waitingForNativeZcash ? `${zcashDisplay.transparent} ZEC` : '—'
                 }
                 fiat={formatBalanceFiat(categories?.fiat.public)}
                 pending={
