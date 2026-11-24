@@ -202,6 +202,85 @@ test('shows only the Public EVM balance and leaves an unknown split unavailable'
   ).toEqual([])
 })
 
+test('shows only the Public NEAR balance and hides a PEA-only holding', () => {
+  const nearAsset = {
+    asset: {
+      asset: {
+        id: 'near:mainnet/nep141:usdt.tether-token.near',
+        chainId: 'near:mainnet'
+      },
+      metadata: { symbol: 'USDT', name: 'Tether USD', decimals: 6 },
+      balance: {
+        totalRaw: '915500',
+        spendableRaw: '915500',
+        availableRaw: '915500',
+        mainRaw: '815700',
+        privateRaw: '99800',
+        privateOnchainRaw: '99800',
+        confidentialRaw: '0'
+      }
+    },
+    chain: {
+      chain: { id: 'near:mainnet', family: 'near', displayName: 'NEAR' }
+    }
+  }
+  const input = {
+    assets: [nearAsset],
+    zcashSources: [],
+    zcashEnabled: false,
+    zcashNetwork: 'mainnet',
+    zecPrice: 0,
+    prices: null,
+    selectedNetwork: 'all',
+    searchQuery: '',
+    enabledFlags: ['chain.near']
+  }
+
+  expect(buildSendAssetSelectionModel(input).orderedRows).toMatchObject([
+    { key: nearAsset.asset.asset.id, amount: '0.8157' }
+  ])
+  expect(
+    buildSendAssetSelectionModel({
+      ...input,
+      assets: [
+        {
+          ...nearAsset,
+          asset: {
+            ...nearAsset.asset,
+            balance: {
+              ...nearAsset.asset.balance,
+              mainRaw: '0',
+              availableRaw: '99800',
+              spendableRaw: '99800'
+            }
+          }
+        }
+      ]
+    }).orderedRows
+  ).toEqual([])
+
+  const unsplit = {
+    totalRaw: '1000000',
+    spendableRaw: '1000000',
+    availableRaw: '1000000',
+    pendingRaw: '0'
+  }
+  expect(
+    buildSendAssetSelectionModel({
+      ...input,
+      assets: [
+        {
+          ...nearAsset,
+          asset: {
+            ...nearAsset.asset,
+            balance: unsplit
+          }
+        }
+      ]
+    }).orderedRows[0].amount
+  ).toBe('1')
+})
+
 test('keeps positive Confidential raw balances eligible independently of fiat price', () => {
   expect([undefined, '0', '1', '1200000'].filter(hasSendPickerBalance)).toEqual(['1', '1200000'])
 })

@@ -412,6 +412,19 @@ const portfolioTokenBalances = new WeakMap<
   }
 >()
 
+/** Separates rows that share a protocol asset id, such as native NEAR and wNEAR. */
+export function swapTokenBalanceKey(token: {
+  readonly assetId: string
+  readonly rheaChainId?: string
+  readonly rheaAddress?: string
+  readonly isNative?: boolean
+  readonly decimals?: number
+}): string {
+  const native = token.isNative === true
+  const address = native ? 'native' : (token.rheaAddress ?? '')
+  return `${token.rheaChainId ?? ''}:${address}:${token.assetId}:${token.decimals ?? ''}:${native}`
+}
+
 export function buildWalletSwapSourceBalances(input: {
   readonly tokens: readonly RheaSwapToken[]
   readonly portfolio: PortfolioReadModel | null
@@ -434,7 +447,7 @@ export function buildWalletSwapSourceBalances(input: {
   const cached = snapshot?.[input.evmExecutionMode]
   for (const token of input.tokens) {
     if (isZecToken(token)) {
-      balances.set(token.assetId, input.zcashAvailable)
+      balances.set(swapTokenBalanceKey(token), input.zcashAvailable)
       continue
     }
     if (!input.portfolio) continue
@@ -447,7 +460,7 @@ export function buildWalletSwapSourceBalances(input: {
           input.evmExecutionMode
         )
     cached?.set(token, formatted)
-    if (formatted !== undefined) balances.set(token.assetId, formatted)
+    if (formatted !== undefined) balances.set(swapTokenBalanceKey(token), formatted)
   }
   return balances
 }

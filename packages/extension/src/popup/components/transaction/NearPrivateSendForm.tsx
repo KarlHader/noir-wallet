@@ -14,6 +14,7 @@ import {
 } from '@/popup/components/transaction/SendInputCards'
 import { SendTransferScreen } from '@/popup/components/transaction/SendTransferView'
 import { accountNetworksClient } from '@/popup/services/account-networks-client'
+import { readNearSendSpendableRaw } from '@/popup/services/near-quote-asset-execution'
 import {
   nearWalletClient,
   type NearTransferReview,
@@ -94,9 +95,7 @@ export function useNearSendAccount(chainId: string): {
 }
 
 function spendableRaw(asset: PortfolioAssetView, source: 'main' | 'incognito'): string {
-  const value = source === 'incognito' ? asset.balance.privateRaw : asset.balance.mainRaw
-  if (value !== undefined && RAW_AMOUNT.test(value)) return value
-  return source === 'incognito' ? '0' : asset.balance.availableRaw
+  return readNearSendSpendableRaw(asset.balance, source)
 }
 
 export function NearPrivateSendForm({

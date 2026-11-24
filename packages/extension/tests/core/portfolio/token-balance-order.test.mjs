@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
+import { swapTokenBalanceKey } from '../../../src/popup/services/swap-page-model.ts'
 import { sortTokensByBalanceValue } from '../../../src/popup/services/token-balance-order.ts'
 
 function token(assetId, symbol, price, blockchain = 'eth') {
@@ -16,10 +17,10 @@ test('sorts held tokens by fiat value before unpriced, zero, and unowned assets'
     token('first', 'FIRST', 2)
   ]
   const balances = new Map([
-    ['zero', '0'],
-    ['unpriced', '500'],
-    ['second', '10'],
-    ['first', '100']
+    [swapTokenBalanceKey(tokens[1]), '0'],
+    [swapTokenBalanceKey(tokens[2]), '500'],
+    [swapTokenBalanceKey(tokens[3]), '10'],
+    [swapTokenBalanceKey(tokens[4]), '100']
   ])
 
   expect(sortTokensByBalanceValue(tokens, balances).map(item => item.assetId)).toEqual([

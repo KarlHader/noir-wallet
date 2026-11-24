@@ -14,10 +14,12 @@ import {
   type TokenSelectionItem
 } from '../tokens/TokenPicker'
 import { sortTokensByBalanceValue } from '@/popup/services/token-balance-order'
+import { swapTokenBalanceKey } from '@/popup/services/swap-page-model'
 import {
   deduplicateNativeEvmSwapDisplayRows,
   getNativeEvmSwapDisplayId,
-  rankTokenSearchFields
+  rankTokenSearchFields,
+  selectSwapCatalogCandidates
 } from '@/popup/services/swap-token-selection'
 import { createDebugRequestId, logDebugTiming } from '@/lib/debug-performance'
 import {
@@ -150,7 +152,12 @@ export function SwapCatalogTokenPicker({
         : undefined
     const ranked = [
       ...sortTokensByBalanceValue(
-        (searching ? tokens : (defaultTokens ?? tokens)).filter(token => {
+        selectSwapCatalogCandidates({
+          tokens,
+          defaultTokens,
+          blockchain: effectiveBlockchain,
+          searching
+        }).filter(token => {
           if (!availableTokenKeys.has(tokenKey(token))) return false
           if (token.assetId === excludeAssetId) return false
           if (effectiveBlockchain !== 'all' && token.blockchain !== effectiveBlockchain)
@@ -163,10 +170,9 @@ export function SwapCatalogTokenPicker({
         balances,
         previous,
         !searching && defaultTokens
-          ? new Map(
-              defaultTokens.map((token, index) => [`${token.blockchain}:${token.assetId}`, index])
-            )
-          : undefined
+          ? new Map(defaultTokens.map((token, index) => [tokenKey(token), index]))
+          : undefined,
+        tokenKey
       )
     ]
     if (searching) ranked.sort((left, right) => searchRanks.get(left)! - searchRanks.get(right)!)
@@ -193,7 +199,7 @@ export function SwapCatalogTokenPicker({
   useEffect(() => {
     previousRows.current = {
       filter: filterKey,
-      keys: filteredTokens.map(token => `${token.blockchain}:${token.assetId}`)
+      keys: filteredTokens.map(token => tokenKey(token))
     }
   }, [filterKey, filteredTokens, tokenKey])
   const visibleExtraItems = extraItems.filter(item => {
@@ -213,7 +219,7 @@ export function SwapCatalogTokenPicker({
   const toItem = (row: SwapToken | TokenSelectorExtraItem): TokenSelectionItem => {
     if ('onSelect' in row) return row
     const token = row
-    const balance = balances?.get(token.assetId)
+    const balance = balances?.get(swapTokenBalanceKey(token))
     const symbol = formatSymbol(token.symbol)
     const chainName = formatChainName(token.blockchain)
     return {

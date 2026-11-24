@@ -17,6 +17,7 @@ import { SendTransferView } from '@/popup/components/transaction/SendTransferVie
 import { useBitcoinSendTransfer } from '@/popup/hooks/useBitcoinSendTransfer'
 import { useSendTransfer, type SendTransferConfig } from '@/popup/hooks/useSendTransfer'
 import type { BitcoinTransferSubmission } from '@/popup/services/bitcoin-wallet-client'
+import { projectNearPublicSendAsset } from '@/popup/services/near-quote-asset-execution'
 import {
   nearWalletClient,
   type NearTransferReview,
@@ -181,7 +182,10 @@ function NearSendBranch({
       onSelectDestinationNetwork={selectPublicNetwork}
       config={{
         family: 'near',
-        selection,
+        selection: {
+          ...selection,
+          asset: projectNearPublicSendAsset(selection.asset)
+        },
         initialRecipient: draft.recipient,
         initialAmount: draft.amount,
         onDraftChange: setDraft,

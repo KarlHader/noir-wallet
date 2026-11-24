@@ -74,6 +74,17 @@ export type TokenSearchFields = Readonly<{
   searchTerms?: readonly string[]
 }>
 
+/** "All" stays on the curated list. A selected chain or a search uses the loaded catalog. */
+export function selectSwapCatalogCandidates<T>(input: {
+  readonly tokens: readonly T[]
+  readonly defaultTokens?: readonly T[]
+  readonly blockchain: string
+  readonly searching: boolean
+}): readonly T[] {
+  if (input.searching || input.blockchain !== 'all') return input.tokens
+  return input.defaultTokens ?? input.tokens
+}
+
 export function filterTokenPickerRows<Row>(
   rows: readonly Row[],
   network: string,

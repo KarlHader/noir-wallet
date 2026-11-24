@@ -292,6 +292,7 @@ import {
   createSwapQuoteRefreshTarget,
   type SwapQuoteRefreshTarget,
   buildWalletSwapSourceBalances,
+  swapTokenBalanceKey,
   filterConfidentialFundingSourceTokens,
   filterSwapDestinationTokens,
   filterSelectableSwapDestinationTokens,
@@ -2684,7 +2685,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         token => token.assetId === swap.tokenIn?.assetId && walletSourceIds.has(token.assetId)
       )
       const positiveBalanceSource = walletSwapSourceTokens.find(token => {
-        const balance = walletSwapSourceBalances.get(token.assetId)
+        const balance = walletSwapSourceBalances.get(swapTokenBalanceKey(token))
         return balance !== undefined && safeBig(balance).gt(0)
       })
       const sourceToken = requestedSourceAssetId

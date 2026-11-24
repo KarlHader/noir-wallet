@@ -10,7 +10,10 @@ import {
   resolveSwapTokenSelection,
   shouldWaitForSwapDestination
 } from '../../../src/popup/services/swap-token-selection.ts'
-import { buildWalletSwapSourceBalances } from '../../../src/popup/services/swap-page-model.ts'
+import {
+  buildWalletSwapSourceBalances,
+  swapTokenBalanceKey
+} from '../../../src/popup/services/swap-page-model.ts'
 
 const zcashChain = {
   id: 'bip122:00040fe8ec8471911baa1db1266ea15d',
@@ -189,7 +192,7 @@ it('keeps a newly selected source while the page still has an older wallet sourc
       receiveTargets: null,
       zcashAvailable: '0',
       evmExecutionMode: 'main'
-    }).has(usdc.assetId),
+    }).has(swapTokenBalanceKey(usdc)),
     false
   )
   assert.equal(
@@ -218,18 +221,92 @@ it('does not show a total balance as a private balance before the private breakd
     zcashAvailable: '0',
     evmExecutionMode: 'private'
   }
-  assert.equal(buildWalletSwapSourceBalances(input).has(token.assetId), false)
+  assert.equal(buildWalletSwapSourceBalances(input).has(swapTokenBalanceKey(token)), false)
   assert.equal(
     buildWalletSwapSourceBalances({
       ...input,
       portfolio: { assets: [{ ...asset, balance: { ...asset.balance, privateRaw: '1000000' } }] }
-    }).get(token.assetId),
+    }).get(swapTokenBalanceKey(token)),
     '1'
   )
   assert.equal(
-    buildWalletSwapSourceBalances({ ...input, evmExecutionMode: 'main' }).get(token.assetId),
+    buildWalletSwapSourceBalances({ ...input, evmExecutionMode: 'main' }).get(
+      swapTokenBalanceKey(token)
+    ),
     '9'
   )
+})
+
+it('keeps native NEAR and wNEAR balances separate when they share a protocol asset id', () => {
+  const chainId = 'near:mainnet'
+  const fields = {
+    assetId: 'nep141:wrap.near',
+    blockchain: 'near',
+    decimals: 24,
+    rheaChainId: 'near',
+    rheaAddress: 'wrap.near',
+    price: 1,
+    priceUpdatedAt: '2026-08-22T00:00:00.000Z'
+  }
+  const native = { ...fields, symbol: 'NEAR', contractAddress: null, isNative: true }
+  const wrapped = { ...fields, symbol: 'wNEAR', contractAddress: 'wrap.near', isNative: false }
+  const held = availableRaw => ({
+    availableRaw,
+    mainRaw: availableRaw,
+    totalRaw: availableRaw,
+    spendableRaw: availableRaw
+  })
+  const portfolio = {
+    scope: { keyDomainId: 'wallet:test', accountId: 'account:test' },
+    chains: [
+      {
+        chain: {
+          id: chainId,
+          family: 'near',
+          capabilities: { transaction: { status: 'available' } }
+        }
+      }
+    ],
+    assets: [
+      {
+        asset: {
+          id: `${chainId}/slip44:397`,
+          chainId,
+          namespace: 'slip44',
+          reference: '397',
+          kind: 'native'
+        },
+        metadata: { symbol: 'NEAR', decimals: 24 },
+        balance: held('1000000000000000000000000')
+      },
+      {
+        asset: {
+          id: `${chainId}/nep141:wrap.near`,
+          chainId,
+          namespace: 'nep141',
+          reference: 'wrap.near',
+          kind: 'token'
+        },
+        metadata: { symbol: 'wNEAR', decimals: 24 },
+        balance: held('0')
+      }
+    ]
+  }
+  const balances = buildWalletSwapSourceBalances({
+    tokens: [wrapped, native],
+    portfolio,
+    receiveTargets: {
+      generationId: 'generation:test',
+      keyDomainId: 'wallet:test',
+      accountId: 'account:test',
+      targets: [{ chain: { id: chainId }, kind: 'near', address: 'alice.near' }]
+    },
+    zcashAvailable: '0',
+    evmExecutionMode: 'main'
+  })
+  assert.equal(balances.get(swapTokenBalanceKey(native)), '1')
+  assert.equal(balances.get(swapTokenBalanceKey(wrapped)), '0')
+  assert.equal(balances.has(native.assetId), false)
 })
 
 it('keeps a reversed source while wallet-owned assets are still loading', () => {

@@ -6,7 +6,8 @@ import {
   findSavedSwapToken,
   matchesSwapTokenSearch,
   resolveSharedSwapPair,
-  resolveSwapTokenSelection
+  resolveSwapTokenSelection,
+  selectSwapCatalogCandidates
 } from '../../../src/popup/services/swap-token-selection.ts'
 
 function token(assetId, blockchain, symbol, contractAddress) {
@@ -21,6 +22,8 @@ function token(assetId, blockchain, symbol, contractAddress) {
   }
 }
 
+const NEAR = token('nep141:wrap.near', 'near', 'NEAR')
+const NEAR_USDT = token('nep141:usdt.tether-token.near', 'near', 'USDT', 'usdt.tether-token.near')
 const ZEC = token('nep141:zec.omft.near', 'zec', 'ZEC')
 const ETH = token('nep141:eth.omft.near', 'eth', 'ETH')
 const ETH_USDC = token(
@@ -43,6 +46,35 @@ const bitcoinChain = {
   family: 'bitcoin',
   network: { kind: 'mainnet' }
 }
+
+test('shows a chain catalog without search and keeps All on the curated list', () => {
+  const tokens = [NEAR, NEAR_USDT, ETH]
+  const defaultTokens = [NEAR, ETH]
+  expect(
+    selectSwapCatalogCandidates({
+      tokens,
+      defaultTokens,
+      blockchain: 'all',
+      searching: false
+    })
+  ).toEqual(defaultTokens)
+  expect(
+    selectSwapCatalogCandidates({
+      tokens,
+      defaultTokens,
+      blockchain: 'near',
+      searching: false
+    })
+  ).toEqual(tokens)
+  expect(
+    selectSwapCatalogCandidates({
+      tokens,
+      defaultTokens,
+      blockchain: 'all',
+      searching: true
+    })
+  ).toEqual(tokens)
+})
 
 test.describe('account-scoped Swap token selection', () => {
   test('does not select a cross-chain destination from the source catalog while its destination catalog is pending', () => {

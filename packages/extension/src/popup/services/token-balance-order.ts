@@ -1,4 +1,5 @@
 import type { SwapToken } from '@/core/services/intents-api'
+import { swapTokenBalanceKey } from './swap-page-model'
 import { parseTokenBalanceDecimal } from './token-balance-format'
 
 interface RankedToken {
@@ -14,8 +15,9 @@ function rankToken(
   index: number,
   balances: ReadonlyMap<string, string> | undefined
 ): RankedToken {
-  const hasBalance = balances?.has(token.assetId) ?? false
-  const amount = hasBalance ? parseTokenBalanceDecimal(balances?.get(token.assetId)) : null
+  const balanceKey = swapTokenBalanceKey(token)
+  const hasBalance = balances?.has(balanceKey) ?? false
+  const amount = hasBalance ? parseTokenBalanceDecimal(balances?.get(balanceKey)) : null
   const price = amount?.gt(0) ? parseTokenBalanceDecimal(token.price) : null
   const fiatValue = price?.gt(0) ? (amount?.times(price) ?? null) : null
   const tier = fiatValue?.gt(0) ? 0 : amount?.gt(0) ? 1 : hasBalance ? 2 : 3
@@ -27,7 +29,8 @@ export function sortTokensByBalanceValue(
   tokens: readonly SwapToken[],
   balances?: ReadonlyMap<string, string>,
   previousOrder?: ReadonlyMap<string, number>,
-  defaultOrder?: ReadonlyMap<string, number>
+  defaultOrder?: ReadonlyMap<string, number>,
+  orderKey: (token: SwapToken) => string = token => `${token.blockchain}:${token.assetId}`
 ): readonly SwapToken[] {
   if (!balances && !previousOrder && !defaultOrder) return tokens
 
@@ -37,8 +40,8 @@ export function sortTokensByBalanceValue(
       .sort((left, right) => {
         if (left.tier !== right.tier) return left.tier - right.tier
         if (previousOrder) {
-          const leftIndex = previousOrder.get(`${left.token.blockchain}:${left.token.assetId}`)
-          const rightIndex = previousOrder.get(`${right.token.blockchain}:${right.token.assetId}`)
+          const leftIndex = previousOrder.get(orderKey(left.token))
+          const rightIndex = previousOrder.get(orderKey(right.token))
           if (leftIndex !== undefined || rightIndex !== undefined) {
             if (leftIndex === undefined) return 1
             if (rightIndex === undefined) return -1
@@ -52,10 +55,8 @@ export function sortTokensByBalanceValue(
           return left.amount.gt(right.amount) ? -1 : 1
         }
         if (defaultOrder) {
-          const leftOrder =
-            defaultOrder.get(`${left.token.blockchain}:${left.token.assetId}`) ?? Infinity
-          const rightOrder =
-            defaultOrder.get(`${right.token.blockchain}:${right.token.assetId}`) ?? Infinity
+          const leftOrder = defaultOrder.get(orderKey(left.token)) ?? Infinity
+          const rightOrder = defaultOrder.get(orderKey(right.token)) ?? Infinity
           if (leftOrder !== rightOrder) return leftOrder < rightOrder ? -1 : 1
         }
         const symbolOrder = left.token.symbol.localeCompare(right.token.symbol)
