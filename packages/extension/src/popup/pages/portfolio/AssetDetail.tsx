@@ -1128,7 +1128,10 @@ export function AssetDetail() {
         </section>
 
         {detailMode !== 'all' && (
-          <div className="flex justify-center gap-2 pb-3">
+          <div
+            data-home-domain={detailMode === 'private' ? 'private' : undefined}
+            className="flex justify-center gap-2 pb-3"
+          >
             {detailMode === 'private' ? (
               <>
                 <WalletActionButton

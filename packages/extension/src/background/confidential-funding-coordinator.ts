@@ -44,6 +44,8 @@ import {
 } from '@/core/chains/registry'
 import {
   CONFIDENTIAL_WITHDRAW_DEFAULT_COUNT,
+  CONFIDENTIAL_WITHDRAW_MIN_COUNT,
+  type ConfidentialFundingPurpose,
   CONFIDENTIAL_SESSION_REQUIRED_ERROR,
   buildConfidentialPortfolioView,
   aggregateConfidentialSettlement,
@@ -230,7 +232,7 @@ interface ConfidentialFundingRouteInput {
   readonly dedupKey?: string
   readonly externalRecipient?: string
   readonly confidentialRecipient?: string
-  readonly purpose?: 'move' | 'native-zec-swap'
+  readonly purpose?: ConfidentialFundingPurpose
 }
 
 export type PrepareConfidentialFundingInput = ConfidentialFundingRouteInput &
@@ -402,13 +404,13 @@ function quoteDeadline(quote: ConfidentialQuote): number {
   return value
 }
 
-function minimumAmountError(error: unknown): boolean {
+function minimumAmountError(error: unknown): error is ConfidentialFundingApiError {
   return (
     error instanceof ConfidentialFundingApiError &&
     error.status !== null &&
     error.status >= 400 &&
     error.status < 500 &&
-    /minimum|min(?:imum)? amount|too small|below/i.test(error.message)
+    /minimum|min amount|too (?:small|low)|below/i.test(error.message)
   )
 }
 
@@ -3669,7 +3671,25 @@ export class ConfidentialFundingCoordinator {
       return await attempt(CONFIDENTIAL_WITHDRAW_DEFAULT_COUNT)
     } catch (error) {
       if (!minimumAmountError(error)) throw error
-      return attempt(2)
+      try {
+        return await attempt(CONFIDENTIAL_WITHDRAW_MIN_COUNT)
+      } catch (fallbackError) {
+        if (minimumAmountError(fallbackError)) {
+          const match = /amount is too low for bridge,?\s*try at least ([0-9]+)/i.exec(
+            fallbackError.message
+          )
+          if (match?.[1]) {
+            const minimum = BigInt(match[1]) * BigInt(CONFIDENTIAL_WITHDRAW_MIN_COUNT)
+            throw new ConfidentialFundingApiError(
+              `Amount is too low for bridge, try at least ${minimum}`,
+              fallbackError.status,
+              fallbackError.ambiguous,
+              fallbackError.businessCode
+            )
+          }
+        }
+        throw fallbackError
+      }
     }
   }
 
@@ -4951,7 +4971,7 @@ export class ConfidentialFundingCoordinator {
       : undefined
     const graph = createConfidentialFundingGraph({
       planId: plan.planId,
-      ...(plan.purpose === 'native-zec-swap' ? { purpose: plan.purpose } : {}),
+      ...(plan.purpose ? { purpose: plan.purpose } : {}),
       ...(plan.operation
         ? {
             operation: plan.operation,
@@ -5009,10 +5029,7 @@ export class ConfidentialFundingCoordinator {
         expectedAmountRaw: plan.expectedOutputRaw,
         address: plan.destination.address
       },
-      externalRecipient:
-        Boolean(plan.externalRecipient) &&
-        plan.purpose !== 'move' &&
-        plan.purpose !== 'native-zec-swap',
+      externalRecipient: Boolean(plan.externalRecipient) && plan.purpose === undefined,
       withdrawDepositAddresses: plan.withdraws.map(row => row.depositAddress || null),
       requiresDeposit: plan.requiresDeposit,
       signedWithdrawFingerprint: plan.requestFingerprint,
@@ -5182,7 +5199,7 @@ export class ConfidentialFundingCoordinator {
   }
 
   private assertOwnZcashMoveRecipient(value: {
-    readonly purpose?: 'move' | 'native-zec-swap'
+    readonly purpose?: ConfidentialFundingPurpose
     readonly operation?: string
     readonly sourceDomain?: string
     readonly destinationDomain?: string
@@ -5194,7 +5211,8 @@ export class ConfidentialFundingCoordinator {
     readonly externalRecipient?: string
   }): void {
     if (value.purpose === undefined) return
-    const isMove = value.purpose === 'move'
+    const sameAssetSwap = value.purpose === 'same-asset-zec-swap'
+    const isMove = value.purpose === 'move' || sameAssetSwap
     const isNativeZecSwap = value.purpose === 'native-zec-swap'
     const active = this.options.getNativeZecActiveAccount?.()
     const assetId = `${getZcashChainId(this.options.network)}/slip44:133`
@@ -5221,6 +5239,8 @@ export class ConfidentialFundingCoordinator {
           : 'ZEC transfers must use a receive address from the current account'
       )
     const parsed = parseZcashAddress(value.externalRecipient, this.options.network)
+    if (sameAssetSwap && parsed.scheme !== 'zcash-full-unified')
+      throw new Error('This ZEC swap requires the current account’s unified receive address')
     if (
       !parsed.scheme.startsWith('zcash-transparent-') &&
       !value.externalRecipient.startsWith(this.options.network === 'mainnet' ? 'u1' : 'utest1')

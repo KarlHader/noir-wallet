@@ -73,14 +73,12 @@ export function HomeShieldProviders({
   const cards = [
     {
       provider: 'near-confidential',
-      visible: canManageNear || near.entries.length > 0,
       fiat: near.fiat,
       loading: near.status !== 'ready' && (loading || loadingShieldBalances),
       icons: nearConfidentialVaultIcons(near.entries)
     },
     {
       provider: 'zcash-shield',
-      visible: zcashEntry.showVaultCard,
       fiat: zcash?.fiat ?? null,
       loading: loading || pricesLoading,
       icons: zcashShieldVaultIcons(zcash?.entries.map(entry => entry.asset) ?? [])
@@ -99,70 +97,68 @@ export function HomeShieldProviders({
         </button>
       )}
       <div className="grid grid-cols-2 gap-3">
-        {cards
-          .filter(card => card.visible)
-          .map(card => {
-            const { provider } = card
-            const { name, tint } = SHIELD_PROVIDERS[provider]
-            const needsZcash = provider === 'zcash-shield' && !zcashEntry.hasActiveZcash
-            const enablePath = needsZcash ? enableZcashPath : null
-            const label = needsZcash ? '—' : formatShieldProviderFiat(card.fiat, balancesHidden)
-            const showSkeleton = !needsZcash && !balancesHidden && card.fiat == null && card.loading
+        {cards.map(card => {
+          const { provider } = card
+          const { name, tint } = SHIELD_PROVIDERS[provider]
+          const needsZcash = provider === 'zcash-shield' && !zcashEntry.hasActiveZcash
+          const enablePath = needsZcash ? enableZcashPath : null
+          const label = needsZcash ? '—' : formatShieldProviderFiat(card.fiat, balancesHidden)
+          const showSkeleton = !needsZcash && !balancesHidden && card.fiat == null && card.loading
 
-            return (
-              <button
-                key={provider}
-                type="button"
-                onClick={() =>
-                  navigate(enablePath ?? `/shield-provider?provider=${provider}&mode=public`)
-                }
-                className="wallet-interactive flex h-[154px] min-w-0 flex-col overflow-hidden rounded-lg bg-wallet-surface text-left hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+          return (
+            <button
+              key={provider}
+              type="button"
+              onClick={() =>
+                navigate(enablePath ?? `/shield-provider?provider=${provider}&mode=public`)
+              }
+              className="wallet-interactive flex h-[154px] min-w-0 flex-col overflow-hidden rounded-lg bg-wallet-surface text-left hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            >
+              <span
+                className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-2 text-center"
+                style={{
+                  backgroundImage: `radial-gradient(ellipse at 50% 0%, ${tint}88, transparent 80%)`
+                }}
               >
-                <span
-                  className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-2 text-center"
-                  style={{
-                    backgroundImage: `radial-gradient(ellipse at 50% 0%, ${tint}88, transparent 80%)`
-                  }}
-                >
-                  <ShieldProviderLogo provider={provider} size={38} />
-                  <span className="text-sm font-medium leading-tight">{name}</span>
-                </span>
-                <span className="flex h-9 items-center justify-between gap-1 bg-white/5 px-2.5 text-xs">
-                  {enablePath ? (
-                    <span className="flex w-full items-center justify-between gap-1 text-primary">
-                      <span>Enable Zcash</span>
-                      <Icon icon="lucide:chevron-right" width={14} height={14} aria-hidden="true" />
+                <ShieldProviderLogo provider={provider} size={38} />
+                <span className="text-sm font-medium leading-tight">{name}</span>
+              </span>
+              <span className="flex h-9 items-center justify-between gap-1 bg-white/5 px-2.5 text-xs">
+                {enablePath ? (
+                  <span className="flex w-full items-center justify-between gap-1 text-primary">
+                    <span>Enable Zcash</span>
+                    <Icon icon="lucide:chevron-right" width={14} height={14} aria-hidden="true" />
+                  </span>
+                ) : (
+                  <>
+                    <span className="flex min-w-0 shrink-0 items-center">
+                      {card.icons.map((entry, index) => (
+                        <TokenIcon
+                          key={entry.key}
+                          assetId={entry.assetId}
+                          symbol={entry.symbol}
+                          icon={entry.icon}
+                          size={16}
+                          className={index ? '-ml-1 shrink-0' : 'shrink-0'}
+                        />
+                      ))}
                     </span>
-                  ) : (
-                    <>
-                      <span className="flex min-w-0 shrink-0 items-center">
-                        {card.icons.map((entry, index) => (
-                          <TokenIcon
-                            key={entry.key}
-                            assetId={entry.assetId}
-                            symbol={entry.symbol}
-                            icon={entry.icon}
-                            size={16}
-                            className={index ? '-ml-1 shrink-0' : 'shrink-0'}
-                          />
-                        ))}
+                    {showSkeleton ? (
+                      <BalanceSkeleton />
+                    ) : (
+                      <span
+                        className="min-w-0 truncate tabular-nums"
+                        title={balancesHidden ? undefined : label}
+                      >
+                        {label}
                       </span>
-                      {showSkeleton ? (
-                        <BalanceSkeleton />
-                      ) : (
-                        <span
-                          className="min-w-0 truncate tabular-nums"
-                          title={balancesHidden ? undefined : label}
-                        >
-                          {label}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </span>
-              </button>
-            )
-          })}
+                    )}
+                  </>
+                )}
+              </span>
+            </button>
+          )
+        })}
       </div>
     </div>
   )

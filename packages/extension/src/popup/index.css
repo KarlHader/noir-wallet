@@ -392,8 +392,13 @@ html[data-surface='side-panel'] #root {
   background: var(--home-incognito-surface) 0 -100px / 100% 286px no-repeat;
 }
 
-[data-home-domain='private'] .home-mode-content .wallet-action-icon {
+[data-home-domain='private'] .wallet-action-icon {
   color: var(--color-warning);
+}
+
+[data-home-domain='private'] .wallet-action-surface {
+  --color-wallet-surface: rgb(255 255 255 / 6%);
+  --color-wallet-secondary: #bcbcc8;
 }
 
 .home-mode-content[data-wallet-palette='public'] .wallet-action-label {

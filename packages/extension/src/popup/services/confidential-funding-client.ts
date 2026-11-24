@@ -1,8 +1,9 @@
-import type {
-  ConfidentialFundingPhase,
-  ConfidentialFundingPlan,
-  ConfidentialFundingPreview,
-  ConfidentialFundingReview
+import {
+  CONFIDENTIAL_FUNDING_PURPOSES,
+  type ConfidentialFundingPhase,
+  type ConfidentialFundingPlan,
+  type ConfidentialFundingPreview,
+  type ConfidentialFundingReview
 } from '@/core/services/confidential-funding'
 import type {
   CreateExternalShieldDepositInput,
@@ -31,7 +32,7 @@ export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
 export { CONFIDENTIAL_SESSION_REQUIRED_ERROR as CONFIDENTIAL_PREVIEW_CONNECTION_ERROR } from '@/core/services/confidential-funding'
 
 export interface PrepareConfidentialFundingRequest {
-  readonly purpose?: 'move' | 'native-zec-swap'
+  readonly purpose?: ConfidentialFundingPlan['purpose']
   readonly network: Network
   readonly keyDomainId: string
   readonly accountId: string
@@ -233,7 +234,7 @@ function parseReview(value: unknown): ConfidentialFundingReview {
           review.network
         ))) ||
     (review.purpose !== undefined &&
-      (!['move', 'native-zec-swap'].includes(review.purpose) ||
+      (!CONFIDENTIAL_FUNDING_PURPOSES.includes(review.purpose) ||
         review.operation !== 'withdraw' ||
         review.sourceDomain !== 'shield' ||
         review.destinationDomain !== 'public' ||
@@ -308,7 +309,7 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
           plan.network
         ))) ||
     (plan.purpose !== undefined &&
-      (!['move', 'native-zec-swap'].includes(plan.purpose) ||
+      (!CONFIDENTIAL_FUNDING_PURPOSES.includes(plan.purpose) ||
         plan.operation !== 'withdraw' ||
         plan.sourceDomain !== 'shield' ||
         plan.destinationDomain !== 'public' ||

@@ -149,7 +149,7 @@ test.describe('Multichain Activity presentation', () => {
     for (const shieldProvider of [undefined, 'near-confidential']) {
       const perspective = { viewedDomain: 'shield', shieldProvider }
       expect(getActivityAction(zcashWithdrawal, perspective)).toEqual({
-        label: 'Withdraw',
+        label: 'Unshield',
         side: 'source'
       })
       expect(
@@ -212,7 +212,7 @@ test.describe('Multichain Activity presentation', () => {
     ).toEqual({ label: 'Swap', side: 'none' })
     expect(
       getActivityAction(nativeSwap, { viewedDomain: 'shield', shieldProvider: 'zcash-shield' })
-    ).toEqual({ label: 'Deposit', side: 'destination' })
+    ).toEqual({ label: 'Swap', side: 'none' })
     expect(getActivityAction(nativeSwap, { viewedDomain: 'shield' })).toEqual({
       label: 'Swap',
       side: 'none'
@@ -241,7 +241,7 @@ test.describe('Multichain Activity presentation', () => {
         { viewedDomain: 'shield', shieldProvider: 'zcash-shield' },
         shieldedDestination
       )
-    ).toEqual({ label: 'Deposit', side: 'destination' })
+    ).toEqual({ label: 'Swap', side: 'none' })
   })
 
   test('labels a legacy Shield send to the scoped Private address without relabeling other recipients', () => {
@@ -413,7 +413,7 @@ test.describe('Multichain Activity presentation', () => {
         source: { ...route.source, iconUrl: 'https://example.test/eth.png' }
       })
     ).toBe(false)
-    expect(getActivityDetailTitle(item)).toBe('Transfer')
+    expect(getActivityDetailTitle(item)).toBe('Send')
     expect(
       isAccountModeTransfer(
         { ...item, kind: 'swap' },

@@ -316,7 +316,7 @@ export function buildShieldSwapRequest(
         destination: input.to,
         slippageBps: input.slippageBps
       }),
-      purpose: 'move' as const
+      purpose: 'same-asset-zec-swap' as const
     })
   }
   if (nativeZecSwap) {
@@ -366,9 +366,9 @@ export function matchesShieldSwapReview(
   review: ConfidentialFundingReview,
   request: PrepareConfidentialFundingRequest
 ): boolean {
-  if (request.purpose === 'move') {
+  if (request.purpose === 'same-asset-zec-swap') {
     return (
-      review.purpose === 'move' &&
+      review.purpose === request.purpose &&
       review.externalRecipient === request.externalRecipient &&
       review.destinationAddress === request.externalRecipient &&
       matchesExternalShieldWithdrawReview(review, request)

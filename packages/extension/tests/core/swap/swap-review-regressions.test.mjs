@@ -1269,7 +1269,7 @@ it('only routes same-asset Confidential ZEC to the account Unified Address and b
     nativeZecFundingSource: 'shielded'
   }
   const request = buildShieldSwapRequest(input)
-  assert.equal(request.purpose, 'move')
+  assert.equal(request.purpose, 'same-asset-zec-swap')
   assert.equal(request.operation, 'withdraw')
   assert.equal(request.sourceDomain, 'shield')
   assert.equal(request.destinationDomain, 'public')
@@ -1289,7 +1289,7 @@ it('only routes same-asset Confidential ZEC to the account Unified Address and b
   }
 
   const review = {
-    purpose: 'move',
+    purpose: 'same-asset-zec-swap',
     operation: 'withdraw',
     sourceDomain: 'shield',
     destinationDomain: 'public',

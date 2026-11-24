@@ -1,7 +1,7 @@
 import type { Network } from '@/types'
 import { confidentialPrivateTokenId } from './confidential-funding-portfolio'
 
-const CONFIDENTIAL_WITHDRAW_MIN_COUNT = 2
+export const CONFIDENTIAL_WITHDRAW_MIN_COUNT = 2
 const CONFIDENTIAL_WITHDRAW_MAX_COUNT = 5
 export const CONFIDENTIAL_WITHDRAW_DEFAULT_COUNT = 3
 export const CONFIDENTIAL_SESSION_REQUIRED_ERROR = 'Refresh Shield balances to continue.'
@@ -132,9 +132,16 @@ export type ConfidentialFundingOperation =
   | 'swap'
   | 'confidential-transfer'
 
+export const CONFIDENTIAL_FUNDING_PURPOSES = [
+  'move',
+  'native-zec-swap',
+  'same-asset-zec-swap'
+] as const
+export type ConfidentialFundingPurpose = (typeof CONFIDENTIAL_FUNDING_PURPOSES)[number]
+
 export interface ConfidentialFundingPlan {
   readonly schemaVersion: 1
-  readonly purpose?: 'move' | 'native-zec-swap'
+  readonly purpose?: ConfidentialFundingPurpose
   readonly operation?: ConfidentialFundingOperation
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
@@ -219,7 +226,7 @@ export function canRetryConfidentialSubmission(
 
 export interface ConfidentialFundingReview {
   readonly planId: string
-  readonly purpose?: 'move' | 'native-zec-swap'
+  readonly purpose?: ConfidentialFundingPurpose
   readonly operation?: ConfidentialFundingOperation
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'

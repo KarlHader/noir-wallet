@@ -604,7 +604,7 @@ function ShieldSwapForm({
     scopeStillCurrent() &&
     active &&
     latestDraft.current.revision === draftRevision &&
-    (previewRequest?.purpose !== 'move' ||
+    (previewRequest?.purpose !== 'same-asset-zec-swap' ||
       useWalletStore.getState().getCurrentAccount()?.addresses.shielded ===
         previewRequest.externalRecipient)
   const openActivity = (transactionId: string) => {
@@ -739,7 +739,7 @@ function ShieldSwapForm({
   const reviewMatchesDraft =
     prepared !== null &&
     previewRequest !== null &&
-    (prepared.request.purpose !== 'move' || validAmount) &&
+    (prepared.request.purpose !== 'same-asset-zec-swap' || validAmount) &&
     JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
   const refreshReview = async () => {
     if (!prepared || busy || uncertain || !canManageNear || !scopeStillCurrent()) return

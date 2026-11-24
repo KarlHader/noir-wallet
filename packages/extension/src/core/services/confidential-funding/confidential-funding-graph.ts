@@ -7,6 +7,7 @@ import {
   type TransactionGraph
 } from '@/core/transactions/domain'
 import { getZcashChainId } from '@/core/chains/registry'
+import { parseZcashAddress } from '@/core/address-book/address-book'
 import type { Network } from '@/types'
 import type { ConfidentialFundingPlan } from './confidential-funding-model'
 
@@ -27,6 +28,59 @@ export function isLegacyShieldWithdrawActivityGraph(graph: TransactionGraph): bo
     intent.shield.destinationDomain === 'public' &&
     intent.recipient?.chainId.startsWith('eip155:') === true
   )
+}
+
+export function isLegacyUnifiedZecMoveActivityGraph(graph: TransactionGraph): boolean {
+  const { root } = graph
+  const intent = root.intent
+  const recipient = intent?.recipient
+  return (
+    root.id.startsWith(CONFIDENTIAL_TRANSACTION_PREFIX) &&
+    root.kind === 'withdraw' &&
+    intent?.direction === 'self' &&
+    intent.shield?.operation === 'withdraw' &&
+    intent.shield.sourceDomain === 'shield' &&
+    intent.shield.destinationDomain === 'public' &&
+    recipient !== undefined &&
+    /^(u1|utest1)/.test(recipient.address) &&
+    intent.primaryAmount?.assetId === `${recipient.chainId}/slip44:133` &&
+    intent.primaryAmount.assetId === intent.counterAmount?.assetId
+  )
+}
+
+export function projectLegacyUnifiedZecSwapActivityGraph(
+  graph: TransactionGraph,
+  plan: ConfidentialFundingPlan | undefined,
+  network: Network
+): TransactionGraph {
+  const { root } = graph
+  const intent = root.intent
+  const recipient = intent?.recipient
+  const shield = intent?.shield
+  if (
+    !isLegacyUnifiedZecMoveActivityGraph(graph) ||
+    !intent ||
+    !recipient ||
+    !shield ||
+    plan?.purpose !== 'move' ||
+    plan.network !== network ||
+    plan.transactionId !== root.id ||
+    plan.keyDomainId !== root.scope.keyDomainId ||
+    plan.accountId !== root.scope.accountId ||
+    recipient.chainId !== getZcashChainId(network) ||
+    plan.destination.address !== recipient.address ||
+    plan.externalRecipient !== recipient.address
+  )
+    return graph
+  try {
+    if (parseZcashAddress(recipient.address, network).scheme !== 'zcash-full-unified') return graph
+  } catch {
+    return graph
+  }
+  return {
+    ...graph,
+    root: { ...root, kind: 'swap', intent: { ...intent, shield: { ...shield, operation: 'swap' } } }
+  }
 }
 
 export function projectLegacyShieldWithdrawActivityGraph(
@@ -124,7 +178,7 @@ export function projectShieldDepositSettlement(
 export function createConfidentialFundingGraph(input: {
   readonly planId: string
   readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap' | 'confidential-transfer'
-  readonly purpose?: 'native-zec-swap'
+  readonly purpose?: ConfidentialFundingPlan['purpose']
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly scope: TransactionAccountScope
@@ -169,15 +223,17 @@ export function createConfidentialFundingGraph(input: {
           input.sourceDomain === input.destinationDomain)))
   )
     throw new Error('Confidential funding graph route is invalid')
+  const nativeSwap = input.purpose === 'native-zec-swap' || input.purpose === 'same-asset-zec-swap'
   if (
-    input.purpose === 'native-zec-swap' &&
+    nativeSwap &&
     (input.operation !== 'withdraw' ||
       input.sourceDomain !== 'shield' ||
       input.destinationDomain !== 'public' ||
       (input.destination.chainId !== getZcashChainId('mainnet') &&
         input.destination.chainId !== getZcashChainId('testnet')) ||
       input.destination.assetId !== `${input.destination.chainId}/slip44:133` ||
-      input.source.assetId === input.destination.assetId)
+      (input.source.assetId === input.destination.assetId) !==
+        (input.purpose === 'same-asset-zec-swap'))
   )
     throw new Error('Confidential funding graph swap route is invalid')
   if (!input.requiresDeposit && !/^[0-9a-f]{64}$/.test(input.signedWithdrawFingerprint ?? '')) {
@@ -196,7 +252,7 @@ export function createConfidentialFundingGraph(input: {
       id: transactionId,
       scope: input.scope,
       kind:
-        input.purpose === 'native-zec-swap'
+        nativeSwap || input.operation === 'swap'
           ? 'swap'
           : input.operation === 'deposit'
             ? 'shield'
@@ -222,7 +278,7 @@ export function createConfidentialFundingGraph(input: {
           ? {
               shield: {
                 schemaVersion: 1 as const,
-                operation: input.purpose === 'native-zec-swap' ? 'swap' : input.operation,
+                operation: nativeSwap ? 'swap' : input.operation,
                 sourceDomain: input.sourceDomain!,
                 destinationDomain: input.destinationDomain!
               }

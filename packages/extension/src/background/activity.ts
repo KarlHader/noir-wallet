@@ -2,8 +2,10 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   hasExternalShieldDepositFunding,
   isLegacyShieldWithdrawActivityGraph,
+  isLegacyUnifiedZecMoveActivityGraph,
   projectExternalShieldDepositActivityGraph,
   projectLegacyShieldWithdrawActivityGraph,
+  projectLegacyUnifiedZecSwapActivityGraph,
   projectShieldDepositSettlement
 } from '@/core/services/confidential-funding'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
@@ -793,6 +795,7 @@ export function createBackgroundActivityCoordinator(
       .filter(
         graph =>
           (graph.root.status === 'final' && graph.root.intent?.shield?.operation === 'deposit') ||
+          isLegacyUnifiedZecMoveActivityGraph(graph) ||
           (privateExecutionAddresses.length > 0 && isLegacyShieldWithdrawActivityGraph(graph))
       )
       .map(graph => graph.root.id)
@@ -825,6 +828,10 @@ export function createBackgroundActivityCoordinator(
         continue
       }
       const plan = fundingPlans.get(graph.root.id)
+      if (isLegacyUnifiedZecMoveActivityGraph(graph)) {
+        projectedGraphs.push(projectLegacyUnifiedZecSwapActivityGraph(graph, plan, DEFAULT_NETWORK))
+        continue
+      }
       projectedGraphs.push(
         graph.root.intent?.shield?.operation === 'deposit'
           ? projectShieldDepositSettlement(graph, plan, DEFAULT_NETWORK)

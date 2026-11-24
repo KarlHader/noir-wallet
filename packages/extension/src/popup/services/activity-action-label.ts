@@ -9,7 +9,15 @@ export type ActivityPerspective = {
 }
 
 export type ActivityAction = {
-  readonly label: 'Send' | 'Receive' | 'Deposit' | 'Withdraw' | 'Transfer' | 'Swap'
+  readonly label:
+    | 'Send'
+    | 'Receive'
+    | 'Deposit'
+    | 'Withdraw'
+    | 'Shield'
+    | 'Unshield'
+    | 'Transfer'
+    | 'Swap'
   readonly side: 'source' | 'destination' | 'none'
 }
 
@@ -88,13 +96,30 @@ export function getActivityAction(
   const direction = item.snapshot?.direction
   const sourceAssetId = route?.source?.assetId ?? item.snapshot?.primaryAmount?.assetId
   const destinationAssetId = route?.destination?.assetId ?? item.snapshot?.counterAmount?.assetId
+  if (shield?.operation === 'swap') {
+    return {
+      label: 'Swap',
+      side: viewed && viewed !== source && viewed === destination ? 'destination' : 'none'
+    }
+  }
   if (isActivityShieldSend(item)) {
     return { label: 'Send', side: 'source' }
   }
-  // A confidential transfer pays another Shield account, so it stays a Send
-  // even though both domains are Shield. Same-account Shield movement is Transfer.
   if (shield?.operation === 'confidential-transfer') {
     return { label: 'Send', side: 'source' }
+  }
+  if (direction === 'self') {
+    const side = viewed === destination ? 'destination' : 'source'
+    if (destination === 'shield' && source !== 'shield' && shield?.operation === 'deposit') {
+      return { label: 'Shield', side }
+    }
+    if (source === 'shield' && destination === 'public' && shield?.operation === 'withdraw') {
+      return { label: 'Unshield', side }
+    }
+    if (shield?.operation === 'cluster') {
+      if (source === 'public' && destination === 'private') return { label: 'Deposit', side }
+      if (source === 'private' && destination === 'public') return { label: 'Withdraw', side }
+    }
   }
 
   if (
@@ -145,28 +170,19 @@ export function getActivityAction(
       if (perspective.shieldProvider === destinationProvider && destinationProvider)
         return { label: 'Deposit', side: 'destination' }
       if (sourceProvider && perspective.shieldProvider === sourceProvider)
-        return shield?.operation === 'swap'
-          ? { label: 'Swap', side: 'none' }
-          : { label: 'Withdraw', side: 'source' }
+        return { label: 'Withdraw', side: 'source' }
     }
-    return shield?.operation === 'swap' || item.kind === 'swap'
+    return item.kind === 'swap'
       ? { label: 'Swap', side: 'none' }
       : { label: 'Transfer', side: 'none' }
   }
 
   if (source && destination && source !== destination) {
-    if (
-      shield?.operation === 'swap' &&
-      source === 'shield' &&
-      (!perspective.shieldProvider || perspective.shieldProvider === 'near-confidential') &&
-      (!viewed || viewed === 'shield')
-    )
-      return { label: 'Swap', side: 'none' }
     if (viewed === 'shield' && perspective.shieldProvider) {
       const shieldAssetId = source === 'shield' ? sourceAssetId : destinationAssetId
       const provider = shieldProviderForAsset(item, shieldAssetId)
       if (provider && provider !== perspective.shieldProvider)
-        return shield?.operation === 'swap' || item.kind === 'swap'
+        return item.kind === 'swap'
           ? { label: 'Swap', side: 'none' }
           : { label: 'Transfer', side: 'none' }
     }
@@ -187,11 +203,9 @@ export function getActivityAction(
     return { label: 'Transfer', side: 'none' }
   }
 
-  if (item.kind === 'swap' || shield?.operation === 'swap') return { label: 'Swap', side: 'none' }
+  if (item.kind === 'swap') return { label: 'Swap', side: 'none' }
   if (item.kind === 'shield') {
-    if (viewed === 'shield') return { label: 'Deposit', side: 'destination' }
-    if (viewed === 'public') return { label: 'Send', side: 'source' }
-    return { label: 'Transfer', side: 'none' }
+    return { label: 'Shield', side: viewed === 'shield' ? 'destination' : 'source' }
   }
   if (direction === 'incoming') return { label: 'Receive', side: 'destination' }
   if (item.kind === 'transfer' || direction === 'outgoing') return { label: 'Send', side: 'source' }

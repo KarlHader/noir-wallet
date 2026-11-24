@@ -7,7 +7,8 @@ import { serializeConfidentialFundingPlan } from '../../../src/background/confid
 import {
   createConfidentialFundingGraph,
   fingerprintConfidentialValue,
-  fingerprintDirectConfidentialApproval
+  fingerprintDirectConfidentialApproval,
+  projectLegacyUnifiedZecSwapActivityGraph
 } from '../../../src/core/services/confidential-funding/index.ts'
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
 import { createEvmTransferGraph } from '../../../src/infrastructure/chains/evm/evm-transaction-graph.ts'
@@ -701,23 +702,25 @@ test.describe('confidential funding persisted recovery', () => {
     }
     expect(h.state.quoteCalls).toHaveLength(0)
     for (const recipient of [transparent, unified]) {
-      const review = await h.coordinator.prepare({ ...request, externalRecipient: recipient })
-      expect(review).toMatchObject({ purpose: 'move', destinationAddress: recipient })
+      const purpose = recipient === unified ? 'same-asset-zec-swap' : 'move'
+      const reviewedRequest = { ...request, externalRecipient: recipient, purpose }
+      const review = await h.coordinator.prepare(reviewedRequest)
+      expect(review).toMatchObject({ purpose, destinationAddress: recipient })
       const stored = await h.coordinator.getPlan(review.planId)
       const client = createConfidentialFundingClient(async message => ({
         success: true,
         result: message.type === 'PREPARE_CONFIDENTIAL_FUNDING' ? review : stored
       }))
-      await expect(client.prepare(request)).resolves.toMatchObject({
-        purpose: 'move',
+      await expect(client.prepare(reviewedRequest)).resolves.toMatchObject({
+        purpose,
         destinationAddress: recipient
       })
       await expect(client.get(review.planId)).resolves.toMatchObject({
-        purpose: 'move',
+        purpose,
         externalRecipient: recipient
       })
       expect(serializeConfidentialFundingPlan(stored)).toMatchObject({
-        purpose: 'move',
+        purpose,
         externalRecipient: recipient
       })
       active = { ...active, accountId: 'account:other' }
@@ -730,9 +733,42 @@ test.describe('confidential funding persisted recovery', () => {
         'approval content changed'
       )
       h.plans.set(review.planId, stored)
-      await h.coordinator.cancel(review.planId)
+      if (recipient === unified) {
+        h.state.allowSigning = true
+        h.state.formalQuoteAppFees = [{ recipient: 'platform.near', fee: 50 }]
+        await h.coordinator.confirm(review.planId, review.payloadFingerprint)
+        const graph = await h.repository.get(scope, review.transactionId)
+        expect(graph.root).toMatchObject({
+          kind: 'swap',
+          intent: { shield: { operation: 'swap' } }
+        })
+        const legacy = {
+          ...graph,
+          root: {
+            ...graph.root,
+            kind: 'withdraw',
+            intent: {
+              ...graph.root.intent,
+              shield: { ...graph.root.intent.shield, operation: 'withdraw' }
+            }
+          }
+        }
+        const legacyPlan = { ...stored, purpose: 'move' }
+        expect(projectLegacyUnifiedZecSwapActivityGraph(legacy, legacyPlan, 'mainnet')).toEqual(
+          graph
+        )
+        expect(
+          projectLegacyUnifiedZecSwapActivityGraph(
+            legacy,
+            { ...legacyPlan, accountId: 'account:other' },
+            'mainnet'
+          )
+        ).toBe(legacy)
+      } else {
+        await h.coordinator.cancel(review.planId)
+        expect(h.state.signatures).toBe(0)
+      }
     }
-    expect(h.state.signatures).toBe(0)
     const review = await h.coordinator.prepare(request)
     h.state.allowSigning = true
     h.state.formalQuoteAppFees = [{ recipient: 'platform.near', fee: 50 }]
@@ -830,7 +866,7 @@ test.describe('confidential funding persisted recovery', () => {
       segments: graph.segments
     }
     expect(getActivityRouteTitle(activity, {})).toBe('Swap')
-    expect(getActivityDetailTitle(activity)).toBe('Shield Swap')
+    expect(getActivityDetailTitle(activity)).toBe('Swap')
     expect(getActivityAction(activity, { viewedDomain: 'shield' })).toEqual({
       label: 'Swap',
       side: 'none'
@@ -845,7 +881,7 @@ test.describe('confidential funding persisted recovery', () => {
       )
     ).toEqual({ label: 'Swap', side: 'none' })
     expect(getActivityAction(activity, { viewedDomain: 'public' })).toEqual({
-      label: 'Receive',
+      label: 'Swap',
       side: 'destination'
     })
   })
@@ -1083,6 +1119,20 @@ test.describe('confidential funding persisted recovery', () => {
       input.depositType === 'ORIGIN_CHAIN' ? { timeEstimate: 8 } : {}
     const missingTimePreview = await h.coordinator.preview(privateCluster)
     expect(missingTimePreview.timeEstimateSeconds).toBeUndefined()
+
+    h.state.quoteOverride = input => {
+      if (input.depositType === 'CONFIDENTIAL_INTENTS' && BigInt(input.amountRaw) < 40n) {
+        throw new ConfidentialFundingApiError(
+          'Amount is too low for bridge, try at least 40',
+          400,
+          false
+        )
+      }
+      return {}
+    }
+    await expect(h.coordinator.preview(cluster)).rejects.toThrow(
+      'Amount is too low for bridge, try at least 80'
+    )
 
     await expect(h.coordinator.preview({ ...cluster, accountId: 'account:other' })).rejects.toThrow(
       'account or network changed'

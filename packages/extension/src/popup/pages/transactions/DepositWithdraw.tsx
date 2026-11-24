@@ -292,6 +292,7 @@ function MethodCard({
   fee,
   loading,
   disabled,
+  unavailableReason,
   onClick
 }: {
   title: 'Cluster' | 'Directly'
@@ -302,6 +303,7 @@ function MethodCard({
   fee: ReturnType<typeof formatBalanceTransferFee>
   loading?: boolean
   disabled?: boolean
+  unavailableReason?: string | null
   onClick: () => void
 }) {
   return (
@@ -317,7 +319,7 @@ function MethodCard({
         selected ? 'border-primary/60' : 'border-white/10'
       )}
     >
-      {recommended && (
+      {recommended && !disabled && (
         <span className="absolute -top-2.5 left-3 rounded-full bg-primary px-2 py-0.5 text-primary-foreground">
           Recommended
         </span>
@@ -331,7 +333,7 @@ function MethodCard({
           className={selected ? 'text-primary' : 'text-muted'}
         />
       </span>
-      <span className="mt-2 text-muted">{detail}</span>
+      <span className="mt-2 text-muted">{unavailableReason ?? detail}</span>
       <span className="mt-4 flex justify-between gap-2">
         <span className="text-muted">Privacy</span>
         <span>{title === 'Cluster' ? 'Strong' : 'Standard'}</span>
@@ -1402,11 +1404,8 @@ function DepositWithdrawForm({
       : selected
     : null
   const crossChainPrivateTransfer = supportedPair && destinationAssetId !== null
-  const clusterPair =
-    !crossChainPrivateTransfer &&
-    isClusterTransferRoute(from, to) &&
-    selected?.chain.chain.family === 'evm'
-  const clusterSelected = method === 'cluster' && clusterPair
+  const clusterPair = isClusterTransferRoute(from, to) && selected?.chain.chain.family === 'evm'
+  const clusterSelected = method === 'cluster' && clusterPair && !crossChainPrivateTransfer
   const fundingRoute = Boolean(shieldPair || clusterSelected)
   const fundingReady = !shieldPair || shieldConnection === 'connected'
   useEffect(() => {
@@ -1454,7 +1453,9 @@ function DepositWithdrawForm({
           : Boolean(managedAsset))
   })
   const nativeReceive = receiveEntry && receiveZec && !externalReceive && receiveProvider !== null
-  const clusterAvailable = Boolean(clusterPair && managedAsset && effective)
+  const clusterAvailable = Boolean(
+    clusterPair && !crossChainPrivateTransfer && managedAsset && effective
+  )
   const destinationOptions = useMemo(() => {
     if (from !== 'shield' || !selected || !managedAsset) return []
     if (fixedDirection === 'unshield') return [{ ...selected, managed: managedAsset }]
@@ -1713,7 +1714,7 @@ function DepositWithdrawForm({
   })
   const clusterEstimateKey = `${methodEstimateKey}:${managedAsset?.protocolAssetId ?? ''}`
   const clusterEstimate = useBalanceTransferEstimate({
-    enabled: canEstimateMethods && clusterPair && Boolean(managedAsset && effective),
+    enabled: canEstimateMethods && clusterAvailable,
     requestKey: clusterEstimateKey,
     estimate: async signal => {
       const preview = await confidentialFundingClient.preview(
@@ -1740,7 +1741,7 @@ function DepositWithdrawForm({
   const directQuoted = Boolean(canEstimateMethods && methodAvailable && directEstimate.value)
   const selectedEstimate = clusterSelected ? clusterEstimate : directEstimate
   const maxLoading = maxSelected && selectedEstimate.loading
-  const clusterUnavailable = getSwapQuoteFailureMessage(clusterEstimate.errorMessage) === 'no route'
+  const clusterUnavailable = !clusterAvailable || clusterEstimate.error
   const directUnavailable =
     directEstimate.errorMessage === 'Move route unavailable' ||
     getSwapQuoteFailureMessage(directEstimate.errorMessage) === 'no route'
@@ -1755,6 +1756,14 @@ function DepositWithdrawForm({
         )
       : null
   }, [selected, selectedEstimate.errorMessage])
+  const clusterMinimumError =
+    selected && clusterEstimate.errorMessage
+      ? formatTransferQuoteMinimumError(
+          clusterEstimate.errorMessage,
+          selected.asset.metadata.decimals,
+          formatSymbol(selected.asset.metadata.symbol)
+        )
+      : null
   const showGenericEstimateError =
     (clusterPair || crossChainPrivateTransfer) &&
     selectedEstimate.error &&
@@ -1780,14 +1789,21 @@ function DepositWithdrawForm({
     setMethod('cluster')
   }, [clusterPair, clusterAvailable, clusterUnavailable, method])
   useEffect(() => {
-    if (method === 'cluster' && clusterUnavailable && directQuoted) {
-      userPickedMethod.current = false
+    if (method === 'cluster' && clusterUnavailable && methodAvailable) {
+      userPickedMethod.current = clusterEstimate.error
       setMethod('directly')
     } else if (method === 'directly' && directUnavailable && clusterQuoted) {
       userPickedMethod.current = false
       setMethod('cluster')
     }
-  }, [method, clusterUnavailable, directUnavailable, clusterQuoted, directQuoted])
+  }, [
+    method,
+    clusterUnavailable,
+    directUnavailable,
+    clusterQuoted,
+    methodAvailable,
+    clusterEstimate.error
+  ])
   const shieldReviewKeyForFee = (feeSelection: EvmFeeSelection) =>
     quickMaximum
       ? JSON.stringify([
@@ -2992,53 +3008,43 @@ function DepositWithdrawForm({
                 No transferable assets
               </p>
             )}
-            {selected?.chain.chain.family === 'evm' &&
-              clusterPair &&
-              (clusterAvailable || methodAvailable) && (
-                <div
-                  role="radiogroup"
-                  aria-label="Transfer method"
-                  className={cn(
-                    'mt-auto grid shrink-0 gap-2.5 pt-4',
-                    clusterAvailable && methodAvailable
-                      ? 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-                      : 'grid-cols-1'
-                  )}
-                >
-                  {clusterAvailable && (
-                    <MethodCard
-                      title="Cluster"
-                      detail="Multiple transactions"
-                      recommended
-                      selected={method === 'cluster'}
-                      disabled={clusterUnavailable}
-                      estimate={clusterEstimate.value}
-                      loading={canEstimateMethods && clusterEstimate.loading}
-                      fee={formatBalanceTransferFee(clusterEstimateWithFee, selected.asset)}
-                      onClick={() => {
-                        userPickedMethod.current = true
-                        setMethod('cluster')
-                      }}
-                    />
-                  )}
-                  {methodAvailable && (
-                    <MethodCard
-                      title="Directly"
-                      detail="One transaction"
-                      recommended={false}
-                      selected={method === 'directly'}
-                      disabled={directUnavailable}
-                      estimate={directEstimate.value}
-                      loading={canEstimateMethods && methodAvailable && directEstimate.loading}
-                      fee={formatBalanceTransferFee(directEstimate.value, selected.asset)}
-                      onClick={() => {
-                        userPickedMethod.current = true
-                        setMethod('directly')
-                      }}
-                    />
-                  )}
-                </div>
-              )}
+            {selected?.chain.chain.family === 'evm' && clusterPair && (
+              <div
+                role="radiogroup"
+                aria-label="Transfer method"
+                className="mt-auto grid shrink-0 grid-cols-2 gap-2.5 pt-4"
+              >
+                <MethodCard
+                  title="Cluster"
+                  detail="Multiple transactions"
+                  recommended
+                  selected={clusterSelected}
+                  disabled={clusterUnavailable}
+                  unavailableReason={clusterMinimumError}
+                  estimate={clusterEstimate.value}
+                  loading={canEstimateMethods && clusterEstimate.loading}
+                  fee={formatBalanceTransferFee(clusterEstimateWithFee, selected.asset)}
+                  onClick={() => {
+                    userPickedMethod.current = true
+                    setMethod('cluster')
+                  }}
+                />
+                <MethodCard
+                  title="Directly"
+                  detail="One transaction"
+                  recommended={false}
+                  selected={!clusterSelected}
+                  disabled={!methodAvailable || directUnavailable}
+                  estimate={directEstimate.value}
+                  loading={canEstimateMethods && methodAvailable && directEstimate.loading}
+                  fee={formatBalanceTransferFee(directEstimate.value, selected.asset)}
+                  onClick={() => {
+                    userPickedMethod.current = true
+                    setMethod('directly')
+                  }}
+                />
+              </div>
+            )}
             {clusterSelected &&
               clusterNetworkFee &&
               clusterQuoted &&
