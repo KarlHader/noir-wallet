@@ -130,7 +130,6 @@ export function externalShieldDepositFailureMessage(error: unknown): string {
 }
 
 const UNFUNDED_AUTO_REFRESH_MS = 3 * 60 * 60 * 1000
-const UNFUNDED_AUTO_HIDE_MS = 24 * 60 * 60 * 1000
 
 type ExternalShieldDepositLifecycle = Pick<
   ExternalShieldDeposit,
@@ -139,7 +138,6 @@ type ExternalShieldDepositLifecycle = Pick<
   | 'depositedAmountRaw'
   | 'providerStatus'
   | 'updatedAt'
-  | 'createdAt'
   | 'expiresAt'
 >
 
@@ -147,7 +145,9 @@ export function hasExternalShieldDepositFunding(record: ExternalShieldDepositLif
   return (
     record.fundingObservedAt !== undefined ||
     BigInt(record.depositedAmountRaw ?? '0') > 0n ||
-    record.phase !== 'awaiting-payment' ||
+    record.phase === 'processing' ||
+    record.phase === 'ready' ||
+    record.phase === 'refunded' ||
     ['INCOMPLETE_DEPOSIT', 'KNOWN_DEPOSIT_TX', 'PROCESSING', 'PENDING'].includes(
       record.providerStatus ?? ''
     )
@@ -180,17 +180,6 @@ export function shouldAutoRefreshExternalShieldDeposit(
   // Amounts may be absent while a deposit or refund is already in flight.
   return (
     hasExternalShieldDepositFunding(record) || now - record.updatedAt < UNFUNDED_AUTO_REFRESH_MS
-  )
-}
-
-export function isExternalShieldDepositAutoHidden(
-  record: ExternalShieldDepositLifecycle,
-  now = Date.now()
-): boolean {
-  return (
-    !hasExternalShieldDepositFunding(record) &&
-    isExternalShieldDepositExpired(record, now) &&
-    now - record.createdAt >= UNFUNDED_AUTO_HIDE_MS
   )
 }
 

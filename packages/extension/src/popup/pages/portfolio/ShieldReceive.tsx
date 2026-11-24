@@ -5,14 +5,20 @@ import { formatSymbol } from '@/lib/format'
 import providerPlaceholder from '@/images/figma-receive-provider.svg'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
+import { ChainSelector } from '@/popup/components/common/ChainSelector'
 import type { Network } from '@/types/wallet'
 import { PageHeader } from '@/popup/components/common/PageHeader'
-import { ShieldReceiveAddress } from '@/popup/components/portfolio/ShieldReceiveAddress'
+import { ShieldProviderDialog } from '@/popup/components/portfolio/ShieldProviderPicker'
+import {
+  ShieldReceiveAddress,
+  ShieldReceiveAddressSkeleton
+} from '@/popup/components/portfolio/ShieldReceiveAddress'
 import { SHIELD_PROVIDERS, ShieldProviderLogo } from '@/popup/components/portfolio/shield-providers'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenPicker, type TokenPickerAdapter } from '@/popup/components/tokens/TokenPicker'
+import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
-import { Dialog, DialogContent, DialogTitle } from '@/popup/components/ui/dialog'
+import { Skeleton } from '@/popup/components/ui/skeleton'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useShieldReceiveCatalog } from '@/popup/hooks/useShieldReceiveCatalog'
 import type {
@@ -90,6 +96,17 @@ interface ShieldReceiveEntry {
   readonly provider: ShieldProvider | null
 }
 
+function ShieldReceiveFormSkeleton() {
+  return (
+    <div className="space-y-2.5 pt-[14px]">
+      <Skeleton className="h-[62px] w-full rounded-xl" />
+      <Skeleton className="h-[62px] w-full rounded-xl" />
+      <Skeleton className="h-[62px] w-full rounded-xl" />
+      <ShieldReceiveAddressSkeleton />
+    </div>
+  )
+}
+
 export function ShieldReceive() {
   const [params] = useSearchParams()
   const walletId = params.get('walletId')
@@ -129,9 +146,7 @@ export function ShieldReceive() {
           ) : accountChanged ? (
             <TransactionNotice tone="muted" message="Account changed. Reopen Receive." />
           ) : !error && (loading || contextChanging) ? (
-            <p role="status" className="py-6 text-center text-sm text-muted">
-              Loading account…
-            </p>
+            <ShieldReceiveFormSkeleton />
           ) : (
             <TransactionNotice
               message="Could not load the account."
@@ -161,7 +176,8 @@ function ShieldReceiveForm({
     () => listShieldReceiveTokens(network, account, catalog.tokens),
     [network, account, catalog.tokens]
   )
-  const [pickerOpen, setPickerOpen] = useState(false)
+  const [picker, setPicker] = useState<'token' | 'network' | 'provider' | null>(null)
+  const closePicker = () => setPicker(null)
   const [selection, setSelection] = useState<{ tokenId: string; routeId: string | null } | null>(
     null
   )
@@ -169,8 +185,6 @@ function ShieldReceiveForm({
   const networks = [...new Map(token?.routes.map(item => [item.chain.id, item.chain])).values()]
   const chain = route?.chain
   const providerRoutes = token?.routes.filter(item => item.chain.id === chain?.id) ?? []
-  const selectClass =
-    'absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default'
 
   return (
     <>
@@ -180,7 +194,7 @@ function ShieldReceiveForm({
           aria-haspopup="dialog"
           className={fieldClass}
           disabled={tokens.length === 0}
-          onClick={() => setPickerOpen(true)}
+          onClick={() => setPicker('token')}
         >
           <FieldContent
             icon={token && receiveTokenIcon(token)}
@@ -189,7 +203,14 @@ function ShieldReceiveForm({
             value={token ? formatSymbol(token.symbol) : undefined}
           />
         </button>
-        <label className={fieldClass}>
+        <button
+          type="button"
+          aria-label="Network"
+          aria-haspopup="dialog"
+          className={fieldClass}
+          disabled={networks.length === 0}
+          onClick={() => setPicker('network')}
+        >
           <FieldContent
             label={chain ? 'Network' : 'Select Network'}
             value={chain?.displayName}
@@ -205,61 +226,29 @@ function ShieldReceiveForm({
               )
             }
           />
-          <select
-            aria-label="Network"
-            className={selectClass}
-            value={chain?.id ?? ''}
-            disabled={!token || !networks.length}
-            onChange={event => {
-              const next = token?.routes.find(item => item.chain.id === event.target.value)
-              if (token && next) setSelection({ tokenId: token.id, routeId: next.id })
-            }}
-          >
-            <option value="" disabled>
-              Select Network
-            </option>
-            {networks.map(item => (
-              <option key={item.id} value={item.id}>
-                {item.displayName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={fieldClass}>
+        </button>
+        <button
+          type="button"
+          aria-label="Shield provider"
+          aria-haspopup="dialog"
+          className={fieldClass}
+          disabled={providerRoutes.length === 0}
+          onClick={() => setPicker('provider')}
+        >
           <FieldContent
             label="Shield provider"
-            value={route ? SHIELD_PROVIDERS[route.provider].name : undefined}
+            value={route ? SHIELD_PROVIDERS[route.provider].detailName : undefined}
             placeholderIcon={<img src={providerPlaceholder} alt="" width={15} height={16} />}
             icon={route && <ShieldProviderLogo provider={route.provider} size={32} />}
           />
-          <select
-            aria-label="Shield provider"
-            className={selectClass}
-            value={route?.id ?? ''}
-            disabled={!providerRoutes.length}
-            onChange={event => {
-              if (token) setSelection({ tokenId: token.id, routeId: event.target.value })
-            }}
-          >
-            <option value="" disabled>
-              Shield provider
-            </option>
-            {providerRoutes.map(item => (
-              <option key={item.id} value={item.id}>
-                {SHIELD_PROVIDERS[item.provider].name}
-              </option>
-            ))}
-          </select>
-        </label>
+        </button>
         {catalog.error ? (
           <TransactionNotice
             message="Could not load NEAR Confidential tokens."
             onRetry={catalog.retry}
           />
         ) : catalog.loading && !token ? (
-          <p role="status" className="text-sm text-muted">
-            Loading tokens…
-          </p>
+          <ShieldReceiveAddressSkeleton />
         ) : !catalog.loading && tokens.length === 0 ? (
           <TransactionNotice tone="muted" message="No Shield receiving options for this account." />
         ) : !catalog.loading && !selection && entry.assetId && !token ? (
@@ -280,27 +269,58 @@ function ShieldReceiveForm({
           slippageBps={slippageBps}
         />
       )}
-      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-        <DialogContent position="bottom" scroll="body">
-          <DialogTitle>Select token</DialogTitle>
-          <TokenPicker
-            rows={tokens}
-            networks={[]}
-            adapter={tokenPickerAdapter}
-            selectedKey={token?.id}
-            toItem={item => ({
-              key: item.id,
-              symbol: formatSymbol(item.symbol),
-              icon: receiveTokenIcon(item),
-              subtitle: item.subtitle
-            })}
-            onSelect={item => {
-              setSelection({ tokenId: item.id, routeId: null })
-              setPickerOpen(false)
-            }}
-          />
-        </DialogContent>
-      </Dialog>
+      <TokenSelectorDialog open={picker === 'token'} onOpenChange={open => !open && closePicker()}>
+        <TokenPicker
+          rows={tokens}
+          networks={[]}
+          adapter={tokenPickerAdapter}
+          loading={catalog.loading}
+          selectedKey={token?.id}
+          toItem={item => ({
+            key: item.id,
+            symbol: formatSymbol(item.symbol),
+            icon: receiveTokenIcon(item),
+            subtitle: item.subtitle
+          })}
+          onSelect={item => {
+            setSelection({ tokenId: item.id, routeId: null })
+            closePicker()
+          }}
+        />
+      </TokenSelectorDialog>
+      <ChainSelector
+        open={picker === 'network'}
+        onOpenChange={open => !open && closePicker()}
+        options={networks.map(item => ({
+          id: item.id,
+          name: item.displayName,
+          icon: resolveChainIconAlias(item.family, item.displayName, item.id)
+        }))}
+        selectedId={chain?.id}
+        onSelect={id => {
+          if (id === chain?.id) return
+          const next = token?.routes.find(item => item.chain.id === id)
+          if (token && next) setSelection({ tokenId: token.id, routeId: next.id })
+        }}
+      />
+      <ShieldProviderDialog
+        open={picker === 'provider'}
+        onClose={closePicker}
+        selected={route?.provider ?? null}
+        available={{
+          'zcash-shield': providerRoutes.some(item => item.provider === 'zcash-shield'),
+          'near-confidential': providerRoutes.some(item => item.provider === 'near-confidential')
+        }}
+        onSelect={provider => {
+          if (provider !== route?.provider) {
+            const next = providerRoutes.find(item => item.provider === provider)
+            if (token && next) setSelection({ tokenId: token.id, routeId: next.id })
+          }
+          closePicker()
+        }}
+        networks={account.networks.map(item => item.chain)}
+        tokens={catalog.tokens}
+      />
     </>
   )
 }

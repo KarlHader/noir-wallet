@@ -45,7 +45,13 @@ export function ActivityRouteTokenIcons({
         assetId={primaryAsset?.assetId}
         symbol={primaryAsset?.symbol ?? 'Asset'}
         icon={primaryAsset?.iconUrl}
-        blockchain={primaryAsset === route.destination ? destinationChain : sourceChain}
+        blockchain={
+          route.isExternalDeposit
+            ? route.sourceChainIconAlias
+            : primaryAsset === route.destination
+              ? destinationChain
+              : sourceChain
+        }
         size={iconSize}
         className="absolute left-0 top-0"
       />

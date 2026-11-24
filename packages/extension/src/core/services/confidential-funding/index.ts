@@ -37,7 +37,7 @@ export {
 } from './confidential-funding-graph'
 export {
   createExternalShieldDepositGraph,
-  isExternalShieldDepositAutoHidden,
+  hasExternalShieldDepositFunding,
   projectExternalShieldDepositActivityGraph
 } from './confidential-external-deposit'
 export type {

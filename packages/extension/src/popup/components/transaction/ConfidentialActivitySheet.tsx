@@ -343,7 +343,7 @@ export function ConfidentialActivityView({
         {activityView ? (
           <ActivityTransactionBody
             view={activityView}
-            showAmountsAsDetails={display?.operation === 'send'}
+            showAmountsAsDetails
             showDate={activityView.item.snapshot?.shield?.operation === 'cluster'}
           />
         ) : (
@@ -351,24 +351,24 @@ export function ConfidentialActivityView({
             {display && (
               <div className="flex justify-between gap-4 py-4">
                 <span className="text-muted">Amount</span>
-                <span className="min-w-0 text-right font-medium">
-                  <AmountDisplay
-                    value={display.amount}
-                    symbol={formatShieldSymbol(display.symbol)}
-                    prefix={display.operation === 'swap' ? '-' : ''}
-                  />
-                  {display.operation === 'swap' &&
-                    display.receiveAmount &&
-                    display.receiveSymbol && (
-                      <span className="block">
-                        <AmountDisplay
-                          value={display.receiveAmount}
-                          symbol={formatShieldSymbol(display.receiveSymbol)}
-                          prefix="+"
-                        />
-                      </span>
-                    )}
+                <AmountDisplay
+                  value={display.amount}
+                  symbol={formatShieldSymbol(display.symbol)}
+                  prefix={display.operation === 'swap' || display.operation === 'send' ? '−' : ''}
+                  className="min-w-0 justify-end text-sm font-medium"
+                />
+              </div>
+            )}
+            {!refunded && display?.receiveAmount && display.receiveSymbol && (
+              <div className="flex justify-between gap-4 py-4">
+                <span className="text-muted">
+                  {display.operation === 'send' ? 'Recipient receives' : 'Expected receive'}
                 </span>
+                <AmountDisplay
+                  value={display.receiveAmount}
+                  symbol={formatShieldSymbol(display.receiveSymbol)}
+                  className="min-w-0 justify-end text-sm font-medium"
+                />
               </div>
             )}
             {display?.from && (

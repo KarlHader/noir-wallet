@@ -117,11 +117,7 @@ export function StandardTransactionResult({
         />
       )}
       {activityView ? (
-        <ActivityTransactionBody
-          view={activityView}
-          showDate={showTime}
-          showAmountsAsDetails={phaseLayout}
-        />
+        <ActivityTransactionBody view={activityView} showDate={showTime} showAmountsAsDetails />
       ) : (
         step !== 'failed' && (
           <div className="w-full">

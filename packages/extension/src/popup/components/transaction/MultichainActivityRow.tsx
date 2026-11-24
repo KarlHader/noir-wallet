@@ -228,7 +228,7 @@ function RouteActivityRow({
           <ActivityAvatar
             primary={reviewedAmount}
             chainIconAlias={
-              showCredit
+              showCredit && !presentation.isExternalDeposit
                 ? presentation.destinationChainIconAlias
                 : presentation.sourceChainIconAlias
             }

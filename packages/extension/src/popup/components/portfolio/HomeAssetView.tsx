@@ -132,9 +132,8 @@ function ScopedHomeAssetView({
         <DialogContent
           position="bottom"
           scroll="body"
-          fixedHeight={formOpen}
           showCloseButton={!formOpen}
-          className={formOpen ? 'gap-0 p-0' : 'gap-3 px-4 pt-5 pb-4'}
+          className={formOpen ? 'h-[50dvh] gap-0 p-0' : 'gap-3 px-4 pt-5 pb-4'}
           style={
             formOpen && formState.reviewing
               ? { height: '100dvh', maxHeight: '100dvh', borderRadius: 0 }
