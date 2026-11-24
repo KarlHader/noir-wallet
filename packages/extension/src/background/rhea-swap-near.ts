@@ -5,6 +5,7 @@ import { parseAccountId } from '@/core/accounts/domain'
 import {
   NEAR_MAINNET_NATIVE_ASSET_ID,
   NEAR_MAINNET_WRAPPED_ASSET_ID,
+  nearAccountStorageReserveYocto,
   nearPublicKeyFromImplicitAccountId,
   parseNearAccountId,
   parseNearBase58,
@@ -20,6 +21,7 @@ import type {
 } from '@/core/services/rhea-swap'
 import {
   isNearWrapSwapSource,
+  nearDirectNativeHoldYocto,
   nearSwapNativeRequiredYocto,
   prependRheaSwapNearWrap,
   spendRheaSwapWrappedNear,
@@ -69,6 +71,17 @@ const RETRYABLE_NEAR_BROADCAST_CODES = new Set([
   'rate-limited',
   'cancelled'
 ])
+const NEAR_NATIVE_HOLD_TOKENS = new Set([
+  'native',
+  'near',
+  'wrap.near',
+  'nep141:wrap.near',
+  'near:mainnet/nep141:wrap.near'
+])
+
+function isNearNativeHoldToken(tokenIn: string): boolean {
+  return NEAR_NATIVE_HOLD_TOKENS.has(tokenIn)
+}
 
 class NearSwapCommitError extends Error {
   readonly failureCode: Extract<TransactionFailureCode, 'invalid' | 'reverted'>
@@ -370,6 +383,7 @@ export interface RheaSwapNearCoordinatorOptions {
     RheaSwapService,
     | 'readNearTransactionBatchPlan'
     | 'readPreparedBuild'
+    | 'readQuoteSecurityContext'
     | 'recordTransactionSubmission'
     | 'reportSubmission'
     | 'discard'
@@ -457,7 +471,7 @@ export class RheaSwapNearCoordinator {
         plan.tokenIn
       )
     ) {
-      requests = await this.nativeNearWrapBatch(plan, sender, identity.kind, originalRequests)
+      requests = await this.nativeNearWrapBatch(plan, sender, originalRequests)
       await this.assertNativeNearBalance(sender, requests)
     } else if (binding.origin.assetId === NEAR_MAINNET_WRAPPED_ASSET_ID) {
       const balance = await this.options.rpc.getFungibleTokenBalance('wrap.near', sender)
@@ -606,7 +620,7 @@ export class RheaSwapNearCoordinator {
     fingerprint: string
   ): Promise<RheaSwapSignedOrderResult> {
     let pending = await this.requirePending(quoteHandle, fingerprint)
-    const { context, sender, kind } = await this.resolveSigningIdentity(pending.sender)
+    const { context, sender } = await this.resolveSigningIdentity(pending.sender)
     if (
       sender !== pending.sender ||
       context.chainAccount.scope.chainId !== pending.chainId ||
@@ -632,7 +646,6 @@ export class RheaSwapNearCoordinator {
           const requests = await this.nativeNearWrapBatch(
             plan,
             sender,
-            kind,
             parseNearDAppTransactionBatch([
               {
                 transactions: plan.transactions.map(transaction => ({
@@ -929,7 +942,6 @@ export class RheaSwapNearCoordinator {
   private async nativeNearWrapBatch(
     plan: RheaSwapNearTransactionBatchPlan,
     sender: string,
-    kind: 'near-transaction' | 'pea-near-transaction',
     transactions: readonly NearWrapTransaction[]
   ): Promise<readonly NearWrapTransaction[]> {
     const [balance, registered] = await Promise.all([
@@ -943,16 +955,69 @@ export class RheaSwapNearCoordinator {
     ) {
       throw new Error('RHEA Swap NEAR wrapped balance does not match the signer')
     }
-    // A missing PEA registration is not a reason to move funds from Main or to guess storage.
-    if (kind === 'pea-near-transaction' && registered !== true) {
-      throw new Error(NEAR_INCOGNITO_UNFUNDED_ERROR)
-    }
+    // The PEA pays its own wrap.near registration inside near_deposit. Do not fund it from Main.
     return prependRheaSwapNearWrap({
       transactions,
       amountIn: plan.amountIn,
       wrappedBalanceRaw: balance.amountRaw,
       registered
     })
+  }
+
+  async readNearDirectNativeHold(quoteHandle: string, senderValue: string): Promise<string> {
+    const sender = parseNearAccountId(senderValue, 'RHEA Swap NEAR sender')
+    const quote = await this.options.service.readQuoteSecurityContext(quoteHandle)
+    if (quote.request.sender !== sender) {
+      throw new Error('RHEA Swap NEAR binding does not match its build')
+    }
+    const plan = await this.options.service.readNearTransactionBatchPlan(quoteHandle)
+    if (plan.chain !== 'near' || !isNearNativeHoldToken(plan.tokenIn)) {
+      throw new Error('RHEA Swap NEAR quote source does not match its asset')
+    }
+    const transactions = parseNearDAppTransactionBatch([
+      {
+        transactions: plan.transactions.map(transaction => ({
+          ...(transaction.signerId === null ? {} : { signerId: transaction.signerId }),
+          receiverId: transaction.receiverId,
+          actions: transaction.actions
+        }))
+      }
+    ])
+    await this.options.rpc.assertExpectedChain()
+    const [account, registered, gasPriceRaw, costs] = await Promise.all([
+      this.options.rpc.getAccount(sender),
+      this.options.rpc.isFungibleTokenAccountRegistered('wrap.near', sender),
+      this.options.rpc.getGasPrice(),
+      this.options.rpc.getNativeTransferCostConfig()
+    ])
+    if (
+      !account ||
+      account.accountId !== sender ||
+      !/^(?:0|[1-9][0-9]*)$/.test(account.amountRaw) ||
+      !Number.isSafeInteger(account.storageUsage) ||
+      account.storageUsage < 0 ||
+      typeof registered !== 'boolean' ||
+      !/^(?:0|[1-9][0-9]*)$/.test(gasPriceRaw) ||
+      !/^(?:0|[1-9][0-9]*)$/.test(costs.minGasPurchasePriceRaw) ||
+      !/^(?:0|[1-9][0-9]*)$/.test(costs.storageAmountPerByteRaw)
+    ) {
+      throw new Error('RHEA Swap NEAR account balance is unavailable')
+    }
+    const spot = BigInt(gasPriceRaw)
+    const minimum = BigInt(costs.minGasPurchasePriceRaw)
+    const hold = nearDirectNativeHoldYocto({
+      transactions,
+      amountIn: plan.amountIn,
+      registered,
+      gasPriceYocto: spot > minimum ? spot : minimum,
+      signerId: sender,
+      costs,
+      storageReserveYocto: nearAccountStorageReserveYocto(
+        BigInt(account.storageUsage),
+        BigInt(costs.storageAmountPerByteRaw)
+      )
+    })
+    return hold.toString()
   }
 
   private async assertNativeNearBalance(

@@ -195,6 +195,41 @@ export function nearSwapNativeRequiredYocto(
   return required
 }
 
+/**
+ * Native yocto that must stay outside amountIn. Covers the quote's attached
+ * deposits, first wrap.near registration, prepaid gas, and the account storage
+ * stake. Existing wNEAR is not spent; the full amount is wrapped from native NEAR.
+ */
+export function nearDirectNativeHoldYocto(
+  input: Readonly<{
+    transactions: readonly NearWrapTransaction[]
+    amountIn: string
+    registered: boolean
+    gasPriceYocto: bigint
+    signerId: string
+    costs: NearSwapNativeCostConfig
+    storageReserveYocto: bigint
+  }>
+): bigint {
+  if (input.storageReserveYocto < 0n) throw new Error('RHEA Swap NEAR storage reserve is invalid')
+  const amount = unsigned(input.amountIn, 'source amount')
+  const batch = prependRheaSwapNearWrap({
+    transactions: input.transactions,
+    amountIn: input.amountIn,
+    wrappedBalanceRaw: '0',
+    registered: input.registered
+  })
+  const required = nearSwapNativeRequiredYocto(
+    batch,
+    input.gasPriceYocto,
+    input.signerId,
+    input.costs
+  )
+  const hold = required - amount + input.storageReserveYocto
+  if (hold < 0n) throw new Error('RHEA Swap NEAR native hold is invalid')
+  return hold
+}
+
 export function prependRheaSwapNearWrap(
   input: Readonly<{
     transactions: readonly NearWrapTransaction[]

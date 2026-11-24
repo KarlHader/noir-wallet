@@ -4,6 +4,7 @@ import { expect } from '@playwright/test'
 import {
   buildCrossChainPrivateWithdrawReviewPath,
   buildNearPrivateDepositReviewPath,
+  buildNearPrivateWithdrawReviewPath,
   buildPrivateDepositReviewPath,
   normalizePrivateBalanceTransferInput,
   resolveCrossChainPrivateWithdrawRoute,
@@ -294,6 +295,124 @@ test('builds a wNEAR Incognito deposit review when both assets are the wrapped w
     amount: '0.5',
     review: '1'
   })
+})
+
+test('builds a NEAR Incognito withdraw review on the private transfer route', () => {
+  const assetId = 'near:mainnet/slip44:397'
+  const recipient = 'alice.near'
+  const peaAccountId = 'a'.repeat(64)
+  const reviewPath = buildNearPrivateWithdrawReviewPath({
+    sourceAssetId: assetId,
+    destinationAssetId: assetId,
+    recipient,
+    peaAccountId,
+    amount: '0.03',
+    maximum: true
+  })
+  const reviewRoute = new URL(reviewPath, 'https://wallet.test')
+  expect(reviewRoute.pathname).toBe('/swap')
+  expect(Object.fromEntries(reviewRoute.searchParams)).toEqual({
+    privateTransfer: '1',
+    balanceTransfer: '1',
+    destinationChain: 'near',
+    destinationAsset: assetId,
+    source: assetId,
+    recipient,
+    amount: '0.03',
+    review: '1',
+    maximum: '1'
+  })
+  expect(reviewRoute.searchParams.has('privateDestination')).toBe(false)
+})
+
+test('builds a wNEAR Incognito withdraw review for the wrapped wallet id', () => {
+  const assetId = 'near:mainnet/nep141:wrap.near'
+  const recipient = 'b'.repeat(64)
+  const reviewPath = buildNearPrivateWithdrawReviewPath({
+    sourceAssetId: assetId,
+    destinationAssetId: assetId,
+    recipient,
+    peaAccountId: 'c'.repeat(64),
+    amount: '0.5',
+    maximum: false
+  })
+  const reviewRoute = new URL(reviewPath, 'https://wallet.test')
+  expect(Object.fromEntries(reviewRoute.searchParams)).toEqual({
+    privateTransfer: '1',
+    balanceTransfer: '1',
+    destinationChain: 'near',
+    destinationAsset: assetId,
+    source: assetId,
+    recipient,
+    amount: '0.5',
+    review: '1'
+  })
+})
+
+test('rejects a NEAR Incognito withdraw route that is not one direct quote asset', () => {
+  const nativeAssetId = 'near:mainnet/slip44:397'
+  const wrappedAssetId = 'near:mainnet/nep141:wrap.near'
+  const recipient = 'alice.near'
+  const peaAccountId = 'a'.repeat(64)
+  const route = {
+    sourceAssetId: nativeAssetId,
+    destinationAssetId: nativeAssetId,
+    recipient,
+    peaAccountId,
+    amount: '1',
+    maximum: false
+  }
+  expect(() =>
+    buildNearPrivateWithdrawReviewPath({
+      ...route,
+      sourceAssetId: 'eip155:1/slip44:60',
+      destinationAssetId: 'eip155:1/slip44:60'
+    })
+  ).toThrow('Invalid NEAR source asset route')
+  expect(() =>
+    buildNearPrivateWithdrawReviewPath({
+      ...route,
+      sourceAssetId: 'near:mainnet/nep141:eth.omft.near',
+      destinationAssetId: 'near:mainnet/nep141:eth.omft.near'
+    })
+  ).toThrow('Invalid NEAR source asset route')
+  expect(() =>
+    buildNearPrivateWithdrawReviewPath({
+      ...route,
+      destinationAssetId: wrappedAssetId
+    })
+  ).toThrow('Invalid NEAR source asset route')
+  expect(() => buildNearPrivateWithdrawReviewPath({ ...route, amount: '1e3' })).toThrow(
+    'Invalid NEAR transfer amount route'
+  )
+})
+
+test('rejects a NEAR Incognito withdraw recipient that is not the main account', () => {
+  const assetId = 'near:mainnet/slip44:397'
+  const peaAccountId = 'a'.repeat(64)
+  const route = {
+    sourceAssetId: assetId,
+    destinationAssetId: assetId,
+    peaAccountId,
+    amount: '1',
+    maximum: false
+  }
+  expect(() => buildNearPrivateWithdrawReviewPath({ ...route, recipient: 'not valid' })).toThrow(
+    'Invalid NEAR recipient route'
+  )
+  expect(() => buildNearPrivateWithdrawReviewPath({ ...route, recipient: 'Alice.near' })).toThrow(
+    'Invalid NEAR recipient route'
+  )
+  expect(() => buildNearPrivateWithdrawReviewPath({ ...route, recipient: peaAccountId })).toThrow(
+    'Invalid NEAR recipient route'
+  )
+  expect(() =>
+    buildNearPrivateWithdrawReviewPath({
+      ...route,
+      recipient: 'alice.near',
+      peaAccountId: 'alice.near'
+    })
+  ).toThrow('Invalid NEAR recipient route')
 })
 
 test('offers an unfunded registered USDC destination without trusting matching token symbols', () => {

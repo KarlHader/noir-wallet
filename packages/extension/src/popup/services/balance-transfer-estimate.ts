@@ -39,6 +39,8 @@ export interface BalanceTransferEstimate {
     readonly symbol: string
     readonly decimals: number
   }
+  /** Native yocto that must remain outside a direct NEAR amount. Not part of the displayed fee. */
+  readonly nativeHoldRaw?: string
   readonly time: string
 }
 
@@ -258,10 +260,18 @@ async function estimateNearDirectTransfer(
   )
   try {
     input.signal.throwIfAborted()
+    let nativeHoldRaw: string | undefined
+    if (input.asset.asset.kind === 'native') {
+      await rheaSwapClient.prepare(quote.quoteHandle)
+      input.signal.throwIfAborted()
+      nativeHoldRaw = await rheaSwapClient.readNearDirectNativeHold(quote.quoteHandle, input.sender)
+    }
+    input.signal.throwIfAborted()
     return {
       expiresAt: Math.min(quote.expiresAt ?? Infinity, Date.now() + 30_000),
       routeFeeRaw: routeFee(input.amountRaw, quote.estimatedOut),
-      time: formatTransferTime(undefined, DIRECT_MAXIMUM_MINUTES)
+      time: formatTransferTime(undefined, DIRECT_MAXIMUM_MINUTES),
+      ...(nativeHoldRaw === undefined ? {} : { nativeHoldRaw })
     }
   } finally {
     await rheaSwapClient.discard(quote.quoteHandle).catch(() => {})

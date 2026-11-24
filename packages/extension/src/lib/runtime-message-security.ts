@@ -19,6 +19,7 @@ import {
   RHEA_SWAP_CHAIN_CATALOG,
   parseRheaSwapQuoteRequest
 } from '@/core/services/rhea-swap/rhea-swap-model'
+import { parseNearAccountId } from '@/core/chains/near/identifiers'
 import { parseRheaSwapTransactionBinding } from '@/core/transactions/domain'
 import { isZcashOperationAnalyticsContext } from './analytics/operations'
 import { isDiagnosticContextId } from './diagnostic-log'
@@ -306,6 +307,14 @@ const isRheaSwapQuoteRequest: RuntimeFieldValidator = value => {
 }
 const isRheaSwapQuoteHandle: RuntimeFieldValidator = value =>
   typeof value === 'string' && /^rhea-quote:[0-9A-Za-z:_-]{1,128}$/.test(value)
+const isNearRuntimeAccountId: RuntimeFieldValidator = value => {
+  try {
+    parseNearAccountId(value)
+    return true
+  } catch {
+    return false
+  }
+}
 const isRheaSwapRouteIndex: RuntimeFieldValidator = value =>
   Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 12
 const isRheaSwapSourceHash: RuntimeFieldValidator = value =>
@@ -701,6 +710,9 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   CANCEL_RHEA_SWAP_SOLANA: { required: { quoteHandle: isRheaSwapQuoteHandle } },
   PREPARE_RHEA_SWAP_NEAR: {
     required: { quoteHandle: isRheaSwapQuoteHandle, binding: isRheaSwapBinding }
+  },
+  READ_RHEA_SWAP_NEAR_NATIVE_HOLD: {
+    required: { quoteHandle: isRheaSwapQuoteHandle, sender: isNearRuntimeAccountId }
   },
   CONFIRM_RHEA_SWAP_NEAR: {
     required: { quoteHandle: isRheaSwapQuoteHandle, payloadFingerprint: isEvmPayloadFingerprint }
@@ -1168,6 +1180,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     CONFIRM_RHEA_SWAP_SOLANA: ['extension-page'],
     CANCEL_RHEA_SWAP_SOLANA: ['extension-page'],
     PREPARE_RHEA_SWAP_NEAR: ['extension-page'],
+    READ_RHEA_SWAP_NEAR_NATIVE_HOLD: ['extension-page'],
     CONFIRM_RHEA_SWAP_NEAR: ['extension-page'],
     CANCEL_RHEA_SWAP_NEAR: ['extension-page'],
     RECORD_RHEA_SWAP_SUBMISSION: ['extension-page'],
