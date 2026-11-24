@@ -1,4 +1,5 @@
 import {
+  CONFIDENTIAL_WITHDRAW_PROVIDER_APP_FEE,
   NOIR_PUBLIC_CONFIDENTIAL_TRANSFER_APP_FEES,
   NOIR_RECEIVE_REFERRAL,
   NOIR_SEND_REFERRAL,
@@ -192,6 +193,35 @@ export function readConfidentialQuoteAppFees(
       fee: entry.fee as number
     }
   })
+}
+
+/** Shown when a quoted app fee cannot be charged on a cluster leg. */
+export const CONFIDENTIAL_QUOTED_FEE_UNREPRESENTABLE_ERROR =
+  'Amount is too small to cover the quoted fee.'
+
+/**
+ * 1Click charges quoteRequest app fees in integer raw units (bps / 10_000).
+ * A positive fee that truncates to 0 is later rejected with business code 2002.
+ * amountOut staying equal to amountIn is the same outcome from the provider.
+ */
+export function confidentialQuoteAppFeeUnrepresentable(quote: ConfidentialQuote): boolean {
+  const feeBps = readConfidentialQuoteAppFees(quote).reduce((sum, fee) => sum + fee.fee, 0)
+  if (feeBps <= 0) return false
+  if (feeBps > 10_000) throw new Error('Confidential quote app fees are invalid')
+  const amountIn = quote.quote.amountIn
+  const amountOut = quote.quote.amountOut
+  if (!/^(0|[1-9]\d*)$/.test(amountIn) || !/^(0|[1-9]\d*)$/.test(amountOut)) {
+    throw new Error('Confidential quote amount is invalid')
+  }
+  if ((BigInt(amountIn) * BigInt(feeBps)) / 10_000n === 0n) return true
+  return BigInt(amountOut) === BigInt(amountIn)
+}
+
+function isConfidentialWithdrawProviderAppFee(fee: IntentsAppFee): boolean {
+  return (
+    fee.recipient === CONFIDENTIAL_WITHDRAW_PROVIDER_APP_FEE.recipient &&
+    fee.fee === CONFIDENTIAL_WITHDRAW_PROVIDER_APP_FEE.fee
+  )
 }
 
 function assertQuoteAppFees(
@@ -910,7 +940,7 @@ export class ConfidentialFundingApi {
     }
     const normalized = normalizeNearConfidentialQuote(input)
     const nearSource = isNearChainConfidentialProtocolAsset(normalized.originAsset)
-    const appFees = isPublicTransfer
+    const walletAppFees = isPublicTransfer
       ? NOIR_PUBLIC_CONFIDENTIAL_TRANSFER_APP_FEES
       : !isDeposit && input.referral === NOIR_SWAP_REFERRAL
         ? NOIR_SWAP_APP_FEES
@@ -933,11 +963,23 @@ export class ConfidentialFundingApi {
       quoteWaitingTimeMs: 0,
       confidentiality: 'basic'
     }
-    const { quote: baseline, fees: providerFees } = await this.quoteProviderFees(request, signal)
+    // Successful confidential withdrawals settle this provider fee. Request it only
+    // when the dry quote omitted every app fee, so it is never stacked to 100 bps.
+    const acceptObservedWithdrawFee =
+      isWithdrawal && input.referral === NOIR_SEND_REFERRAL && walletAppFees.length === 0
+    const { quote: baseline, fees: providerFees } = await this.quoteProviderFees(
+      request,
+      signal,
+      acceptObservedWithdrawFee
+    )
     assertConfidentialQuoteBinding(baseline, normalized)
     if (nearSource && baseline.quote.depositMemo) {
       throw new Error('NEAR Shield quote must not include a memo')
     }
+    const appFees =
+      acceptObservedWithdrawFee && providerFees.length === 0
+        ? [CONFIDENTIAL_WITHDRAW_PROVIDER_APP_FEE]
+        : walletAppFees
     if (input.dry && appFees.length === 0) return baseline
     if (appFees.some(appFee => providerFees.some(fee => fee.recipient === appFee.recipient))) {
       throw new Error('Confidential provider fee quote already includes the wallet fee recipient')
@@ -1108,7 +1150,8 @@ export class ConfidentialFundingApi {
 
   private async quoteProviderFees(
     request: Readonly<Record<string, string | number | boolean>>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    acceptObservedWithdrawFee = false
   ) {
     const baseline = { ...request, dry: true }
     const quote = parseQuote(
@@ -1122,7 +1165,11 @@ export class ConfidentialFundingApi {
     if (
       Object.entries(baseline).some(([key, expected]) => quote.quoteRequest[key] !== expected) ||
       fees.length > 1 ||
-      fees.some(fee => fee.fee > MAX_CONFIDENTIAL_PROVIDER_FEE_BPS)
+      fees.some(
+        fee =>
+          fee.fee > MAX_CONFIDENTIAL_PROVIDER_FEE_BPS &&
+          !(acceptObservedWithdrawFee && isConfidentialWithdrawProviderAppFee(fee))
+      )
     ) {
       throw new Error('Confidential provider fee quote is invalid')
     }

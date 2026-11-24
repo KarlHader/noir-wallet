@@ -3,6 +3,18 @@ import { encodeFunctionData, erc20Abi, isAddress, type Address } from 'viem'
 import { isNoirPublicConfidentialTransferReferral, ZEC_ZCASH_ASSET } from '@/config/intents'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { getEvmRouteAssetIdentity } from '@/core/chains/cross-chain-asset-group'
+import {
+  buildNearConfidentialFungibleDepositActions,
+  isNearFungibleContractId,
+  NEAR_FT_TRANSFER_DEPOSIT_YOCTO,
+  NEAR_FT_TRANSFER_GAS,
+  NEAR_STORAGE_DEPOSIT_GAS,
+  NEAR_STORAGE_DEPOSIT_YOCTO,
+  parseNearAccountId,
+  WRAP_NEAR_CONTRACT_ID,
+  type NearIntentsDepositAction
+} from '@/core/chains/near'
+import { acceptNearDirectDeposit } from '@/core/chains/near/near-incognito-move'
 import { fetchSwapTokens, type SwapToken } from '@/core/services/intents-api'
 import { isDeprecatedIntentsToken } from '@/core/services/intents-evm-assets'
 import { isEvmNativeQuoteAddress, resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap'
@@ -17,12 +29,35 @@ import type { ConfidentialFundingApi } from './confidential-funding-api'
 
 const ROUTER = 'nearintents'
 
+function nearDepositContractId(address: string): string {
+  if (address === 'near' || address === 'native' || address === WRAP_NEAR_CONTRACT_ID) {
+    return WRAP_NEAR_CONTRACT_ID
+  }
+  const contractId = parseNearAccountId(address, 'Confidential NEAR token')
+  if (!isNearFungibleContractId(contractId)) {
+    throw new Error('Confidential transfer asset is unavailable')
+  }
+  return contractId
+}
+
+function nearProtocolAssetId(address: string): string | null {
+  try {
+    return `nep141:${nearDepositContractId(address)}`
+  } catch {
+    return null
+  }
+}
+
 function resolveAsset(asset: AssetRef, tokens: readonly SwapToken[]): SwapToken {
-  const identity = getEvmRouteAssetIdentity(
-    `eip155:${asset.chain}`,
-    asset.address,
-    isEvmNativeQuoteAddress(asset.chain, asset.address)
-  )
+  const nearProtocolId = asset.chain === 'near' ? nearProtocolAssetId(asset.address) : null
+  const identity =
+    nearProtocolId === null
+      ? getEvmRouteAssetIdentity(
+          `eip155:${asset.chain}`,
+          asset.address,
+          isEvmNativeQuoteAddress(asset.chain, asset.address)
+        )
+      : null
   const canonicalId = identity && `${identity.chainId}/${identity.namespace}:${identity.reference}`
   const matches = tokens.filter(
     token =>
@@ -30,10 +65,51 @@ function resolveAsset(asset: AssetRef, tokens: readonly SwapToken[]): SwapToken 
       (asset.decimals === undefined || token.decimals === asset.decimals) &&
       (asset.chain === 'zcash'
         ? token.assetId === ZEC_ZCASH_ASSET && asset.address === 'zec'
-        : canonicalId !== null && resolveRheaSwapCanonicalAssetId(token.assetId) === canonicalId)
+        : nearProtocolId !== null
+          ? token.assetId === nearProtocolId
+          : canonicalId !== null && resolveRheaSwapCanonicalAssetId(token.assetId) === canonicalId)
   )
   if (matches.length !== 1) throw new Error('Confidential transfer asset is unavailable')
   return matches[0]!
+}
+
+function nearBatchAction(action: NearIntentsDepositAction) {
+  return {
+    methodName: action.methodName,
+    args: action.args,
+    gas: action.gas,
+    deposit: action.depositYocto
+  }
+}
+
+/** Estimate batch. Recipient storage is included so Max keeps the registration deposit. */
+function conservativeNearDepositActions(
+  contractId: string,
+  depositAddress: string,
+  amount: string
+): readonly NearIntentsDepositAction[] {
+  if (contractId === WRAP_NEAR_CONTRACT_ID) {
+    return [
+      {
+        methodName: 'storage_deposit',
+        args: { account_id: depositAddress, registration_only: true },
+        gas: NEAR_STORAGE_DEPOSIT_GAS.toString(),
+        depositYocto: NEAR_STORAGE_DEPOSIT_YOCTO.toString()
+      },
+      {
+        methodName: 'ft_transfer',
+        args: { receiver_id: depositAddress, amount },
+        gas: NEAR_FT_TRANSFER_GAS.toString(),
+        depositYocto: NEAR_FT_TRANSFER_DEPOSIT_YOCTO.toString()
+      }
+    ]
+  }
+  return buildNearConfidentialFungibleDepositActions({
+    contractId,
+    depositAddress,
+    amountRaw: BigInt(amount),
+    recipientRegistered: false
+  }).actions
 }
 
 export class PublicConfidentialTransfer {
@@ -93,13 +169,16 @@ export class PublicConfidentialTransfer {
       result.quote
     if (depositMemo || !depositAddress)
       throw new Error('Unsupported confidential deposit instructions')
+    const near = quote.fromChain === 'near'
     const zcash = quote.fromChain === 'zcash'
-    const tx = zcash
-      ? this.zcashTransfer(depositAddress, amountIn)
-      : this.evmTransfer(quote.tokenIn, depositAddress, amountIn, request.sender)
+    const tx = near
+      ? this.nearTransfer(quote.tokenIn, depositAddress, amountIn, request.recipient ?? '')
+      : zcash
+        ? this.zcashTransfer(depositAddress, amountIn)
+        : this.evmTransfer(quote.tokenIn, depositAddress, amountIn, request.sender)
     return {
       router: ROUTER,
-      chainType: zcash ? 'zcash' : 'evm',
+      chainType: near ? 'near' : zcash ? 'zcash' : 'evm',
       isCrossChain: quote.fromChain !== quote.toChain,
       fromChain: quote.fromChain,
       toChain: quote.toChain,
@@ -150,9 +229,14 @@ export class PublicConfidentialTransfer {
         referral,
         originAsset,
         destinationAsset,
-        signerId: request.fromChain === 'zcash' ? request.sender : request.sender.toLowerCase(),
+        signerId:
+          request.fromChain === 'zcash' || request.fromChain === 'near'
+            ? request.sender
+            : request.sender.toLowerCase(),
         recipient:
-          request.toChain === 'zcash' ? request.recipient : request.recipient.toLowerCase(),
+          request.toChain === 'zcash' || request.toChain === 'near'
+            ? request.recipient
+            : request.recipient.toLowerCase(),
         amountRaw: request.amountIn,
         depositType: 'ORIGIN_CHAIN',
         refundType: 'ORIGIN_CHAIN',
@@ -162,6 +246,26 @@ export class PublicConfidentialTransfer {
       },
       signal
     )
+  }
+
+  private nearTransfer(token: AssetRef, depositAddress: string, amount: string, recipient: string) {
+    const accepted = acceptNearDirectDeposit({ depositAddress })
+    if (!accepted.ok || !recipient || accepted.depositAddress === recipient) {
+      throw new Error(
+        accepted.ok
+          ? 'Confidential deposit address cannot be the Incognito account'
+          : accepted.error
+      )
+    }
+    const contractId = nearDepositContractId(token.address)
+    return [
+      {
+        receiverId: contractId,
+        actions: conservativeNearDepositActions(contractId, accepted.depositAddress, amount).map(
+          nearBatchAction
+        )
+      }
+    ]
   }
 
   private zcashTransfer(depositAddress: string, amount: string) {

@@ -458,6 +458,49 @@ test.describe('Multichain Activity presentation', () => {
     expect(getActivityRouteTitle(externalTransfer, externalRoute)).toBe('Send')
   })
 
+  test('resolves a NEAR Incognito sender and Public recipient from chain-scoped addresses', () => {
+    const pea = 'a'.repeat(64)
+    const main = 'b'.repeat(64)
+    const chainId = 'near:mainnet'
+    const assetId = `${chainId}/nep141:usdt.tether-token.near`
+    const addressModes = buildActivityExecutionAddressModes([
+      {
+        chain: { id: chainId, family: 'near' },
+        addresses: [{ value: main }],
+        privateExecutionAddress: pea
+      }
+    ])
+    const item = {
+      ...failedItem({ transactionHash: 'z596xHJoyJNKaKrjZP476naVT7x7mM1mbQ6oLotgiPix' }),
+      kind: 'transfer',
+      status: 'final',
+      failureCode: undefined,
+      completeness: 'complete',
+      snapshot: {
+        schemaVersion: 1,
+        direction: 'outgoing',
+        primaryAmount: { assetId, amountRaw: '155000' },
+        counterAmount: { assetId, amountRaw: '154600' },
+        sender: { chainId, address: pea },
+        recipient: { chainId, address: main },
+        protocol: {
+          provider: 'rhea-cross-chain-dex',
+          userAction: 'transfer',
+          isCrossChain: false,
+          destination: { chainId, recipient: main, assetId }
+        }
+      }
+    }
+    const assets = new Map([[assetId, { metadata: { symbol: 'USDT', decimals: 6 } }]])
+    const chains = new Map([[chainId, { displayName: 'NEAR' }]])
+
+    const route = getActivitySwapPresentation(item, assets, chains, addressModes)
+    expect(route?.sourceAccountMode).toBe('Confidential')
+    expect(route?.destinationAccountMode).toBe('Public')
+    expect(getActivityRouteTitle(item, route, { viewedDomain: 'private' })).toBe('Send')
+    expect(getActivityRouteTitle(item, route, { viewedDomain: 'public' })).toBe('Receive')
+  })
+
   test('keeps both Swap assets and their route tied to the correct chains', () => {
     const sourceId = 'eip155:1/slip44:60'
     const destinationId = 'eip155:42161/erc20:0xaf88d065e77c8cc2239327c5edb3a432268e5831'

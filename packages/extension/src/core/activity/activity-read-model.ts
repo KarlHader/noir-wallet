@@ -252,7 +252,7 @@ function itemIdentityKeys(item: ActivityItem): readonly string[] {
     }
     const namespace = segment.target.chainId.split(':', 1)[0]
     const mode =
-      namespace === 'eip155'
+      namespace === 'eip155' || namespace === 'near'
         ? `:${item.accountMode ?? 'main'}`
         : item.source === 'zcash-v1' && item.assetDomains?.[0] === 'shield'
           ? ':shield'
@@ -639,7 +639,7 @@ export function buildActivityReadModel(input: {
   const privateAddressValues = input.privateExecutionAddresses ?? []
   if (
     privateAddressValues.length > 32 ||
-    privateAddressValues.some(address => !/^0x[0-9a-fA-F]{40}$/.test(address))
+    privateAddressValues.some(address => !/^(?:0x[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/.test(address))
   ) {
     throw new Error('Invalid Activity Private Execution Address set')
   }

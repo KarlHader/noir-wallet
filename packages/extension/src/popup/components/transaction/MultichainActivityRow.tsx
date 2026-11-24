@@ -32,6 +32,7 @@ import type {
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
 import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
 import { getActivityAddressAlias } from '@/popup/services/activity-address-alias'
+import { getActivityAddressMode } from '@/popup/services/activity-balance-route'
 import { SMALL_TRANSFER_WARNING } from '@/popup/services/activity-small-transfer-warning'
 import { Tooltip } from '../ui/tooltip'
 import type { TransactionAssetAmount } from '@/core/transactions/domain'
@@ -49,6 +50,17 @@ interface MultichainActivityRowProps {
   readonly onClick?: (item: ActivityItem) => void
   readonly smallTransferWarning?: boolean
   readonly settledDestination?: TransactionAssetAmount
+}
+
+function activityPartyMode(
+  modes: ReadonlyMap<string, 'Public' | 'Confidential'> | undefined,
+  party: { readonly chainId: string; readonly address: string } | undefined
+): 'Public' | 'Confidential' | undefined {
+  if (!modes || !party) return undefined
+  return (
+    getActivityAddressMode(modes, party.chainId, party.address) ??
+    modes.get(party.address.toLowerCase())
+  )
 }
 
 function SmallTransferWarningIcon() {
@@ -304,12 +316,8 @@ export function MultichainActivityRow({
     getActivityAssetEffects(item) !== undefined &&
     !(item.kind === 'transfer' && item.snapshot?.direction === 'self')
   const accountRoute = {
-    sourceAccountMode: item.snapshot?.sender?.address
-      ? executionAddressModes?.get(item.snapshot.sender.address.toLowerCase())
-      : undefined,
-    destinationAccountMode: item.snapshot?.recipient?.address
-      ? executionAddressModes?.get(item.snapshot.recipient.address.toLowerCase())
-      : undefined
+    sourceAccountMode: activityPartyMode(executionAddressModes, item.snapshot?.sender),
+    destinationAccountMode: activityPartyMode(executionAddressModes, item.snapshot?.recipient)
   }
   const actionSide = getActivityAction(item, perspective, accountRoute).side
   const preferredDirection =

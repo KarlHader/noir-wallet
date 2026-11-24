@@ -27,6 +27,7 @@ import {
 
 const MAIN = 'alice.near'
 const PEA = 'ab'.repeat(32)
+const EVM = '0x1111111111111111111111111111111111111111'
 
 function account(pea = PEA) {
   return {
@@ -57,6 +58,7 @@ function clusterInput(overrides = {}) {
     amountRaw: '1000',
     slippageBps: 50,
     implicitAccountOnChain: false,
+    confidentialPrincipal: EVM,
     ...overrides
   }
 }
@@ -68,15 +70,15 @@ test('mainnet cluster does not build a Main-to-PEA transfer', () => {
   expect(plan.method).toBe('cluster')
   expect(plan.fundingTransfers).toEqual([])
   expect(plan.implicitAccountOnChain).toBeUndefined()
-  expect(plan.signerChainFamily).toBe('near')
-  expect(plan.intentStandard).toBe('nep413')
-  expect(plan.signerId).toBe(MAIN)
-  expect(plan.deposit.signerId).toBe(MAIN)
-  expect(plan.deposit.recipient).toBe(MAIN)
+  expect(plan.signerChainFamily).toBe('evm')
+  expect(plan.intentStandard).toBe('erc191')
+  expect(plan.signerId).toBe(EVM)
+  expect(plan.deposit.signerId).toBe(EVM)
+  expect(plan.deposit.recipient).toBe(EVM)
   expect(plan.deposit.refundTo).toBe(MAIN)
   expect(plan.deposit.recipientType).toBe('CONFIDENTIAL_INTENTS')
   expect(plan.withdraw.recipient).toBe(PEA)
-  expect(plan.withdraw.signerId).toBe(MAIN)
+  expect(plan.withdraw.signerId).toBe(EVM)
   expect(JSON.stringify(plan)).not.toMatch(/receiverId|storage_deposit|signer_chain_family/)
   expect(plan.deposit.recipient).not.toBe(PEA)
 })
@@ -167,6 +169,59 @@ test('directly rejects a memo and a non-64-hex deposit address', () => {
       }
     )
   ).not.toThrow()
+  expect(publicRouteCalled).toBe(false)
+})
+
+test('public-private-move accepts a public NEAR sender and rejects the PEA', () => {
+  const quoteAccount = {
+    walletId: 'wallet',
+    accountId: 'account',
+    accountIndex: 0,
+    walletSource: { kind: 'software' },
+    networks: [
+      {
+        chainId: 'near:mainnet',
+        privateExecutionAddress: PEA,
+        addresses: [{ value: MAIN }]
+      }
+    ]
+  }
+  const scope = { walletId: 'wallet', accountId: 'account' }
+  const request = (token, sender) => ({
+    fromChain: 'near',
+    toChain: 'near',
+    tokenIn: { address: token },
+    tokenOut: { address: token === 'near' ? 'wrap.near' : token },
+    sender,
+    recipient: PEA,
+    confidentiality: 'basic'
+  })
+  let publicRouteCalled = false
+  const rejectPublic = () => {
+    publicRouteCalled = true
+    throw new Error('public route')
+  }
+  for (const token of ['near', 'usdt.tether-token.near']) {
+    expect(() =>
+      assertNearPrivateQuoteRoute(
+        request(token, MAIN),
+        quoteAccount,
+        'public-private-move',
+        scope,
+        rejectPublic
+      )
+    ).not.toThrow()
+  }
+  expect(publicRouteCalled).toBe(false)
+  expect(() =>
+    assertNearPrivateQuoteRoute(
+      request('usdt.tether-token.near', PEA),
+      quoteAccount,
+      'public-private-move',
+      scope,
+      rejectPublic
+    )
+  ).toThrow('Private quote account changed. Get a new quote.')
   expect(publicRouteCalled).toBe(false)
 })
 

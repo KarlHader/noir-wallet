@@ -47,7 +47,11 @@ export function assertNearPrivateQuoteRoute(
     assertCurrentPublicRoute(request, account, purpose, scope)
     return
   }
-  if (purpose === 'confidential-funding' || purpose === 'private-transfer') {
+  if (
+    purpose === 'confidential-funding' ||
+    purpose === 'public-private-move' ||
+    purpose === 'private-transfer'
+  ) {
     assertNearIncognitoDirectQuote(request, account, purpose, scope)
     return
   }

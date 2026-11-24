@@ -770,6 +770,43 @@ test('maps NEAR Intents balances onto chain assets without bridge assets or doub
   expect(view.assets.find(asset => asset.protocolAssetId === 'nep141:wrap.near').assetId).toBe(
     nativeId
   )
+  const managedNear = buildConfidentialPortfolioView(
+    balances,
+    [
+      {
+        assetId: 'nep141:wrap.near',
+        blockchain: 'near',
+        contractAddress: 'wrap.near',
+        decimals: 24,
+        symbol: 'wNEAR',
+        price: 0,
+        priceUpdatedAt: ''
+      }
+    ],
+    [
+      {
+        protocolAssetId: 'nep141:wrap.near',
+        assetId: 'near:mainnet/nep141:wrap.near',
+        chainId: 'near:mainnet',
+        namespace: 'nep141',
+        reference: 'wrap.near',
+        blockchain: 'near',
+        symbol: 'wNEAR',
+        decimals: 24,
+        management: 'protocol'
+      }
+    ],
+    [],
+    assets
+  )
+  expect(
+    managedNear.assets.find(asset => asset.protocolAssetId === 'nep141:wrap.near')
+  ).toMatchObject({
+    assetId: nativeId,
+    chainId: 'near:mainnet',
+    symbol: 'NEAR',
+    decimals: 24
+  })
   expect(view.assets.find(asset => asset.protocolAssetId === 'nep141:token.near').assetId).toBe(
     tokenId
   )

@@ -23,6 +23,7 @@ import {
   toRheaSwapExecutionView,
   toRheaSwapToken,
   toRheaSwapProtocolRequest,
+  usesPublicConfidentialTransferAdapter,
   type RheaSwapQuoteView,
   type RheaSwapReviewView,
   type RheaSwapOrderStatusView,
@@ -39,7 +40,6 @@ import { isRheaIntentsRoute } from '@/core/transactions/domain/protocol'
 import { readRheaDestinationHash } from './rhea-order-status'
 import { getRheaSwapQuoteDeadline, isRheaSwapQuoteFresh } from './rhea-swap-quote-validity'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
-import { isNoirPublicConfidentialTransferReferral } from '@/config/intents'
 
 const MAXIMUM_SESSION_RECORDS = 16
 
@@ -825,7 +825,11 @@ export class RheaSwapService {
     const submission = record.submission
     if (!submission) throw new Error('RHEA Swap has not been submitted')
     let status: SwapOrderStatusDataRaw
-    if (isNoirPublicConfidentialTransferReferral(record.request.extensions?.referral)) {
+    if (
+      usesPublicConfidentialTransferAdapter({
+        referral: record.request.extensions?.referral
+      })
+    ) {
       if (!this.client.getPublicConfidentialTransferStatus || !submission.orderId) {
         throw new Error('Confidential transfer order is unavailable')
       }

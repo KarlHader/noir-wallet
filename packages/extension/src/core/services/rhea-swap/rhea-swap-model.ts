@@ -15,7 +15,12 @@ import {
   ASSET_PRICE_SOURCE_ASSETS,
   getEvmNativeProtocolAssetId
 } from '@/config/asset-market-assets'
-import { NOIR_MOVE_REFERRAL, NOIR_PRIVATELY_REFERRAL, NOIR_SWAP_REFERRAL } from '@/config/intents'
+import {
+  isNoirPublicConfidentialTransferReferral,
+  NOIR_MOVE_REFERRAL,
+  NOIR_PRIVATELY_REFERRAL,
+  NOIR_SWAP_REFERRAL
+} from '@/config/intents'
 import { createInitialProductChainRegistry, getZcashChainId } from '@/core/chains/registry'
 import {
   getEvmRouteAssetIdentity,
@@ -54,6 +59,13 @@ export function rheaSwapReferral(purpose?: PrivateQuotePurpose): string {
   if (purpose === 'public-private-send') return NOIR_PRIVATELY_REFERRAL
   if (purpose === 'public-private-move') return NOIR_MOVE_REFERRAL
   return NOIR_SWAP_REFERRAL
+}
+
+/** `noir_move` and `noir_privately` quote through 1Click, including NEAR Directly deposits. */
+export function usesPublicConfidentialTransferAdapter(input: {
+  readonly referral: unknown
+}): boolean {
+  return isNoirPublicConfidentialTransferReferral(input.referral)
 }
 
 type PrivateQuoteSourceFamily = 'evm' | 'zcash' | 'near' | 'other'

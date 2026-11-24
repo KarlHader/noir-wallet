@@ -190,6 +190,18 @@ function parseClusterNetworkFee(value: unknown) {
   return Object.freeze({ raw: value.raw, symbol: value.symbol, decimals: value.decimals })
 }
 
+function isSameNearAccount(recipient: string, destination: string): boolean {
+  try {
+    return (
+      parseNearAccountId(recipient) === recipient &&
+      parseNearAccountId(destination) === destination &&
+      recipient === destination
+    )
+  } catch {
+    return false
+  }
+}
+
 function matchesExternalRecipient(
   recipient: unknown,
   destination: unknown,
@@ -199,6 +211,8 @@ function matchesExternalRecipient(
   if (/^0x[0-9a-fA-F]{40}$/.test(recipient)) {
     return !/^0x0{40}$/i.test(recipient) && recipient.toLowerCase() === destination.toLowerCase()
   }
+  // A NEAR account id is not a Zcash address. Check it before the Zcash parser.
+  if (isSameNearAccount(recipient, destination)) return true
   if (network !== 'mainnet' && network !== 'testnet') return false
   try {
     return parseZcashAddress(recipient, network).address === destination
@@ -216,6 +230,12 @@ function isConfidentialRouteAddress(value: unknown): boolean {
   } catch {
     return false
   }
+}
+
+function cancellablePreparedPlanId(value: unknown): string | null {
+  if (!isRecord(value) || value.phase !== 'prepared' || typeof value.planId !== 'string')
+    return null
+  return value.planId.length > 0 ? value.planId : null
 }
 
 function parseReview(value: unknown): ConfidentialFundingReview {
@@ -420,8 +440,18 @@ export function createConfidentialFundingClient(
       ),
     prepare: async (
       request: PrepareConfidentialFundingRequest
-    ): Promise<ConfidentialFundingReview> =>
-      parseReview(unwrap(await send({ type: 'PREPARE_CONFIDENTIAL_FUNDING', request }))),
+    ): Promise<ConfidentialFundingReview> => {
+      const value = unwrap(await send({ type: 'PREPARE_CONFIDENTIAL_FUNDING', request }))
+      try {
+        return parseReview(value)
+      } catch (error) {
+        const planId = cancellablePreparedPlanId(value)
+        // The plan is already stored. A rejected review must not keep its balance reserved.
+        if (planId)
+          await send({ type: 'CANCEL_CONFIDENTIAL_FUNDING', planId }).catch(() => undefined)
+        throw error
+      }
+    },
     confirm: async (planId: string, payloadFingerprint: string): Promise<ConfidentialFundingPlan> =>
       parsePlan(
         unwrap(

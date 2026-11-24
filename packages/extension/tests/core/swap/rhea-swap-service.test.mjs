@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { decodeFunctionData, erc20Abi } from 'viem'
 import { ConfidentialFundingApi } from '../../../src/background/confidential-funding-api.ts'
+import { parseNearDAppTransactionBatch } from '../../../src/background/near-dapp-codecs.ts'
 import { PublicConfidentialTransfer } from '../../../src/background/public-confidential-transfer.ts'
 import { RheaSwapCatalogClient } from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
 import {
@@ -149,6 +150,117 @@ test('uses the same 2 bps 1Click route for public confidential transfer quotes a
     await expect(
       service.quote(request, undefined, { ...scope, purpose: 'public-private-move' })
     ).rejects.toThrow('already includes the wallet fee recipient')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('quotes a NEAR public-private move through 1Click and pays the solver deposit address', async () => {
+  const depositAddress = 'cd'.repeat(32)
+  const usdt = {
+    assetId: 'nep141:usdt.tether-token.near',
+    symbol: 'USDT',
+    decimals: 6
+  }
+  const asset = {
+    chain: 'near',
+    address: 'usdt.tether-token.near',
+    symbol: 'USDT',
+    decimals: 6
+  }
+  const request = {
+    fromChain: 'near',
+    toChain: 'near',
+    tokenIn: asset,
+    tokenOut: asset,
+    amountIn: '1000000',
+    slippageBps: 50,
+    sender: 'Alice.near',
+    recipient: 'ab'.repeat(32),
+    confidentiality: 'basic'
+  }
+  const config = {
+    oneClickApiUrl: 'https://example.test/1click',
+    oneClickDirectApiUrl: 'https://example.test/1click',
+    rheaSwapApiUrl: 'https://example.test'
+  }
+  const fees = [{ recipient: 'noir_swap.near', fee: 2 }]
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    expect(String(url)).toBe(`${config.oneClickApiUrl}/quote`)
+    const body = JSON.parse(init.body)
+    expect(body).toMatchObject({
+      referral: 'noir_move',
+      originAsset: usdt.assetId,
+      destinationAsset: usdt.assetId,
+      amount: request.amountIn,
+      refundTo: request.sender,
+      recipient: request.recipient,
+      recipientType: 'DESTINATION_CHAIN',
+      confidentiality: 'basic',
+      depositMode: 'SIMPLE'
+    })
+    expect(body.refundTo).toBe(request.sender)
+    expect(body.recipient).toBe(request.recipient)
+    if (body.appFees) expect(body.appFees).toEqual(fees)
+    else expect(body.dry).toBe(true)
+    const appFees = body.appFees ?? []
+    return Response.json({
+      correlationId: 'near-public-confidential-quote',
+      quoteRequest: { ...body, appFees },
+      quote: {
+        amountIn: body.amount,
+        amountOut: body.appFees ? '999800' : '1000000',
+        minAmountOut: '994801',
+        deadline: body.deadline,
+        depositAddress: body.dry ? undefined : depositAddress
+      }
+    })
+  }
+  try {
+    const adapter = new PublicConfidentialTransfer(
+      new ConfidentialFundingApi(config, '', ''),
+      async () => [usdt]
+    )
+    const client = new RheaSwapCatalogClient({
+      baseUrl: config.rheaSwapApiUrl,
+      publicConfidentialTransfer: adapter
+    })
+    const service = new RheaSwapService(client, new MemoryRheaSwapQuoteSessionStore())
+    const quote = await service.quote(request, undefined, {
+      walletId: 'wallet',
+      accountId: 'account',
+      purpose: 'public-private-move'
+    })
+    expect(quote).toMatchObject({ estimatedOut: '999800', minAmountOut: '994801' })
+    await service.prepare(quote.quoteHandle)
+    const plan = await service.readNearTransactionBatchPlan(quote.quoteHandle)
+    expect(plan.transactions).toHaveLength(1)
+    expect(plan.transactions[0].receiverId).toBe('usdt.tether-token.near')
+    const transfer = plan.transactions[0].actions.find(action => action.methodName === 'ft_transfer')
+    expect(transfer.args).toMatchObject({ receiver_id: depositAddress, amount: request.amountIn })
+    expect(transfer.args).not.toHaveProperty('memo')
+    expect(transfer.args.receiver_id).not.toBe(request.recipient)
+    expect(
+      plan.transactions[0].actions.some(
+        action =>
+          action.methodName === 'storage_deposit' && action.args.account_id === depositAddress
+      )
+    ).toBe(true)
+    const [parsed] = parseNearDAppTransactionBatch([
+      {
+        transactions: plan.transactions.map(transaction => ({
+          receiverId: transaction.receiverId,
+          actions: transaction.actions
+        }))
+      }
+    ])
+    const parsedTransfer = parsed.actions.find(action => action.methodName === 'ft_transfer')
+    expect(parsedTransfer.args).toMatchObject({
+      receiver_id: depositAddress,
+      amount: request.amountIn
+    })
+    expect(parsedTransfer.args).not.toHaveProperty('memo')
   } finally {
     globalThis.fetch = originalFetch
   }

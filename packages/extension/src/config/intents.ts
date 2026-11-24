@@ -63,6 +63,14 @@ export const NOIR_MOVE_REFERRAL = 'noir_move'
 export const NOIR_PUBLIC_CONFIDENTIAL_TRANSFER_APP_FEES: readonly IntentsAppFee[] = [
   { recipient: NOIR_APP_FEE_RECIPIENT, fee: 2 }
 ]
+/**
+ * Provider fee observed on successful 1Click confidential withdrawals.
+ * 50 bps (0.5%) to cross_confidential.near. This is not Noir's swap fee.
+ */
+export const CONFIDENTIAL_WITHDRAW_PROVIDER_APP_FEE: IntentsAppFee = Object.freeze({
+  recipient: 'cross_confidential.near',
+  fee: 50
+})
 
 export type NoirPublicConfidentialTransferReferral =
   | typeof NOIR_PRIVATELY_REFERRAL

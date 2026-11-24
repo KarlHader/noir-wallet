@@ -419,6 +419,187 @@ test.describe('confidential funding safety rules', () => {
     expect(coordinator.hasExternalDepositAsset(source)).toBe(false)
   })
 
+  test('NEAR Shield receive quotes a NEP-141 deposit and rejects bridged assets', async () => {
+    const usdtProtocol = 'nep141:usdt.tether-token.near'
+    const usdtAssetId = 'near:mainnet/nep141:usdt.tether-token.near'
+    const nearAssetId = 'near:mainnet/slip44:397'
+    const wrapProtocol = 'nep141:wrap.near'
+    const refundAddress = '0x2222222222222222222222222222222222222222'
+    const signer = '0x1111111111111111111111111111111111111111'
+    const now = 1_000_000
+    const records = new Map()
+    const quotes = []
+    const usdtToken = {
+      assetId: usdtProtocol,
+      blockchain: 'near',
+      contractAddress: 'usdt.tether-token.near',
+      decimals: 6,
+      symbol: 'USDT',
+      price: 1
+    }
+    const wrapToken = {
+      assetId: wrapProtocol,
+      blockchain: 'near',
+      contractAddress: 'wrap.near',
+      decimals: 24,
+      symbol: 'wNEAR',
+      price: 1
+    }
+    let catalog = [usdtToken, wrapToken]
+    const assets = {
+      [usdtAssetId]: {
+        asset: { namespace: 'nep141' },
+        metadata: { symbol: 'USDT', decimals: 6 }
+      },
+      [nearAssetId]: {
+        asset: { namespace: 'slip44' },
+        metadata: { symbol: 'NEAR', decimals: 24 }
+      }
+    }
+    const coordinator = new ConfidentialFundingCoordinator({
+      network: 'mainnet',
+      evmNetworks: getEvmNetworkConfigs('mainnet').filter(network => network.chainId === 'eip155:1'),
+      assets: { get: id => assets[id] },
+      assetMappings: [{ assetId: nearAssetId, protocolAssetId: wrapProtocol }],
+      getProtocolTokens: () => catalog,
+      now: () => now,
+      createId: () => `external-${records.size + 1}`,
+      scheduleMonitoring: async () => {},
+      api: {
+        async quoteFlexibleDeposit(request) {
+          quotes.push(request)
+          return {
+            correlationId: `quote-${quotes.length}`,
+            quoteRequest: {
+              dry: false,
+              swapType: 'FLEX_INPUT',
+              confidentiality: 'basic',
+              originAsset: request.originAsset,
+              destinationAsset: request.originAsset,
+              amount: request.quoteAmountRaw,
+              refundTo: request.refundTo,
+              depositType: 'ORIGIN_CHAIN',
+              refundType: 'ORIGIN_CHAIN',
+              recipient: request.signerId,
+              recipientType: 'CONFIDENTIAL_INTENTS',
+              slippageTolerance: request.slippageBps
+            },
+            quote: {
+              amountIn: request.quoteAmountRaw,
+              minAmountIn: '1',
+              amountOut: request.quoteAmountRaw,
+              minAmountOut: request.quoteAmountRaw,
+              depositAddress: request.originAsset === usdtProtocol ? 'a'.repeat(64) : 'b'.repeat(64),
+              deadline: new Date(now + 60_000).toISOString()
+            }
+          }
+        }
+      },
+      store: {
+        async getSession() {
+          return { accessToken: 'synthetic', expiresAt: now + 1_000_000 }
+        },
+        async listExternalDeposits() {
+          return [...records.values()]
+        },
+        async putExternalDeposit(record) {
+          records.set(record.depositId, record)
+        }
+      },
+      signer: {
+        async resolveIdentity() {
+          return {
+            address: signer,
+            addressIndex: 0,
+            context: {
+              chainAccount: {
+                scope: {
+                  keyDomainId: 'wallet:one',
+                  accountId: 'account:one',
+                  chainId: 'eip155:1'
+                }
+              }
+            }
+          }
+        }
+      }
+    })
+    const usdtSource = {
+      chainId: 'near:mainnet',
+      chainName: 'NEAR',
+      assetId: usdtAssetId,
+      protocolAssetId: usdtProtocol
+    }
+    expect(coordinator.hasExternalDepositAsset(usdtSource)).toBe(true)
+    catalog = [{ ...usdtToken, decimals: 18 }, wrapToken]
+    expect(coordinator.hasExternalDepositAsset(usdtSource)).toBe(false)
+    catalog = [{ ...usdtToken, symbol: 'USDT (DEPRECATED)' }, wrapToken]
+    expect(coordinator.hasExternalDepositAsset(usdtSource)).toBe(false)
+    catalog = [{ ...usdtToken, blockchain: 'eth' }, wrapToken]
+    expect(coordinator.hasExternalDepositAsset(usdtSource)).toBe(false)
+    catalog = [usdtToken, wrapToken]
+    expect(
+      coordinator.hasExternalDepositAsset({
+        chainId: 'near:mainnet',
+        assetId: nearAssetId,
+        protocolAssetId: wrapProtocol
+      })
+    ).toBe(true)
+
+    await expect(
+      coordinator.createExternalDeposit({
+        network: 'mainnet',
+        keyDomainId: 'wallet:one',
+        accountId: 'account:one',
+        refundAddress,
+        requestId: 'omft',
+        source: {
+          chainId: 'near:mainnet',
+          chainName: 'NEAR',
+          assetId: 'near:mainnet/nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near',
+          protocolAssetId: 'nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near'
+        }
+      })
+    ).rejects.toThrow('External Shield deposit request is invalid')
+    expect(quotes).toEqual([])
+
+    const created = await coordinator.createExternalDeposit({
+      network: 'mainnet',
+      keyDomainId: 'wallet:one',
+      accountId: 'account:one',
+      refundAddress,
+      requestId: 'usdt',
+      source: usdtSource
+    })
+    expect(quotes[0]).toMatchObject({
+      originAsset: usdtProtocol,
+      quoteAmountRaw: '20000000'
+    })
+    expect(created).toMatchObject({
+      source: { protocolAssetId: usdtProtocol, assetId: usdtAssetId },
+      depositAddress: 'a'.repeat(64),
+      sourceSymbol: 'USDT'
+    })
+    expect(created.depositMemo).toBeUndefined()
+
+    const wrapped = await coordinator.createExternalDeposit({
+      network: 'mainnet',
+      keyDomainId: 'wallet:one',
+      accountId: 'account:one',
+      refundAddress,
+      requestId: 'wnear',
+      source: {
+        chainId: 'near:mainnet',
+        chainName: 'NEAR',
+        assetId: nearAssetId,
+        protocolAssetId: wrapProtocol
+      }
+    })
+    expect(quotes[1]).toMatchObject({ originAsset: wrapProtocol })
+    expect(wrapped.source.assetId).toBe(nearAssetId)
+    expect(wrapped.depositAddress).toBe('b'.repeat(64))
+  })
+
   test('external Shield deposit is account-bound, idempotent and recovers from status without local signing', async () => {
     const address = '0x1111111111111111111111111111111111111111'
     const refundAddress = '0x2222222222222222222222222222222222222222'
@@ -1339,6 +1520,87 @@ test.describe('confidential funding safety rules', () => {
       echoedFees = undefined
       providerFee = { recipient: 'provider.near', fee: 26 }
       await expect(api.quote(withdrawal)).rejects.toThrow('provider fee quote is invalid')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('requests the observed withdraw fee when a noir_send quote omits it', async () => {
+    const originalFetch = globalThis.fetch
+    const observedFee = { recipient: 'cross_confidential.near', fee: 50 }
+    let providerFee
+    const requests = []
+    globalThis.fetch = async (url, init) => {
+      expect(url).toBe('https://example.test/1click/quote')
+      const request = JSON.parse(init.body)
+      requests.push(request)
+      const echoed = [
+        ...(request.appFees ?? []),
+        ...(providerFee &&
+        !(request.appFees ?? []).some(fee => fee.recipient === providerFee.recipient)
+          ? [providerFee]
+          : [])
+      ]
+      return Response.json({
+        correlationId: 'withdraw-fee',
+        quoteRequest: {
+          ...request,
+          ...(echoed.length > 0 ? { appFees: echoed } : {})
+        },
+        quote: {
+          amountIn: request.amount,
+          amountOut: echoed.length > 0 ? String(BigInt(request.amount) - 1n) : request.amount,
+          deadline: request.deadline
+        }
+      })
+    }
+    try {
+      const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', '')
+      const withdrawal = {
+        referral: 'noir_send',
+        originAsset: 'nep141:eth.omft.near',
+        destinationAsset: 'nep141:eth.omft.near',
+        amountRaw: '1000000',
+        signerId: '0x1111111111111111111111111111111111111111',
+        recipient: '0x2222222222222222222222222222222222222222',
+        depositType: 'CONFIDENTIAL_INTENTS',
+        refundType: 'CONFIDENTIAL_INTENTS',
+        recipientType: 'DESTINATION_CHAIN',
+        slippageBps: 50,
+        dry: false
+      }
+      for (const dry of [true, false]) {
+        requests.length = 0
+        const quote = await api.quote({ ...withdrawal, dry })
+        expect(requests.map(request => [request.dry, request.appFees])).toEqual([
+          [true, undefined],
+          [dry, [observedFee]]
+        ])
+        expect(quote.quoteRequest.appFees).toEqual([observedFee])
+        expect(BigInt(quote.quote.amountOut) < BigInt(quote.quote.amountIn)).toBe(true)
+      }
+
+      providerFee = observedFee
+      for (const dry of [true, false]) {
+        requests.length = 0
+        const quote = await api.quote({ ...withdrawal, dry })
+        expect(requests.every(request => request.appFees === undefined)).toBe(true)
+        expect(quote.quoteRequest.appFees).toEqual([observedFee])
+        expect(requests).toHaveLength(dry ? 1 : 2)
+      }
+
+      providerFee = undefined
+      requests.length = 0
+      const deposit = await api.quote({
+        ...withdrawal,
+        referral: 'noir_receive',
+        depositType: 'ORIGIN_CHAIN',
+        refundType: 'ORIGIN_CHAIN',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        dry: false
+      })
+      expect(requests.every(request => request.appFees === undefined)).toBe(true)
+      expect(deposit.quoteRequest.appFees).toBeUndefined()
     } finally {
       globalThis.fetch = originalFetch
     }

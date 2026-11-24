@@ -388,6 +388,7 @@ function rawErrorMessage(error: unknown): string {
 }
 
 export function isUnmappedError(error: unknown): boolean {
+  console.log('%c isUnmappedError error: %o', 'background: red; color: #fff;', error)
   if (isWalletSnapshotRecoveryError(error)) return false
   const raw = rawErrorMessage(error)
   return !ERROR_MAPPINGS.some(mapping => mapping.pattern.test(raw))
@@ -435,6 +436,12 @@ export function classifyError(
   error: unknown,
   balanceSymbols?: ErrorBalanceSymbols
 ): ClassifiedError {
+  console.log('%c classifyError error: %o', 'background: red; color: #fff;', error)
+  console.log(
+    '%c classifyError balanceSymbols: %o',
+    'background: red; color: #fff;',
+    balanceSymbols
+  )
   const raw = rawErrorMessage(error)
 
   if (error instanceof InsufficientBalanceError) {

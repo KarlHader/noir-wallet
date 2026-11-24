@@ -7,7 +7,10 @@ import {
   getTransferDomainBalanceRaw,
   type TransferDomain
 } from '@/popup/services/private-balance-transfer'
-import { resolveShieldManagedAsset } from '@/popup/services/shield-transfer'
+import {
+  listNearShieldPickerAssets,
+  resolveShieldManagedAsset
+} from '@/popup/services/shield-transfer'
 
 // Keep the persisted key readable by existing wallet installations.
 const STORAGE_PREFIX = 'shield_move_preference_v1:'
@@ -93,5 +96,19 @@ export function selectShieldTransferAssetId(input: {
     items.find(item => item.asset.asset.id === input.preferredAssetId) ??
     items.find(item => item.asset.asset.id === ETHEREUM_USDC_ASSET_ID) ??
     items[0]
-  return (preferred(funded) ?? preferred(candidates))?.asset.asset.id ?? null
+  const evmAssetId = (preferred(funded) ?? preferred(candidates))?.asset.asset.id ?? null
+  if (evmAssetId) return evmAssetId
+  const near = listNearShieldPickerAssets({
+    assets: input.assets,
+    managedAssets: input.managedAssets,
+    catalogTokens: input.catalogTokens,
+    network: input.network,
+    from: input.from,
+    shieldBalances: input.shieldBalances
+  })
+  return (
+    near.find(item => item.asset.asset.id === input.preferredAssetId)?.asset.asset.id ??
+    near[0]?.asset.asset.id ??
+    null
+  )
 }

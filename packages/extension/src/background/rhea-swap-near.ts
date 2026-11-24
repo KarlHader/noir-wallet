@@ -3,13 +3,18 @@ import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-setting
 import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import { parseAccountId } from '@/core/accounts/domain'
 import {
+  buildNearConfidentialFungibleDepositActions,
+  buildNearIntentsDepositActions,
+  isNearFungibleContractId,
   NEAR_MAINNET_NATIVE_ASSET_ID,
   NEAR_MAINNET_WRAPPED_ASSET_ID,
   nearAccountStorageReserveYocto,
   nearPublicKeyFromImplicitAccountId,
   parseNearAccountId,
   parseNearBase58,
-  supportsNearPrivateExecution
+  supportsNearPrivateExecution,
+  WRAP_NEAR_CONTRACT_ID,
+  type NearIntentsDepositAction
 } from '@/core/chains/near'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseSigningCommandId, type SigningCommandId } from '@/core/keyring/ports'
@@ -57,7 +62,11 @@ import {
 import type { TransactionRepository } from '@/ports/repositories'
 import { credentialSession } from './credential-session'
 import { nearLedgerSigningBridge } from './ledger-signing-bridge'
-import { encodeNearDAppFunctionArgs, parseNearDAppTransactionBatch } from './near-dapp-codecs'
+import {
+  encodeNearDAppFunctionArgs,
+  parseNearDAppTransactionBatch,
+  type NearTransactionRequest
+} from './near-dapp-codecs'
 import { loadActiveNearTransferContext, type ActiveNearTransferContext } from './near-transfer'
 import { NEAR_TRANSACTION_MONITOR_ALARM } from './native-transaction-monitor'
 import { RHEA_SWAP_TRANSACTION_MONITOR_ALARM } from './rhea-swap-transaction-monitor'
@@ -462,8 +471,14 @@ export class RheaSwapNearCoordinator {
       }
     ])
     await this.options.rpc.assertExpectedChain()
+    const directDeposit = await this.publicPrivateMoveDeposit(quoteHandle, sender, binding, plan)
     let requests = originalRequests
-    if (
+    if (directDeposit) {
+      requests = directDeposit
+      if (binding.origin.assetId === NEAR_MAINNET_NATIVE_ASSET_ID) {
+        await this.assertNativeNearBalance(sender, requests)
+      }
+    } else if (
       isNearWrapSwapSource(
         context.chainAccount.scope.chainId,
         binding.origin.assetId,
@@ -643,19 +658,27 @@ export class RheaSwapNearCoordinator {
         try {
           const plan = await this.options.service.readNearTransactionBatchPlan(quoteHandle)
           this.assertBinding(plan, pending.binding, sender, pending.chainId)
-          const requests = await this.nativeNearWrapBatch(
-            plan,
+          const directDeposit = await this.publicPrivateMoveDeposit(
+            quoteHandle,
             sender,
-            parseNearDAppTransactionBatch([
-              {
-                transactions: plan.transactions.map(transaction => ({
-                  ...(transaction.signerId === null ? {} : { signerId: transaction.signerId }),
-                  receiverId: transaction.receiverId,
-                  actions: transaction.actions
-                }))
-              }
-            ])
+            pending.binding,
+            plan
           )
+          const requests =
+            directDeposit ??
+            (await this.nativeNearWrapBatch(
+              plan,
+              sender,
+              parseNearDAppTransactionBatch([
+                {
+                  transactions: plan.transactions.map(transaction => ({
+                    ...(transaction.signerId === null ? {} : { signerId: transaction.signerId }),
+                    receiverId: transaction.receiverId,
+                    actions: transaction.actions
+                  }))
+                }
+              ])
+            ))
           await this.assertNativeNearBalance(sender, requests)
         } catch (error) {
           await this.options.pending.delete(quoteHandle)
@@ -797,6 +820,206 @@ export class RheaSwapNearCoordinator {
       throw new Error('RHEA Swap NEAR review is unavailable or expired')
     }
     return pending
+  }
+
+  private async publicPrivateMoveDeposit(
+    quoteHandle: string,
+    sender: string,
+    binding: RheaSwapTransactionBinding,
+    plan: RheaSwapNearTransactionBatchPlan
+  ): Promise<readonly NearTransactionRequest[] | null> {
+    const build = await this.options.service.readPreparedBuild(quoteHandle)
+    if (
+      build.request?.confidentiality !== 'basic' ||
+      build.fromChain !== 'near' ||
+      build.toChain !== 'near'
+    ) {
+      return null
+    }
+    const quote = await this.options.service.readQuoteSecurityContext(quoteHandle)
+    if (quote.scope?.purpose !== 'public-private-move') return null
+    const rawDeposit =
+      build.raw.deposit && typeof build.raw.deposit === 'object'
+        ? (build.raw.deposit as { memo?: unknown; depositMemo?: unknown })
+        : undefined
+    const text = (value: unknown) => (typeof value === 'string' ? value : undefined)
+    const executionAddress =
+      'depositAddress' in build.execution ? build.execution.depositAddress : undefined
+    const accepted = acceptNearDirectDeposit({
+      depositAddress: build.deposit?.depositAddress ?? executionAddress,
+      memo: text(rawDeposit?.memo) ?? text(build.raw.memo),
+      depositMemo: text(rawDeposit?.depositMemo) ?? text(build.raw.depositMemo)
+    })
+    if (!accepted.ok) throw new Error(accepted.error)
+    const recipient = quote.request.recipient
+    if (
+      !recipient ||
+      quote.request.sender !== sender ||
+      quote.request.amountIn !== plan.amountIn ||
+      accepted.depositAddress === recipient ||
+      accepted.depositAddress === sender
+    ) {
+      throw new Error('Confidential NEAR deposit does not match its quote')
+    }
+    const native = isNearWrapSwapSource(
+      binding.origin.chainId,
+      binding.origin.assetId,
+      binding.origin.protocolAssetId,
+      plan.tokenIn
+    )
+    const wrapped = binding.origin.assetId === NEAR_MAINNET_WRAPPED_ASSET_ID
+    const actions =
+      native || wrapped
+        ? await this.wrapDepositActions(
+            sender,
+            accepted.depositAddress,
+            plan.amountIn,
+            native ? undefined : false
+          )
+        : await this.fungibleDepositActions(
+            binding.origin.protocolAssetId,
+            sender,
+            accepted.depositAddress,
+            plan.amountIn
+          )
+    this.assertDirectDepositActions(
+      actions.actions,
+      accepted.depositAddress,
+      recipient,
+      sender,
+      plan.amountIn
+    )
+    if (actions.receiverId === recipient || actions.receiverId === accepted.depositAddress) {
+      throw new Error('Confidential NEAR deposit does not match its quote')
+    }
+    return parseNearDAppTransactionBatch([
+      {
+        transactions: [
+          {
+            receiverId: actions.receiverId,
+            actions: actions.actions.map(action => ({
+              methodName: action.methodName,
+              args: action.args,
+              gas: action.gas,
+              deposit: action.depositYocto
+            }))
+          }
+        ]
+      }
+    ])
+  }
+
+  private async wrapDepositActions(
+    sender: string,
+    depositAddress: string,
+    amountRaw: string,
+    wrapShortfall: false | undefined
+  ): Promise<Readonly<{ receiverId: string; actions: readonly NearIntentsDepositAction[] }>> {
+    const [balance, signerRegistered, recipientRegistered] = await Promise.all([
+      this.options.rpc.getFungibleTokenBalance(WRAP_NEAR_CONTRACT_ID, sender),
+      this.options.rpc.isFungibleTokenAccountRegistered(WRAP_NEAR_CONTRACT_ID, sender),
+      this.options.rpc.isFungibleTokenAccountRegistered(WRAP_NEAR_CONTRACT_ID, depositAddress)
+    ])
+    if (
+      balance.contractId !== WRAP_NEAR_CONTRACT_ID ||
+      balance.accountId !== sender ||
+      !/^(?:0|[1-9][0-9]*)$/.test(balance.amountRaw) ||
+      typeof signerRegistered !== 'boolean' ||
+      typeof recipientRegistered !== 'boolean'
+    ) {
+      throw new Error('RHEA Swap NEAR wrapped balance does not match the signer')
+    }
+    const plan = buildNearIntentsDepositActions({
+      signerId: sender,
+      depositAddress,
+      amountYocto: BigInt(amountRaw),
+      wrappedBalanceYocto: BigInt(balance.amountRaw),
+      signerRegistered,
+      recipientRegistered,
+      ...(wrapShortfall === undefined ? {} : { wrapShortfall })
+    })
+    if (plan.receiverId !== WRAP_NEAR_CONTRACT_ID || plan.amountYocto !== BigInt(amountRaw)) {
+      throw new Error('Confidential NEAR deposit does not match its quote')
+    }
+    return plan
+  }
+
+  private async fungibleDepositActions(
+    protocolAssetId: string,
+    sender: string,
+    depositAddress: string,
+    amountRaw: string
+  ): Promise<Readonly<{ receiverId: string; actions: readonly NearIntentsDepositAction[] }>> {
+    if (!protocolAssetId.startsWith('nep141:')) {
+      throw new Error('Confidential NEAR deposit does not match its quote')
+    }
+    const contractId = parseNearAccountId(
+      protocolAssetId.slice('nep141:'.length),
+      'NEAR fungible token contract ID'
+    )
+    if (contractId === WRAP_NEAR_CONTRACT_ID || !isNearFungibleContractId(contractId)) {
+      throw new Error('Confidential NEAR deposit does not match its quote')
+    }
+    const [balance, recipientRegistered] = await Promise.all([
+      this.options.rpc.getFungibleTokenBalance(contractId, sender),
+      this.options.rpc.isFungibleTokenAccountRegistered(contractId, depositAddress)
+    ])
+    if (
+      balance.contractId !== contractId ||
+      balance.accountId !== sender ||
+      !/^(?:0|[1-9][0-9]*)$/.test(balance.amountRaw) ||
+      typeof recipientRegistered !== 'boolean'
+    ) {
+      throw new Error('NEAR token balance does not match the signer')
+    }
+    if (BigInt(balance.amountRaw) < BigInt(amountRaw)) {
+      throw new Error('NEAR token balance is insufficient')
+    }
+    const plan = buildNearConfidentialFungibleDepositActions({
+      contractId,
+      depositAddress,
+      amountRaw: BigInt(amountRaw),
+      recipientRegistered
+    })
+    if (plan.receiverId !== contractId || plan.amountRaw !== BigInt(amountRaw)) {
+      throw new Error('Confidential NEAR deposit does not match its quote')
+    }
+    return plan
+  }
+
+  private assertDirectDepositActions(
+    actions: readonly NearIntentsDepositAction[],
+    depositAddress: string,
+    recipient: string,
+    sender: string,
+    amountRaw: string
+  ): void {
+    let transfers = 0
+    for (const action of actions) {
+      if (action.methodName === 'ft_transfer') {
+        transfers += 1
+        if (
+          action.args.receiver_id !== depositAddress ||
+          action.args.receiver_id === recipient ||
+          action.args.amount !== amountRaw ||
+          Object.prototype.hasOwnProperty.call(action.args, 'memo')
+        ) {
+          throw new Error('Confidential NEAR deposit does not match its quote')
+        }
+        continue
+      }
+      if (action.methodName === 'storage_deposit') {
+        const account = action.args.account_id
+        if (account === recipient || (account !== depositAddress && account !== sender)) {
+          throw new Error('Confidential NEAR deposit does not match its quote')
+        }
+        continue
+      }
+      if (action.methodName !== 'near_deposit') {
+        throw new Error('Confidential NEAR deposit does not match its quote')
+      }
+    }
+    if (transfers !== 1) throw new Error('Confidential NEAR deposit does not match its quote')
   }
 
   private assertBinding(

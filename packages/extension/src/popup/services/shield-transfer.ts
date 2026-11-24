@@ -36,9 +36,10 @@ import {
 } from '@/background/confidential-near-quote'
 import {
   decodeNearContractId,
+  isNearWrappedProtocolAsset,
   nearConfidentialPortfolioAssetId
 } from '@/core/chains/near/near-portfolio-assets'
-import type { TransferDomain } from './private-balance-transfer'
+import { getTransferDomainBalanceRaw, type TransferDomain } from './private-balance-transfer'
 import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
 import { formatIntentsConfirmationTime } from './confirmation-time-format'
 
@@ -259,6 +260,43 @@ function nearShieldEnabled(): boolean {
   return readEnabledChainFeatureFlags().includes(NEAR_CHAIN_FEATURE_FLAG)
 }
 
+function bundledNearSendLabel(network: Network): {
+  readonly name: string
+  readonly symbol: string
+} {
+  const chains = createInitialProductChainRegistry(network)
+  const registry = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions(network))
+  const metadata = registry.get(NEAR_CONFIDENTIAL_CHAIN_ASSET_ID)?.metadata
+  return {
+    name: metadata?.name ?? 'NEAR',
+    symbol: metadata?.symbol ?? 'NEAR'
+  }
+}
+
+// A wNEAR holding uses the same protocol id. Shield Send spends native NEAR.
+function nearNativeShieldHolding(
+  holding: ReturnType<typeof confidentialHolding>
+): ReturnType<typeof confidentialHolding> {
+  if (!holding) return holding
+  const assetId = holding.assetId
+  const accepted =
+    assetId === undefined ||
+    assetId === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID ||
+    isNearWrappedProtocolAsset(assetId, NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+  if (!accepted) return holding
+  if (
+    assetId === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID &&
+    (holding.chainId === undefined || holding.chainId === 'near:mainnet')
+  ) {
+    return holding
+  }
+  return {
+    ...holding,
+    assetId: NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
+    chainId: 'near:mainnet'
+  }
+}
+
 function nearShieldFundingAsset(
   model: PortfolioReadModel,
   chains: ReadonlyMap<string, PortfolioChainView>,
@@ -282,16 +320,19 @@ function nearShieldFundingAsset(
     !isDeprecatedIntentsToken(wrapToken) &&
     wrapToken.decimals === 24
   ) {
+    const nearLabel = bundledNearSendLabel(network)
     const managed = {
       assetId: NEAR_CONFIDENTIAL_CHAIN_ASSET_ID,
       chainId: 'near:mainnet',
       protocolAssetId: NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID,
       blockchain: wrapToken.blockchain,
-      symbol: wrapToken.symbol,
+      symbol: nearLabel.symbol,
       decimals: wrapToken.decimals
     }
-    const holding = confidentialHolding(model, NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
-    const asset = fundingAssetView(model, managed, wrapToken.symbol, holding)
+    const holding = nearNativeShieldHolding(
+      confidentialHolding(model, NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
+    )
+    const asset = fundingAssetView(model, managed, nearLabel.name, holding)
     if (asset && asset.metadata.decimals === wrapToken.decimals) {
       seen.add(NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID)
       rows.push({
@@ -360,13 +401,19 @@ export function shieldFundingAvailableRaw(
   asset: ShieldFundingAsset | null,
   balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
 ): string {
+  const listed =
+    asset && balances
+      ? getConfidentialAvailableForAsset(balances, asset.managed.protocolAssetId)
+      : null
   if (asset?.chain.chain.family === 'near') {
     const raw = asset.asset.balance.confidentialRaw
-    if (typeof raw === 'string' && /^(?:0|[1-9][0-9]*)$/.test(raw)) return raw
+    // The portfolio figure can still include an unconfirmed Shield Send reservation.
+    if (typeof raw === 'string' && /^(?:0|[1-9][0-9]*)$/.test(raw)) {
+      if (listed === null) return raw
+      return BigInt(raw) < BigInt(listed) ? raw : listed
+    }
   }
-  return asset && balances
-    ? (getConfidentialAvailableForAsset(balances, asset.managed.protocolAssetId) ?? '0')
-    : '0'
+  return listed ?? '0'
 }
 
 export function shieldFundingSources(
@@ -509,6 +556,47 @@ export function resolveShieldManagedAsset(
   })
 }
 
+type NearShieldPickerAsset = Readonly<{
+  asset: PortfolioAssetView
+  chain: PortfolioChainView
+}>
+
+/** NEAR rows for the fixed Shield and Unshield pickers. EVM eligibility stays unchanged. */
+export function listNearShieldPickerAssets(input: {
+  readonly assets: readonly NearShieldPickerAsset[]
+  readonly managedAssets: readonly IntentsManagedAsset[]
+  readonly catalogTokens: readonly SwapToken[]
+  readonly network: Network
+  readonly from: TransferDomain
+  readonly shieldBalances?: readonly Readonly<{ tokenId: string; available: string }>[] | null
+}): readonly NearShieldPickerAsset[] {
+  return input.assets.filter(item => {
+    if (
+      item.chain.chain.family !== 'near' ||
+      item.chain.chain.capabilities.transaction.status !== 'available'
+    ) {
+      return false
+    }
+    const managed = resolveShieldManagedAsset(
+      item.asset,
+      input.managedAssets,
+      input.catalogTokens,
+      input.network
+    )
+    if (!managed) return false
+    if (input.from === 'shield') {
+      return (
+        input.shieldBalances != null &&
+        BigInt(
+          getConfidentialAvailableForAsset(input.shieldBalances, managed.protocolAssetId) ?? '0'
+        ) > 0n
+      )
+    }
+    const publicRaw = getTransferDomainBalanceRaw(item.asset, 'public')
+    return publicRaw !== null && BigInt(publicRaw) > 0n
+  })
+}
+
 export function isShieldTransferRoute(from: TransferDomain, to: TransferDomain): boolean {
   return (
     (from === 'shield' && (to === 'public' || to === 'private')) ||
@@ -529,6 +617,25 @@ function isValidShieldFundingAsset(item: ShieldFundingAsset): boolean {
   )
 }
 
+// wrap.near maps to native NEAR. A wNEAR token id does not match, so it stays a cluster move.
+function isNearDirectShieldAsset(assetId: string, protocolAssetId: string): boolean {
+  return nearConfidentialPortfolioAssetId(protocolAssetId) === assetId
+}
+
+function isNearDirectShieldRoute(
+  source: ShieldFundingAsset,
+  destination: ShieldFundingAsset
+): boolean {
+  return (
+    source.chain.chain.family === 'near' &&
+    destination.chain.chain.family === 'near' &&
+    source.chain.chain.id === destination.chain.chain.id &&
+    source.asset.asset.id === destination.asset.asset.id &&
+    source.managed.protocolAssetId === destination.managed.protocolAssetId &&
+    isNearDirectShieldAsset(source.asset.asset.id, source.managed.protocolAssetId)
+  )
+}
+
 function isShieldMoveDestination(
   source: ShieldFundingAsset,
   destination: ShieldFundingAsset,
@@ -536,14 +643,7 @@ function isShieldMoveDestination(
 ): boolean {
   if (!isValidShieldFundingAsset(source) || !isValidShieldFundingAsset(destination)) return false
   if (source.chain.chain.family === 'near' || destination.chain.chain.family === 'near') {
-    return (
-      source.chain.chain.family === 'near' &&
-      destination.chain.chain.family === 'near' &&
-      source.chain.chain.id === destination.chain.chain.id &&
-      source.asset.asset.id === destination.asset.asset.id &&
-      source.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID &&
-      destination.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
-    )
+    return isNearDirectShieldRoute(source, destination)
   }
   if (source.chain.chain.family !== 'evm' || destination.chain.chain.family !== 'evm') return false
   if (source.asset.asset.id === destination.asset.asset.id) {
@@ -586,13 +686,7 @@ function isShieldSendDestination(
 ): boolean {
   if (!isValidShieldFundingAsset(source) || !isValidShieldFundingAsset(destination)) return false
   if (source.chain.chain.family === 'near' || destination.chain.chain.family === 'near') {
-    return (
-      source.chain.chain.family === 'near' &&
-      destination.chain.chain.family === 'near' &&
-      source.asset.asset.id === destination.asset.asset.id &&
-      source.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID &&
-      destination.managed.protocolAssetId === NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID
-    )
+    return isNearDirectShieldRoute(source, destination)
   }
   const zcashChainId = getZcashChainId(network)
   if (source.chain.chain.family !== 'evm' && source.chain.chain.id !== zcashChainId) return false
@@ -773,7 +867,10 @@ export function buildExternalShieldWithdrawRequest(
       input.source.chain.chain.family !== 'near' &&
       input.source.chain.chain.id !== getZcashChainId(input.network)) ||
     (input.source.chain.chain.family === 'near' &&
-      input.source.managed.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) ||
+      !isNearDirectShieldAsset(
+        input.source.asset.asset.id,
+        input.source.managed.protocolAssetId
+      )) ||
     !isShieldSendDestination(input.source, input.destination, input.network) ||
     input.source.asset.asset.id !== input.source.managed.assetId ||
     input.destination.asset.asset.id !== input.destination.managed.assetId ||
@@ -866,7 +963,7 @@ export function buildShieldTransferRequest(
     (input.chain.chain.family !== 'evm' && input.chain.chain.family !== 'near') ||
     (input.chain.chain.family === 'near' &&
       !nearCluster &&
-      input.managed.protocolAssetId !== NEAR_CONFIDENTIAL_PROTOCOL_ASSET_ID) ||
+      !isNearDirectShieldAsset(input.asset.asset.id, input.managed.protocolAssetId)) ||
     input.managed.assetId !== input.asset.asset.id ||
     input.managed.chainId !== input.chain.chain.id ||
     (input.destination !== undefined &&

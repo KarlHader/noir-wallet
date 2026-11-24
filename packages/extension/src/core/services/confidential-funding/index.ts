@@ -32,6 +32,7 @@ export {
   createConfidentialFundingGraph,
   getConfidentialFundingPlanId,
   isLegacyShieldWithdrawActivityGraph,
+  projectConfidentialAppFeeRejection,
   projectLegacyShieldWithdrawActivityGraph,
   projectShieldDepositSettlement
 } from './confidential-funding-graph'
@@ -49,6 +50,8 @@ export {
   CONFIDENTIAL_PRIVATE_TREASURY_ACCOUNT_ID,
   confidentialPrivateTokenId,
   buildConfidentialPortfolioView,
+  combineConfidentialSignerBalances,
+  confidentialAvailableByProtocolAsset,
   filterConfidentialPortfolioMappings,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio,
