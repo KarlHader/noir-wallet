@@ -326,12 +326,19 @@ function ShieldSwapForm({
   )
   const from = confidentialFromAssetId
     ? (sourceChoices.find(asset => matchesAsset(asset, confidentialFromAssetId)) ?? null)
-    : (sourceChoices.find(
-        asset =>
-          asset.asset.asset.id === defaultSource?.asset.asset.id && asset.asset.asset.id !== toId
-      ) ??
-      sourceChoices.find(asset => asset.asset.asset.id !== toId) ??
-      null)
+    : balanceLoading || (!displayBalances && portfolioLoading)
+      ? null
+      : (sourceChoices.find(
+          asset =>
+            asset.asset.asset.id === defaultSource?.asset.asset.id && asset.asset.asset.id !== toId
+        ) ??
+        sourceChoices.find(asset => asset.asset.asset.id !== toId) ??
+        null)
+  useEffect(() => {
+    if (active && !preferredSourceId && from && displayBalances) {
+      setFromId(from.asset.asset.id)
+    }
+  }, [active, preferredSourceId, from, displayBalances])
   const ethereumUsdcContract = getEvmNetworkConfigs(network)
     .find(config => config.chainId === 'eip155:1')
     ?.usdcContract?.toLowerCase()
@@ -1223,7 +1230,7 @@ function ShieldSwapForm({
             sharedPair?.tokenInSymbol ?? findSavedSwapToken(tokens, preferredSourceId)?.symbol
           }
           tokenBadgeBlockchain={fromPickerChain?.badgeBlockchain}
-          tokenNetworkLabel={fromPickerChain?.sourceLabel ?? fromPickerChain?.chainName}
+          tokenNetworkLabel="NEAR Confidential"
           amount={amount}
           fiatValue={fromToken?.price ? fromFiat : ''}
           balance={hidden ? '••••' : (balance ?? '—')}
@@ -1264,9 +1271,7 @@ function ShieldSwapForm({
           tokenBadgeBlockchain={
             nativeDestinationChain?.badgeBlockchain ?? toPickerChain?.badgeBlockchain
           }
-          tokenNetworkLabel={
-            nativeDestinationChain?.chainName ?? (to ? 'NEAR Confidential' : undefined)
-          }
+          tokenNetworkLabel={nativeDestinationChain?.chainName ?? 'NEAR Confidential'}
           zcashFundingSource={nativeZecDestination ?? undefined}
           accountAddress={nativeZecRecipient}
           amount={displayOutput}
