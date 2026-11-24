@@ -147,6 +147,18 @@ test.describe('Multichain Activity presentation', () => {
       label: 'Unshield',
       side: 'source'
     })
+    const projectedLegacyMovement = {
+      ...item,
+      snapshot: { ...item.snapshot, direction: 'outgoing' }
+    }
+    expect(
+      getActivityDetailTitle(
+        projectedLegacyMovement,
+        undefined,
+        { viewedDomain: 'shield' },
+        sameAssetRoute
+      )
+    ).toBe('Unshield')
     const zcashWithdrawal = {
       ...item,
       snapshot: {

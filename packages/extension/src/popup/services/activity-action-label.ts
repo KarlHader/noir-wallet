@@ -123,6 +123,15 @@ export function getActivityAction(
   const sourceAssetId = route?.source?.assetId ?? item.snapshot?.primaryAmount?.assetId
   const destinationAssetId = route?.destination?.assetId ?? item.snapshot?.counterAmount?.assetId
   if (isPublicSendToShield(item, perspective, route)) return { label: 'Send', side: 'source' }
+  if (
+    shield?.operation === 'withdraw' &&
+    shield.sourceDomain === 'shield' &&
+    shield.destinationDomain === 'private' &&
+    sourceAssetId &&
+    sourceAssetId === destinationAssetId
+  ) {
+    return { label: 'Unshield', side: viewed === 'private' ? 'destination' : 'source' }
+  }
   if (shield?.operation === 'swap') {
     return {
       label: 'Swap',
@@ -141,7 +150,6 @@ export function getActivityAction(
       return { label: 'Withdraw', side: 'source' }
     }
     if (source === 'shield' && destination === 'private' && shield?.operation === 'withdraw') {
-      if (sourceAssetId && sourceAssetId === destinationAssetId) return { label: 'Unshield', side }
       return viewed === 'private'
         ? { label: 'Deposit', side: 'destination' }
         : { label: 'Send', side: 'source' }

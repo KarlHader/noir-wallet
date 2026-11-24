@@ -216,14 +216,11 @@ export function Home() {
     effectiveAccountId,
     currentNetwork
   )
-  const siteDisconnected = currentDApp && 'disconnectedBySite' in currentDApp ? currentDApp : null
   const connectedDApp = currentDApp && !('disconnectedBySite' in currentDApp) ? currentDApp : null
-  const currentDAppUsesEvm = siteDisconnected
-    ? siteDisconnected.disconnectedBySite === 'evm'
-    : Boolean(
-        connectedDApp?.evmAuthorization ||
-        connectedDApp?.chainAuthorizations?.some(grant => grant.chainId.startsWith('eip155:'))
-      )
+  const currentDAppUsesEvm = Boolean(
+    connectedDApp?.evmAuthorization ||
+    connectedDApp?.chainAuthorizations?.some(grant => grant.chainId.startsWith('eip155:'))
+  )
   const [pendingModeChange, setPendingModeChange] = useState<{
     scopeKey: string
     mode: DAppExecutionMode | null
@@ -1242,13 +1239,12 @@ export function Home() {
           onDisconnect={disconnectDApp}
         />
       )}
-      {currentDApp && !currentAccountAuthorized && (
+      {connectedDApp && !currentAccountAuthorized && (
         <DAppConnectPrompt
-          host={currentDApp.host}
-          favicon={currentDApp.favicon}
+          host={connectedDApp.host}
+          favicon={connectedDApp.favicon}
           accountName={accountDisplayName}
           canConnect={canConnectCurrentAccount}
-          disconnectedBySite={siteDisconnected !== null}
           executionMode={
             hardwareWallet || !currentDAppUsesEvm || !supportsEvmDAppExecutionMode
               ? 'main'
@@ -1256,8 +1252,8 @@ export function Home() {
           }
           darkPalette={darkDAppBar}
           modeControl={currentDAppUsesEvm ? dappModeControl : undefined}
-          onConnect={() => connectCurrentAccount(currentDApp.origin)}
-          onReturnToSite={() => void returnToDAppSite(currentDApp.origin)}
+          onConnect={() => connectCurrentAccount(connectedDApp.origin)}
+          onReturnToSite={() => void returnToDAppSite(connectedDApp.origin)}
         />
       )}
 
