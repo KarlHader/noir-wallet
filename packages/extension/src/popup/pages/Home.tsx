@@ -193,11 +193,14 @@ export function Home() {
     }
   }, [effectiveWalletId, effectiveAccountId, currentNetwork, swapEnabledChainKey, swapSelections])
   const {
-    model: multichainPortfolio,
-    status: portfolioLoadStatus,
+    model: portfolioSnapshot,
+    status: portfolioSnapshotStatus,
     settled: portfolioSettled,
+    initialChainBalancesPending,
     refresh: refreshPortfolio
   } = useHomePortfolio(effectiveWalletId, effectiveAccountId)
+  const multichainPortfolio = initialChainBalancesPending ? null : portfolioSnapshot
+  const portfolioLoadStatus = initialChainBalancesPending ? 'loading' : portfolioSnapshotStatus
   const supportsEvmDAppExecutionMode =
     storageV2Account?.networks.some(network => network.chain.family === 'evm') ??
     Boolean(evmOperationsEnabled && currentAccount)

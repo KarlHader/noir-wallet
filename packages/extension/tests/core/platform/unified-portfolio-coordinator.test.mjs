@@ -16,6 +16,7 @@ import {
 } from '../../../src/infrastructure/portfolio/index.ts'
 import { isPortfolioModelForScope } from '../../../src/popup/services/portfolio-cache.ts'
 import { parsePortfolioReadModel } from '../../../src/core/portfolio/index.ts'
+import { getChainEndpointRuntimeKey } from '../../../src/core/chains/chain-endpoint-settings.ts'
 
 const generationId = 'metadata:generation:unified-portfolio'
 const keyDomainId = 'wallet:portfolio'
@@ -277,6 +278,81 @@ test.describe('Unified active Portfolio coordinator', () => {
       ],
       assets: [{ metadata: { symbol: 'ZEC' }, balance: { totalRaw: '150000000' } }]
     })
+  })
+
+  test('keeps the first home balance batch pending through intermediate cache reads', async () => {
+    const portfolio = coordinator({
+      evmPortfolios: [
+        {
+          chainId: evmChainId,
+          portfolio: {
+            readCachedActiveSource: async () => null,
+            refreshActiveSource: async () => evmSource()
+          }
+        }
+      ]
+    })
+    let cached = await portfolio.readCachedActive()
+    const refreshed = await portfolio.refreshActive()
+    const refreshRequested = Promise.withResolvers()
+    const releaseRefresh = Promise.withResolvers()
+    const previousChrome = globalThis.chrome
+    const storage = { get: async () => ({}) }
+    globalThis.chrome = {
+      storage: { local: storage, session: storage },
+      runtime: {
+        sendMessage: async message => {
+          if (message.action === 'refresh') {
+            refreshRequested.resolve(message)
+            await releaseRefresh.promise
+          }
+          return {
+            result: { model: cached, userAssets: [], detectedAssets: [], protocolAssets: [] }
+          }
+        }
+      }
+    }
+    try {
+      const { useSettingsStore } = await import('../../../src/store/settings-store.ts')
+      const {
+        getPortfolioSnapshot,
+        portfolioSnapshotKey,
+        readPortfolioSnapshot,
+        refreshPortfolioSnapshot
+      } = await import('../../../src/popup/services/portfolio-snapshot-store.ts')
+      const scope = {
+        network: 'mainnet',
+        walletId: keyDomainId,
+        accountId,
+        endpointRuntimeKey: getChainEndpointRuntimeKey(
+          useSettingsStore.getState().chainEndpointSettings
+        )
+      }
+      const key = portfolioSnapshotKey(scope)
+      getPortfolioSnapshot(key, scope)
+      await readPortfolioSnapshot(key)
+      expect(getPortfolioSnapshot(key).initialChainBalancesPending).toBe(true)
+
+      const operation = refreshPortfolioSnapshot(key)
+      expect(await refreshRequested.promise).toMatchObject({ waitForTokenDiscovery: true })
+      cached = refreshed
+      await readPortfolioSnapshot(key, true)
+      expect(getPortfolioSnapshot(key)).toMatchObject({
+        initialChainBalancesPending: true,
+        model: { status: 'ready' }
+      })
+
+      releaseRefresh.resolve()
+      await expect(operation).resolves.toBe(true)
+      expect(getPortfolioSnapshot(key)).toMatchObject({
+        initialChainBalancesPending: false,
+        model: { status: 'ready' }
+      })
+    } finally {
+      releaseRefresh.resolve()
+      if (previousChrome === undefined) delete globalThis.chrome
+      else globalThis.chrome = previousChrome
+    }
   })
 
   test('refreshes only the requested public-chain sources', async () => {

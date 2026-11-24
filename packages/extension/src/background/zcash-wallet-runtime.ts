@@ -4308,6 +4308,9 @@ export class BackgroundZcashWalletRuntime {
 
     const currentSyncState = this.accountDataStore.getWalletSyncState(syncNetwork, syncWalletId)
     const lastSyncTime = currentSyncState.lastSyncTime || 0
+    const startedWithSyncedBalance =
+      currentSyncState.latestHeight > 0 &&
+      currentSyncState.currentHeight >= currentSyncState.latestHeight
 
     const setSyncState = (partial: Partial<import('@/store/account-data-store').SyncState>) => {
       this.accountDataStore.setWalletSyncStateFor(syncNetwork, syncWalletId!, partial)
@@ -5407,8 +5410,9 @@ export class BackgroundZcashWalletRuntime {
                 checkpointErr
               )
             }
-            // Surface scanned-so-far balances in the UI during long syncs
-            await this.refreshBalances(syncWalletId, true).catch(() => {})
+            if (startedWithSyncedBalance) {
+              await this.refreshBalances(syncWalletId, true).catch(() => {})
+            }
           }
         }
       }
