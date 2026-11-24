@@ -14,13 +14,7 @@ import {
   type CurrentDAppEvmNetworkState
 } from '@/popup/services/dapp-network-client'
 import { ChainSelector, type ChainSelectorOption } from '../common/ChainSelector'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger
-} from '../ui/dropdown-menu'
+import { DAppAddressModeSelector, type DAppAddressModeControl } from './DAppAddressModeSelector'
 
 export function ConnectedDAppBar({
   dapp,
@@ -35,11 +29,7 @@ export function ConnectedDAppBar({
   readonly account: AccountRef | null
   readonly executionMode: DAppExecutionMode | null
   readonly darkPalette?: boolean
-  readonly modeControl?: {
-    readonly busy: boolean
-    readonly incognitoAvailable: boolean
-    readonly onChange: (mode: DAppExecutionMode) => void
-  }
+  readonly modeControl?: DAppAddressModeControl
   readonly onManage: () => void
   readonly onDisconnect: (origin: string) => Promise<void>
 }) {
@@ -51,7 +41,6 @@ export function ConnectedDAppBar({
     permission => permission.chainId === 'evm' || permission.chainId.startsWith('eip155:')
   )
   const incognito = hasEvm && executionMode === 'private'
-  const modeLabel = incognito ? 'Incognito' : 'Public'
   const walletPalette = incognito || darkPalette ? undefined : 'public'
   return (
     <footer
@@ -101,43 +90,12 @@ export function ConnectedDAppBar({
         )
       )}
       {hasEvm && modeControl && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label={executionMode ? `DApp address: ${modeLabel}` : 'DApp address'}
-              aria-busy={modeControl.busy || undefined}
-              disabled={!executionMode || modeControl.busy || disconnecting}
-              className="dapp-connection-control wallet-interactive flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2 text-sm text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60"
-            >
-              <Icon
-                icon={incognito ? 'noir:private-assets' : 'lucide:eye'}
-                className="shrink-0"
-                width={14}
-                aria-hidden="true"
-              />
-              {executionMode ? modeLabel : '—'}
-              <Icon icon="lucide:chevron-up" width={12} className="ml-auto" aria-hidden="true" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent side="top" align="end" data-wallet-palette={walletPalette}>
-            <DropdownMenuRadioGroup
-              value={executionMode ?? ''}
-              onValueChange={value => {
-                if (value === 'main' || value === 'private') modeControl.onChange(value)
-              }}
-            >
-              <DropdownMenuRadioItem value="main">
-                <Icon icon="lucide:eye" aria-hidden="true" />
-                Public
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="private" disabled={!modeControl.incognitoAvailable}>
-                <Icon icon="noir:private-assets" className="text-private" aria-hidden="true" />
-                Incognito
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <DAppAddressModeSelector
+          executionMode={executionMode}
+          palette={walletPalette}
+          control={modeControl}
+          disabled={disconnecting}
+        />
       )}
       <button
         type="button"

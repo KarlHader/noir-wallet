@@ -368,10 +368,6 @@ html[data-surface='side-panel'] #root {
   }
 }
 
-[data-home-domain='shield'] .home-mode-content .wallet-action-surface {
-  background-color: rgb(255 255 255 / 6%);
-}
-
 .home-mode-content[data-wallet-palette='public'] {
   --color-foreground: #000;
   --color-wallet-secondary: #606068;
@@ -392,16 +388,32 @@ html[data-surface='side-panel'] #root {
   background: var(--home-incognito-surface) 0 -100px / 100% 286px no-repeat;
 }
 
-[data-home-domain='private'] .wallet-action-icon {
-  color: var(--color-warning);
+.wallet-action-row .wallet-action-surface {
+  height: auto;
+  gap: 6px;
+  background: transparent;
 }
 
-[data-home-domain='private'] .wallet-action-surface {
-  --color-wallet-surface: rgb(255 255 255 / 6%);
-  --color-wallet-secondary: #bcbcc8;
+.wallet-action-row .wallet-action-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--color-wallet-surface);
 }
 
-.home-mode-content[data-wallet-palette='public'] .wallet-action-label {
+.wallet-action-row .wallet-action-button:is(:hover, :active):enabled .wallet-action-surface {
+  background: transparent;
+}
+
+.wallet-action-row .wallet-action-button:is(:hover, :active):enabled .wallet-action-icon {
+  background: var(--color-wallet-selected);
+}
+
+.wallet-action-row[data-wallet-action-domain='private'] .wallet-action-icon {
+  color: #ffa500;
+}
+
+.wallet-action-row .wallet-action-label {
   color: var(--color-foreground);
 }
 
@@ -438,6 +450,10 @@ html[data-surface='side-panel'] #root {
 
 .dapp-connection-bar:not([data-wallet-palette='public']) .dapp-connection-control {
   color: var(--color-foreground);
+}
+
+.dapp-connection-bar .dapp-connection-control[data-incognito='true'] {
+  color: #ffa500;
 }
 
 .dapp-connection-control:is(:enabled):hover {

@@ -1,6 +1,13 @@
 import { Icon } from '@iconify/react'
 
-export type WalletAction = 'send' | 'receive' | 'deposit' | 'withdraw' | 'swap'
+const LUCIDE_ACTION_ICONS = {
+  deposit: 'lucide:arrow-down-to-line',
+  withdraw: 'lucide:arrow-up-from-line',
+  shield: 'lucide:shield',
+  unshield: 'lucide:shield-off'
+} as const
+
+export type WalletAction = 'send' | 'receive' | 'swap' | keyof typeof LUCIDE_ACTION_ICONS
 
 export function WalletActionIcon({
   action,
@@ -11,10 +18,10 @@ export function WalletActionIcon({
   readonly size?: number
   readonly className?: string
 }) {
-  if (action === 'deposit' || action === 'withdraw') {
+  if (action !== 'send' && action !== 'receive' && action !== 'swap') {
     return (
       <Icon
-        icon={action === 'deposit' ? 'lucide:arrow-down-to-line' : 'lucide:arrow-up-from-line'}
+        icon={LUCIDE_ACTION_ICONS[action]}
         width={size}
         height={size}
         className={className}

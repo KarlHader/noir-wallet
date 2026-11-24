@@ -733,6 +733,16 @@ export function Home() {
   const showInlineSyncProgress = showZcashSyncStatus && isSyncing
   const syncIssue = showZcashSyncStatus && !isSyncing ? getHomeZcashSyncIssue(syncReason) : null
 
+  const dappModeControl =
+    !hardwareWallet && supportsEvmDAppExecutionMode
+      ? {
+          busy: !modeActionsReady || dappExecutionMode.updating || modeSwitchPending,
+          incognitoAvailable: dappExecutionMode.state?.privateAvailable === true,
+          onChange: handleDAppExecutionModeChange
+        }
+      : undefined
+  const darkDAppBar = assetDomain !== 'public'
+
   const retryZcashSync = async () => {
     if (syncActionPending) return
     setSyncActionPending(true)
@@ -861,7 +871,8 @@ export function Home() {
 
           <div
             data-testid="home-actions"
-            className={`grid px-4 ${isShieldView ? 'mb-5 grid-cols-5 gap-1.5' : 'mb-2.5 grid-cols-3 gap-[11px]'}`}
+            data-wallet-action-domain={assetDomain}
+            className={`wallet-action-row mb-6 grid auto-cols-fr grid-flow-col items-start gap-2 ${assetDomain === 'private' ? 'px-3' : 'px-2'}`}
           >
             {assetDomain === 'private' ? (
               <>
@@ -904,18 +915,22 @@ export function Home() {
                 />
               </>
             )}
-            {isShieldView &&
-              (['shield', 'unshield'] as const).map(direction => (
-                <WalletActionButton
-                  key={direction}
-                  icon={
-                    <WalletActionIcon action={direction === 'shield' ? 'deposit' : 'withdraw'} />
-                  }
-                  label={direction === 'shield' ? 'Shield' : 'Unshield'}
-                  disabled={!shieldActions.hasZcash && !shieldActions.canManageNear}
-                  onClick={() => navigate.navigate(`/${direction}`)}
-                />
-              ))}
+            {assetDomain !== 'private' && (
+              <WalletActionButton
+                icon={<WalletActionIcon action="shield" />}
+                label="Shield"
+                disabled={!shieldActions.hasZcash && !shieldActions.canManageNear}
+                onClick={() => navigate.navigate('/shield')}
+              />
+            )}
+            {isShieldView && (
+              <WalletActionButton
+                icon={<WalletActionIcon action="unshield" />}
+                label="Unshield"
+                disabled={!shieldActions.hasZcash && !shieldActions.canManageNear}
+                onClick={() => navigate.navigate('/unshield')}
+              />
+            )}
             <WalletActionButton
               icon={<WalletActionIcon action="swap" />}
               label="Swap"
@@ -1134,32 +1149,26 @@ export function Home() {
           dapp={connectedDApp}
           account={effectiveAccount}
           executionMode={hardwareWallet ? 'main' : (dappExecutionMode.state?.mode ?? null)}
-          darkPalette={isShieldView}
-          modeControl={
-            !hardwareWallet && supportsEvmDAppExecutionMode
-              ? {
-                  busy: !modeActionsReady || dappExecutionMode.updating || modeSwitchPending,
-                  incognitoAvailable: dappExecutionMode.state?.privateAvailable === true,
-                  onChange: handleDAppExecutionModeChange
-                }
-              : undefined
-          }
+          darkPalette={darkDAppBar}
+          modeControl={dappModeControl}
           onManage={handleDAppClick}
           onDisconnect={disconnectDApp}
         />
       )}
-      {!isShieldView && currentDApp && !currentAccountAuthorized && (
+      {currentDApp && !currentAccountAuthorized && (
         <DAppConnectPrompt
           host={currentDApp.host}
           favicon={currentDApp.favicon}
           accountName={accountDisplayName}
-          canConnect={canConnectCurrentAccount && !(currentDAppUsesEvm && modeSwitchPending)}
+          canConnect={canConnectCurrentAccount}
           disconnectedBySite={siteDisconnected !== null}
           executionMode={
             hardwareWallet || !currentDAppUsesEvm || !supportsEvmDAppExecutionMode
               ? 'main'
               : (dappExecutionMode.state?.mode ?? null)
           }
+          darkPalette={darkDAppBar}
+          modeControl={currentDAppUsesEvm ? dappModeControl : undefined}
           onConnect={() => connectCurrentAccount(currentDApp.origin)}
           onReturnToSite={() => void returnToDAppSite(currentDApp.origin)}
         />

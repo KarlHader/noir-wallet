@@ -1129,8 +1129,8 @@ export function AssetDetail() {
 
         {detailMode !== 'all' && (
           <div
-            data-home-domain={detailMode === 'private' ? 'private' : undefined}
-            className="flex justify-center gap-2 pb-3"
+            data-wallet-action-domain={detailMode}
+            className="wallet-action-row grid auto-cols-fr grid-flow-col items-start gap-2 pb-3"
           >
             {detailMode === 'private' ? (
               <>
@@ -1185,20 +1185,20 @@ export function AssetDetail() {
                     detailMode === 'shield' ? handleShieldAction('receive') : handleReceive()
                   }
                 />
-                {detailMode === 'shield' &&
-                  (['shield', 'unshield'] as const).map(direction => (
-                    <WalletActionButton
-                      key={direction}
-                      icon={
-                        <WalletActionIcon
-                          action={direction === 'shield' ? 'deposit' : 'withdraw'}
-                        />
-                      }
-                      label={direction === 'shield' ? 'Shield' : 'Unshield'}
-                      disabled={!hasConfidentialCapability && !isZcashAsset}
-                      onClick={() => handleShieldFunds(direction)}
-                    />
-                  ))}
+                <WalletActionButton
+                  icon={<WalletActionIcon action="shield" />}
+                  label="Shield"
+                  disabled={!hasConfidentialCapability && !isZcashAsset}
+                  onClick={() => handleShieldFunds('shield')}
+                />
+                {detailMode === 'shield' && (
+                  <WalletActionButton
+                    icon={<WalletActionIcon action="unshield" />}
+                    label="Unshield"
+                    disabled={!hasConfidentialCapability && !isZcashAsset}
+                    onClick={() => handleShieldFunds('unshield')}
+                  />
+                )}
                 <WalletActionButton
                   icon={<WalletActionIcon action="swap" />}
                   label="Swap"
@@ -1215,20 +1215,6 @@ export function AssetDetail() {
                       : handleSwap('public', 'transparent')
                   }
                 />
-                {lendingRate && detailMode !== 'shield' && (
-                  <WalletActionButton
-                    icon={
-                      <Icon
-                        icon="lucide:circle-dollar-sign"
-                        width={20}
-                        height={20}
-                        aria-hidden="true"
-                      />
-                    }
-                    label="Lending"
-                    href={lendingRate.url}
-                  />
-                )}
               </>
             )}
           </div>

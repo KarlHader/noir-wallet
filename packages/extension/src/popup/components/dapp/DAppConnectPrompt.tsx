@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react'
 import { formatAccountName } from '@/lib/format'
 import { toast } from '@/store/toast-store'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
+import { DAppAddressModeSelector, type DAppAddressModeControl } from './DAppAddressModeSelector'
 
 interface DAppConnectPromptProps {
   host: string
@@ -11,6 +12,8 @@ interface DAppConnectPromptProps {
   canConnect: boolean
   disconnectedBySite: boolean
   executionMode: DAppExecutionMode | null
+  darkPalette?: boolean
+  modeControl?: DAppAddressModeControl
   onConnect: () => Promise<void>
   onReturnToSite: () => void
 }
@@ -22,15 +25,19 @@ export function DAppConnectPrompt({
   canConnect,
   disconnectedBySite,
   executionMode,
+  darkPalette = false,
+  modeControl,
   onConnect,
   onReturnToSite
 }: DAppConnectPromptProps) {
   const [connecting, setConnecting] = useState(false)
   const incognito = executionMode === 'private'
-  const palette = incognito ? 'incognito' : executionMode === 'main' ? 'public' : undefined
+  const palette = !darkPalette && executionMode === 'main' ? 'public' : undefined
+  const connectionBusy =
+    connecting || (canConnect && Boolean(modeControl?.busy || (modeControl && !executionMode)))
 
   const handleConnect = async () => {
-    if (connecting) return
+    if (connectionBusy) return
     setConnecting(true)
     try {
       await onConnect()
@@ -69,21 +76,34 @@ export function DAppConnectPrompt({
             : `${formatAccountName(accountName, 14)} · ${canConnect ? 'Not connected' : 'Reconnect from site'}`}
         </div>
       </div>
-      {executionMode && (
-        <span className="dapp-connection-control flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs text-muted">
-          <Icon
-            icon={incognito ? 'noir:private-assets' : 'lucide:eye'}
-            width={14}
-            aria-hidden="true"
-          />
-          {incognito ? 'Incognito' : 'Public'}
-        </span>
+      {modeControl ? (
+        <DAppAddressModeSelector
+          executionMode={executionMode}
+          palette={palette}
+          control={modeControl}
+          disabled={connecting}
+          compact
+        />
+      ) : (
+        executionMode && (
+          <span
+            data-incognito={incognito || undefined}
+            className="dapp-connection-control flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs text-muted"
+          >
+            <Icon
+              icon={incognito ? 'noir:private-assets' : 'lucide:eye'}
+              width={14}
+              aria-hidden="true"
+            />
+            {incognito ? 'Incognito' : 'Public'}
+          </span>
+        )
       )}
       <button
         type="button"
         onClick={canConnect ? handleConnect : onReturnToSite}
         title={disconnectedBySite ? 'Connect from the site' : undefined}
-        disabled={connecting}
+        disabled={connectionBusy}
         className="wallet-interactive shrink-0 h-8 px-4 rounded-lg bg-primary text-black text-xs font-semibold hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60 inline-flex items-center gap-1.5"
       >
         {connecting && (
