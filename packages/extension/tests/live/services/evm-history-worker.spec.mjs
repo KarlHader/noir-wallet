@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { getEvmNetworkConfigs } from '../../../src/config/networks.ts'
+import { getEvmAnkrHistoryBlockchain, getEvmNetworkConfigs } from '../../../src/config/networks.ts'
 import { resolveHistoryApiOrigin } from '../../../scripts/lib/extension-build-config.ts'
 import { CHAIN_ID_TO_ANKR } from '../../../../evm-history-worker/src/index.ts'
 
@@ -16,7 +16,10 @@ function historyOrigin() {
 
 function supportedNetworks(networkMode) {
   return getEvmNetworkConfigs(networkMode).flatMap(network => {
-    const blockchain = CHAIN_ID_TO_ANKR[network.chainId.slice('eip155:'.length)]
+    const blockchain = getEvmAnkrHistoryBlockchain(network.chainId)
+    expect(CHAIN_ID_TO_ANKR[network.chainId.slice('eip155:'.length)], network.chainId).toBe(
+      blockchain
+    )
     return blockchain ? [{ ...network, blockchain }] : []
   })
 }
@@ -66,7 +69,6 @@ test.describe('live EVM history Worker', () => {
     await expect(health.json()).resolves.toEqual({ ok: true })
 
     const networks = ['mainnet', 'testnet'].flatMap(supportedNetworks)
-    expect(networks).toHaveLength(14)
     const probes = networks.flatMap(network =>
       HISTORY_METHODS.map(([method, resultKey]) => ({ network, method, resultKey }))
     )

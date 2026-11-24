@@ -439,7 +439,7 @@ export class RheaSwapTransactionMonitor {
       status = observation.status
       destinationHash = observation.destinationHash
     } catch (error) {
-      if (value.isCrossChain) return
+      if (value.isCrossChain || isTransfer || !classificationResolved) return
       if (!transaction?.confirmations || transaction.confirmations <= 0) return
       status = 'completed'
     }

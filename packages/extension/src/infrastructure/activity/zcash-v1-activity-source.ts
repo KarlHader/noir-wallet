@@ -10,7 +10,7 @@ import type {
   TransactionKind,
   TransactionLifecycleStatus
 } from '@/core/transactions/domain'
-import { getEvmNetworkConfig, getEvmNetworkConfigs } from '@/config/networks'
+import { getEvmNetworkConfig, getKnownEvmNetworkIdentities } from '@/config/networks'
 import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
 import type { Transaction, TransactionType } from '@/types'
 import { safeBig } from '@/lib/big'
@@ -134,7 +134,7 @@ function externalChainId(chain: string, transaction: Transaction): ChainId | nul
   if (normalized === 'ethereum' || normalized === 'eth' || normalized === 'sepolia') {
     return parseChainId(getEvmNetworkConfig(transaction.network).chainId).id
   }
-  const evmNetwork = getEvmNetworkConfigs(transaction.network).find(config =>
+  const evmNetwork = getKnownEvmNetworkIdentities(transaction.network).find(config =>
     [config.displayName, config.networkName, config.iconChain].some(
       candidate => candidate.toLowerCase().replace(/[^a-z0-9]/g, '') === normalized
     )

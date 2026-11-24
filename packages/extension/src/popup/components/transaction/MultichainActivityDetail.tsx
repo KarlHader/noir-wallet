@@ -92,6 +92,7 @@ export function MultichainActivityDetail({
   const [checkingPrivateFunding, setCheckingPrivateFunding] = useState(false)
   const [zcashRecord, setZcashRecord] = useState<Transaction | null>(null)
   const [swapApprovalAvailable, setSwapApprovalAvailable] = useState(false)
+  const [swapApprovalNotice, setSwapApprovalNotice] = useState<string | null>(null)
   const { activeAccount: activeSwapAccount } = useActiveAccountNetworks()
   const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
   const {
@@ -155,6 +156,7 @@ export function MultichainActivityDetail({
   useEffect(() => {
     let cancelled = false
     setSwapApprovalAvailable(false)
+    setSwapApprovalNotice(null)
     if (
       visibleItem.source !== 'wallet-v2' ||
       (visibleItem.kind !== 'contract-call' && visibleItem.kind !== 'approve') ||
@@ -178,6 +180,16 @@ export function MultichainActivityDetail({
           )
       })
       .catch(() => {})
+    if (visibleItem.kind === 'approve') {
+      void swapApprovalContinuationClient
+        .getCombined(visibleItem.id)
+        .then(progress => {
+          if (!cancelled && progress?.status === 'review-required') {
+            setSwapApprovalNotice(progress.message)
+          }
+        })
+        .catch(() => {})
+    }
     return () => {
       cancelled = true
     }
@@ -601,7 +613,13 @@ export function MultichainActivityDetail({
                 </>
               ) : (
                 <AccountDomainBadge
-                  domain={visibleItem.accountMode === 'private' ? 'private' : 'public'}
+                  domain={
+                    visibleItem.assetDomains?.includes('shield')
+                      ? 'shield'
+                      : visibleItem.accountMode === 'private'
+                        ? 'private'
+                        : 'public'
+                  }
                 />
               )}
             </span>
@@ -743,6 +761,7 @@ export function MultichainActivityDetail({
           tone="warning"
         />
       )}
+      {swapApprovalNotice && <InlineError message={swapApprovalNotice} tone="warning" />}
       {swapApprovalAvailable &&
         onContinueSwap &&
         activeSwapAccount?.walletId === visibleItem.scope.keyDomainId &&

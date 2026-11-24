@@ -183,6 +183,7 @@ test('imported EVM accounts refresh Main-only caches before exposing combined ba
     })),
     [
       { mainRaw: '10', privateRaw: '4', totalRaw: '14' },
+      { mainRaw: '20', privateRaw: '6', totalRaw: '26' },
       { mainRaw: '20', privateRaw: '6', totalRaw: '26' }
     ]
   )

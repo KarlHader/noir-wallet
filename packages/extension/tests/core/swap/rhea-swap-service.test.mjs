@@ -1,5 +1,9 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
+import { decodeFunctionData, erc20Abi } from 'viem'
+import { ConfidentialFundingApi } from '../../../src/background/confidential-funding-api.ts'
+import { PublicConfidentialTransfer } from '../../../src/background/public-confidential-transfer.ts'
+import { RheaSwapCatalogClient } from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
 import {
   createSwapBuildRequest,
   normalizeBuild,
@@ -47,6 +51,107 @@ const quoteRequest = Object.freeze({
   slippageBps: 50,
   sender: 't1sender',
   recipient: 'alice.near'
+})
+
+test('uses the same 2 bps 1Click route for public confidential transfer quotes and builds', async () => {
+  const usdcAddress = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
+  const depositAddress = '0x4444444444444444444444444444444444444444'
+  const usdc = { assetId: `nep141:base-${usdcAddress}.omft.near`, symbol: 'USDC', decimals: 6 }
+  const asset = { chain: '8453', address: usdcAddress, symbol: 'USDC', decimals: 6 }
+  const request = {
+    fromChain: '8453',
+    toChain: '8453',
+    tokenIn: asset,
+    tokenOut: asset,
+    amountIn: '1000000',
+    slippageBps: 50,
+    sender: '0x1111111111111111111111111111111111111111',
+    recipient: '0x2222222222222222222222222222222222222222',
+    confidentiality: 'basic'
+  }
+  const config = {
+    oneClickApiUrl: 'https://example.test/1click',
+    oneClickDirectApiUrl: 'https://example.test/1click',
+    rheaSwapApiUrl: 'https://example.test'
+  }
+  const fees = [{ recipient: 'noir_swap.near', fee: 2 }]
+  const originalFetch = globalThis.fetch
+  let referral
+  let repeatFeeInBaseline = false
+  let repeatFeeInBuild = false
+  globalThis.fetch = async (url, init) => {
+    expect(url).toBe(`${config.oneClickApiUrl}/quote`)
+    const body = JSON.parse(init.body)
+    expect(body).toMatchObject({
+      referral,
+      originAsset: usdc.assetId,
+      destinationAsset: usdc.assetId,
+      amount: request.amountIn,
+      refundTo: request.sender,
+      recipient: request.recipient,
+      recipientType: 'DESTINATION_CHAIN'
+    })
+    if (body.appFees) expect(body.appFees).toEqual(fees)
+    else expect(body.dry).toBe(true)
+    const appFees =
+      repeatFeeInBaseline || (repeatFeeInBuild && !body.dry)
+        ? body.appFees
+          ? [...body.appFees, ...fees]
+          : fees
+        : (body.appFees ?? [])
+    return Response.json({
+      correlationId: 'public-confidential-quote',
+      quoteRequest: { ...body, appFees },
+      quote: {
+        amountIn: body.amount,
+        amountOut: body.appFees ? '999800' : '1000000',
+        minAmountOut: '994801',
+        deadline: body.deadline,
+        depositAddress: body.dry ? undefined : depositAddress
+      }
+    })
+  }
+  try {
+    const adapter = new PublicConfidentialTransfer(
+      new ConfidentialFundingApi(config, '', ''),
+      async () => [usdc]
+    )
+    const client = new RheaSwapCatalogClient({
+      baseUrl: config.rheaSwapApiUrl,
+      publicConfidentialTransfer: adapter
+    })
+    const service = new RheaSwapService(client, new MemoryRheaSwapQuoteSessionStore())
+    const scope = { walletId: 'wallet', accountId: 'account' }
+    for (const [purpose, expectedReferral] of [
+      ['public-private-send', 'noir_privately'],
+      ['public-private-move', 'noir_move']
+    ]) {
+      referral = expectedReferral
+      const quote = await service.quote(request, undefined, { ...scope, purpose })
+      expect(quote).toMatchObject({ estimatedOut: '999800', minAmountOut: '994801' })
+      const review = await service.prepare(quote.quoteHandle)
+      expect(review).toMatchObject({
+        amountIn: request.amountIn,
+        estimatedOut: quote.estimatedOut,
+        minAmountOut: quote.minAmountOut
+      })
+      const plan = await service.readEvmTransactionPlan(quote.quoteHandle)
+      expect(plan).toMatchObject({ approval: null, transaction: { to: usdcAddress, value: '0' } })
+      expect(decodeFunctionData({ abi: erc20Abi, data: plan.transaction.data })).toEqual({
+        functionName: 'transfer',
+        args: [depositAddress, BigInt(request.amountIn)]
+      })
+      repeatFeeInBuild = true
+      await expect(service.prepare(quote.quoteHandle)).rejects.toThrow('app fees do not match')
+      repeatFeeInBuild = false
+    }
+    repeatFeeInBaseline = true
+    await expect(
+      service.quote(request, undefined, { ...scope, purpose: 'public-private-move' })
+    ).rejects.toThrow('already includes the wallet fee recipient')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('reads destination hashes from RHEA status across EVM and non-EVM routes', () => {
@@ -1253,7 +1358,12 @@ test('prioritizes the persisted Intents order and only falls back to order-level
     statusChainId: order.chainId,
     sourceHash
   }
-  const record = { schemaVersion: 1, quoteHandle, submission }
+  const record = {
+    schemaVersion: 1,
+    quoteHandle,
+    request: toRheaSwapProtocolRequest(quoteRequest),
+    submission
+  }
   await sessions.put(record)
   let orderStatus = { status: 'PROCESSING' }
   let recordStatus = sourceReceipt
@@ -1277,12 +1387,21 @@ test('prioritizes the persisted Intents order and only falls back to order-level
     status: 'processing',
     destinationHash: null
   })
+  recordStatus = { status: 'SUCCESS', toHash: destinationHash }
+  for (const status of ['PROCESSING', 'SUCCESS']) {
+    orderStatus = { status }
+    await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
+      status: 'completed',
+      destinationHash
+    })
+  }
+  expect(recordReads).toBe(3)
   orderStatus = { status: 'SUCCESS', toHash: destinationHash }
   await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({
     status: 'completed',
     destinationHash
   })
-  expect(recordReads).toBe(0)
+  expect(recordReads).toBe(3)
   orderStatus = new Error('Order status unavailable')
   recordStatus = { status: 'SUCCESS', toHash: sourceHash }
   await expect(service.getOrderStatus(quoteHandle)).resolves.toMatchObject({

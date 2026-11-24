@@ -898,17 +898,42 @@ export function ActivityTransactionBody({
   view,
   precedingProgress,
   showDate = false,
-  showAccountRoute = false
+  showAccountRoute = false,
+  showAmountsAsDetails = false
 }: {
   readonly view: ActivityTransactionView
   readonly precedingProgress?: PrecedingProgress
   readonly showDate?: boolean
   readonly showAccountRoute?: boolean
+  readonly showAmountsAsDetails?: boolean
 }) {
+  const amount = view.swap?.source
+    ? { value: view.swap.source.exact, symbol: view.swap.source.symbol, prefix: '−' }
+    : view.amount
+  const destination = view.swap?.hideDestinationCredit ? null : view.swap?.destination
   return (
     <>
-      <ActivityTransactionHero view={view} />
+      {!showAmountsAsDetails && <ActivityTransactionHero view={view} />}
       <div className="mb-6 space-y-4">
+        {showAmountsAsDetails && amount && (
+          <DetailRow label="Amount">
+            <AmountDisplay
+              value={amount.value}
+              symbol={amount.symbol}
+              prefix={amount.prefix}
+              className="text-sm"
+            />
+          </DetailRow>
+        )}
+        {showAmountsAsDetails && destination && !view.isRefunded && (
+          <DetailRow label={view.swap?.destinationIsSettled ? 'Received' : 'Expected receive'}>
+            <AmountDisplay
+              value={destination.exact}
+              symbol={destination.symbol}
+              className="text-sm"
+            />
+          </DetailRow>
+        )}
         <ActivityTransactionRoute view={view} />
         {showDate && (
           <DetailRow label="Date">

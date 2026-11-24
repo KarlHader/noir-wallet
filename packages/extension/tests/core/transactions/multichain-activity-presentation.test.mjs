@@ -590,7 +590,7 @@ test.describe('Multichain Activity presentation', () => {
 
     expect(getActivityRowTextPresentation(base, 'ETH', undefined, 'Ethereum')).toEqual({
       title: 'Sent ETH',
-      subtitle: 'To: 0x2222...222222'
+      subtitle: 'To 0x2222...222222'
     })
     expect(
       getActivityRowTextPresentation(
@@ -688,7 +688,7 @@ test.describe('Multichain Activity presentation', () => {
     expect(getActivityTransferRecipient(item)).toBe(destination)
     expect(getActivityRowTextPresentation(item, 'USDC', undefined, 'Ethereum')).toEqual({
       title: 'Sent USDC',
-      subtitle: 'To: 0x3333...333333'
+      subtitle: 'To 0x3333...333333'
     })
     expect(
       getActivityTransferRecipient({ ...item, snapshot: { ...item.snapshot, protocol: undefined } })
@@ -721,7 +721,7 @@ test.describe('Multichain Activity presentation', () => {
     expect(getActivityTransferRecipient(item)).toBe(destination)
     expect(getActivityRowTextPresentation(item, 'ETH', 'ETH', 'Base')).toEqual({
       title: 'Sent ETH',
-      subtitle: 'To: 0x3333...333333'
+      subtitle: 'To 0x3333...333333'
     })
     expect(getActivitySwapPresentation(item, assets, new Map())).toBeNull()
   })

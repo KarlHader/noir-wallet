@@ -47,14 +47,19 @@ const rheaIconSlugs = new Map<string, string>([
   ['kyberswap', 'kyberSwap']
 ])
 
+export function isInternalSwapProvider(router: string): boolean {
+  return /\brhea(?:\b|_|swap|finance)/i.test(router)
+}
+
 export function providerDisplayName(router: string): string {
   const name = router.trim()
+  if (isInternalSwapProvider(name)) return 'Swap provider'
   return providerNames.get(name.toLowerCase()) ?? name
 }
 
 export function getRheaProviderIconUrl(router: string): string | undefined {
   const id = router.trim().toLowerCase()
-  if (!/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(id)) return undefined
+  if (isInternalSwapProvider(id) || !/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(id)) return undefined
   if (id === 'dflow') return `${rheaIconBase}logo-dflow.svg`
   return `${rheaIconBase}logo-${rheaIconSlugs.get(id) ?? id}-simple.svg`
 }

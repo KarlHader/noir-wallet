@@ -10,7 +10,6 @@ import { Switch } from '../ui/switch'
 import { ChainIcon } from '../common/ChainIcon'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { BalanceSkeleton } from '../ui/skeleton'
-import { TransactionNotice } from './TransactionNotice'
 
 export interface TransferMaximumControl {
   readonly onClick?: () => void
@@ -71,6 +70,7 @@ export interface SendFormAdapter {
       readonly selectorLabel?: string
     }
     readonly feedback?: ReactNode
+    readonly notice?: ReactNode
   }
 }
 
@@ -89,6 +89,7 @@ export function SendFormView({
         <SendRecipientSection {...adapter.recipient} />
         <SendAmountRow {...adapter} />
         {children}
+        {adapter.recipient.notice}
       </div>
       <div className="page-footer">{footer}</div>
     </>
@@ -147,7 +148,13 @@ function SendFieldLabel({ children }: { readonly children: ReactNode }) {
   )
 }
 
-function SendRecipientSection({ network, feedback, ...field }: SendFormAdapter['recipient']) {
+function SendRecipientSection({
+  network,
+  feedback,
+  notice,
+  describedBy,
+  ...field
+}: SendFormAdapter['recipient']) {
   const networkLabel = (
     <>
       {network.icon && (
@@ -181,7 +188,12 @@ function SendRecipientSection({ network, feedback, ...field }: SendFormAdapter['
           <span className="inline-flex min-w-0 items-center gap-1.5">{networkLabel}</span>
         )}
       </div>
-      <SendRecipientInputCard {...field} hideLabel variant="filled" />
+      <SendRecipientInputCard
+        {...field}
+        describedBy={notice ? `${field.id}-error` : describedBy}
+        hideLabel
+        variant="filled"
+      />
       {feedback}
     </div>
   )
@@ -285,6 +297,7 @@ export function SendRecipientInputCard({
   hideLabel = false,
   variant = 'outline',
   invalid = false,
+  describedBy,
   autoFocus = false,
   disabled = false,
   readOnly,
@@ -299,6 +312,7 @@ export function SendRecipientInputCard({
   readonly hideLabel?: boolean
   readonly variant?: 'outline' | 'filled'
   readonly invalid?: boolean
+  readonly describedBy?: string
   readonly autoFocus?: boolean
   readonly disabled?: boolean
   readonly readOnly?: boolean
@@ -333,6 +347,7 @@ export function SendRecipientInputCard({
         id={id}
         aria-label={label}
         aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
         disabled={disabled}
         readOnly={readOnly}
         value={value}
@@ -398,7 +413,7 @@ function SendAmountInput({
   value,
   onChange,
   invalid,
-  error,
+  describedBy,
   testId = 'send-amount-card',
   disabled
 }: {
@@ -406,7 +421,7 @@ function SendAmountInput({
   readonly value: string
   readonly onChange: (value: string) => void
   readonly invalid?: boolean
-  readonly error?: string
+  readonly describedBy?: string
   readonly testId?: string
   readonly disabled?: boolean
 }) {
@@ -415,7 +430,7 @@ function SendAmountInput({
       <input
         aria-label={ariaLabel}
         aria-invalid={invalid || undefined}
-        aria-describedby={error ? `${testId}-error` : undefined}
+        aria-describedby={describedBy}
         disabled={disabled}
         inputMode="decimal"
         value={value}
@@ -423,7 +438,6 @@ function SendAmountInput({
         placeholder="0"
         className="h-12 w-full min-w-0 bg-transparent font-sans text-xl font-medium tabular-nums text-foreground outline-none placeholder:text-muted/45"
       />
-      {error && <TransactionNotice id={`${testId}-error`} tone="warning" message={error} />}
     </div>
   )
 }

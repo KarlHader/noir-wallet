@@ -185,7 +185,7 @@ export interface EvmNetworkConfig {
   readonly historyApiUrl?: string
   readonly explorerUrl: string
   readonly usdcContract?: `0x${string}`
-  readonly historyErc20Assets?: readonly {
+  readonly bundledErc20Assets?: readonly {
     readonly contract: `0x${string}`
     readonly name: string
     readonly symbol: string
@@ -223,34 +223,13 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
         slip44Reference: '60'
       },
       explorerUrl: 'https://etherscan.io',
-      usdcContract: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
-    }),
-    defineNetwork({
-      networkMode: 'mainnet',
-      chainId: 'eip155:56',
-      numericChainId: 56,
-      networkName: 'bsc-mainnet',
-      displayName: 'BNB Chain',
-      iconChain: 'bsc',
-      nativeCurrency: {
-        name: 'BNB',
-        symbol: 'BNB',
-        decimals: 18,
-        slip44Reference: '714'
-      },
-      explorerUrl: 'https://bscscan.com',
-      historyErc20Assets: [
+      usdcContract: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      bundledErc20Assets: [
         {
-          contract: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
-          name: 'USD Coin',
-          symbol: 'USDC',
-          decimals: 18
-        },
-        {
-          contract: '0x55d398326f99059ff775485246999027b3197955',
+          contract: '0xdac17f958d2ee523a2206206994597c13d831ec7',
           name: 'Tether USD',
           symbol: 'USDT',
-          decimals: 18
+          decimals: 6
         }
       ]
     }),
@@ -272,6 +251,35 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
     }),
     defineNetwork({
       networkMode: 'mainnet',
+      chainId: 'eip155:56',
+      numericChainId: 56,
+      networkName: 'bsc-mainnet',
+      displayName: 'BNB Chain',
+      iconChain: 'bsc',
+      nativeCurrency: {
+        name: 'BNB',
+        symbol: 'BNB',
+        decimals: 18,
+        slip44Reference: '714'
+      },
+      explorerUrl: 'https://bscscan.com',
+      bundledErc20Assets: [
+        {
+          contract: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
+          name: 'USD Coin',
+          symbol: 'USDC',
+          decimals: 18
+        },
+        {
+          contract: '0x55d398326f99059ff775485246999027b3197955',
+          name: 'Tether USD',
+          symbol: 'USDT',
+          decimals: 18
+        }
+      ]
+    }),
+    defineNetwork({
+      networkMode: 'mainnet',
       chainId: 'eip155:8453',
       numericChainId: 8_453,
       networkName: 'base-mainnet',
@@ -288,22 +296,6 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
     }),
     defineNetwork({
       networkMode: 'mainnet',
-      chainId: 'eip155:10',
-      numericChainId: 10,
-      networkName: 'op-mainnet',
-      displayName: 'Optimism',
-      iconChain: 'optimism',
-      nativeCurrency: {
-        name: 'Ether',
-        symbol: 'ETH',
-        decimals: 18,
-        slip44Reference: '60'
-      },
-      explorerUrl: 'https://optimistic.etherscan.io',
-      usdcContract: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85'
-    }),
-    defineNetwork({
-      networkMode: 'mainnet',
       chainId: 'eip155:137',
       numericChainId: 137,
       networkName: 'polygon-mainnet',
@@ -316,98 +308,15 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
         slip44Reference: '966'
       },
       explorerUrl: 'https://polygonscan.com',
-      usdcContract: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'
-    }),
-    defineNetwork({
-      networkMode: 'mainnet',
-      chainId: 'eip155:43114',
-      numericChainId: 43_114,
-      networkName: 'avalanche-c-chain',
-      displayName: 'Avalanche',
-      iconChain: 'avax',
-      nativeCurrency: {
-        name: 'Avalanche',
-        symbol: 'AVAX',
-        decimals: 18,
-        slip44Reference: '9000'
-      },
-      explorerUrl: 'https://snowtrace.io',
-      usdcContract: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E'
-    }),
-    defineNetwork({
-      networkMode: 'mainnet',
-      chainId: 'eip155:143',
-      numericChainId: 143,
-      networkName: 'monad-mainnet',
-      displayName: 'Monad',
-      iconChain: 'monad',
-      nativeCurrency: {
-        name: 'Monad',
-        symbol: 'MON',
-        decimals: 18,
-        slip44Reference: '268435779'
-      },
-      explorerUrl: 'https://monadscan.com'
-    }),
-    defineNetwork({
-      networkMode: 'mainnet',
-      chainId: 'eip155:100',
-      numericChainId: 100,
-      networkName: 'gnosis-mainnet',
-      displayName: 'Gnosis',
-      iconChain: 'gnosis',
-      nativeCurrency: {
-        name: 'xDAI',
-        symbol: 'xDAI',
-        decimals: 18,
-        slip44Reference: '700'
-      },
-      explorerUrl: 'https://gnosisscan.io'
-    }),
-    defineNetwork({
-      networkMode: 'mainnet',
-      chainId: 'eip155:9745',
-      numericChainId: 9_745,
-      networkName: 'plasma-mainnet',
-      displayName: 'Plasma',
-      iconChain: 'plasma',
-      nativeCurrency: {
-        name: 'Plasma',
-        symbol: 'XPL',
-        decimals: 18,
-        slip44Reference: '60'
-      },
-      explorerUrl: 'https://plasmascan.to'
-    }),
-    defineNetwork({
-      networkMode: 'mainnet',
-      chainId: 'eip155:196',
-      numericChainId: 196,
-      networkName: 'xlayer-mainnet',
-      displayName: 'X Layer',
-      iconChain: 'xlayer',
-      nativeCurrency: {
-        name: 'OKB',
-        symbol: 'OKB',
-        decimals: 18,
-        slip44Reference: '60'
-      },
-      explorerUrl: 'https://www.okx.com/web3/explorer/xlayer'
-    }),
-    defineNetwork({
-      networkMode: 'mainnet',
-      chainId: 'eip155:80094',
-      numericChainId: 80_094,
-      networkName: 'berachain-mainnet',
-      displayName: 'Berachain',
-      iconChain: 'bera',
-      nativeCurrency: {
-        name: 'Berachain',
-        symbol: 'BERA',
-        decimals: 18,
-        slip44Reference: '8008'
-      },
-      explorerUrl: 'https://berascan.com'
+      usdcContract: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+      bundledErc20Assets: [
+        {
+          contract: '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619',
+          name: 'Wrapped Ether',
+          symbol: 'WETH',
+          decimals: 18
+        }
+      ]
     })
   ] as const),
   testnet: Object.freeze([
@@ -429,21 +338,6 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
     }),
     defineNetwork({
       networkMode: 'testnet',
-      chainId: 'eip155:97',
-      numericChainId: 97,
-      networkName: 'bsc-testnet',
-      displayName: 'BSC Testnet',
-      iconChain: 'bsc',
-      nativeCurrency: {
-        name: 'Testnet BNB',
-        symbol: 'tBNB',
-        decimals: 18,
-        slip44Reference: '714'
-      },
-      explorerUrl: 'https://testnet.bscscan.com'
-    }),
-    defineNetwork({
-      networkMode: 'testnet',
       chainId: 'eip155:421614',
       numericChainId: 421_614,
       networkName: 'arbitrum-sepolia',
@@ -458,6 +352,21 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
       historyApiUrl: 'https://arbitrum-sepolia.blockscout.com/api/',
       explorerUrl: 'https://sepolia.arbiscan.io',
       usdcContract: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d'
+    }),
+    defineNetwork({
+      networkMode: 'testnet',
+      chainId: 'eip155:97',
+      numericChainId: 97,
+      networkName: 'bsc-testnet',
+      displayName: 'BSC Testnet',
+      iconChain: 'bsc',
+      nativeCurrency: {
+        name: 'Testnet BNB',
+        symbol: 'tBNB',
+        decimals: 18,
+        slip44Reference: '714'
+      },
+      explorerUrl: 'https://testnet.bscscan.com'
     }),
     defineNetwork({
       networkMode: 'testnet',
@@ -477,22 +386,6 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
     }),
     defineNetwork({
       networkMode: 'testnet',
-      chainId: 'eip155:11155420',
-      numericChainId: 11_155_420,
-      networkName: 'op-sepolia',
-      displayName: 'OP Sepolia',
-      iconChain: 'optimism',
-      nativeCurrency: {
-        name: 'Sepolia Ether',
-        symbol: 'ETH',
-        decimals: 18,
-        slip44Reference: '60'
-      },
-      explorerUrl: 'https://sepolia-optimism.etherscan.io',
-      usdcContract: '0x5fd84259d66Cd46123540766Be93DFE6D43130D7'
-    }),
-    defineNetwork({
-      networkMode: 'testnet',
       chainId: 'eip155:80002',
       numericChainId: 80_002,
       networkName: 'polygon-amoy',
@@ -506,25 +399,103 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
       },
       explorerUrl: 'https://amoy.polygonscan.com',
       usdcContract: '0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582'
-    }),
-    defineNetwork({
-      networkMode: 'testnet',
-      chainId: 'eip155:43113',
-      numericChainId: 43_113,
-      networkName: 'avalanche-fuji',
-      displayName: 'Avalanche Fuji',
-      iconChain: 'avax',
-      nativeCurrency: {
-        name: 'Avalanche',
-        symbol: 'AVAX',
-        decimals: 18,
-        slip44Reference: '9000'
-      },
-      explorerUrl: 'https://testnet.snowtrace.io',
-      usdcContract: '0x5425890298aed601595a70AB815c96711a31Bc65'
     })
   ] as const)
 } as const satisfies Record<Network, readonly EvmNetworkConfig[]>)
+
+export function getRetiredEvmNetworkIdentities(network: Network) {
+  return RETIRED_EVM_NETWORK_IDENTITIES[network]
+}
+
+export type EvmNetworkIdentity = Pick<
+  EvmNetworkConfig,
+  'chainId' | 'displayName' | 'networkName' | 'iconChain'
+>
+
+const RETIRED_EVM_NETWORK_IDENTITIES = {
+  mainnet: [
+    {
+      chainId: 'eip155:10',
+      displayName: 'Optimism',
+      networkName: 'op-mainnet',
+      iconChain: 'optimism',
+      slip44Reference: '60'
+    },
+    {
+      chainId: 'eip155:43114',
+      displayName: 'Avalanche',
+      networkName: 'avalanche-c-chain',
+      iconChain: 'avax',
+      slip44Reference: '9000'
+    },
+    {
+      chainId: 'eip155:143',
+      displayName: 'Monad',
+      networkName: 'monad-mainnet',
+      iconChain: 'monad',
+      slip44Reference: '268435779'
+    },
+    {
+      chainId: 'eip155:100',
+      displayName: 'Gnosis',
+      networkName: 'gnosis-mainnet',
+      iconChain: 'gnosis',
+      slip44Reference: '700'
+    },
+    {
+      chainId: 'eip155:9745',
+      displayName: 'Plasma',
+      networkName: 'plasma-mainnet',
+      iconChain: 'plasma',
+      slip44Reference: '60'
+    },
+    {
+      chainId: 'eip155:196',
+      displayName: 'X Layer',
+      networkName: 'xlayer-mainnet',
+      iconChain: 'xlayer',
+      slip44Reference: '60'
+    },
+    {
+      chainId: 'eip155:80094',
+      displayName: 'Berachain',
+      networkName: 'berachain-mainnet',
+      iconChain: 'bera',
+      slip44Reference: '8008'
+    }
+  ],
+  testnet: [
+    {
+      chainId: 'eip155:11155420',
+      displayName: 'OP Sepolia',
+      networkName: 'op-sepolia',
+      iconChain: 'optimism',
+      slip44Reference: '60'
+    },
+    {
+      chainId: 'eip155:43113',
+      displayName: 'Avalanche Fuji',
+      networkName: 'avalanche-fuji',
+      iconChain: 'avax',
+      slip44Reference: '9000'
+    }
+  ]
+} as const
+
+const KNOWN_EVM_NETWORK_IDENTITIES: Readonly<Record<Network, readonly EvmNetworkIdentity[]>> = {
+  mainnet: Object.freeze([
+    ...BUILTIN_EVM_NETWORKS.mainnet,
+    ...RETIRED_EVM_NETWORK_IDENTITIES.mainnet
+  ]),
+  testnet: Object.freeze([
+    ...BUILTIN_EVM_NETWORKS.testnet,
+    ...RETIRED_EVM_NETWORK_IDENTITIES.testnet
+  ])
+}
+
+export function getKnownEvmNetworkIdentities(network: Network): readonly EvmNetworkIdentity[] {
+  return KNOWN_EVM_NETWORK_IDENTITIES[network]
+}
 
 const EVM_ANKR_HISTORY_BLOCKCHAINS: Readonly<Record<string, string>> = Object.freeze({
   'eip155:1': 'eth',

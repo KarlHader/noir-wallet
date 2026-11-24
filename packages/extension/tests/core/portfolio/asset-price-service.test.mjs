@@ -130,18 +130,13 @@ test('maps only canonical product assets to explicit 1Click sources on both buil
       'ZEC',
       'ETH',
       'USDC',
+      'ETH',
+      'USDC',
       network === 'mainnet' ? 'BNB' : 'tBNB',
-      'ETH',
-      'USDC',
-      'ETH',
-      'USDC',
       'ETH',
       'USDC',
       'POL',
       'USDC',
-      'AVAX',
-      'USDC',
-      ...(network === 'mainnet' ? ['MON', 'xDAI', 'XPL', 'OKB', 'BERA'] : []),
       'BTC',
       'SOL',
       'NEAR'
@@ -150,12 +145,8 @@ test('maps only canonical product assets to explicit 1Click sources on both buil
       expectedSymbols
     )
     expect(new Set(mappings.map(item => item.assetId)).size).toBe(expectedSymbols.length)
-    expect(new Set(mappings.map(item => item.marketAssetId)).size).toBe(
-      network === 'mainnet' ? 14 : 9
-    )
-    expect(new Set(mappings.map(item => item.sourceAssetId)).size).toBe(
-      network === 'mainnet' ? 14 : 9
-    )
+    expect(new Set(mappings.map(item => item.marketAssetId)).size).toBe(8)
+    expect(new Set(mappings.map(item => item.sourceAssetId)).size).toBe(8)
     expect(mappings.find(item => item.marketAssetId === 'solana')?.sourceAssetId).toBe(
       'nep141:sol.omft.near'
     )
@@ -286,21 +277,19 @@ test('does not map a native reference unless it matches the exact built-in chain
 test('maps release assets to fixed DEX Screener pools without symbol discovery', () => {
   for (const network of ['mainnet', 'testnet']) {
     const { assets, mappings } = createMarketMappings(network)
-    expect(mappings).toHaveLength(9)
-    expect(new Set(mappings.map(mapping => mapping.assetId)).size).toBe(9)
-    expect(new Set(mappings.map(mapping => mapping.marketAssetId)).size).toBe(6)
+    expect(mappings).toHaveLength(7)
+    expect(new Set(mappings.map(mapping => mapping.assetId)).size).toBe(7)
+    expect(new Set(mappings.map(mapping => mapping.marketAssetId)).size).toBe(5)
     expect(
       new Set(mappings.map(mapping => `${mapping.pool.chainId}:${mapping.pool.pairAddress}`)).size
-    ).toBe(6)
+    ).toBe(5)
     expect(mappings.map(mapping => assets.resolve(mapping.assetId).metadata.symbol)).toEqual([
       'ZEC',
       'ETH',
+      'ETH',
       network === 'mainnet' ? 'BNB' : 'tBNB',
       'ETH',
-      'ETH',
-      'ETH',
       'POL',
-      'AVAX',
       'BTC'
     ])
     expect(
@@ -345,18 +334,17 @@ test('serves fresh prices, keeps bounded stale cache, and expires old quotes ins
   expect(fresh.quotes).toHaveLength(mappings.length)
   const ethereumNativeAssetIds = new Set([
     'eip155:1/slip44:60',
-    'eip155:10/slip44:60',
     'eip155:8453/slip44:60',
     'eip155:42161/slip44:60'
   ])
   const ethPrices = fresh.quotes
     .filter(quote => ethereumNativeAssetIds.has(quote.assetId))
     .map(quote => quote.priceUsd)
-  expect(ethPrices).toEqual(['11', '11', '11', '11'])
+  expect(ethPrices).toEqual(['11', '11', '11'])
   const usdcPrices = fresh.quotes
     .filter(quote => quote.assetId.includes('/erc20:'))
     .map(quote => quote.priceUsd)
-  expect(usdcPrices).toEqual(Array(6).fill('12'))
+  expect(usdcPrices).toEqual(Array(4).fill('12'))
   expect(fetchCount).toBe(1)
 
   await service.refresh()
@@ -629,18 +617,18 @@ test('caches validated DEX changes, deduplicates shared pools, and expires faile
 
   await expect(service.readCached()).resolves.toMatchObject({ quotes: [] })
   const fresh = await service.refresh()
-  expect(fresh.quotes).toHaveLength(9)
+  expect(fresh.quotes).toHaveLength(7)
   expect(fresh.quotes.every(quote => quote.percent24h === '2.5')).toBe(true)
-  expect(fetchCount).toBe(6)
-  expect(stored.quotes).toHaveLength(6)
+  expect(fetchCount).toBe(5)
+  expect(stored.quotes).toHaveLength(5)
 
   await service.refresh()
-  expect(fetchCount).toBe(6)
+  expect(fetchCount).toBe(5)
 
   offline = true
   now += 31 * 60 * 1000
   const stale = await service.refresh()
-  expect(stale.quotes).toHaveLength(9)
+  expect(stale.quotes).toHaveLength(7)
   expect(stale.quotes.every(quote => quote.freshness === 'stale')).toBe(true)
 
   now += 90 * 60 * 1000
@@ -687,7 +675,7 @@ test('rejects a spoofed trusted-pair identity and removes changes below liquidit
       rejectedPools.has(mappings.find(m => m.assetId === quote.assetId).pool.chainId)
     )
   ).toBe(false)
-  expect(result.quotes).toHaveLength(4)
+  expect(result.quotes).toHaveLength(3)
 })
 
 test('prefers a fresh trusted DEX price, falls back to 1Click on divergence, and keeps exact sources', () => {

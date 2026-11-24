@@ -727,10 +727,12 @@ export function normalizeOrderStatus(raw: SwapOrderStatusDataRaw): OrderStatus {
     case 'OPEN':
     case 'PRESIGNATUREPENDING':
     case 'PENDING':
+    case 'PENDING_DEPOSIT':
     case 'CREATED':
       return 'pending'
     case 'PROCESSING':
     case 'IN_PROGRESS':
+    case 'REFUNDING':
       return 'processing'
     case 'FULFILLED':
     case 'SUCCESS':

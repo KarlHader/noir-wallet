@@ -1,4 +1,5 @@
 import { DedupPromise } from '@/lib/async-utils'
+import { isNoirPublicConfidentialTransferReferral } from '@/config/intents'
 import {
   RHEA_SWAP_CHAIN_CATALOG,
   RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
@@ -14,9 +15,11 @@ import {
   type Quote,
   type QuoteRequest,
   type SwapBuild,
+  type SwapBuildDataRaw,
   type SwapOrderStatusDataRaw,
   type SwapOrderSubmitDataRaw,
   type SwapReportRequestRaw,
+  type SwapQuoteDataRaw,
   type SwapTokenListItem
 } from './rhea-swap-protocol'
 
@@ -28,6 +31,11 @@ interface RheaSwapClientConfig {
   now?: () => number
   fetch?: typeof fetch
   retry?: { maxRetries?: number; baseDelayMs?: number; maxDelayMs?: number; jitter?: boolean }
+  publicConfidentialTransfer?: {
+    quote(request: QuoteRequest, signal?: AbortSignal): Promise<SwapQuoteDataRaw>
+    build(quote: Quote, signal?: AbortSignal): Promise<SwapBuildDataRaw>
+    getStatus(depositAddress: string, signal?: AbortSignal): Promise<SwapOrderStatusDataRaw>
+  }
 }
 
 interface TokenListRequest {
@@ -163,15 +171,19 @@ export class RheaSwapCatalogClient {
   private readonly requests = new Map<string, DedupPromise<SwapTokenListItem[]>>()
   private readonly now: () => number
   private readonly cacheTtlMs: number
+  private readonly publicConfidentialTransfer: RheaSwapClientConfig['publicConfidentialTransfer']
 
   constructor(config: RheaSwapClientConfig) {
     this.api = new RheaSwapApi(config)
     this.now = config.now ?? Date.now
     this.cacheTtlMs = config.tokenListCacheTtlMs ?? RHEA_SWAP_TOKEN_CATALOG_TTL_MS
+    this.publicConfidentialTransfer = config.publicConfidentialTransfer
   }
 
   async quote(request: QuoteRequest, options: ApiRequestOptions = {}): Promise<Quote> {
-    const raw = await this.api.quote(serializeQuoteRequest(request), options.signal)
+    const raw = isNoirPublicConfidentialTransferReferral(request.extensions?.referral)
+      ? await this.requirePublicConfidentialTransfer().quote(request, options.signal)
+      : await this.api.quote(serializeQuoteRequest(request), options.signal)
     return normalizeQuote(request, raw, this.now())
   }
 
@@ -180,8 +192,22 @@ export class RheaSwapCatalogClient {
       throw new RheaSwapHttpError('QUOTE_EXPIRED', 'build', 'Quote expired. Get a new quote.')
     }
     const request = createSwapBuildRequest(input.quote)
-    const raw = await this.api.build(request, input.signal)
+    const raw = isNoirPublicConfidentialTransferReferral(request.referral)
+      ? await this.requirePublicConfidentialTransfer().build(input.quote, input.signal)
+      : await this.api.build(request, input.signal)
     return normalizeBuild(raw, crypto.randomUUID(), request)
+  }
+
+  getPublicConfidentialTransferStatus(
+    depositAddress: string,
+    signal?: AbortSignal
+  ): Promise<SwapOrderStatusDataRaw> {
+    return this.requirePublicConfidentialTransfer().getStatus(depositAddress, signal)
+  }
+
+  private requirePublicConfidentialTransfer() {
+    if (!this.publicConfidentialTransfer) throw new Error('Confidential transfer is unavailable')
+    return this.publicConfidentialTransfer
   }
 
   async submitOrderRaw(

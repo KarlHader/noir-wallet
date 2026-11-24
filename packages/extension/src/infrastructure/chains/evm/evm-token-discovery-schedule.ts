@@ -2,14 +2,13 @@ import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
 import type { Network } from '@/types'
 import type { DetectedEvmTokenCandidate } from './evm-token-discovery-client'
 
-const DISCOVERY_INTERVAL_MS = 5 * 60_000
-const MAX_FAILURE_DELAY_MS = 30 * 60_000
-const MAX_FAILURE_COUNT = 3
+const DISCOVERY_INTERVAL_MS = 60_000
+const FAILURE_RETRY_INTERVAL_MS = 3 * 60_000
 const MAX_TIMING_ENTRIES = 256
 
 interface DiscoveryTiming {
   readonly attemptedAt: number
-  readonly failures: number
+  readonly failed: boolean
 }
 
 type DiscoveryCandidates = readonly DetectedEvmTokenCandidate[]
@@ -25,7 +24,8 @@ export class EvmTokenDiscoverySchedule {
 
   constructor(
     network: Network,
-    private readonly storage?: SessionStorage
+    private readonly storage?: SessionStorage,
+    private readonly now: () => number = Date.now
   ) {
     this.storageKey = `evm_token_discovery_timing_${network}_v1`
   }
@@ -54,27 +54,25 @@ export class EvmTokenDiscoverySchedule {
           const previous = this.timing.get(key)
           const current = previous && previous.attemptedAt <= now ? previous : undefined
           if (current && !force) {
-            const interval = Math.min(
-              DISCOVERY_INTERVAL_MS * 2 ** current.failures,
-              MAX_FAILURE_DELAY_MS
-            )
+            const interval = current.failed ? FAILURE_RETRY_INTERVAL_MS : DISCOVERY_INTERVAL_MS
             if (now - current.attemptedAt < interval) return undefined
           }
-          const timing = { attemptedAt: now, failures: current?.failures ?? 0 }
+          const timing = { attemptedAt: now, failed: current?.failed ?? false }
           await this.save(key, timing)
           return timing
         })
         if (!attempt) return undefined
 
-        let failures = 0
         let candidates: DiscoveryCandidates = []
+        let failed = false
         try {
           candidates = await discover(canonicalAddress, canonicalChains)
         } catch {
-          failures = Math.min(attempt.failures + 1, MAX_FAILURE_COUNT)
+          failed = true
         }
-        if (attempt.failures !== failures) {
-          await this.queue.run(() => this.save(key, { attemptedAt: now, failures }))
+        if (failed || attempt.failed) {
+          const attemptedAt = failed ? Math.max(now, this.now()) : now
+          await this.queue.run(() => this.save(key, { attemptedAt, failed }))
         }
         return candidates
       })
@@ -105,11 +103,10 @@ export class EvmTokenDiscoverySchedule {
         /^[0-9a-f]{64}$/.test(key) &&
         Number.isSafeInteger(attemptedAt) &&
         attemptedAt >= 0 &&
-        Number.isInteger(failures) &&
-        failures >= 0 &&
-        failures <= MAX_FAILURE_COUNT
+        Number.isSafeInteger(failures) &&
+        failures >= 0
       ) {
-        this.timing.set(key, { attemptedAt, failures })
+        this.timing.set(key, { attemptedAt, failed: failures > 0 })
       }
     }
   }
@@ -126,7 +123,7 @@ export class EvmTokenDiscoverySchedule {
         [this.storageKey]: Array.from(this.timing, ([key, timing]) => [
           key,
           timing.attemptedAt,
-          timing.failures
+          Number(timing.failed)
         ])
       })
       .catch(() => {})

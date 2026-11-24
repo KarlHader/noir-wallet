@@ -24,7 +24,6 @@ import {
 import {
   isDuplicateWasmRow,
   isTransparentReceive,
-  localShieldedSendHashSet,
   localTxHashSet,
   normalizeTxHash
 } from '../../lib/tx-history-dedup.ts'
@@ -517,13 +516,12 @@ export function mergeTransactionsWithWasmHistory(
     return mergeTransactionUpdate(current, observation, confirmation)
   })
   const localHashes = localTxHashSet(refreshedCurrentTransactions)
-  const localShieldedSendHashes = localShieldedSendHashSet(refreshedCurrentTransactions)
   const newWasmTransactions = reconciledWasmTransactions.filter(
-    tx => !isDuplicateWasmRow(tx, localHashes, localShieldedSendHashes)
+    tx => !isDuplicateWasmRow(tx, localHashes)
   )
   const newWasmHashes = new Set(newWasmTransactions.map(tx => normalizeTxHash(tx.txHash)))
   const preservedTransactions = refreshedCurrentTransactions.filter(tx => {
-    if (isDuplicateWasmRow(tx, localHashes, localShieldedSendHashes)) return false
+    if (isDuplicateWasmRow(tx, localHashes)) return false
     if (!tx.id.startsWith('wasm_')) return true
     return !newWasmHashes.has(normalizeTxHash(tx.txHash))
   })
@@ -533,8 +531,7 @@ export function mergeTransactionsWithWasmHistory(
 
   const transactions = mergeTransactionsWithTransparentReceives(
     mergedWasmTransactions,
-    transparentReceives,
-    localShieldedSendHashes
+    transparentReceives
   )
 
   return {
@@ -545,34 +542,36 @@ export function mergeTransactionsWithWasmHistory(
 
 export function mergeTransactionsWithTransparentReceives(
   existingTransactions: Transaction[],
-  transparentReceives: Transaction[],
-  localShieldedSendHashes: ReadonlySet<string> = localShieldedSendHashSet(existingTransactions)
+  transparentReceives: Transaction[]
 ): Transaction[] {
-  if (transparentReceives.length === 0) return existingTransactions
-
-  const existingByHash = new Map(
-    existingTransactions
-      .filter(isTransparentReceive)
-      .map(transaction => [normalizeTxHash(transaction.txHash), transaction])
-  )
-  const reconciledReceives = transparentReceives.map(transaction => {
-    const existing = existingByHash.get(normalizeTxHash(transaction.txHash))
-    if (!existing) return transaction
-    return mergeZcashReceiveObservation(
-      existing,
-      existing.status === 'failed' ? { ...transaction, id: existing.id } : transaction
+  const receiptsByHash = new Map<string, Transaction>()
+  const preservedTransactions: Transaction[] = []
+  for (const transaction of [...existingTransactions, ...transparentReceives]) {
+    const hash = normalizeTxHash(transaction.txHash)
+    if (!hash || !isTransparentReceive(transaction)) {
+      preservedTransactions.push(transaction)
+      continue
+    }
+    const existing = receiptsByHash.get(hash)
+    if (!existing) {
+      receiptsByHash.set(hash, transaction)
+      continue
+    }
+    const [previous, observed] =
+      existing.id.startsWith('rpc_treceive_') && transaction.id.startsWith('wasm_')
+        ? [transaction, existing]
+        : [existing, transaction]
+    receiptsByHash.set(
+      hash,
+      mergeZcashReceiveObservation(
+        previous,
+        previous.status === 'failed' ? { ...observed, id: previous.id } : observed
+      )
     )
-  })
-  const transparentReceiveHashes = new Set(reconciledReceives.map(tx => normalizeTxHash(tx.txHash)))
-  const preservedTransactions = existingTransactions.filter(
-    tx => !isTransparentReceive(tx) || !transparentReceiveHashes.has(normalizeTxHash(tx.txHash))
+  }
+  return [...preservedTransactions, ...receiptsByHash.values()].sort(
+    (left, right) => right.timestamp - left.timestamp
   )
-
-  const externalReceives = reconciledReceives.filter(
-    tx => !localShieldedSendHashes.has(normalizeTxHash(tx.txHash))
-  )
-
-  return [...preservedTransactions, ...externalReceives].sort((a, b) => b.timestamp - a.timestamp)
 }
 
 export function associateIncomingIntentsTransactions(transactions: Transaction[]): Transaction[] {

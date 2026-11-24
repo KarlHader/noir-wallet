@@ -7,7 +7,7 @@ import type { ConfidentialFundingReview } from '@/core/services/confidential-fun
 import type { SwapToken } from '@/core/services/intents-api'
 import Big from '@/lib/big'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
-import { formatSortAddress } from '@/lib/format'
+import { formatInsufficientBalance, formatSortAddress } from '@/lib/format'
 import {
   formatBaseUnitDecimalAmount,
   formatTokenQuantity,
@@ -232,22 +232,41 @@ export function formatShieldSwapPreviewRate(
   return formatTokenQuantity(new Big(output).div(amount).toString())
 }
 
+function getShieldSwapAmountIssue(
+  amount: string,
+  asset: ShieldFundingAsset | null,
+  balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
+): 'non-positive' | 'balance-unavailable' | 'insufficient' | 'invalid' | null {
+  if (!amount || !asset) return null
+  try {
+    const raw = BigInt(parseDisplayUnitAmount(amount, asset.asset.metadata.decimals))
+    if (raw <= 0n) return 'non-positive'
+    if (!balances) return 'balance-unavailable'
+    if (raw > BigInt(shieldFundingAvailableRaw(asset, balances))) {
+      return 'insufficient'
+    }
+    return null
+  } catch {
+    return 'invalid'
+  }
+}
+
 export function shieldSwapFormAmountError(
   amount: string,
   asset: ShieldFundingAsset | null,
   balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
 ): string | null {
-  if (!amount || !asset) return null
-  try {
-    const raw = BigInt(parseDisplayUnitAmount(amount, asset.asset.metadata.decimals))
-    if (raw <= 0n) return 'Enter an amount greater than zero'
-    if (!balances) return 'Refresh your Shield balance'
-    if (raw > BigInt(shieldFundingAvailableRaw(asset, balances))) {
-      return 'Insufficient Shield balance'
-    }
-    return null
-  } catch {
-    return 'Enter a valid amount'
+  switch (getShieldSwapAmountIssue(amount, asset, balances)) {
+    case 'non-positive':
+      return 'Enter an amount greater than zero'
+    case 'balance-unavailable':
+      return 'Refresh your Shield balance'
+    case 'insufficient':
+      return formatInsufficientBalance(asset?.asset.metadata.symbol)
+    case 'invalid':
+      return 'Enter a valid amount'
+    default:
+      return null
   }
 }
 
@@ -273,16 +292,12 @@ export function buildShieldSwapRequest(
     sameAsset &&
     input.nativeZecFundingSource === 'shielded' &&
     canMoveShieldSwapZecToUnifiedAddress(input.from, nativeZecRecipient, input.network)
-  const amountError = shieldSwapFormAmountError(input.amount, input.from, input.balances)
+  const amountIssue = getShieldSwapAmountIssue(input.amount, input.from, input.balances)
   if (
     (sameAsset && !nativeZecMove) ||
     (nativeZecSwap && !isNativeZecAsset(input.to, input.network)) ||
-    (amountError &&
-      !(
-        preview &&
-        (amountError === 'Insufficient Shield balance' ||
-          amountError === 'Refresh your Shield balance')
-      )) ||
+    (amountIssue &&
+      !(preview && (amountIssue === 'insufficient' || amountIssue === 'balance-unavailable'))) ||
     !Number.isSafeInteger(input.slippageBps) ||
     input.slippageBps < 0 ||
     input.slippageBps > 10_000

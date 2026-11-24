@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
-import { formatChainName, formatSymbol } from '@/lib/format'
+import { formatChainName, formatInsufficientBalance, formatSymbol } from '@/lib/format'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
@@ -35,7 +35,6 @@ interface CrossChainSendFormViewProps {
   readonly destinationAssetsLoading: boolean
   readonly destinationNetworksLoading?: boolean
   readonly hasInsufficientFunds: boolean
-  readonly insufficientMessage?: string
   readonly maxLoading: boolean
   readonly maxDisabled: boolean
   readonly maxDisabledReason?: string
@@ -76,7 +75,6 @@ export function CrossChainSendFormView({
   destinationAssetsLoading,
   destinationNetworksLoading = false,
   hasInsufficientFunds,
-  insufficientMessage,
   maxLoading,
   maxDisabled,
   maxDisabledReason,
@@ -114,7 +112,9 @@ export function CrossChainSendFormView({
             readOnly: initializing,
             invalid: Boolean(recipientError),
             onSelectRecipient,
-            feedback: recipientError && <TransactionNotice message={recipientError} />,
+            notice: recipientError && (
+              <TransactionNotice id="cross-chain-send-recipient-error" message={recipientError} />
+            ),
             network: {
               name: destinationName,
               icon: destination?.icon ?? tokenOut?.blockchain ?? destinationNameFallback,
@@ -187,10 +187,7 @@ export function CrossChainSendFormView({
         {recipientError ? null : catalogError ? (
           <TransactionNotice message="Unable to load assets" onRetry={onRetryCatalog} />
         ) : hasInsufficientFunds ? (
-          <TransactionNotice
-            message={insufficientMessage ?? 'Insufficient balance'}
-            tone="warning"
-          />
+          <TransactionNotice message={formatInsufficientBalance(tokenIn?.symbol)} tone="warning" />
         ) : !isQuoting && quoteError ? (
           <TransactionNotice
             message={quoteNotice ?? quoteError}

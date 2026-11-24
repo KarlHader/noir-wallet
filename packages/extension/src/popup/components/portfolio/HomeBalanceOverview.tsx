@@ -1,147 +1,138 @@
 import { Icon } from '@iconify/react'
 import incognitoWatermark from '@/images/figma-incognito-watermark.svg'
-import shieldProviderMarks from '@/images/figma-shield-provider-marks.svg'
 import { cn } from '@/lib/utils'
 import { formatAssetDomainFiat } from '@/popup/services/asset-domains'
-import type { HomeAssetDomain } from '@/popup/services/home-navigation'
 import type { HomeAssetDomainDisplay } from '@/popup/services/home-asset-breakdown'
+import type { HomeAssetDomain } from '@/popup/services/home-navigation'
 import { BalanceSkeleton } from '../ui/skeleton'
+
+const balanceCards = [
+  { domain: 'shield', label: 'Shield' },
+  { domain: 'public', label: 'Public' },
+  { domain: 'private', label: 'Incognito' }
+] as const
+
+export interface HomeBalanceOverviewProps {
+  readonly domain: HomeAssetDomain
+  readonly display: HomeAssetDomainDisplay
+  readonly showIncognito: boolean
+  readonly incognitoEnabled: boolean
+  readonly hidden: boolean
+  readonly modeSelectionDisabled: boolean
+  readonly onToggleHidden: () => void
+  readonly onSelect: (domain: HomeAssetDomain) => void
+}
 
 export function HomeBalanceOverview({
   domain,
   display,
-  walletTotal,
   showIncognito,
+  incognitoEnabled,
   hidden,
   modeSelectionDisabled,
   onToggleHidden,
   onSelect
-}: {
-  readonly domain: HomeAssetDomain
-  readonly display: HomeAssetDomainDisplay
-  readonly walletTotal: string | null
-  readonly showIncognito: boolean
-  readonly hidden: boolean
-  readonly modeSelectionDisabled: boolean
-  readonly onToggleHidden: () => void
-  readonly onSelect: (domain: 'public' | 'private') => void
-}) {
-  function balance(value: string | null, loading: boolean, skeleton: string) {
+}: HomeBalanceOverviewProps) {
+  const cards = balanceCards.filter(card => showIncognito || card.domain !== 'private')
+  const activeIndex = cards.findIndex(card => card.domain === domain)
+
+  function balance(cardDomain: HomeAssetDomain | 'all', skeleton: string) {
     if (hidden) return <span aria-label="Balance hidden">••••</span>
-    if (loading) return <BalanceSkeleton className={skeleton} />
+    if (display.loading[cardDomain]) return <BalanceSkeleton className={skeleton} />
     return (
-      <span className="block truncate tabular-nums" title={formatAssetDomainFiat(value)}>
-        {formatAssetDomainFiat(value)}
+      <span className="tabular-nums wrap-anywhere">
+        {formatAssetDomainFiat(display.totals[cardDomain], display.partial[cardDomain])}
       </span>
     )
   }
 
-  const visibilityToggle = (
-    <button
-      type="button"
-      aria-label={hidden ? 'Show balances' : 'Hide balances'}
-      aria-pressed={hidden}
-      onClick={onToggleHidden}
-      className="wallet-interactive flex size-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-    >
-      <Icon icon={hidden ? 'lucide:eye-off' : 'lucide:eye'} width={15} />
-    </button>
-  )
-
-  if (domain === 'shield') {
-    return (
-      <section aria-label="Shield balance" className="px-4 pt-3 pb-3 text-center">
-        <div className="mx-auto flex w-fit max-w-full items-center gap-1 pl-8">
-          <div
-            data-testid="home-total-assets"
-            className="min-w-0 text-[32px] leading-[38px] font-semibold"
-          >
-            {balance(display.totals.shield, display.loading.shield, 'h-9 w-36')}
-          </div>
-          {visibilityToggle}
-        </div>
-        <p className="mt-[3px] text-sm text-wallet-secondary">Shield balance</p>
-        <img
-          src={shieldProviderMarks}
-          alt=""
-          width={156}
-          height={18}
-          className="mx-auto mt-5 block max-w-full"
-        />
-        <p className="mt-2 text-[13px] leading-[17px] text-muted">
-          Your combined balance across privacy providers.
-        </p>
-      </section>
-    )
-  }
-
   return (
-    <section aria-label="Wallet balances" className="px-4 pt-2 pb-3">
-      <div className="mb-2.5 flex h-[21px] items-center gap-1 text-base leading-[21px] font-medium text-muted">
-        <div data-testid="home-total-assets" className="flex min-w-0 items-center gap-1.5">
-          <span>Total</span>
-          {balance(
-            walletTotal,
-            display.loading.public || (showIncognito && display.loading.private),
-            'h-4 w-16'
-          )}
+    <section aria-label="Wallet balances" className="shrink-0 px-4 pt-2 pb-3">
+      <div className="mb-2.5 flex items-center gap-1">
+        <div data-testid="home-total-assets" className="flex min-w-0 items-baseline gap-1.5">
+          <span className="text-sm font-medium text-muted">Total</span>
+          <div className="min-w-0 text-xl leading-7 font-semibold">
+            {balance('all', 'h-5 w-24')}
+          </div>
         </div>
-        {visibilityToggle}
+        <button
+          type="button"
+          aria-label={hidden ? 'Show balances' : 'Hide balances'}
+          aria-pressed={hidden}
+          onClick={onToggleHidden}
+          className="wallet-interactive flex size-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <Icon icon={hidden ? 'lucide:eye-off' : 'lucide:eye'} width={15} />
+        </button>
       </div>
-      <div role="group" aria-label="Wallet balance mode" className="relative isolate h-28">
-        {(['public', 'private'] as const)
-          .filter(mode => showIncognito || mode === 'public')
-          .map(mode => {
-            const selected = domain === mode
-            const incognito = mode === 'private'
-            const label = incognito ? 'Incognito' : 'Public'
-            return (
-              <button
-                key={mode}
-                type="button"
-                aria-label={`${label} balance`}
-                aria-pressed={selected}
-                disabled={modeSelectionDisabled}
-                onClick={() => onSelect(mode)}
+
+      <div
+        role="group"
+        aria-label="Wallet balance mode"
+        className="relative isolate grid h-[104px]"
+        style={{
+          gridTemplateColumns: cards
+            .map(card => (card.domain === domain ? 'minmax(0, 1fr)' : 'min(23%, 96px)'))
+            .join(' ')
+        }}
+      >
+        {cards.map(({ domain: cardDomain, label }, index) => {
+          const isIncognito = cardDomain === 'private'
+          const setup = isIncognito && !incognitoEnabled
+          const selected = cardDomain === domain
+          const distance = Math.abs(activeIndex - index)
+          return (
+            <button
+              key={cardDomain}
+              type="button"
+              aria-label={setup ? 'Enable Incognito' : `${label} balance`}
+              aria-pressed={setup ? undefined : selected}
+              disabled={modeSelectionDisabled}
+              onClick={() => onSelect(cardDomain)}
+              className={cn(
+                'home-balance-card wallet-interactive relative isolate flex min-w-0 flex-col justify-center gap-1 rounded-xl enabled:hover:brightness-105 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                selected ? 'items-start px-4 text-left' : 'items-center px-1 text-center'
+              )}
+              style={{ marginBlock: distance * 6, zIndex: cards.length - distance }}
+              data-balance-domain={cardDomain}
+              data-peek={selected ? undefined : index < activeIndex ? 'left' : 'right'}
+              data-balance-setup={setup || undefined}
+            >
+              {isIncognito && selected && (
+                <img
+                  src={incognitoWatermark}
+                  alt=""
+                  width={32}
+                  height={32}
+                  className="home-balance-watermark pointer-events-none absolute right-1 bottom-1 -z-10"
+                />
+              )}
+              <span
                 className={cn(
-                  'home-balance-card wallet-interactive absolute flex min-w-0 flex-col overflow-hidden rounded-xl border px-[13px] text-left enabled:hover:brightness-110 focus-visible:z-20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
-                  selected
-                    ? 'top-0 z-10 h-28 w-[61.225%] gap-2 pt-[18px]'
-                    : 'top-3.5 h-[84px] w-[42%] gap-2 pt-4',
-                  incognito ? 'right-0' : 'left-0',
-                  incognito && !selected && 'pl-5',
-                  !showIncognito && 'w-full'
+                  'flex min-w-0 items-center gap-1 font-medium',
+                  selected ? 'text-sm leading-5' : 'text-xs leading-5'
                 )}
-                data-balance-domain={mode}
               >
-                <span className="relative z-10 flex min-w-0 items-center gap-[6px] text-sm leading-[18px]">
-                  <span className="home-balance-indicator size-[7px] shrink-0 rounded-full" />
-                  <span className="truncate">{label}</span>
+                <span className="home-balance-indicator size-1.5 shrink-0 rounded-full" />
+                {label}
+              </span>
+              {setup ? (
+                <span className="home-balance-plus grid size-5 place-items-center rounded-full border">
+                  <Icon icon="lucide:plus" width={13} aria-hidden="true" />
                 </span>
-                {incognito && (
-                  <img
-                    src={incognitoWatermark}
-                    alt=""
-                    width={40}
-                    height={40}
-                    className="home-balance-watermark pointer-events-none absolute top-[15px] right-[14px]"
-                  />
-                )}
+              ) : (
                 <span
                   className={cn(
-                    'home-balance-amount relative z-10 min-w-0 font-semibold',
-                    selected ? 'text-[26px] leading-[37px]' : 'text-sm leading-[18px]'
+                    'home-balance-amount min-w-0 max-w-full overflow-hidden font-semibold',
+                    selected ? 'text-[28px] leading-9' : 'text-xs leading-5'
                   )}
                 >
-                  {balance(
-                    display.totals[mode],
-                    display.loading[mode],
-                    'h-5 w-16 max-w-full bg-current/15'
-                  )}
+                  {balance(cardDomain, 'h-3.5 w-12 bg-current/15')}
                 </span>
-              </button>
-            )
-          })}
+              )}
+            </button>
+          )
+        })}
       </div>
     </section>
   )

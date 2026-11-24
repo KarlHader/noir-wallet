@@ -136,7 +136,7 @@ test('unknown transfer asset reports its cause in Send', () => {
   assert.equal(
     getEvmSendPrepareError(
       new EvmWalletClientError(runtimeError.code, runtimeError.message),
-      'main'
+      'ETH'
     ),
     'This asset is unavailable for sending.'
   )

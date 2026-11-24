@@ -66,7 +66,7 @@ function parsePortfolioChainSelectionByAccount(
   )
 }
 
-function parseExpandedPortfolioChainLists(value: unknown): Readonly<Record<string, true>> {
+function parseEnabledScopes(value: unknown): Readonly<Record<string, true>> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
   return Object.fromEntries(
     Object.entries(value)
@@ -127,6 +127,7 @@ interface SettingsStore {
   portfolioViewMode: 'assets' | 'chains'
   portfolioChainSelectionByAccount: Readonly<Record<string, readonly string[]>>
   expandedPortfolioChainLists: Readonly<Record<string, true>>
+  incognitoCardScopes: Readonly<Record<string, true>>
   ledgerSigningTransportByWallet: Readonly<Record<string, 'usb' | 'bluetooth'>>
   sidePanelMode: boolean
   isSidePanelModeLoaded: boolean
@@ -140,6 +141,7 @@ interface SettingsStore {
   setPortfolioViewMode: (mode: 'assets' | 'chains') => void
   setPortfolioChainSelection: (scopeKey: string, chainIds: readonly string[] | null) => void
   setPortfolioChainListExpanded: (scopeKey: string, expanded: boolean) => void
+  enableIncognitoCard: (scopeKey: string) => void
   setLedgerSigningTransport: (walletId: string, transport: 'usb' | 'bluetooth') => void
   setSidePanelMode: (enabled: boolean) => Promise<void>
   syncSidePanelMode: (enabled: boolean) => void
@@ -161,6 +163,7 @@ export const useSettingsStore = create<SettingsStore>()(
       portfolioViewMode: 'assets',
       portfolioChainSelectionByAccount: {},
       expandedPortfolioChainLists: {},
+      incognitoCardScopes: {},
       ledgerSigningTransportByWallet: {},
       sidePanelMode: DEFAULT_SIDE_PANEL_MODE,
       isSidePanelModeLoaded: false,
@@ -199,6 +202,11 @@ export const useSettingsStore = create<SettingsStore>()(
           else delete next[scopeKey]
           return { expandedPortfolioChainLists: next }
         })
+      },
+
+      enableIncognitoCard: scopeKey => {
+        if (!scopeKey || scopeKey.length > 512 || get().incognitoCardScopes[scopeKey]) return
+        set(state => ({ incognitoCardScopes: { ...state.incognitoCardScopes, [scopeKey]: true } }))
       },
 
       setLedgerSigningTransport: (walletId, transport) => {
@@ -343,9 +351,8 @@ export const useSettingsStore = create<SettingsStore>()(
           portfolioChainSelectionByAccount: parsePortfolioChainSelectionByAccount(
             value.portfolioChainSelectionByAccount
           ),
-          expandedPortfolioChainLists: parseExpandedPortfolioChainLists(
-            value.expandedPortfolioChainLists
-          ),
+          expandedPortfolioChainLists: parseEnabledScopes(value.expandedPortfolioChainLists),
+          incognitoCardScopes: parseEnabledScopes(value.incognitoCardScopes),
           ledgerSigningTransportByWallet: parseLedgerSigningTransportByWallet(
             value.ledgerSigningTransportByWallet
           ),
@@ -373,6 +380,7 @@ export const useSettingsStore = create<SettingsStore>()(
         portfolioViewMode: state.portfolioViewMode,
         portfolioChainSelectionByAccount: state.portfolioChainSelectionByAccount,
         expandedPortfolioChainLists: state.expandedPortfolioChainLists,
+        incognitoCardScopes: state.incognitoCardScopes,
         ledgerSigningTransportByWallet: state.ledgerSigningTransportByWallet
       })
     }

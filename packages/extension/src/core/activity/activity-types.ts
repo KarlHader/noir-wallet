@@ -54,6 +54,11 @@ export interface ActivityItem {
   readonly failureCode?: TransactionFailureCode
   readonly reconfirming?: true
   readonly cancellationStatus?: (typeof ACTIVITY_CANCELLATION_STATUSES)[number]
+  readonly evmReplacement?: Readonly<{
+    id: string
+    action: 'cancel' | 'speed-up'
+    status: 'signed' | 'broadcast' | 'confirming'
+  }>
 }
 
 export interface ActivityReadModel {

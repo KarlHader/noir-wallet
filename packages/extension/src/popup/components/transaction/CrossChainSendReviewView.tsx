@@ -1,6 +1,11 @@
 import type { ReactNode } from 'react'
 import type { RheaSwapReviewView, RheaSwapToken } from '@/core/services/rhea-swap'
-import { formatChainName, formatSortAddress, formatSymbol } from '@/lib/format'
+import {
+  formatChainName,
+  formatInsufficientBalance,
+  formatSortAddress,
+  formatSymbol
+} from '@/lib/format'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
@@ -31,6 +36,7 @@ export function CrossChainSendReviewView({
   quoteChanges,
   transferPreparationError,
   insufficientFunds,
+  insufficientSymbol = source.symbol,
   onRefresh,
   onAccept,
   onRetryPreparation,
@@ -58,6 +64,7 @@ export function CrossChainSendReviewView({
   readonly quoteChanges?: ReactNode
   readonly transferPreparationError: string | null
   readonly insufficientFunds: boolean
+  readonly insufficientSymbol?: string
   readonly onRefresh: () => void
   readonly onAccept: () => void
   readonly onRetryPreparation: () => void
@@ -202,7 +209,7 @@ export function CrossChainSendReviewView({
           : []),
         { label: 'Provider', content: <RouteProviderLabel router={review.router} /> }
       ]}
-      afterRows={reviewedQuoteReady ? quoteChanges : undefined}
+      quoteChanges={reviewedQuoteReady ? quoteChanges : undefined}
       error={
         transferPreparationError ? (
           <TransactionNotice message={transferPreparationError} />
@@ -212,7 +219,7 @@ export function CrossChainSendReviewView({
             tone={quoteExpired ? 'muted' : 'error'}
           />
         ) : insufficientFunds ? (
-          <TransactionNotice message="Amount exceeds balance at this fee." />
+          <TransactionNotice message={formatInsufficientBalance(insufficientSymbol)} />
         ) : undefined
       }
       {...primaryAction}

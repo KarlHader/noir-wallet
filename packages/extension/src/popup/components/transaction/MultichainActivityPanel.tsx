@@ -24,7 +24,6 @@ import { NetworkFilter, NetworkFilterToolbar } from '../common/NetworkFilter'
 import { InlineError } from '../common/InlineError'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
 import { MultichainActivityRow } from './MultichainActivityRow'
-import { EvmNonceRecoveryBanner } from '../evm/EvmNonceRecoveryBanner'
 import { resolveActivityChainId } from '@/core/activity/activity-chain'
 import { cn } from '@/lib/utils'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
@@ -609,35 +608,6 @@ export function MultichainActivityPanel({
     }
   }
   const groups = useMemo(() => groupActivityItemsByDate(displayedItems), [displayedItems])
-  const recoveryChainIds = selectedChainIds.filter(
-    chainId =>
-      chainId.startsWith('eip155:') &&
-      (selectedChainIds.length === 1 || pendingEvmChainKey.split(',').includes(chainId))
-  )
-  const recoveryBanners =
-    accountId && filterDomain !== 'shield' && !shieldProvider
-      ? recoveryChainIds.map(chainId => {
-          const nativeAsset = portfolio?.assets.find(
-            entry => entry.asset.chainId === chainId && entry.asset.kind === 'native'
-          )
-          return (
-            <EvmNonceRecoveryBanner
-              key={`${accountId}:${chainId}:${filterDomain ?? accountMode ?? 'main'}`}
-              accountId={accountId}
-              chainId={chainId}
-              networkName={chainMetadata.get(chainId)?.displayName ?? 'EVM'}
-              executionMode={
-                filterDomain === 'private' || (!filterDomain && accountMode === 'private')
-                  ? 'private'
-                  : 'main'
-              }
-              feeSymbol={nativeAsset?.metadata.symbol ?? 'native'}
-              feeDecimals={nativeAsset?.metadata.decimals ?? 18}
-              onUpdated={() => void load()}
-            />
-          )
-        })
-      : null
   const historyIssueBanner =
     historyRefreshFailed &&
     showsTransparentHistory &&
@@ -755,7 +725,6 @@ export function MultichainActivityPanel({
       <section aria-label="Multichain activity" className={sectionClassName}>
         {sectionHeading}
         {toolbar}
-        {recoveryBanners}
         <ListSkeleton rows={3} label="Loading activity" className="px-5 py-3" />
       </section>
     )
@@ -766,7 +735,6 @@ export function MultichainActivityPanel({
       <section aria-label="Multichain activity" className={sectionClassName}>
         {sectionHeading}
         {toolbar}
-        {recoveryBanners}
         <div className={cn('flex items-center px-6', compact ? 'min-h-28 py-4' : 'min-h-48 py-8')}>
           <InlineError
             message="Unable to load activity"
@@ -792,7 +760,6 @@ export function MultichainActivityPanel({
       <section aria-label="Multichain activity" className={sectionClassName}>
         {sectionHeading}
         {toolbar}
-        {recoveryBanners}
         {historyIssueBanner ?? (
           <EmptyState
             icon="lucide:inbox"
@@ -816,7 +783,6 @@ export function MultichainActivityPanel({
     <section aria-label="Multichain activity" className={sectionClassName}>
       {sectionHeading}
       {toolbar}
-      {recoveryBanners}
       <div className="space-y-4 pb-4">
         {groups.map(([date, items]) => (
           <section key={date} aria-label={date}>

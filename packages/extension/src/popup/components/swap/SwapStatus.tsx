@@ -171,7 +171,8 @@ export function SwapStatusDisplay({
       compact
     />
   )
-  const submittingOrigin = !!beforeSubmission && approvalProgress?.status === 'confirmed'
+  const submittingOrigin =
+    !!beforeSubmission && !beforeSubmission.error && approvalProgress?.status === 'confirmed'
   const sourceNetwork = originChainHint && formatChainName(originChainHint)
   const destinationNetwork = destinationChainHint && formatChainName(destinationChainHint)
   const fallbackSteps = approvalStep
@@ -184,10 +185,10 @@ export function SwapStatusDisplay({
                 ...step,
                 label: 'Origin transaction',
                 detail: sourceNetwork,
-                ...(submittingOrigin ? { state: 'active' as const, statusLabel: 'Preparing' } : {})
+                ...(submittingOrigin ? { state: 'active' as const, statusLabel: 'Submitting' } : {})
               }
             case 'intents':
-              return { ...step, label: 'Cross-chain relay', detail: router }
+              return { ...step, label: 'Cross-chain' }
             case 'destination':
               return { ...step, label: 'Destination transaction', detail: destinationNetwork }
             default:
@@ -206,6 +207,7 @@ export function SwapStatusDisplay({
   )
 
   const labels = getSwapActionLabels(actionName)
+  const isSend = actionName === 'Send' || actionName === 'Cross-chain Send'
   const showExchangeAmounts = !actionName || actionName === 'Swap'
   const showFee = !!fee
   const showDestinationAmount = showExchangeAmounts && confidentialFunding?.phase !== 'refunded'
@@ -297,7 +299,7 @@ export function SwapStatusDisplay({
   return (
     <TransactionResult
       status={txStatus}
-      showStatus={!!confidentialFunding}
+      showStatus={isSend || !!confidentialFunding}
       title={confidentialFunding ? statusCopy.title : progress.title}
       description={confidentialFunding ? statusCopy.description : progress.description}
       footer={
@@ -310,16 +312,9 @@ export function SwapStatusDisplay({
                 onClick={beforeSubmission.onContinue}
                 disabled={beforeSubmission.continueDisabled}
               >
-                Continue Swap
+                Review New Quote
               </Button>
             )}
-            <Button
-              className="h-[45px] w-full"
-              onClick={onViewActivity}
-              disabled={viewActivityDisabled}
-            >
-              View Activity
-            </Button>
           </div>
         ) : resultAction === 'continue' && onResumeConfidentialFunding ? (
           <Button
@@ -344,6 +339,7 @@ export function SwapStatusDisplay({
       {activityView ? (
         <ActivityTransactionBody
           view={activityView}
+          showAmountsAsDetails={isSend}
           precedingProgress={
             approvalStep ? { step: approvalStep, reference: approvalReference } : undefined
           }

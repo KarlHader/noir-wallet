@@ -1,4 +1,4 @@
-import { getEvmNetworkConfigs } from './networks'
+import { getKnownEvmNetworkIdentities } from './networks'
 
 const CHAIN_ICON_BASE_URL = 'https://assets.zknoir.com/chain'
 
@@ -55,8 +55,8 @@ export function isDynamicEvmChainIcon(chain: string): boolean {
 
 export function resolveEvmChainIconAlias(chainId: string): string {
   for (const mode of ['mainnet', 'testnet'] as const) {
-    const builtin = getEvmNetworkConfigs(mode).find(network => network.chainId === chainId)
-    if (builtin) return builtin.iconChain
+    const known = getKnownEvmNetworkIdentities(mode).find(network => network.chainId === chainId)
+    if (known) return known.iconChain
   }
   return isDynamicEvmChainIcon(chainId) ? chainId : 'custom-evm'
 }

@@ -93,7 +93,7 @@ test.describe('dApp approval request boundary', () => {
     }
     const unavailable = resolveEvmGasFundingPreview(input)
     expect(unavailable.publicBalanceRaw).toBe('0')
-    expect(unavailable.error).toBe('Insufficient ETH balance in Public account.')
+    expect(unavailable.error).toBe('Insufficient ETH balance')
     expect(unavailable.suggestedOutputRaw).toBe('2500000000000000')
     const publicAsset = { ...portfolio.assets[0], balance: { mainRaw: '1000000000000000000' } }
     expect(

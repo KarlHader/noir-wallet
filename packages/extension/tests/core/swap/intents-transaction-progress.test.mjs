@@ -178,7 +178,7 @@ test('RHEA signed orders and relay use the same progress language in Activity', 
   )
   expect(steps.map(step => [step.label, step.state, step.statusLabel])).toEqual([
     ['Order submitted', 'complete', 'Submitted'],
-    ['Intents processing', 'active', 'Processing'],
+    ['Crosschain', 'active', 'Processing'],
     ['Destination transaction', 'pending', 'Pending']
   ])
 })
@@ -219,7 +219,7 @@ test('Activity hides an unused refund branch but shows a refund that actually st
 
   expect(getActivityProgressSteps(item, chainName).map(step => step.label)).toEqual([
     'Origin transaction',
-    'Intents processing',
+    'Crosschain',
     'Destination transaction'
   ])
   expect(

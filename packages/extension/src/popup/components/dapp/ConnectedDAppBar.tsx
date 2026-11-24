@@ -49,16 +49,12 @@ export function ConnectedDAppBar({
     permission => permission.chainId === 'evm' || permission.chainId.startsWith('eip155:')
   )
   const incognito = hasEvm && executionMode === 'private'
-  const palette = incognito
-    ? 'incognito'
-    : !hasEvm || executionMode === 'main'
-      ? 'public'
-      : undefined
   const modeLabel = incognito ? 'Incognito' : 'Public'
+  const walletPalette = incognito ? undefined : 'public'
   return (
     <footer
       aria-label="Current dApp connection"
-      data-wallet-palette={palette}
+      data-wallet-palette={walletPalette}
       className="dapp-connection-bar relative z-10 flex h-[66px] shrink-0 items-start gap-2.5 px-4 pt-2.5 text-foreground"
     >
       <button
@@ -102,77 +98,68 @@ export function ConnectedDAppBar({
           </span>
         )
       )}
-      <div className={incognito && modeControl ? 'dapp-connection-mode-group' : 'contents'}>
-        {hasEvm && modeControl && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label={executionMode ? `DApp address: ${modeLabel}` : 'DApp address'}
-                aria-busy={modeControl.busy || undefined}
-                disabled={!executionMode || modeControl.busy || disconnecting}
-                className="dapp-connection-control wallet-interactive flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2 text-sm text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60"
-              >
-                <Icon
-                  icon={incognito ? 'noir:private-assets' : 'lucide:eye'}
-                  className="shrink-0"
-                  width={14}
-                  aria-hidden="true"
-                />
-                {executionMode ? modeLabel : '—'}
-                {!incognito && (
-                  <Icon
-                    icon="lucide:chevron-up"
-                    width={12}
-                    className="ml-auto"
-                    aria-hidden="true"
-                  />
-                )}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent side="top" align="end" data-wallet-palette={palette}>
-              <DropdownMenuRadioGroup
-                value={executionMode ?? ''}
-                onValueChange={value => {
-                  if (value === 'main' || value === 'private') modeControl.onChange(value)
-                }}
-              >
-                <DropdownMenuRadioItem value="main">
-                  <Icon icon="lucide:eye" aria-hidden="true" />
-                  Public
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="private" disabled={!modeControl.incognitoAvailable}>
-                  <Icon icon="noir:private-assets" className="text-private" aria-hidden="true" />
-                  Incognito
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-        <button
-          type="button"
-          aria-label={`Disconnect ${dapp.name}`}
-          disabled={disconnecting}
-          className="dapp-connection-control wallet-interactive flex h-10 w-[42px] shrink-0 items-center justify-center rounded-lg text-muted hover:text-foreground active:brightness-90 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={async () => {
-            setDisconnecting(true)
-            try {
-              await onDisconnect(dapp.origin)
-            } catch {
-              toast.error('Unable to disconnect dApp')
-            } finally {
-              setDisconnecting(false)
-            }
-          }}
-        >
-          <Icon
-            icon={disconnecting ? 'lucide:loader-circle' : 'lucide:link-2-off'}
-            width={16}
-            height={16}
-            className={disconnecting ? 'animate-spin' : ''}
-          />
-        </button>
-      </div>
+      {hasEvm && modeControl && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={executionMode ? `DApp address: ${modeLabel}` : 'DApp address'}
+              aria-busy={modeControl.busy || undefined}
+              disabled={!executionMode || modeControl.busy || disconnecting}
+              className="dapp-connection-control wallet-interactive flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2 text-sm text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60"
+            >
+              <Icon
+                icon={incognito ? 'noir:private-assets' : 'lucide:eye'}
+                className="shrink-0"
+                width={14}
+                aria-hidden="true"
+              />
+              {executionMode ? modeLabel : '—'}
+              <Icon icon="lucide:chevron-up" width={12} className="ml-auto" aria-hidden="true" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="top" align="end" data-wallet-palette={walletPalette}>
+            <DropdownMenuRadioGroup
+              value={executionMode ?? ''}
+              onValueChange={value => {
+                if (value === 'main' || value === 'private') modeControl.onChange(value)
+              }}
+            >
+              <DropdownMenuRadioItem value="main">
+                <Icon icon="lucide:eye" aria-hidden="true" />
+                Public
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="private" disabled={!modeControl.incognitoAvailable}>
+                <Icon icon="noir:private-assets" className="text-private" aria-hidden="true" />
+                Incognito
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      <button
+        type="button"
+        aria-label={`Disconnect ${dapp.name}`}
+        disabled={disconnecting}
+        className="dapp-connection-control wallet-interactive flex h-10 w-[42px] shrink-0 items-center justify-center rounded-lg text-muted hover:text-foreground active:brightness-90 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={async () => {
+          setDisconnecting(true)
+          try {
+            await onDisconnect(dapp.origin)
+          } catch {
+            toast.error('Unable to disconnect dApp')
+          } finally {
+            setDisconnecting(false)
+          }
+        }}
+      >
+        <Icon
+          icon={disconnecting ? 'lucide:loader-circle' : 'lucide:link-2-off'}
+          width={16}
+          height={16}
+          className={disconnecting ? 'animate-spin' : ''}
+        />
+      </button>
     </footer>
   )
 }

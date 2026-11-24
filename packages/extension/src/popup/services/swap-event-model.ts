@@ -98,6 +98,7 @@ export function projectSwapCollector(input: {
       ? 'external'
       : input.purpose === 'wallet-swap' ||
           input.purpose === 'confidential-funding' ||
+          input.purpose === 'public-private-move' ||
           input.purpose === 'private-transfer' ||
           input.purpose === 'private-cross-chain-withdraw'
         ? 'self'

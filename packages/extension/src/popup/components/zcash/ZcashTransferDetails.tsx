@@ -63,15 +63,12 @@ export function ZcashTransferRoute({
 }
 
 export function ZcashTransferSyncStatus({
-  sync,
-  showError = true
+  sync
 }: {
-  readonly sync: ZcashTransferState['sync']
-  readonly showError?: boolean
+  readonly sync: Pick<ZcashTransferState['sync'], 'progress' | 'loading'>
 }) {
   if (sync.progress)
     return <ZcashSyncProgress className="mb-2 w-fit" showLabel {...sync.progress} />
-  if (sync.error && showError) return <TransactionNotice className="mb-2" {...sync.error} />
   if (sync.loading)
     return (
       <p role="status" className="mb-2 text-xs text-muted">
@@ -90,6 +87,7 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
       open={review.open}
       title={`Confirm ${action.label}`}
       description="Review the amount, destination, and fee."
+      fullHeight={review.submitting}
       onOpenChange={review.onOpenChange}
     >
       <TransactionReviewView
@@ -164,7 +162,7 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
             )
           }
         ]}
-        afterRows={
+        quoteChanges={
           quote && (
             <QuoteReviewChanges
               changes={review.changes}
