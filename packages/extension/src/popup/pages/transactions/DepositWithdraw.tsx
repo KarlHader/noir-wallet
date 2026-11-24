@@ -244,7 +244,7 @@ function TransferBalanceOption({
       onClick={onSelect}
       className={cn(
         'wallet-interactive flex min-h-[65px] w-full items-center justify-between gap-3 rounded-lg border bg-white/5 px-3 py-2 text-left enabled:hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-45',
-        selected ? 'border-primary ring-1 ring-primary' : 'border-white/10'
+        selected ? 'border-primary bg-wallet-selected ring-1 ring-primary' : 'border-white/10'
       )}
     >
       <span className="min-w-0">
@@ -263,16 +263,21 @@ function TransferBalanceOption({
           </span>
         )}
       </span>
-      {balance !== undefined && (
-        <span
-          className={cn(
-            'max-w-[38%] break-words text-right text-base font-medium leading-[21px]',
-            (!balance || balance === '0') && 'text-muted'
-          )}
-        >
-          {balance ?? '—'}
-        </span>
-      )}
+      <span className="flex max-w-[48%] shrink-0 items-center gap-2">
+        {balance !== undefined && (
+          <span
+            className={cn(
+              'min-w-0 break-words text-right text-base font-medium',
+              !balance && 'text-muted'
+            )}
+          >
+            {balance ?? '—'}
+          </span>
+        )}
+        {selected && (
+          <Icon icon="lucide:check" width={16} height={16} className="shrink-0 text-primary" />
+        )}
+      </span>
     </button>
   )
 }
@@ -383,11 +388,11 @@ export function DepositWithdraw({
   )
 }
 
-function QuickShieldReviewSkeleton() {
+function TransferReviewSkeleton({ action }: { action: string }) {
   return (
     <div
       role="status"
-      aria-label="Preparing Shield review"
+      aria-label={`Preparing ${action} review`}
       className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-4 pt-2 pb-4"
     >
       <div className="flex shrink-0 items-center gap-3">
@@ -597,7 +602,6 @@ function DepositWithdrawForm({
   )
   const [assetPrices, setAssetPrices] = useState<AssetPriceReadModel | null>(null)
   const [domainPicker, setDomainPicker] = useState<'from' | 'to' | null>(null)
-  const [shieldPickerLoading, setShieldPickerLoading] = useState(false)
   const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const [receiveExternal, setReceiveExternal] = useState(
     () => shieldDepositSource(routeFrom) === 'external'
@@ -629,8 +633,7 @@ function DepositWithdrawForm({
     model: portfolio,
     status: loadState,
     settled: portfolioSettled,
-    refresh: refreshPortfolio,
-    refreshSource: refreshPortfolioSource
+    refresh: refreshPortfolio
   } = usePortfolioSnapshot(effective?.walletId ?? null, effective?.accountId ?? null, {
     refreshConfidential: usesConfidentialBalances
   })
@@ -662,6 +665,8 @@ function DepositWithdrawForm({
   const [catalogTokens, setCatalogTokens] = useState<readonly SwapToken[]>([])
   const canLoadShield =
     getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
+  const shieldPickerOpen =
+    domainPicker !== null && !receiveEntry && pickerAccountId === effective?.accountId
   const shieldBalanceKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}`
   const {
     balances: shieldBalances,
@@ -671,7 +676,7 @@ function DepositWithdrawForm({
     errorCode: shieldBalanceErrorCode,
     refreshBalances: loadShieldBalances
   } = useShieldBalances({
-    active: usesConfidentialBalances,
+    active: usesConfidentialBalances || shieldPickerOpen,
     enabled: canLoadShield,
     scopeKey: shieldBalanceKey,
     scope: effective
@@ -1321,7 +1326,7 @@ function DepositWithdrawForm({
       ? receivePickerRows
       : evmShieldPickerRows
   const groupedAssetPicker = !receiveEntry && Boolean(fixedDirection || intent)
-  const pickerAsset = (item: TransferPickerRow) =>
+  const getTokenPickerBalance = (item: TransferPickerRow) =>
     'key' in item
       ? shieldTokenPickerBalance({ ...item, pinned: item.key === zcashAssetId })
       : {
@@ -2024,40 +2029,39 @@ function DepositWithdrawForm({
     pickerAccount.accountId === effective.accountId &&
     pickerAccountId === effective.accountId
   )
+  const pickerAsset = domainPicker === 'to' ? (targetAsset ?? selected) : selected
   const pickerNetwork = pickerAccount?.networks.find(
     item =>
-      item.chain.id === (receiveZec ? getZcashChainId(currentNetwork) : selected?.chain.chain.id)
+      item.chain.id === (receiveZec ? getZcashChainId(currentNetwork) : pickerAsset?.chain.chain.id)
   )
   const pickerValue = receiveEntry ? receiveSource : domainPicker === 'from' ? from : to
   const oppositeDomain = domainPicker === 'from' ? to : from
   const pickerBalance = (raw: string | null) =>
-    selected && pickerIsActive && raw !== null
-      ? `${formatTokenQuantity(formatBaseUnitAmount(raw, selected.asset.metadata.decimals))} ${symbol}`
+    pickerAsset && pickerIsActive && raw !== null
+      ? balancesHidden
+        ? '••••'
+        : `${formatTokenQuantity(formatBaseUnitAmount(raw, pickerAsset.asset.metadata.decimals))} ${formatSymbol(pickerAsset.asset.metadata.symbol)}`
       : null
+  const pickerManagedAsset =
+    pickerAsset === selected
+      ? managedAsset
+      : pickerAsset &&
+        resolveShieldManagedAsset(pickerAsset.asset, managedAssets, catalogTokens, currentNetwork)
   const nearPickerAvailable =
-    pickerIsActive && canLoadShield && Boolean(managedAsset) && oppositeDomain !== 'shield'
-  const showShieldPickerBalance = domainPicker !== null && !receiveEntry && nearPickerAvailable
-  useEffect(() => {
-    if (!showShieldPickerBalance || usesConfidentialBalances) {
-      setShieldPickerLoading(false)
-      return
-    }
-    let current = true
-    setShieldPickerLoading(true)
-    void refreshPortfolioSource({ source: 'near-confidential', authorize: false })
-      .catch(() => false)
-      .finally(() => {
-        if (current) setShieldPickerLoading(false)
-      })
-    return () => {
-      current = false
-    }
-  }, [showShieldPickerBalance, usesConfidentialBalances, refreshPortfolioSource])
+    pickerIsActive && canLoadShield && Boolean(pickerManagedAsset) && oppositeDomain !== 'shield'
+  const pickerHolding = portfolio?.confidential?.assets.find(
+    holding =>
+      holding.assetId === pickerAsset?.asset.asset.id &&
+      holding.chainId === pickerAsset?.chain.chain.id &&
+      holding.decimals === pickerAsset?.asset.metadata.decimals
+  )
   const shieldPickerRaw =
-    currentShieldBalances && managedAsset
-      ? (getConfidentialAvailableForAsset(currentShieldBalances, managedAsset.protocolAssetId) ??
-        '0')
-      : null
+    currentShieldBalances && pickerManagedAsset
+      ? (getConfidentialAvailableForAsset(
+          currentShieldBalances,
+          pickerManagedAsset.protocolAssetId
+        ) ?? '0')
+      : (pickerHolding?.availableRaw ?? null)
   const addressFor = (domain: TransferDomain) => {
     if (domain === 'shield') return ''
     return domain === 'private' ? privateAddress : mainAddress
@@ -2446,7 +2450,7 @@ function DepositWithdrawForm({
 
   const exitForm = fixedShield?.onBack ?? goBack
   const openShieldReview = () => {
-    if (!canReviewShield) return
+    if (!canReviewShield || preparingShieldRef.current) return
     setShieldAwaitingReview(true)
     void prepareShield()
   }
@@ -2789,21 +2793,21 @@ function DepositWithdrawForm({
   const shieldHasQuote = fixedDirection === 'shield' && fixedProvider === 'near-confidential'
 
   if (
-    fixedDirection &&
     shieldAwaitingReview &&
+    draftScope === scopeKey &&
     !fixedNativeRetryPath &&
     (preparingShield || shieldError)
   ) {
     return (
       <div className="page-container">
         <PageHeader
-          title={`Confirm ${fixedActionLabel}`}
+          title={`Confirm ${actionLabel}`}
           showBack
           onBack={() => setShieldAwaitingReview(false)}
           backDisabled={preparingShield}
         />
         {preparingShield ? (
-          <QuickShieldReviewSkeleton />
+          <TransferReviewSkeleton action={actionLabel} />
         ) : (
           <div className="p-4" aria-live="polite">
             <TransactionNotice message={shieldError!} onRetry={openShieldReview} />
@@ -2982,7 +2986,7 @@ function DepositWithdrawForm({
                           ? undefined
                           : () => openDomainPicker('from')
                     }
-                    provider={fixedDirection && from === 'shield' ? 'near-confidential' : null}
+                    provider={from === 'shield' ? 'near-confidential' : null}
                     disabled={!selected}
                   />
                 }
@@ -3016,7 +3020,7 @@ function DepositWithdrawForm({
                           ? () => openDomainPicker('to')
                           : undefined
                     }
-                    provider={fixedDirection && to === 'shield' ? 'near-confidential' : null}
+                    provider={to === 'shield' ? 'near-confidential' : null}
                     disabled={!selected}
                   />
                 }
@@ -3142,13 +3146,7 @@ function DepositWithdrawForm({
                   selectedEstimate.loading) ||
                 (crossChainPrivateTransfer && directEstimate.loading)
               }
-              onClick={
-                fundingRoute
-                  ? fixedDirection
-                    ? openShieldReview
-                    : () => void prepareShield()
-                  : review
-              }
+              onClick={fundingRoute ? openShieldReview : review}
             >
               {clusterSelected ? `Review ${actionLabel}` : actionLabel}
             </Button>
@@ -3196,7 +3194,10 @@ function DepositWithdrawForm({
           }
           visibility={
             groupedAssetPicker
-              ? { policy: withdrawalPicker ? 'withdrawal' : 'grouped', balance: pickerAsset }
+              ? {
+                  policy: withdrawalPicker ? 'withdrawal' : 'grouped',
+                  balance: getTokenPickerBalance
+                }
               : undefined
           }
           isDisabled={item =>
@@ -3368,7 +3369,9 @@ function DepositWithdrawForm({
                       nativeRaw !== null
                         ? `${formatTokenQuantity(nativeRaw)} ZEC`
                         : pickerBalance(
-                            selected ? getTransferDomainBalanceRaw(selected.asset, domain) : null
+                            pickerAsset
+                              ? getTransferDomainBalanceRaw(pickerAsset.asset, domain)
+                              : null
                           )
                     }
                     disabled={
@@ -3428,10 +3431,7 @@ function DepositWithdrawForm({
                   selected={pickerIsActive && pickerValue === 'shield'}
                   disabled={!nearPickerAvailable}
                   balance={
-                    nearPickerAvailable
-                      ? (pickerBalance(shieldPickerRaw) ??
-                        (shieldPickerLoading || loadingShieldBalances ? 'Updating…' : null))
-                      : null
+                    pickerBalance(shieldPickerRaw) ?? (loadingShieldBalances ? 'Updating…' : null)
                   }
                   onSelect={() => {
                     if (nearPickerAvailable && domainPicker) selectDomain('shield', domainPicker)
