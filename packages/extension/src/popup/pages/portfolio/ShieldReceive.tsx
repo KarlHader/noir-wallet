@@ -15,11 +15,13 @@ import {
 } from '@/popup/components/portfolio/ShieldReceiveAddress'
 import { SHIELD_PROVIDERS, ShieldProviderLogo } from '@/popup/components/portfolio/shield-providers'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
-import { TokenPicker, type TokenPickerAdapter } from '@/popup/components/tokens/TokenPicker'
+import { ShieldTokenPicker } from '@/popup/components/tokens/ShieldTokenPicker'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
+import { useCachedAssetPrices } from '@/popup/hooks/useCachedAssetPrices'
+import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import { useShieldReceiveCatalog } from '@/popup/hooks/useShieldReceiveCatalog'
 import type {
   AccountNetworksCatalogView,
@@ -27,22 +29,15 @@ import type {
 } from '@/popup/services/account-networks-client'
 import type { ShieldProvider } from '@/popup/services/asset-domains'
 import {
+  buildShieldReceivePickerRows,
   canReceiveNearShield,
   listShieldReceiveTokens,
   resolveShieldReceiveSelection,
   type ShieldReceiveToken
 } from '@/popup/services/shield-receive'
+import { useSettingsStore } from '@/store/settings-store'
 import { useSwapPreferences } from '@/store/swap-store'
 import { useWalletStore } from '@/store/wallet-store'
-
-const tokenPickerAdapter: TokenPickerAdapter<ShieldReceiveToken> = {
-  chainId: () => 'all',
-  searchFields: token => ({
-    symbol: token.symbol,
-    name: token.name,
-    searchTerms: [token.subtitle ?? '']
-  })
-}
 
 function receiveTokenIcon(token: ShieldReceiveToken) {
   return token.id === 'native-zec' ? (
@@ -176,6 +171,15 @@ function ShieldReceiveForm({
     () => listShieldReceiveTokens(network, account, catalog.tokens),
     [network, account, catalog.tokens]
   )
+  const { model } = usePortfolioSnapshot(account.walletId, account.accountId, {
+    autoRefresh: false
+  })
+  const prices = useCachedAssetPrices(network)
+  const balancesHidden = useSettingsStore(state => state.balancesHidden)
+  const tokenPickerRows = useMemo(
+    () => buildShieldReceivePickerRows(tokens, model, prices),
+    [tokens, model, prices]
+  )
   const [picker, setPicker] = useState<'token' | 'network' | 'provider' | null>(null)
   const closePicker = () => setPicker(null)
   const [selection, setSelection] = useState<{ tokenId: string; routeId: string | null } | null>(
@@ -270,20 +274,14 @@ function ShieldReceiveForm({
         />
       )}
       <TokenSelectorDialog open={picker === 'token'} onOpenChange={open => !open && closePicker()}>
-        <TokenPicker
-          rows={tokens}
+        <ShieldTokenPicker
+          rows={tokenPickerRows}
           networks={[]}
-          adapter={tokenPickerAdapter}
           loading={catalog.loading}
+          balancesHidden={balancesHidden}
           selectedKey={token?.id}
-          toItem={item => ({
-            key: item.id,
-            symbol: formatSymbol(item.symbol),
-            icon: receiveTokenIcon(item),
-            subtitle: item.subtitle
-          })}
           onSelect={item => {
-            setSelection({ tokenId: item.id, routeId: null })
+            setSelection({ tokenId: item.key, routeId: null })
             closePicker()
           }}
         />

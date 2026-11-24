@@ -231,7 +231,7 @@ function QuickShieldSummary({
   return (
     <section
       aria-label="Assets available to shield"
-      className="mx-4 mb-3 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border border-border bg-wallet-surface px-3 py-2"
+      className="mx-4 mt-2 mb-3 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border border-border bg-wallet-surface px-3 py-2"
     >
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
         <div aria-hidden="true" className="flex shrink-0 items-center -space-x-2">
