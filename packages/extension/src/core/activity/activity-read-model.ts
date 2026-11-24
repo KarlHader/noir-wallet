@@ -249,8 +249,34 @@ export function isActivityReceive(item: ActivityItem): boolean {
   )
 }
 
+function activityRecordKey(item: ActivityItem): string {
+  return `${item.source}:${item.id}`
+}
+
+export function mergeActivityHistoryItems(
+  previous: readonly ActivityItem[],
+  incoming: readonly ActivityItem[],
+  limit?: number
+): readonly ActivityItem[] {
+  const latest = new Map<string, ActivityItem>()
+  for (const items of [previous, incoming]) {
+    for (const item of items) {
+      const key = activityRecordKey(item)
+      const existing = latest.get(key)
+      if (!existing || item.updatedAt >= existing.updatedAt) latest.set(key, item)
+    }
+  }
+  const sorted = [...latest.values()].sort(
+    (left, right) =>
+      right.updatedAt - left.updatedAt ||
+      right.createdAt - left.createdAt ||
+      left.id.localeCompare(right.id)
+  )
+  return Object.freeze(limit === undefined ? sorted : sorted.slice(0, limit))
+}
+
 function itemIdentityKeys(item: ActivityItem): readonly string[] {
-  const keys = [`source:${item.source}:${item.id}`]
+  const keys = [`source:${activityRecordKey(item)}`]
   if (isActivityReceive(item)) return keys
   for (const segment of item.segments) {
     if (segment.target.kind !== 'onchain' || !segment.evidence?.transactionHash) continue
@@ -608,7 +634,7 @@ export function parseActivityReadModel(value: unknown): ActivityReadModel {
   if (partialItemCount !== items.filter(item => item.completeness === 'partial').length) {
     throw new Error('Activity partial item count does not match its items')
   }
-  if (new Set(items.map(item => `${item.source}:${item.id}`)).size !== items.length) {
+  if (new Set(items.map(activityRecordKey)).size !== items.length) {
     throw new Error('Duplicate Activity item ID')
   }
   if (value.hasMore !== undefined && typeof value.hasMore !== 'boolean') {

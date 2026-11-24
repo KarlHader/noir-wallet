@@ -1,4 +1,9 @@
-import { isActivityReceive, type ActivityItem, type ActivityScope } from '@/core/activity'
+import {
+  isActivityReceive,
+  mergeActivityHistoryItems,
+  type ActivityItem,
+  type ActivityScope
+} from '@/core/activity'
 import { EvmRpcError } from './evm-rpc-client'
 import {
   isIndexedBaseAcrossReceipt,
@@ -110,21 +115,11 @@ function normalizeItems(
   fresh: readonly ActivityItem[],
   scope: ActivityScope
 ): readonly ActivityItem[] {
-  const byId = new Map<string, ActivityItem>()
-  for (const item of fresh) {
-    const normalized = normalizeLegacyInferredEvmActivity(item)
-    if (isZeroValueEvmTokenActivity(normalized)) continue
-    if (!byId.has(normalized.id)) byId.set(normalized.id, normalized)
-  }
+  const normalized = fresh
+    .map(normalizeLegacyInferredEvmActivity)
+    .filter(item => !isZeroValueEvmTokenActivity(item))
   return rescopeItems(
-    removeSupersededEvmReceipts([...byId.values()])
-      .sort(
-        (left, right) =>
-          right.updatedAt - left.updatedAt ||
-          right.createdAt - left.createdAt ||
-          left.id.localeCompare(right.id)
-      )
-      .slice(0, MAX_ITEMS),
+    removeSupersededEvmReceipts(mergeActivityHistoryItems([], normalized)).slice(0, MAX_ITEMS),
     scope
   )
 }
@@ -158,42 +153,30 @@ function incrementalStartBlock(
   return Math.max(0, Math.max(...heights) - REORG_OVERLAP_BLOCKS)
 }
 
+function evmNonReceiveHistoryKey(item: ActivityItem): string | undefined {
+  if (item.source !== 'rpc' || isActivityReceive(item)) return undefined
+  const origin = item.segments.find(segment => segment.role === 'origin')
+  if (origin?.target.kind !== 'onchain' || !origin.evidence?.transactionHash) return undefined
+  const key = `rpc:evm:${origin.target.chainId}:${origin.evidence.transactionHash.toLowerCase()}:`
+  return item.id.startsWith(key) ? key : undefined
+}
+
 function mergeItems(
   previous: readonly ActivityItem[],
   fresh: readonly ActivityItem[],
   scope: ActivityScope
 ): readonly ActivityItem[] {
-  const byId = new Map(previous.map(item => [item.id, item] as const))
+  const replacementIds = new Map<string, string>()
   for (const item of fresh) {
-    const segment = item.segments.find(value => value.role === 'origin')
-    if (
-      item.source === 'rpc' &&
-      !isActivityReceive(item) &&
-      segment?.target.kind === 'onchain' &&
-      segment.evidence?.transactionHash &&
-      item.id.startsWith(`rpc:evm:${segment.target.chainId}:${segment.evidence.transactionHash}:`)
-    ) {
-      const chainId = segment.target.chainId
-      const hash = segment.evidence.transactionHash.toLowerCase()
-      for (const [id, cached] of byId) {
-        if (
-          cached.source === 'rpc' &&
-          !isActivityReceive(cached) &&
-          cached.id.startsWith(`rpc:evm:${chainId}:${hash}:`) &&
-          cached.segments?.some(
-            value =>
-              value.target?.kind === 'onchain' &&
-              value.target.chainId === chainId &&
-              value.evidence?.transactionHash?.toLowerCase() === hash
-          )
-        ) {
-          byId.delete(id)
-        }
-      }
-    }
-    byId.set(item.id, item)
+    const key = evmNonReceiveHistoryKey(item)
+    if (key) replacementIds.set(key, item.id)
   }
-  return normalizeItems([...byId.values()], scope)
+  const isRetained = (item: ActivityItem) => {
+    const key = evmNonReceiveHistoryKey(item)
+    const replacementId = key && replacementIds.get(key)
+    return !replacementId || item.id === replacementId
+  }
+  return normalizeItems([...previous.filter(isRetained), ...fresh.filter(isRetained)], scope)
 }
 
 function hasPendingItems(items: readonly ActivityItem[]): boolean {

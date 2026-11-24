@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import type { Network } from '@/types'
 import {
   NOIR_RECEIVE_REFERRAL,
@@ -1400,7 +1401,11 @@ export class ConfidentialFundingCoordinator {
     const transactionId = parseTransactionId(record.transactionId)
     if (!(await this.options.repository.get(scope, transactionId))) {
       const result = await this.options.store.withExternalDepositScope(record, () =>
-        this.options.repository.create(createExternalShieldDepositGraph(record))
+        writeLocalActivity(
+          'create',
+          this.options.repository,
+          createExternalShieldDepositGraph(record)
+        )
       )
       if (result.status === 'id-conflict')
         throw new Error('External Shield deposit transaction ID conflicts')
@@ -1436,7 +1441,7 @@ export class ConfidentialFundingCoordinator {
           break
         // Release the metadata lock before applying: the committed event awaits observers that reacquire it.
         await this.options.store.withExternalDepositScope(record, async () => {})
-        const result = await this.options.repository.applySegmentEvent({
+        const result = await writeLocalActivity('applySegmentEvent', this.options.repository, {
           scope,
           transactionId,
           segmentId: segment.id,
@@ -4949,15 +4954,19 @@ export class ConfidentialFundingCoordinator {
             ? existing
             : await this.options.repository.get(scope, parseTransactionId(plan.transactionId))
         if (!current) return
-        const result = await this.options.repository.backfillConfidentialEvmOrigin({
-          scope,
-          transactionId: parseTransactionId(plan.transactionId),
-          expectedRootRevision: current.root.revision,
-          transactionHash: plan.preparedDeposit.transactionHash,
-          legacySenderAddress: plan.source.address,
-          preparedTransfer: plan.preparedDeposit.preparedTransfer,
-          observedAt: this.now()
-        })
+        const result = await writeLocalActivity(
+          'backfillConfidentialEvmOrigin',
+          this.options.repository,
+          {
+            scope,
+            transactionId: parseTransactionId(plan.transactionId),
+            expectedRootRevision: current.root.revision,
+            transactionHash: plan.preparedDeposit.transactionHash,
+            legacySenderAddress: plan.source.address,
+            preparedTransfer: plan.preparedDeposit.preparedTransfer,
+            observedAt: this.now()
+          }
+        )
         if (result.status === 'revision-conflict') continue
         if (result.status === 'applied') this.notifyActivityChanged(plan)
         return
@@ -5038,7 +5047,7 @@ export class ConfidentialFundingCoordinator {
       signedWithdrawFingerprint: plan.requestFingerprint,
       now: plan.createdAt
     })
-    const result = await this.options.repository.create(graph)
+    const result = await writeLocalActivity('create', this.options.repository, graph)
     if (result.status === 'id-conflict') {
       throw new Error('Confidential funding transaction ID conflicts')
     }
@@ -5066,7 +5075,7 @@ export class ConfidentialFundingCoordinator {
         observedAt: this.now()
       })
       if (!event) return
-      const result = await this.options.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.options.repository, {
         scope,
         transactionId,
         segmentId: segment.id,
@@ -5110,7 +5119,7 @@ export class ConfidentialFundingCoordinator {
           ? { failure: { code: failure ?? 'relay-failed', occurredAt: now } }
           : {})
       }
-      const result = await this.options.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.options.repository, {
         scope,
         transactionId,
         segmentId,

@@ -1,7 +1,11 @@
-import { parseActivityReadModel, type ActivityItem, type ActivityScope } from '@/core/activity'
+import {
+  mergeActivityHistoryItems,
+  parseActivityReadModel,
+  type ActivityItem,
+  type ActivityScope
+} from '@/core/activity'
 import { parseChainId } from '@/core/chains/registry'
-import { removeSupersededEvmReceipts } from './evm-indexed-activity'
-import { isZeroValueEvmTokenActivity } from './evm-indexed-activity'
+import { isZeroValueEvmTokenActivity, removeSupersededEvmReceipts } from './evm-indexed-activity'
 
 const DB_NAME = 'noir-wallet-evm-history-cache'
 const DB_VERSION = 2
@@ -412,11 +416,6 @@ export function mergeEvmHistoryCacheRecords(
   ) {
     throw new Error('EVM history cache key does not match its record')
   }
-  const byId = new Map(current.items.map(item => [item.id, item] as const))
-  for (const item of incoming.items) {
-    const previous = byId.get(item.id)
-    if (!previous || item.updatedAt >= previous.updatedAt) byId.set(item.id, item)
-  }
   const newest = current.lastAttemptAt > incoming.lastAttemptAt ? current : incoming
   const currentDepth = current.historyPageCount ?? 1
   const incomingDepth = incoming.historyPageCount ?? 1
@@ -442,9 +441,9 @@ export function mergeEvmHistoryCacheRecords(
     hasMore: pagination.hasMore,
     historyPageCount: pagination.historyPageCount,
     historySyncAt: pagination.historySyncAt ?? pagination.successfulSyncAt,
-    items: removeSupersededEvmReceipts([...byId.values()])
-      .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
-      .slice(0, MAX_ITEMS)
+    items: removeSupersededEvmReceipts(
+      mergeActivityHistoryItems(current.items, incoming.items)
+    ).slice(0, MAX_ITEMS)
   })
 }
 

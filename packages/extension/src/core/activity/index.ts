@@ -4,6 +4,7 @@ export {
   isActivityReceive,
   inferPrivateExecutionAddressFromLocalGraphs,
   mapTransactionGraphToActivityItem,
+  mergeActivityHistoryItems,
   parseActivityReadModel
 } from './activity-read-model'
 export {

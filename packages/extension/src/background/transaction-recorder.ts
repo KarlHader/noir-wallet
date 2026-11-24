@@ -1,4 +1,4 @@
-import { writeLocalZcashActivity } from '@/infrastructure/persistence/repositories/local-zcash-activity'
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import type { Transaction } from '@/types'
 import type { ZcashConfirmation } from '@/lib/transaction-status'
 
@@ -14,7 +14,7 @@ export class TransactionRecorder {
     const id = `tx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const newTx: Transaction = { ...transaction, id }
 
-    await writeLocalZcashActivity(accountKey, { kind: 'add', transaction: newTx })
+    await writeLocalActivity('legacy-zcash', accountKey, { kind: 'add', transaction: newTx })
 
     this.broadcastTransactionAdded(accountKey)
 
@@ -27,7 +27,7 @@ export class TransactionRecorder {
     updates: Partial<Transaction>,
     options: { onlyIfUnsubmitted?: boolean } = {}
   ): Promise<void> {
-    const result = await writeLocalZcashActivity(accountKey, {
+    const result = await writeLocalActivity('legacy-zcash', accountKey, {
       kind: 'update',
       id: transactionId,
       updates,
@@ -42,7 +42,7 @@ export class TransactionRecorder {
     updates: Partial<Transaction> & { status: 'success' | 'failed' },
     confirmation?: ZcashConfirmation
   ): Promise<{ found: boolean; shouldNotify: boolean; statusMatches: boolean }> {
-    const result = await writeLocalZcashActivity(accountKey, {
+    const result = await writeLocalActivity('legacy-zcash', accountKey, {
       kind: 'terminal',
       id: transactionId,
       updates,
@@ -63,7 +63,7 @@ export class TransactionRecorder {
     transactionId: string,
     status: 'success' | 'failed'
   ): Promise<{ found: boolean; newlyNotified: boolean }> {
-    const result = await writeLocalZcashActivity(accountKey, {
+    const result = await writeLocalActivity('legacy-zcash', accountKey, {
       kind: 'notified',
       id: transactionId,
       status

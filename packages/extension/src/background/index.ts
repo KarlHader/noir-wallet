@@ -113,7 +113,7 @@ import {
   writePreparedHardwareSignRequest,
   type HardwareSignKind
 } from '@/lib/hardware-tab'
-import { writeLocalZcashActivity } from '@/infrastructure/persistence/repositories/local-zcash-activity'
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { WalletCleanupCoordinator } from './wallet-cleanup'
 import {
   getShieldableTransparentBalance,
@@ -7796,7 +7796,7 @@ async function recordUncertainBroadcast(
   txHash: string,
   txHashes: string[] = [txHash]
 ): Promise<void> {
-  await writeLocalZcashActivity(accountKey, {
+  await writeLocalActivity('legacy-zcash', accountKey, {
     kind: 'broadcast',
     id: transactionId,
     hash: txHash,
@@ -8114,7 +8114,7 @@ async function handleBackgroundZcashTx(params: {
             amount: onChainAmount
           })
         }
-        await writeLocalZcashActivity(accountKey, {
+        await writeLocalActivity('legacy-zcash', accountKey, {
           kind: 'broadcast',
           id: transactionId,
           hash: txid,

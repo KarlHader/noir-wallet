@@ -102,7 +102,7 @@ import {
   fetchTransparentReceiveTransactions,
   fetchMissingTransparentSendRecipients
 } from '@/core/wallet/transparent-history'
-import { writeLocalZcashActivity } from '@/infrastructure/persistence/repositories/local-zcash-activity'
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { shouldMarkSyncJobInterrupted, syncJobStore } from '@/lib/sync-job-store'
 import {
   runSpendabilitySnapshotRefresh,
@@ -382,7 +382,8 @@ export class BackgroundZcashWalletRuntime {
         cacheKey: accountKey,
         signal
       }),
-    write: writeLocalZcashActivity,
+    write: (accountKey, write, options) =>
+      writeLocalActivity('legacy-zcash', accountKey, write, options),
     notify: async accountKey => {
       await chrome.runtime
         .sendMessage({
@@ -3001,7 +3002,7 @@ export class BackgroundZcashWalletRuntime {
       }
 
       const { transactions: persistedTransactions, newWasmTransactionCount } =
-        await writeLocalZcashActivity(accountKey, {
+        await writeLocalActivity('legacy-zcash', accountKey, {
           kind: 'history',
           wasm: wasmTransactions,
           receipts: transparentReceiveTransactions,

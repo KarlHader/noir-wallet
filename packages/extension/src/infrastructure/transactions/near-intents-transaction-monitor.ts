@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import {
   parseTransactionEventId,
   type NearIntentsTransactionBinding,
@@ -340,7 +341,7 @@ export class NearIntentsTransactionMonitor {
       if (!graph || !segment) return false
       if (segment.status === 'final' || segment.status === 'failed') return false
       const observedAt = this.now()
-      const result = await this.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.repository, {
         scope,
         transactionId,
         segmentId: segment.id,

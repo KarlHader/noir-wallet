@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { parseAccountId } from '@/core/accounts/domain'
 import type { AssetId } from '@/core/chains/domain'
 import { createAssetId, parseAssetId, parseChainId } from '@/core/chains/registry'
@@ -441,7 +442,7 @@ export class EvmTransactionMonitor {
       }
       if (receipt?.status !== 'failed') return 'unchanged'
     }
-    const result = await this.repository.applySegmentEvent({
+    const result = await writeLocalActivity('applySegmentEvent', this.repository, {
       scope: graph.root.scope,
       transactionId: graph.root.id,
       segmentId: segment.id,
@@ -504,7 +505,7 @@ export class EvmTransactionMonitor {
     })
     if (!event) return 'unchanged'
     const assetEffects = receiptAssetEffects(graph, observation, this.chainId)
-    const result = await this.repository.applySegmentEvent({
+    const result = await writeLocalActivity('applySegmentEvent', this.repository, {
       scope: graph.root.scope,
       transactionId: graph.root.id,
       segmentId: segment.id,
@@ -574,7 +575,7 @@ export class EvmTransactionMonitor {
   ): Promise<'applied' | 'unchanged'> {
     if (segment.status === 'final' || segment.status === 'failed') return 'unchanged'
     const observedAt = this.now()
-    const result = await this.repository.applySegmentEvent({
+    const result = await writeLocalActivity('applySegmentEvent', this.repository, {
       scope: original.root.scope,
       transactionId: original.root.id,
       segmentId: segment.id,
@@ -666,7 +667,7 @@ export class EvmTransactionMonitor {
         return false
       }
       const observedAt = this.now()
-      const result = await this.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.repository, {
         scope: original.root.scope,
         transactionId: original.root.id,
         segmentId: segment.id,

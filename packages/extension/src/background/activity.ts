@@ -13,6 +13,7 @@ import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-setting
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import {
   inferPrivateExecutionAddressFromLocalGraphs,
+  mergeActivityHistoryItems,
   type ActivityItem,
   type ActivityScope
 } from '@/core/activity'
@@ -226,35 +227,6 @@ function filterItemsForChain(
   return Object.freeze(items.filter(item => activityItemIncludesChain(item, chainId)))
 }
 
-function mergeBoundedActivityItems(
-  previous: readonly ActivityItem[],
-  fresh: readonly ActivityItem[],
-  limit = ACTIVITY_HISTORY_CACHE_ITEM_LIMIT
-): readonly ActivityItem[] {
-  const cacheKey = (item: ActivityItem) => {
-    const chainIds = [
-      ...new Set(
-        item.segments.flatMap(segment =>
-          segment.target.kind === 'onchain' ? [segment.target.chainId] : []
-        )
-      )
-    ].sort()
-    return `${item.source}:${item.id}:${chainIds.join(',')}`
-  }
-  const byId = new Map(previous.map(item => [cacheKey(item), item] as const))
-  for (const item of fresh) byId.set(cacheKey(item), item)
-  return Object.freeze(
-    [...byId.values()]
-      .sort(
-        (left, right) =>
-          right.updatedAt - left.updatedAt ||
-          right.createdAt - left.createdAt ||
-          left.id.localeCompare(right.id)
-      )
-      .slice(0, limit)
-  )
-}
-
 function solanaSignature(item: ActivityItem): string | null {
   const prefix = 'rpc:solana:'
   return item.id.startsWith(prefix) ? item.id.slice(prefix.length) : null
@@ -331,7 +303,7 @@ export function createBackgroundActivityCoordinator(
           .map(observation => observation.derived.address)
       })
       onHistoryRead?.(scope, bitcoinNetwork.chainId)
-      return mergeBoundedActivityItems(fallbackItems, fresh)
+      return mergeActivityHistoryItems(fallbackItems, fresh, ACTIVITY_HISTORY_CACHE_ITEM_LIMIT)
     } catch (error) {
       logger.warn(
         `Bitcoin activity refresh failed: ${formatLogError(error)}`,
@@ -511,7 +483,7 @@ export function createBackgroundActivityCoordinator(
       return supported ? [supported] : []
     })
     return historyPageCount > 1
-      ? mergeBoundedActivityItems([], supportedItems, 10_000)
+      ? mergeActivityHistoryItems([], supportedItems, 10_000)
       : Object.freeze(supportedItems)
   }
 
@@ -595,7 +567,7 @@ export function createBackgroundActivityCoordinator(
         ...(untilSignature === undefined ? {} : { untilSignature })
       })
       onHistoryRead?.(scope, solanaNetwork.chainId)
-      return mergeBoundedActivityItems(fallbackItems, fresh)
+      return mergeActivityHistoryItems(fallbackItems, fresh, ACTIVITY_HISTORY_CACHE_ITEM_LIMIT)
     } catch (error) {
       logger.warn(
         `Solana activity refresh failed: ${formatLogError(error)}`,
@@ -616,7 +588,7 @@ export function createBackgroundActivityCoordinator(
     try {
       const fresh = await nearHistory.readAddressActivity({ scope, address })
       onHistoryRead?.(scope, nearNetwork.chainId)
-      return mergeBoundedActivityItems(fallbackItems, fresh)
+      return mergeActivityHistoryItems(fallbackItems, fresh, ACTIVITY_HISTORY_CACHE_ITEM_LIMIT)
     } catch (error) {
       logger.warn(
         `NEAR activity refresh failed: ${formatLogError(error)}`,
@@ -657,7 +629,7 @@ export function createBackgroundActivityCoordinator(
       })
     )
     const activeItems = activeCache?.items ?? []
-    const cachedItems = mergeBoundedActivityItems(activeItems, cachedEvm.items, 10_000)
+    const cachedItems = mergeActivityHistoryItems(activeItems, cachedEvm.items, 10_000)
     const currentTime = Date.now()
     const supportedChainIds = Object.freeze([
       ...(bitcoinHistory ? [bitcoinNetwork.chainId] : []),
@@ -741,18 +713,19 @@ export function createBackgroundActivityCoordinator(
         .catch(() => {})
         .then(async () => {
           const latest = await historyCache.read(scope, cachePartition).catch(() => activeCache)
-          const retainedItems = mergeBoundedActivityItems(
+          const retainedItems = mergeActivityHistoryItems(
             cachedItems,
             latest?.items ?? [],
             10_000
           ).filter(item => !staleChainIds.some(chainId => activityItemIncludesChain(item, chainId)))
-          committedItems = mergeBoundedActivityItems(retainedItems, refreshedItems, 10_000)
+          committedItems = mergeActivityHistoryItems(retainedItems, refreshedItems, 10_000)
           const retainedNonEvmItems = (latest?.items ?? activeItems).filter(
             item => !staleChainIds.some(chainId => activityItemIncludesChain(item, chainId))
           )
-          const nonEvmItems = mergeBoundedActivityItems(
+          const nonEvmItems = mergeActivityHistoryItems(
             retainedNonEvmItems,
-            refreshedItems.filter(item => !isEvmActivityItem(item))
+            refreshedItems.filter(item => !isEvmActivityItem(item)),
+            ACTIVITY_HISTORY_CACHE_ITEM_LIMIT
           )
           const refreshedAtByChainId = Object.freeze({
             ...(latest?.refreshedAtByChainId ?? activeCache?.refreshedAtByChainId ?? {}),
@@ -793,7 +766,7 @@ export function createBackgroundActivityCoordinator(
     const partition = bitcoinActivityCachePartition(addressType)
     const snapshot = await historyCache.read(scope, partition).catch(() => null)
     const evm = await loadCachedEvmItems(scope, accountMode).catch(() => ({ items: [] }))
-    return mergeBoundedActivityItems(snapshot?.items ?? [], evm.items, 10_000)
+    return mergeActivityHistoryItems(snapshot?.items ?? [], evm.items, 10_000)
   }
 
   const loadSupplementalHasMore = async (

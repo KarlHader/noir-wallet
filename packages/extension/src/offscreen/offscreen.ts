@@ -8,7 +8,7 @@ import { isTransactionSubmissionUnknown } from '@/core/zcash/transfer-result'
 import { replayJournalPages } from '@/lib/sync-journal'
 import { zcashWorkerBroadcastResult } from '@/lib/transaction-replacement'
 import { loadWalletDb, quarantineWalletPersistence, saveWalletDb } from '@/lib/indexed-db'
-import { writeLocalZcashActivity } from '@/infrastructure/persistence/repositories/local-zcash-activity'
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import {
   registerOffscreenSyncAbortListener,
   isSyncAbortRequested,
@@ -1002,7 +1002,7 @@ async function persistBroadcastHash(
   if (!context) return
   const broadcast = zcashWorkerBroadcastResult(method, result)
   if (!broadcast) return
-  const { changed } = await writeLocalZcashActivity(context.accountKey, {
+  const { changed } = await writeLocalActivity('legacy-zcash', context.accountKey, {
     kind: 'worker-broadcast',
     context,
     walletId,

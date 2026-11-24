@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import {
   applyTransactionGraphEvent,
   parseTransactionEventId,
@@ -106,7 +107,7 @@ export async function persistSignedTransactionGraph(input: {
   if (graph.root.status !== 'signed' || segment?.status !== 'signed' || !validates(segment)) {
     throw new Error(`Pending ${input.label} signed transaction graph does not match recovery data`)
   }
-  const created = await input.repository.create(graph)
+  const created = await writeLocalActivity('create', input.repository, graph)
   if (created.status === 'id-conflict') {
     throw new Error(`${input.label} signed transaction ID conflict`)
   }

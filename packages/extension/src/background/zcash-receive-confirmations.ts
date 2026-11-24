@@ -5,7 +5,7 @@ import {
 } from '@/core/wallet/transparent-history'
 import { DedupPromise } from '@/lib/async-utils'
 import { loadTransactions } from '@/lib/indexed-db'
-import { writeLocalZcashActivity } from '@/infrastructure/persistence/repositories/local-zcash-activity'
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { getNetworkConfig } from '@/lib/runtime-network'
 import type { AccountData, Network, Transaction } from '@/types/wallet'
 
@@ -31,7 +31,7 @@ export async function discoverZcashTransparentReceipts(
     walletCreatedTxids: sent
   })
   if (incoming.length > 0) {
-    await writeLocalZcashActivity(accountKey, { kind: 'history', receipts: incoming })
+    await writeLocalActivity('legacy-zcash', accountKey, { kind: 'history', receipts: incoming })
   }
   return true
 }
@@ -61,10 +61,14 @@ export async function refreshZcashReceiveConfirmations(
         AbortSignal.timeout(8_000)
       )
       if (observed.size === 0) return loadTransactions(accountKey)
-      const { changed, transactions: updated } = await writeLocalZcashActivity(accountKey, {
-        kind: 'receive-confirmations',
-        observed
-      })
+      const { changed, transactions: updated } = await writeLocalActivity(
+        'legacy-zcash',
+        accountKey,
+        {
+          kind: 'receive-confirmations',
+          observed
+        }
+      )
       if (changed) {
         void chrome.runtime.sendMessage({ type: 'TRANSACTION_UPDATED', accountKey }).catch(() => {})
       }
