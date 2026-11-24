@@ -76,6 +76,10 @@ export interface IndexedTokenTransfer {
   readonly assetId: ReturnType<typeof parseAssetId>['id']
 }
 
+export function isIndexedBaseAcrossReceipt(item: ActivityItem): boolean {
+  return item.id.startsWith('rpc:evm:eip155:8453:') && item.id.includes(':native-receive:across:')
+}
+
 export function isZeroValueEvmTokenActivity(item: ActivityItem): boolean {
   const amount = item.snapshot?.primaryAmount
   return (
@@ -332,7 +336,8 @@ function mapTokenActivityItem(
   input: ReadEvmAddressActivityInput,
   chainId: ReturnType<typeof parseChainId>['id'],
   nativeAssetId: ReturnType<typeof parseAssetId>['id'],
-  partial: boolean
+  partial: boolean,
+  acrossLogIndex?: number
 ): ActivityItem {
   const transfer = transfers[0]
   const address = input.address.toLowerCase()
@@ -343,7 +348,8 @@ function mapTokenActivityItem(
   if (direction === undefined) {
     throw new EvmRpcError('invalid-response', 'EVM history item does not involve the address')
   }
-  const id = `rpc:evm:${chainId}:${transfer.transactionHash}:token`
+  const suffix = acrossLogIndex === undefined ? 'token' : `native-receive:across:${acrossLogIndex}`
+  const id = `rpc:evm:${chainId}:${transfer.transactionHash}:${suffix}`
   const status = 'final' as const
   const effects = hasConflictingInclusion(undefined, transfers)
     ? undefined
@@ -357,7 +363,7 @@ function mapTokenActivityItem(
     id,
     source: 'rpc' as const,
     scope: input.scope,
-    kind: single ? ('transfer' as const) : ('contract-call' as const),
+    kind: acrossLogIndex !== undefined ? 'receive' : single ? 'transfer' : 'contract-call',
     status,
     snapshot: Object.freeze({
       schemaVersion: 1 as const,
@@ -398,6 +404,7 @@ export function mapEvmIndexedActivity(input: {
   readonly nativeAssetId: string
   readonly normalTransactions: readonly IndexedTransaction[]
   readonly tokenTransfers: readonly IndexedTokenTransfer[]
+  readonly indexedNativeReceipts?: readonly (IndexedTokenTransfer & { readonly logIndex: number })[]
   readonly sourcePartial: boolean
   readonly itemLimit?: number
 }): readonly ActivityItem[] {
@@ -413,6 +420,22 @@ export function mapEvmIndexedActivity(input: {
   const normalByHash = new Map(
     input.normalTransactions.map(transaction => [transaction.transactionHash, transaction])
   )
+  const receipts = new Map<string, ActivityItem>()
+  for (const transfer of input.indexedNativeReceipts ?? []) {
+    const key = `${transfer.transactionHash}:${transfer.logIndex}`
+    if (receipts.has(key)) continue
+    receipts.set(
+      key,
+      mapTokenActivityItem(
+        [transfer],
+        input.request,
+        chain.id,
+        nativeAssetId.id,
+        false,
+        transfer.logIndex
+      )
+    )
+  }
   const tokenItems: ActivityItem[] = []
   for (const [hash, transfers] of tokenTransfersByHash) {
     const normal = normalByHash.get(hash)
@@ -438,7 +461,7 @@ export function mapEvmIndexedActivity(input: {
     )
   )
   return Object.freeze(
-    [...normalItems, ...tokenItems]
+    [...normalItems, ...tokenItems, ...receipts.values()]
       .sort(
         (left, right) =>
           right.updatedAt - left.updatedAt ||

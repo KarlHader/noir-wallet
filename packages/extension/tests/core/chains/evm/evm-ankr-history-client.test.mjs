@@ -99,6 +99,56 @@ test('keeps identical transaction hashes on different EVM chains distinct after 
   ])
 })
 
+test('loads Across receipts independently of the Ankr cursor and keeps each fill in Activity', async () => {
+  const chainId = 'eip155:8453'
+  const receipt = {
+    transactionHash: HASH,
+    blockHash: BLOCK_HASH,
+    blockHeight: 100,
+    logIndex: 2,
+    timestamp: 1_700_000_000_000,
+    from: OTHER,
+    to: ADDRESS,
+    amountRaw: '2508975445201995'
+  }
+  const requests = []
+  const client = createEvmAnkrHistoryClient(
+    'https://history.example/',
+    chains,
+    async (input, init) => {
+      const url = new URL(input)
+      if (url.pathname === '/base-across-receipts') {
+        requests.push(url)
+        return Response.json({ receipts: [receipt, receipt, { ...receipt, logIndex: 4 }] })
+      }
+      const { method, params } = JSON.parse(init.body)
+      expect(params.fromBlock).toBe(200)
+      return method === 'ankr_getTransactionsByAddress'
+        ? rpc({ transactions: [] })
+        : rpc({ transfers: [] })
+    },
+    true
+  )
+  const result = await client.readAddressActivities(
+    chains.map(chain => ({ chainId: chain.chainId, address: ADDRESS, scope, fromBlock: 200 }))
+  )
+  const model = parseActivityReadModel(
+    buildActivityReadModel({
+      scope,
+      localGraphs: [],
+      supplementalItems: result.get(chainId).items
+    })
+  )
+  expect(requests.map(url => url.search)).toEqual([`?address=${ADDRESS}`])
+  expect(result.get('eip155:1').items).toEqual([])
+  expect(
+    model.items.map(item => [item.id.split(':').at(-1), item.kind, item.snapshot.primaryAmount])
+  ).toEqual([
+    ['2', 'receive', { assetId: `${chainId}/slip44:60`, amountRaw: receipt.amountRaw }],
+    ['4', 'receive', { assetId: `${chainId}/slip44:60`, amountRaw: receipt.amountRaw }]
+  ])
+})
+
 test('Ankr history batches chains by address with the earliest incremental block', async () => {
   const requests = []
   const client = createEvmAnkrHistoryClient(

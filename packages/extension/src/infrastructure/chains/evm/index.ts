@@ -107,9 +107,12 @@ export function createConfiguredEvmActivityHistorySource(
   const trackedErc20Assets = buildTrackedErc20Assets(config)
   const nativeAssetId = `${config.chainId}/slip44:${config.nativeCurrency.slip44Reference}`
   if (evmHistoryApiOrigin && getEvmAnkrHistoryBlockchain(config.chainId)) {
-    const ankr = createEvmAnkrHistoryClient(evmHistoryApiOrigin, [
-      { chainId: config.chainId, nativeAssetId, trackedErc20Assets }
-    ])
+    const ankr = createEvmAnkrHistoryClient(
+      evmHistoryApiOrigin,
+      [{ chainId: config.chainId, nativeAssetId, trackedErc20Assets }],
+      fetch,
+      true
+    )
     const readAddressActivityWithMetadata = async (input: ReadEvmAddressActivityInput) => {
       const result = (
         await ankr.readAddressActivities([{ chainId: config.chainId, ...input }], input.signal)
@@ -166,7 +169,7 @@ export function createEvmActivityHistoryBatchReader(configs: readonly EvmNetwork
   return Object.freeze({
     chainIds: new Set(chains.map(chain => chain.chainId)),
     ...createCachedEvmAnkrHistoryBatchSource({
-      source: createEvmAnkrHistoryClient(evmHistoryApiOrigin, chains),
+      source: createEvmAnkrHistoryClient(evmHistoryApiOrigin, chains, fetch, true),
       trackedAssetKeys: new Map(
         chains.map(chain => [chain.chainId, trackedErc20AssetKey(chain.trackedErc20Assets)])
       )

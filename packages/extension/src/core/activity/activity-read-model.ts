@@ -245,6 +245,7 @@ function normalizeHexHash(chainId: string, hash: string): string {
 
 function itemIdentityKeys(item: ActivityItem): readonly string[] {
   const keys = [`source:${item.source}:${item.id}`]
+  if (item.kind === 'receive') return keys
   for (const segment of item.segments) {
     if (segment.target.kind !== 'onchain' || !segment.evidence?.transactionHash) continue
     if (item.segments.length > 1 && segment.role !== 'origin') {

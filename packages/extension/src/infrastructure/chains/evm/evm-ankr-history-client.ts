@@ -18,6 +18,8 @@ const MAXIMUM_RESPONSE_BYTES = 8 * 1024 * 1024
 const TX_PAGE_SIZE = 200
 const TOKEN_PAGE_SIZE = 2_000
 const UINT256_LIMIT = 1n << 256n
+const BASE_CHAIN_ID = 'eip155:8453'
+const BASE_RECEIPTS_TIMEOUT_MS = 3_000
 export interface EvmAnkrHistoryChain {
   readonly chainId: string
   readonly nativeAssetId: string
@@ -193,7 +195,8 @@ function parseOrigin(value: string): string {
 export function createEvmAnkrHistoryClient(
   originValue: string,
   chains: readonly EvmAnkrHistoryChain[],
-  fetchImplementation: typeof fetch = fetch
+  fetchImplementation: typeof fetch = fetch,
+  includeBaseAcrossReceipts = false
 ): EvmAnkrHistoryClient {
   const origin = parseOrigin(originValue)
   const byChainId = new Map(chains.map(chain => [chain.chainId, chain] as const))
@@ -205,24 +208,34 @@ export function createEvmAnkrHistoryClient(
   }
 
   async function request(
-    method: 'ankr_getTransactionsByAddress' | 'ankr_getTokenTransfers',
+    method: 'ankr_getTransactionsByAddress' | 'ankr_getTokenTransfers' | 'baseAcrossReceipts',
     params: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<unknown> {
+    const across = method === 'baseAcrossReceipts'
     const controller = new AbortController()
     let timedOut = false
     const abort = () => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
     if (signal?.aborted) controller.abort()
-    const timer = setTimeout(() => {
-      timedOut = true
-      controller.abort()
-    }, DEFAULT_REQUEST_TIMEOUT_MS)
+    const timer = setTimeout(
+      () => {
+        timedOut = true
+        controller.abort()
+      },
+      across ? BASE_RECEIPTS_TIMEOUT_MS : DEFAULT_REQUEST_TIMEOUT_MS
+    )
     try {
-      const response = await fetchImplementation(origin, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      const url = across ? new URL('/base-across-receipts', origin) : new URL(origin)
+      if (across) url.searchParams.set('address', String(params.address))
+      const response = await fetchImplementation(url.toString(), {
+        ...(across
+          ? { method: 'GET' }
+          : {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
+            }),
         cache: 'no-store',
         credentials: 'omit',
         redirect: 'error',
@@ -230,6 +243,7 @@ export function createEvmAnkrHistoryClient(
         signal: controller.signal
       })
       if (!response.ok) {
+        if (across && response.status === 404) return []
         if (response.status === 429)
           throw new EvmRpcError('rate-limited', 'EVM history rate limit exceeded')
         throw new EvmRpcError('network-unavailable', 'EVM history endpoint is unavailable')
@@ -246,6 +260,7 @@ export function createEvmAnkrHistoryClient(
         invalid('JSON response')
       }
       const envelope = record(decoded, 'JSON-RPC response')
+      if (across) return envelope.receipts
       if (envelope.jsonrpc !== '2.0' || envelope.id !== 1) invalid('JSON-RPC response')
       if ('error' in envelope) {
         const error = record(envelope.error, 'JSON-RPC error')
@@ -270,6 +285,49 @@ export function createEvmAnkrHistoryClient(
       clearTimeout(timer)
       signal?.removeEventListener('abort', abort)
     }
+  }
+
+  async function readBaseAcrossReceipts(
+    wallet: string,
+    nativeAssetId: IndexedTokenTransfer['assetId'],
+    signal?: AbortSignal
+  ): Promise<(IndexedTokenTransfer & { readonly logIndex: number })[]> {
+    const response = await request('baseAcrossReceipts', { address: wallet }, signal)
+    if (!Array.isArray(response) || response.length > TX_PAGE_SIZE) invalid('Base Across result')
+    return response.map(value => {
+      const row = record(value, 'Base Across receipt')
+      const from = address(row.from, 'Base Across sender')
+      const to = address(row.to, 'Base Across recipient')
+      const amountRaw = tokenInteger(row.amountRaw, 'Base Across amount')
+      const { blockHeight, logIndex, timestamp } = row
+      if (
+        to !== wallet ||
+        from === to ||
+        amountRaw === '0' ||
+        typeof blockHeight !== 'number' ||
+        !Number.isSafeInteger(blockHeight) ||
+        blockHeight < 1 ||
+        typeof logIndex !== 'number' ||
+        !Number.isSafeInteger(logIndex) ||
+        logIndex < 0 ||
+        typeof timestamp !== 'number' ||
+        !Number.isSafeInteger(timestamp) ||
+        timestamp < 1
+      )
+        invalid('Base Across receipt')
+      return {
+        transactionHash: hash(row.transactionHash, 'Base Across transaction hash'),
+        blockHash: hash(row.blockHash, 'Base Across block hash'),
+        blockHeight,
+        logIndex,
+        timestamp,
+        from,
+        to,
+        amountRaw,
+        confirmations: 1,
+        assetId: nativeAssetId
+      }
+    })
   }
 
   async function readAddressActivities(
@@ -360,9 +418,16 @@ export function createEvmAnkrHistoryClient(
       }
       return { items, partial: true, failed: false }
     }
-    const [native, tokens] = await Promise.allSettled([
+    const baseChain =
+      includeBaseAcrossReceipts && requested.has(BASE_CHAIN_ID)
+        ? byChainId.get(BASE_CHAIN_ID)
+        : undefined
+    const [native, tokens, across] = await Promise.allSettled([
       readPages('ankr_getTransactionsByAddress', 'transactions', TX_PAGE_SIZE, firstAddress),
-      readPages('ankr_getTokenTransfers', 'transfers', TOKEN_PAGE_SIZE, [firstAddress])
+      readPages('ankr_getTokenTransfers', 'transfers', TOKEN_PAGE_SIZE, [firstAddress]),
+      baseChain
+        ? readBaseAcrossReceipts(firstAddress, parseAssetId(baseChain.nativeAssetId).id, signal)
+        : []
     ])
     const output = new Map<string, EvmAnkrHistoryResult>()
     if (signal?.aborted) {
@@ -373,7 +438,9 @@ export function createEvmAnkrHistoryClient(
       }
       return output
     }
-    if (native.status === 'rejected' && tokens.status === 'rejected') {
+    const ankrFailed = native.status === 'rejected' && tokens.status === 'rejected'
+    const hasAcrossReceipts = across.status === 'fulfilled' && across.value.length > 0
+    if (ankrFailed && !hasAcrossReceipts) {
       for (const target of targets) output.set(target.chainId, { error: native.reason })
       return output
     }
@@ -426,6 +493,12 @@ export function createEvmAnkrHistoryClient(
     for (const target of targets) {
       const chain = byChainId.get(target.chainId)!
       const blockchain = getEvmAnkrHistoryBlockchain(target.chainId)!
+      const baseAcross = baseChain === chain && across.status === 'fulfilled' ? across.value : []
+      const chainPartial = partial || (baseChain === chain && across.status === 'rejected')
+      if (ankrFailed && baseAcross.length === 0) {
+        output.set(target.chainId, { error: native.reason })
+        continue
+      }
       try {
         const normalTransactions =
           native.status === 'fulfilled'
@@ -446,10 +519,11 @@ export function createEvmAnkrHistoryClient(
           nativeAssetId: chain.nativeAssetId,
           normalTransactions,
           tokenTransfers,
+          indexedNativeReceipts: baseAcross,
           sourcePartial: partial,
           itemLimit: historyPageCount > 1 ? EVM_ACTIVITY_ITEM_LIMIT : undefined
         })
-        if (items.length === 0 && partial) {
+        if (items.length === 0 && chainPartial) {
           output.set(target.chainId, {
             incomplete: true,
             retrySingleChain: (pageTruncated && !branchFailed) || retrySharedFailure
@@ -457,7 +531,7 @@ export function createEvmAnkrHistoryClient(
         } else {
           output.set(target.chainId, {
             items,
-            partial,
+            partial: chainPartial,
             retrySingleChain: retrySharedFailure,
             hasMore:
               historyPageCount > 1 && items.length >= EVM_ACTIVITY_ITEM_LIMIT

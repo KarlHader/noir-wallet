@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 import { evmHistoryWorker } from '../../../../../evm-history-worker/src/index.ts'
+import { scanBaseAcrossReceipts } from '../../../../../evm-history-worker/src/base-across-receipts.ts'
 
 const ADDRESS = `0x${'1'.repeat(40)}`
 const CONTRACT = `0x${'2'.repeat(40)}`
@@ -78,6 +79,79 @@ function rpcError(code, message = 'upstream private detail') {
 }
 
 test.describe('EVM history Worker', () => {
+  test('indexes each verified native Across payout once and excludes wrapped ETH and failed receipts', async () => {
+    const pool = '0x09aea4b2242abc8bb4bb78d537a67a245a7bec64'
+    const weth = '0x4200000000000000000000000000000000000006'
+    const filledRelay = '0x44b559f101f8fbcc8a0ea43fa91a05a729a5ea6e14a7c75aa750374690137208'
+    const withdrawal = '0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65'
+    const transfer = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+    const blockHash = `0x${'b'.repeat(64)}`
+    const blockNumber = '0x3a6f842'
+    const word = value => value.replace(/^0x/, '').padStart(64, '0')
+    const amount = '0x8e9e65e29544b'
+    const relayData = Array.from({ length: 15 }, () => word('0x0'))
+    relayData[1] = word(weth)
+    relayData[9] = word(CONTRACT)
+    relayData[11] = word(ADDRESS)
+    relayData[13] = word(amount)
+    const log = (logIndex, address, topics, data) => ({
+      blockNumber,
+      blockHash,
+      transactionHash: TRANSACTION_HASH,
+      logIndex,
+      address,
+      topics,
+      data
+    })
+    const fills = ['0x0', '0x2', '0x5'].map(index =>
+      log(index, pool, [filledRelay], `0x${relayData.join('')}`)
+    )
+    const withdraw = index => log(index, weth, [withdrawal, `0x${word(pool)}`], `0x${word(amount)}`)
+    let status = '0x1'
+    const rpc = async method => {
+      if (method === 'eth_getBlockByNumber') return { number: blockNumber }
+      if (method === 'eth_getLogs') return [...fills].reverse()
+      if (method === 'eth_getTransactionReceipt')
+        return {
+          status,
+          blockNumber,
+          blockHash,
+          transactionHash: TRANSACTION_HASH,
+          logs: [
+            fills[0],
+            withdraw('0x1'),
+            fills[1],
+            withdraw('0x3'),
+            fills[2],
+            log(
+              '0x6',
+              weth,
+              [transfer, `0x${word(pool)}`, `0x${word(ADDRESS)}`],
+              `0x${word(amount)}`
+            ),
+            withdraw('0x7')
+          ]
+        }
+      if (method === 'eth_getBlockByHash')
+        return { hash: blockHash, number: blockNumber, timestamp: '0x6b03c777' }
+      throw new Error('Unexpected RPC method')
+    }
+    const cursor = { block: Number(blockNumber), logIndex: -1 }
+    const result = await scanBaseAcrossReceipts(cursor, rpc)
+    expect(result.rows.map(row => [row.to, row.amountRaw, row.logIndex])).toEqual([
+      [ADDRESS, '2508975445201995', 0],
+      [ADDRESS, '2508975445201995', 2]
+    ])
+    expect(await scanBaseAcrossReceipts(result.cursor, rpc)).toEqual({
+      cursor: result.cursor,
+      rows: []
+    })
+    status = '0x0'
+    await expect(scanBaseAcrossReceipts(cursor, rpc)).rejects.toThrow(
+      'Invalid Base receipt RPC data'
+    )
+  })
+
   test('proxies all routes in the Workers runtime without following upstream redirects', async () => {
     // Use Wrangler's own runtime and bundler so Node fetch mocks cannot hide edge incompatibilities.
     const workerRequire = createRequire(

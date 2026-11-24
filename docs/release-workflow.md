@@ -237,7 +237,7 @@ After deployment, check `GET https://www.zknoir.com/api/frost-signups` for HTTP 
 
 ## History Proxy Deployment
 
-The existing Worker source is `packages/evm-history-worker/`; its production hostname is `https://history-proxy.zknoir.com`. It serves the bounded Ankr methods used by the extension. Bitcoin, Solana, NEAR, and Blockscout providers remain direct client requests.
+The existing Worker source is `packages/evm-history-worker/`; its production hostname is `https://history-proxy.zknoir.com`. It serves the bounded Ankr methods and the Base Across native ETH receipt index used by the extension. Bitcoin, Solana, NEAR, and Blockscout providers remain direct client requests.
 
 Runtime caching is enabled in the [History proxy configuration](../packages/evm-history-worker/wrangler.json) and [RPC registry configuration](../packages/rpc-registry/wrangler.json), so deployments retain the setting. Public icon and registry responses use their existing cache headers; History and token-discovery responses use `Cache-Control: no-store`.
 
@@ -251,5 +251,7 @@ pnpm --filter @noir-wallet/evm-history-worker deploy
 Missing or invalid keys return service-unavailable errors. When using a Cloudflare Git build, select `main` and the repository-relative `packages/evm-history-worker` root. A retry of an old build still uses that build's source revision.
 
 Before enabling a new deployment, verify supported chains, native and token history, bounded or partial responses, account isolation, rate limiting, and failure fallback. A remote failure must retain existing cache and locally initiated transactions. Deployment and live-service verification are separate from local unit tests and extension builds.
+
+Deploy the Base receipt index with the Wrangler SQLite Durable Object migration and cron trigger. The first scan starts at Base block `61274000`, then advances through finalized blocks. Before releasing the extension, confirm the Worker has backfilled the expected Across receipt at block `61274178` and that the receiving wallet can read it once after reloading Activity. This index uses public Base RPC endpoints and requires no additional API keys.
 
 The website Beta guide pins an existing published ZIP in `packages/web/src/lib/v2-beta-release.ts`. Advance that link only after verifying the new Release download; a source merge alone does not make a Beta available.
