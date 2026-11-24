@@ -1277,7 +1277,7 @@ function DepositWithdrawForm({
           : [])
       ]
     : []
-  const providerAssetRows = fixedDirection
+  const providerAssetRows: readonly ShieldTokenPickerItem[] = fixedDirection
     ? [
         ...evmShieldPickerRows,
         ...(fixedZcashNativeAvailable || (fixedDirection === 'shield' && supportsConfidentialZec)
@@ -1288,6 +1288,7 @@ function DepositWithdrawForm({
                 symbol: 'ZEC',
                 ...getZcashTokenPickerChain(currentNetwork),
                 nativeIconChain: 'zcash',
+                zcashFundingSource: fixedZcashSource,
                 availableRaw: parseDisplayUnitAmount(fixedZcashAvailable, ZEC_DECIMALS),
                 decimals: ZEC_DECIMALS,
                 priceUsd: zecPrice,
@@ -1295,7 +1296,7 @@ function DepositWithdrawForm({
                   withdrawalPicker && Number(fixedZcashAvailable) <= 0
                     ? 'No available balance'
                     : undefined
-              }
+              } satisfies ShieldTokenPickerItem
             ]
           : []),
         ...(fixedDirection === 'unshield' && fixedNearZecAsset

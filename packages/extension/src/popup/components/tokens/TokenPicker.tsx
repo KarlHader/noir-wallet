@@ -164,8 +164,8 @@ export function TokenPicker<Row>({
     name: network.label
   }))
   const available = orderedNetworks.filter(network => !network.disabledReason)
-  const primary = available.slice(0, 5)
-  const more = available.slice(5)
+  const primary = available.slice(0, 6)
+  const more = available.slice(primary.length)
   const disabled = orderedNetworks.filter(network => network.disabledReason)
   const inspectedResult = tokenDiscovery.result
   const discoveredAddress = inspectedResult?.candidate.contractAddress
@@ -216,7 +216,7 @@ export function TokenPicker<Row>({
         {toolbar}
         {networks.length > 0 && (
           <div
-            className="mt-3 flex items-center gap-2 overflow-x-auto pb-1"
+            className="mt-3 flex items-center gap-1.5 overflow-x-auto pb-1"
             role="group"
             aria-label="Filter assets by network"
           >
@@ -226,7 +226,7 @@ export function TokenPicker<Row>({
               aria-pressed={effectiveNetwork === 'all'}
               title="All networks"
               className={cn(
-                'wallet-interactive flex size-10 shrink-0 items-center justify-center rounded-md border text-sm focus-visible:outline-2 focus-visible:outline-primary',
+                'wallet-interactive flex size-9 shrink-0 items-center justify-center rounded-md border text-sm focus-visible:outline-2 focus-visible:outline-primary',
                 effectiveNetwork === 'all'
                   ? 'border-primary text-foreground'
                   : 'border-transparent bg-card text-muted hover:text-foreground'
@@ -243,7 +243,7 @@ export function TokenPicker<Row>({
                 aria-pressed={effectiveNetwork === network.id}
                 title={network.label}
                 className={cn(
-                  'wallet-interactive flex size-10 shrink-0 items-center justify-center rounded-md border hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary',
+                  'wallet-interactive flex size-9 shrink-0 items-center justify-center rounded-md border hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary',
                   effectiveNetwork === network.id
                     ? 'border-primary bg-primary/10'
                     : 'border-transparent bg-card'
@@ -267,7 +267,7 @@ export function TokenPicker<Row>({
                 title="More networks"
                 onClick={() => setNetworkPickerOpen(true)}
                 className={cn(
-                  'wallet-interactive flex size-10 shrink-0 items-center justify-center rounded-md border bg-card focus-visible:outline-2 focus-visible:outline-primary',
+                  'wallet-interactive flex size-9 shrink-0 items-center justify-center rounded-md border bg-card focus-visible:outline-2 focus-visible:outline-primary',
                   more.some(network => network.id === effectiveNetwork)
                     ? 'border-primary bg-primary/10'
                     : 'border-transparent'

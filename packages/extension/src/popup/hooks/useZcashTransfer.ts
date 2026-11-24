@@ -196,6 +196,10 @@ export function useZcashTransfer({
   const [maxSelected, setMaxSelected] = useState(retryDraft?.maxSelected ?? false)
   const [memo, setMemo] = useState(retryDraft?.memo ?? '')
   const [showReview, setShowReview] = useState(false)
+  const [reviewedUnshieldMax, setReviewedUnshieldMax] = useState<{
+    amount: string
+    fee: string
+  } | null>(null)
   const [isHardwareSigning, setIsHardwareSigning] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
   useLayoutEffect(() => {
@@ -253,6 +257,8 @@ export function useZcashTransfer({
       : selectedFundingSource)
   const isTransparentToShieldMove =
     isSelfMove && !isConfidentialMove && fundingSource === 'transparent'
+  const nativeUnshieldMax =
+    isSelfMove && !isConfidentialMove && fundingSource === 'shielded' && maxSelected
   const actionLabel = shieldReceive?.actionLabel ?? (shieldReceive ? 'Deposit' : 'Send')
   const sendDraftPath =
     shieldReceive?.retryPath ??
@@ -470,12 +476,16 @@ export function useZcashTransfer({
       !!effectiveToAddress &&
       !recipientFormatError &&
       !nativeShieldMaxSelected &&
+      !nativeUnshieldMax &&
       (!maxSelected || exactMaximum === null) &&
       !isMaxTransferAmount
   })
 
   const isMaxFeeMode =
-    nativeShieldMaxSelected || (maxSelected && exactMaximum !== null) || isMaxTransferAmount
+    nativeShieldMaxSelected ||
+    nativeUnshieldMax ||
+    (maxSelected && exactMaximum !== null) ||
+    isMaxTransferAmount
   const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
   const displayedFeeLoadingByTier = isMaxFeeMode
     ? maxTransfer.loadingByTier
@@ -493,7 +503,7 @@ export function useZcashTransfer({
     feeRequired &&
     !feeError &&
     !staleSelectedMax &&
-    (!nativeShieldMaxSelected || isMaxTransferAmount) &&
+    (!(nativeShieldMaxSelected || nativeUnshieldMax) || isMaxTransferAmount) &&
     !!(isMaxFeeMode ? maxTransfer.feeQuote : feeEstimate.feeQuote) &&
     (isMaxFeeMode ? maxTransfer.feeQuote!.expiresAt : feeEstimate.feeQuote!.expiresAt) >
       Date.now() &&
@@ -583,6 +593,7 @@ export function useZcashTransfer({
     : isTransparentToShieldMove
       ? (exactMaximum ?? '')
       : feeAdjustedAvailable
+  const nextMaxAmount = nativeUnshieldMax ? exactMaximum : effectiveMaxStr
   const amountError = isTransparentToShieldMove
     ? null
     : getFundingAmountError(amount, sourceBalance, feeAdjustedAvailable)
@@ -595,6 +606,12 @@ export function useZcashTransfer({
     balanceKnown && !!fromAddress && safeBig(amount || '0').gt(0) && !reviewInsufficient
   const selectedFeeZec = isMaxFeeMode ? (maxTransfer.fee ?? estimatedFeeZec) : estimatedFeeZec
   const selectedFeeQuote = isMaxFeeMode ? maxTransfer.feeQuote : feeEstimate.feeQuote
+  const unshieldMaxChanges = Boolean(
+    nativeUnshieldMax &&
+    reviewedUnshieldMax &&
+    feeReady &&
+    (amount !== reviewedUnshieldMax.amount || selectedFeeZec !== reviewedUnshieldMax.fee)
+  )
   const latestFee = useRef({
     selectedFeeQuote,
     selectedFeeZec,
@@ -619,14 +636,21 @@ export function useZcashTransfer({
   }
 
   useEffect(() => {
-    if (showReview && staleSelectedMax && !isConfirming && !isConfidentialMove) setShowReview(false)
-  }, [showReview, staleSelectedMax, isConfirming, isConfidentialMove])
+    if (
+      showReview &&
+      staleSelectedMax &&
+      !isConfirming &&
+      !isConfidentialMove &&
+      !nativeUnshieldMax
+    )
+      setShowReview(false)
+  }, [showReview, staleSelectedMax, isConfirming, isConfidentialMove, nativeUnshieldMax])
 
   useEffect(() => {
-    if (active && maxSelected && effectiveMaxStr && !(usesBufferedMaximum && showReview)) {
-      setAmount(current => (current === effectiveMaxStr ? current : effectiveMaxStr))
+    if (active && maxSelected && nextMaxAmount && !(usesBufferedMaximum && showReview)) {
+      setAmount(current => (current === nextMaxAmount ? current : nextMaxAmount))
     }
-  }, [active, maxSelected, effectiveMaxStr, usesBufferedMaximum, showReview])
+  }, [active, maxSelected, nextMaxAmount, usesBufferedMaximum, showReview])
 
   useEffect(() => {
     if (!active) setShowReview(false)
@@ -737,6 +761,7 @@ export function useZcashTransfer({
         isZcashSendRecipientReady(effectiveToAddress, recipientFormatError, zns.loading))
     ) {
       if (isConfidentialMove) beginMoveReview()
+      setReviewedUnshieldMax(nativeUnshieldMax ? { amount, fee: selectedFeeZec } : null)
       if (shieldReceive?.actionLabel) {
         if (isMaxFeeMode) void maxTransfer.request(true)
         else feeEstimate.retry()
@@ -763,6 +788,7 @@ export function useZcashTransfer({
       !currentAccount ||
       syncBlocked ||
       moveUnavailable ||
+      unshieldMaxChanges ||
       (isConfidentialMove && !moveReviewReady)
     )
       return
@@ -1261,31 +1287,40 @@ export function useZcashTransfer({
       feeControl,
       quote: reviewedMoveQuote,
       changes: moveReviewStatus.changes,
-      error:
-        isConfidentialMove && !moveReviewReady && !moveReviewStatus.acceptLabel
-          ? {
-              message: moveQuoteLoading
-                ? 'Refreshing quote…'
-                : (moveQuoteNotice ??
-                  moveQuoteError ??
-                  (moveQuote ? 'Quote expired.' : 'Refreshing quote…')),
-              tone:
-                moveQuoteLoading || !moveQuoteError || moveQuoteNotice
-                  ? ('muted' as const)
-                  : undefined,
-              onRetry:
-                !moveQuoteLoading && (moveQuoteError || moveQuote) ? retryMoveQuote : undefined
-            }
-          : reviewInsufficient && amountErrorCopy
-            ? { message: amountErrorCopy }
-            : feeError
-              ? { message: feeErrorMessage, onRetry: retryFeeEstimate }
-              : null,
+      error: unshieldMaxChanges
+        ? { message: 'The amount or network fee changed. Review the updated transfer.' }
+        : nativeUnshieldMax && feeError
+          ? { message: feeErrorMessage, onRetry: retryFeeEstimate }
+          : nativeUnshieldMax && feeCalculating
+            ? { message: 'Refreshing network fee…', tone: 'muted' as const }
+            : isConfidentialMove && !moveReviewReady && !moveReviewStatus.acceptLabel
+              ? {
+                  message: moveQuoteLoading
+                    ? 'Refreshing quote…'
+                    : (moveQuoteNotice ??
+                      moveQuoteError ??
+                      (moveQuote ? 'Quote expired.' : 'Refreshing quote…')),
+                  tone:
+                    moveQuoteLoading || !moveQuoteError || moveQuoteNotice
+                      ? ('muted' as const)
+                      : undefined,
+                  onRetry:
+                    !moveQuoteLoading && (moveQuoteError || moveQuote) ? retryMoveQuote : undefined
+                }
+              : reviewInsufficient && amountErrorCopy
+                ? { message: amountErrorCopy }
+                : feeError
+                  ? { message: feeErrorMessage, onRetry: retryFeeEstimate }
+                  : null,
       confirmLabel: isHardwareSigning
         ? 'Waiting for wallet...'
-        : (moveReviewStatus.acceptLabel ?? 'Confirm'),
-      confirmTone: moveReviewStatus.acceptLabel ? ('warning' as const) : ('default' as const),
-      preparing: showReview && !syncBlocked && (moveQuoteLoading || feeCalculating),
+        : (moveReviewStatus.acceptLabel ?? (unshieldMaxChanges ? 'Accept changes' : 'Confirm')),
+      confirmTone:
+        moveReviewStatus.acceptLabel || unshieldMaxChanges
+          ? ('warning' as const)
+          : ('default' as const),
+      preparing:
+        showReview && !syncBlocked && (moveQuoteLoading || (!nativeUnshieldMax && feeCalculating)),
       confirming: isConfirming,
       submitting: isConfirming && !isHardwareWallet,
       confirmDisabled:
@@ -1298,7 +1333,11 @@ export function useZcashTransfer({
         isHardwareSigning,
       cancelDisabled: isConfirming || isHardwareSigning,
       onCancel: () => setReviewOpen(false),
-      onConfirm: moveReviewStatus.acceptLabel ? acceptMoveReview : () => void handleConfirm()
+      onConfirm: moveReviewStatus.acceptLabel
+        ? acceptMoveReview
+        : unshieldMaxChanges
+          ? () => setReviewedUnshieldMax({ amount, fee: selectedFeeZec })
+          : () => void handleConfirm()
     }
   }
 }

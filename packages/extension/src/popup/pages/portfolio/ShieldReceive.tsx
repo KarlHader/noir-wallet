@@ -8,6 +8,7 @@ import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector } from '@/popup/components/common/ChainSelector'
 import type { Network } from '@/types/wallet'
 import { PageHeader } from '@/popup/components/common/PageHeader'
+import { useNavigate } from '@/popup/provider/Router'
 import { ShieldProviderDialog } from '@/popup/components/portfolio/ShieldProviderPicker'
 import {
   ShieldReceiveAddress,
@@ -103,6 +104,7 @@ function ShieldReceiveFormSkeleton() {
 }
 
 export function ShieldReceive() {
+  const { goBack } = useNavigate()
   const [params] = useSearchParams()
   const { key: navigationKey } = useLocation()
   const walletId = params.get('walletId')
@@ -139,6 +141,7 @@ export function ShieldReceive() {
               accountCatalog={catalog}
               network={network}
               entry={entry}
+              onBack={goBack}
             />
           ) : accountChanged ? (
             <TransactionNotice tone="muted" message="Account changed. Reopen Receive." />
@@ -160,12 +163,14 @@ function ShieldReceiveForm({
   account,
   accountCatalog,
   network,
-  entry
+  entry,
+  onBack
 }: {
   readonly account: AccountNetworksView
   readonly accountCatalog: AccountNetworksCatalogView | null
   readonly network: Network
   readonly entry: ShieldReceiveEntry
+  readonly onBack: () => void
 }) {
   const slippageBps = useSwapPreferences(state => Math.round(state.slippage * 100))
   const catalog = useShieldReceiveCatalog(canReceiveNearShield(network, account))
@@ -209,12 +214,18 @@ function ShieldReceiveForm({
   const [picker, setPicker] = useState<'token' | 'network' | 'provider' | null>(() =>
     entry.assetId || entry.provider ? null : 'token'
   )
-  const closePicker = () => setPicker(null)
   const [selection, setSelection] = useState<{
     tokenId: string
     routeId: string | null
     provider?: ShieldProvider
   } | null>(null)
+  const closePicker = () => {
+    if (picker === 'token' && !selection && !entry.assetId && !entry.provider) {
+      onBack()
+      return
+    }
+    setPicker(null)
+  }
   const { token, route } = resolveShieldReceiveSelection(tokens, selection, entry, !catalog.loading)
   const networks = [...new Map(token?.routes.map(item => [item.chain.id, item.chain])).values()]
   const chain = route?.chain
