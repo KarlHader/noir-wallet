@@ -42,6 +42,7 @@ export interface ActivityItem {
   readonly id: string
   readonly source: ActivitySource
   readonly accountMode?: 'private'
+  readonly incognitoDeposit?: true
   readonly assetDomains?: readonly ('public' | 'shield')[]
   readonly scope: ActivityScope
   readonly kind: TransactionKind

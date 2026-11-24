@@ -1,6 +1,7 @@
 import type { ActivityItem } from '@/core/activity'
 import { parseAssetId } from '@/core/chains/registry'
 import { ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { detectZcashAddressType } from '@/lib/zcash-memo'
 import { isExternalShieldDepositActivity } from './activity-balance-route'
 
 export type ActivityPerspective = {
@@ -52,6 +53,30 @@ function routeDomain(mode: Route['sourceAccountMode']): Domain | undefined {
         : undefined
 }
 
+export function isPublicSendToShield(
+  item: ActivityItem,
+  perspective: ActivityPerspective,
+  route?: Route | null
+): boolean {
+  if (perspective.viewedDomain !== 'public' || item.kind !== 'transfer') return false
+  const snapshot = item.snapshot
+  const recipient = snapshot?.recipient
+  if (snapshot?.direction !== 'outgoing') return false
+  if (
+    route?.sourceFundingSource === 'transparent' &&
+    route.destinationAccountMode === 'Confidential'
+  )
+    return true
+  return (
+    item.source === 'zcash-v1' &&
+    item.assetDomains?.includes('public') === true &&
+    recipient !== undefined &&
+    (recipient.chainId === ZCASH_CHAIN_IDS.mainnet ||
+      recipient.chainId === ZCASH_CHAIN_IDS.testnet) &&
+    detectZcashAddressType(recipient.address) === 'shielded'
+  )
+}
+
 function shieldProviderForAsset(
   item: ActivityItem,
   assetId: string | undefined
@@ -74,6 +99,7 @@ export function getActivityAction(
   perspective: ActivityPerspective = {},
   route?: Route | null
 ): ActivityAction {
+  if (item.incognitoDeposit) return { label: 'Deposit', side: 'destination' }
   if (item.kind === 'receive' || isExternalShieldDepositActivity(item))
     return { label: 'Receive', side: 'destination' }
 
@@ -96,6 +122,7 @@ export function getActivityAction(
   const direction = item.snapshot?.direction
   const sourceAssetId = route?.source?.assetId ?? item.snapshot?.primaryAmount?.assetId
   const destinationAssetId = route?.destination?.assetId ?? item.snapshot?.counterAmount?.assetId
+  if (isPublicSendToShield(item, perspective, route)) return { label: 'Send', side: 'source' }
   if (shield?.operation === 'swap') {
     return {
       label: 'Swap',
@@ -110,6 +137,14 @@ export function getActivityAction(
   }
   if (direction === 'self') {
     const side = viewed === destination ? 'destination' : 'source'
+    if (source === 'private' && destination === 'shield' && shield?.operation === 'deposit') {
+      return { label: 'Withdraw', side: 'source' }
+    }
+    if (source === 'shield' && destination === 'private' && shield?.operation === 'withdraw') {
+      return viewed === 'private'
+        ? { label: 'Deposit', side: 'destination' }
+        : { label: 'Send', side: 'source' }
+    }
     if (destination === 'shield' && source !== 'shield' && shield?.operation === 'deposit') {
       return { label: 'Shield', side }
     }

@@ -170,7 +170,9 @@ function RouteActivityRow({
     : presentation.destinationAccountMode
   const subtitle = isSwap
     ? swapRoute
-    : ((action === 'Send' ? getActivitySendSubtitle(item, presentation) : undefined) ??
+    : ((action === 'Send'
+        ? getActivitySendSubtitle(item, presentation, undefined, perspective)
+        : undefined) ??
       destinationMode ??
       presentation.destinationNetwork)
   const showStatus = item.status !== 'final'

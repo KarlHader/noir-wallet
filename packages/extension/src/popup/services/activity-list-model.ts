@@ -1,7 +1,7 @@
 import { getActivityAssetEffects, type ActivityItem, type ActivityReadModel } from '@/core/activity'
 import { getZcashChainId, parseAssetId } from '@/core/chains/registry'
 import { resolveActivityChainId } from '@/core/activity/activity-chain'
-import { getActivityBalanceDomains, projectActivityReceipts } from './activity-balance-route'
+import { getActivityBalanceDomains, resolveActivityReceipts } from './activity-balance-route'
 
 const ZCASH_CHAIN_IDS = new Set([getZcashChainId('mainnet'), getZcashChainId('testnet')])
 
@@ -91,9 +91,9 @@ export function filterActivityItems(input: {
         ? 'private'
         : 'public')
   const receipts = domain
-    ? projectActivityReceipts(input.items, domain, input.executionAddressModes)
-    : []
-  const items = input.items.concat(receipts)
+    ? resolveActivityReceipts(input.items, domain, input.executionAddressModes)
+    : undefined
+  const items = input.items.concat(receipts?.projected ?? [])
   const visible = items.filter(item => {
     if (domain && !getActivityBalanceDomains(item).includes(domain)) return false
     if (input.status && input.status !== 'all' && getActivityFilterStatus(item) !== input.status) {
@@ -138,9 +138,12 @@ export function filterActivityItems(input: {
       originMatchesAsset
     )
   })
-  return receipts.length === 0
-    ? visible
-    : visible.sort((left, right) => right.createdAt - left.createdAt)
+  if (receipts?.projected.length) visible.sort((left, right) => right.createdAt - left.createdAt)
+  return receipts?.depositReceiptIds.size
+    ? visible.map(item =>
+        receipts.depositReceiptIds.has(item.id) ? { ...item, incognitoDeposit: true } : item
+      )
+    : visible
 }
 
 function activityDateLabel(timestamp: number, now: number): string {

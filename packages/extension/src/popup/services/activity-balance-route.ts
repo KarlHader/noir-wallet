@@ -97,12 +97,16 @@ function receiptIdentity(
   ])
 }
 
-export function projectActivityReceipts(
+export function resolveActivityReceipts(
   items: readonly ActivityItem[],
   domain: ActivityBalanceDomain,
   modes?: ActivityExecutionAddressModes
-): readonly ActivityItem[] {
-  const receipts = new Set<string>()
+): {
+  readonly projected: readonly ActivityItem[]
+  readonly depositReceiptIds: ReadonlySet<string>
+} {
+  const receipts = new Map<string, string | null>()
+  const depositReceiptIds = new Set<string>()
   for (const item of items) {
     if (
       item.status !== 'final' ||
@@ -117,7 +121,10 @@ export function projectActivityReceipts(
     )?.evidence?.transactionHash
     if (!hash) continue
     const primary = item.snapshot?.primaryAmount
-    if (primary) receipts.add(receiptIdentity(item, domain, primary, hash))
+    if (primary) {
+      const key = receiptIdentity(item, domain, primary, hash)
+      receipts.set(key, receipts.has(key) ? null : item.id)
+    }
   }
 
   const projected: ActivityItem[] = []
@@ -133,6 +140,11 @@ export function projectActivityReceipts(
     )
       continue
     const shield = snapshot.shield
+    const incognitoDeposit =
+      domain === 'private' &&
+      snapshot.direction === 'self' &&
+      ((shield?.operation === 'withdraw' && shield.sourceDomain === 'shield') ||
+        (shield?.operation === 'cluster' && shield.sourceDomain === 'public'))
     if (
       shield &&
       domain === 'public' &&
@@ -184,6 +196,8 @@ export function projectActivityReceipts(
         continue
       if (onchainCredit) {
         const key = receiptIdentity(item, domain, amount, onchainCredit)
+        const observedReceiptId = receipts.get(key)
+        if (incognitoDeposit && observedReceiptId) depositReceiptIds.add(observedReceiptId)
         if (receipts.has(key)) continue
       }
       const fundingAccount =
@@ -202,6 +216,7 @@ export function projectActivityReceipts(
         source: item.source,
         scope: item.scope,
         kind: 'receive',
+        ...(incognitoDeposit ? { incognitoDeposit: true as const } : {}),
         ...(domain === 'private' ? { accountMode: 'private' as const } : {}),
         ...(domain === 'shield' ? { assetDomains: ['shield'] as const } : {}),
         status: 'final',
@@ -237,5 +252,5 @@ export function projectActivityReceipts(
       })
     }
   }
-  return projected
+  return { projected, depositReceiptIds }
 }

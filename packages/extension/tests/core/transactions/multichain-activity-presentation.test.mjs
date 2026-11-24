@@ -128,11 +128,11 @@ test.describe('Multichain Activity presentation', () => {
       }
     }
     expect(getActivityAction(item, { viewedDomain: 'private' })).toEqual({
-      label: 'Receive',
+      label: 'Deposit',
       side: 'destination'
     })
     expect(getActivityAction(item, { viewedDomain: 'shield' })).toEqual({
-      label: 'Withdraw',
+      label: 'Send',
       side: 'source'
     })
     const zcashWithdrawal = {
