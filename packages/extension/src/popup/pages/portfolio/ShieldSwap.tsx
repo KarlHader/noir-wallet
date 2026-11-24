@@ -1006,8 +1006,17 @@ function ShieldSwapForm({
             icon: prepared.from.asset.metadata.iconUrl
           }}
           amount={prepared.amount}
+          amountPrefix="−"
           network=""
-          exchange
+          submissionDestination={{
+            label: 'Expected receive',
+            content: (
+              <AmountDisplay
+                value={output}
+                symbol={formatSymbol(prepared.to.asset.metadata.symbol)}
+              />
+            )
+          }}
           summary={
             <TransactionReviewExchangeSummary
               presentation="exchange"

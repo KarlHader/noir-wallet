@@ -6581,7 +6581,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                   : 'confirmed'
           }}
           beforeSubmission={{
-            token: swap.tokenIn,
             error: 'message' in managed ? managed.message : null,
             continueDisabled: isPreparingReview || !liveQuoteRequest || walletSourcesLoading,
             onContinue:
@@ -6783,6 +6782,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               acceptQuoteReview(nativeReviewScope, review.quoteId)
           }}
           isLoading={isSending}
+          submitting={isSending}
           onCancel={handleReturnToInput}
           onConfirm={() => void handleConfirmSwap()}
         />
@@ -7117,6 +7117,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           slippage={swap.slippage}
           onConfirm={handleConfirmSwap}
           isLoading={isSending || isPreparingReview || refreshingMaximumReview}
+          submitting={isSending}
           preparationError={transferPreparationError}
           onRetryPreparation={retryPreparation}
           confirmLabel={
