@@ -430,6 +430,8 @@ export function provisionKeystoneHardware(input: ProvisionHardwareWalletInput) {
   return provisionHardwareWallet(input, 'keystone')
 }
 
-export function provisionLedgerHardware(input: ProvisionHardwareWalletInput) {
-  return provisionHardwareWallet(input, 'ledger')
+export async function provisionLedgerHardware(input: ProvisionHardwareWalletInput) {
+  const result = await provisionHardwareWallet(input, 'ledger')
+  void chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
+  return result
 }
