@@ -7,8 +7,16 @@ import {
   parseChainId
 } from '@/core/chains/registry'
 import type { AccountRef } from '@/core/dapp/dapp-manager'
+import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
 import type { WalletConnectedDApp } from '@/core/dapp/shield-site-connections'
 import type { Network } from '@/types'
+
+export function resolveDAppFooterPalette(
+  darkView: boolean,
+  executionMode: DAppExecutionMode | null
+): 'public' | undefined {
+  return darkView || executionMode === 'private' ? undefined : 'public'
+}
 
 export interface DAppPermissionPresentation {
   readonly chainId: string

@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react'
 import { formatAccountName } from '@/lib/format'
 import { toast } from '@/store/toast-store'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
+import { resolveDAppFooterPalette } from '@/popup/services/dapp-connection-presentation'
 import { DAppAddressModeSelector, type DAppAddressModeControl } from './DAppAddressModeSelector'
 
 interface DAppConnectPromptProps {
@@ -32,7 +33,7 @@ export function DAppConnectPrompt({
 }: DAppConnectPromptProps) {
   const [connecting, setConnecting] = useState(false)
   const incognito = executionMode === 'private'
-  const palette = !darkPalette && executionMode === 'main' ? 'public' : undefined
+  const palette = resolveDAppFooterPalette(darkPalette, executionMode)
   const connectionBusy =
     connecting || (canConnect && Boolean(modeControl?.busy || (modeControl && !executionMode)))
 
