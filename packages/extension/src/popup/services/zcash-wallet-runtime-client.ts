@@ -14,6 +14,7 @@ type RuntimeResponse = Record<string, unknown>
 export interface UnlockResult {
   readonly success: boolean
   readonly upgradeFailed?: boolean
+  readonly needsWalletImport?: boolean
   readonly isLocked?: boolean
   readonly remainingAttempts?: number
   readonly lockRemainingMs?: number
@@ -168,6 +169,7 @@ export const zcashWalletRuntimeClient = Object.freeze({
     }
     return {
       success: response.success === true,
+      ...(response.needsWalletImport === true ? { needsWalletImport: true } : {}),
       ...(response.failure === 'wrong_password' ||
       response.failure === 'credential_missing' ||
       response.failure === 'credential_invalid' ||

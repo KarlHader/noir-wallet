@@ -42,7 +42,7 @@ import {
 } from '@/ports/repositories'
 import type { RetainedV1MigrationChainProfile } from './retained-v1-migration-coordinator'
 import {
-  assertKeystoneZcashVerificationMatches,
+  verifyRetainedZcashHardwareWallet,
   type KeystoneZcashVerificationPort,
   type KeystoneZcashVerificationResult
 } from './keystone-hardware-verification'
@@ -368,7 +368,7 @@ export class RetainedV1HardwareInventoryCoordinator {
     const prepared: PreparedHardwareWallet[] = []
     for (const [index, wallet] of missing.entries()) {
       const account = wallet.accounts[0]
-      const verification = await this.verifier.verifyZcash({
+      const verification = await verifyRetainedZcashHardwareWallet(this.verifier, wallet.id, {
         vendor: wallet.keySource as 'keystone' | 'ledger',
         envelope: envelopes[index].value,
         password: input.password,
@@ -379,12 +379,6 @@ export class RetainedV1HardwareInventoryCoordinator {
           birthdayHeight: account.birthdayHeight,
           expected: account.addresses
         }
-      })
-      assertKeystoneZcashVerificationMatches(verification, {
-        accountIndex: account.accountIndex,
-        expected: account.addresses,
-        chainId: input.chains.zcashChainId,
-        network: input.chains.zcashNetwork
       })
       const suffix = (await sha256(`${fingerprint}:${wallet.id}`)).slice(0, 32)
       prepared.push({

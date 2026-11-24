@@ -11,6 +11,7 @@ import { lookupTokenContractIcon } from './token-contract-icon'
 import { openTokenManager } from './token-manager-window'
 import { handleEvmWalletChoiceMessage } from './evm-wallet-choice'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
+import { isNativeHardwareWalletId } from '@/core/wallet/native-hardware-identity'
 import {
   isAccountChainEnabled,
   isAccountNetworkEnabled,
@@ -7052,10 +7053,20 @@ async function performWalletUnlock(password: string): Promise<any> {
       }
     }
 
-    const result = await backgroundZcashWalletRuntime.unlock(password, {
+    let result = await backgroundZcashWalletRuntime.unlock(password, {
       allowMissingCredentialRecovery: true
     })
-    if (!result.success) {
+    const previousWalletId = useWalletStore.getState().currentWalletId
+    const previousWallet = previousWalletId
+      ? useWalletStore.getState().getWallet(previousWalletId)
+      : undefined
+    const canRecoverIncompatibleHardware =
+      result.failure === 'credential_invalid' &&
+      previousWallet !== undefined &&
+      previousWallet !== null &&
+      isZcashHardwareKeySource(previousWallet.keySource) &&
+      !isNativeHardwareWalletId(previousWallet.id)
+    if (!result.success && !canRecoverIncompatibleHardware) {
       return result
     }
 
@@ -7067,6 +7078,21 @@ async function performWalletUnlock(password: string): Promise<any> {
             result.recoveredWalletId
           )
         : await credentialLifecycle.synchronizeRetainedV1(password)
+    if (!result.success && !credentials.detachedHardwareWallet) return result
+    if (credentials.detachedHardwareWallet) {
+      await rehydrateWalletStore()
+      if (credentials.status === 'no-compatible-wallets') {
+        await performWalletLockState()
+        return { success: false, needsWalletImport: true }
+      }
+      if (useWalletStore.getState().currentWalletId !== previousWalletId) {
+        await backgroundZcashWalletRuntime.lock()
+        if (useWalletStore.getState().currentWalletId) {
+          result = await backgroundZcashWalletRuntime.unlock(password)
+          if (!result.success) return result
+        }
+      }
+    }
     if (result.recoveredWalletId && result.recoveredAccountId) {
       const selection = await credentialLifecycle.selectActiveAccount(
         result.recoveredWalletId,

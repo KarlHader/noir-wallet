@@ -41,9 +41,13 @@ import {
   parseKeystoneZcashVerificationInput,
   parseKeystoneZcashVerificationResult
 } from '@/infrastructure/keyring/migration'
+import { incompatibleHardwareCredentialError } from '@/infrastructure/keyring/migration/keystone-hardware-verification'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import { getRetainedZcashHardwareBirthdayHeight } from '@/core/wallet/birthday-height'
-import { parseStoredHardwareCredential } from '@/core/wallet/hardware-wallet-data'
+import {
+  legacyZcashHardwareWalletData,
+  parseStoredHardwareCredential
+} from '@/core/wallet/hardware-wallet-data'
 import { getNetworkConfig } from '@/lib/runtime-network'
 import {
   CredentialCapsuleWorkerHost,
@@ -67,10 +71,14 @@ async function verifyKeystoneZcashAccount(value: unknown) {
     const decrypted = await SecureStorage.decrypt(input.envelope, input.password)
     stage = 'credential-validation'
     const credential = parseStoredHardwareCredential(JSON.parse(decrypted))
+    const account = legacyZcashHardwareWalletData(credential, {
+      accountIndex: input.account.accountIndex,
+      network: input.network
+    })
     if (
-      credential.accountExport.protocol !== 'zcash-accounts-v1' ||
+      !account ||
       (input.vendor !== undefined && credential.vendor !== input.vendor) ||
-      credential.accountExport.accountHdIndex !== input.account.accountIndex
+      account.accountHdIndex !== input.account.accountIndex
     ) {
       throw new Error('Hardware credential does not match the account')
     }
@@ -86,9 +94,9 @@ async function verifyKeystoneZcashAccount(value: unknown) {
     const accountId = await zcashWorkerClient.requestToWorker('wallet.createAccountUfvk', {
       walletId,
       accountName: 'Hardware verification',
-      ufvk: credential.accountExport.ufvk,
-      seedFingerprintHex: credential.accountExport.seedFingerprintHex,
-      accountHdIndex: credential.accountExport.accountHdIndex,
+      ufvk: account.ufvk,
+      seedFingerprintHex: account.seedFingerprintHex,
+      accountHdIndex: account.accountHdIndex,
       keySource: credential.vendor,
       birthdayHeight: getRetainedZcashHardwareBirthdayHeight(
         input.account.birthdayHeight,
@@ -106,16 +114,20 @@ async function verifyKeystoneZcashAccount(value: unknown) {
     const fullUnified = addresses.full_unified
     const coinType = input.network === 'mainnet' ? 133 : 1
     return parseKeystoneZcashVerificationResult({
-      accountIndex: credential.accountExport.accountHdIndex,
+      accountIndex: account.accountHdIndex,
       chainId: input.chainId,
-      derivationPath: `m/32'/${coinType}'/${credential.accountExport.accountHdIndex}'`,
+      derivationPath: `m/32'/${coinType}'/${account.accountHdIndex}'`,
       identity: fullUnified ?? addresses.unified,
       transparent: addresses.transparent,
       shielded: addresses.unified,
       ...(fullUnified === undefined ? {} : { fullUnified })
     })
   } catch {
-    throw new Error(`Keystone Zcash verification failed (${stage})`)
+    throw new Error(
+      stage === 'credential-validation'
+        ? incompatibleHardwareCredentialError
+        : `Keystone Zcash verification failed (${stage})`
+    )
   } finally {
     if (walletId) {
       await zcashWorkerClient.requestToWorker('wallet.reset', { walletId }).catch(() => {})

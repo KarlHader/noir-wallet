@@ -43,6 +43,7 @@ import {
 import type { RetainedV1MigrationChainProfile } from '@/infrastructure/keyring/migration'
 import { assertPasswordChangeCredentialInventorySupported } from '@/infrastructure/keyring/migration/credential-password-change-support'
 import { decodeV1EncryptedCredentialEnvelope } from '@/infrastructure/keyring/migration/v1-credential-envelope'
+import { IncompatibleRetainedHardwareWalletError } from '@/infrastructure/keyring/migration/keystone-hardware-verification'
 import { parseRawEncryptedVault } from '@/infrastructure/keyring/multichain/raw-wallet-engine'
 import type { CredentialSessionUnlockCredential } from '@/infrastructure/keyring/session'
 import {
@@ -79,7 +80,11 @@ import type { NetworkAccountMetadataInput } from '@/infrastructure/keyring/netwo
 import type { KeyringCommandBinding, KeyringCommandPayload } from '@/core/keyring/ports'
 import { BackgroundMultichainTransport } from '@/infrastructure/keyring/multichain/background-transport'
 import { parseRawExportedPrivateKey } from '@/infrastructure/keyring/multichain/raw-wallet-engine'
-import { isStoredAccountNetworkEnabled } from '@/lib/wallet-metadata-storage'
+import {
+  detachIncompatibleRetainedHardwareWallet,
+  isStoredAccountNetworkEnabled,
+  WALLET_STATE_KEY
+} from '@/lib/wallet-metadata-storage'
 
 // This migration-only profile anchors identities; it does not enable chain runtime capabilities.
 function getProvisioningChainProfile(): RetainedV1MigrationChainProfile {
@@ -96,10 +101,12 @@ export type RetainedV1SynchronizationStatus =
   | 'already-migrated'
   | 'synchronized'
   | 'already-synchronized'
+  | 'no-compatible-wallets'
 
 export interface RetainedV1SynchronizationResult {
   readonly status: RetainedV1SynchronizationStatus
   readonly generationId?: string
+  readonly detachedHardwareWallet?: boolean
 }
 
 interface ActiveMultichainCredentialRecord {
@@ -258,20 +265,17 @@ export class CredentialLifecycleCoordinator {
   synchronizeRetainedV1(password: string): Promise<RetainedV1SynchronizationResult> {
     const operation = this.synchronizationQueue.then(async () => {
       const result = await this.runRetainedV1Synchronization(password)
+      if (result.status === 'no-compatible-wallets') return result
       const upgradedGenerationId = await this.upgradeLegacyCredentialAuthentication(password)
       const evmMetadata = await this.evmNetworkMetadata.synchronize(
         await this.readPersistedEvmNetworkChainIds()
       )
       const generationId = evmMetadata.generationId ?? upgradedGenerationId ?? result.generationId
-      return upgradedGenerationId !== null
-        ? Object.freeze({
-            status: 'synchronized' as const,
-            ...(generationId === undefined ? {} : { generationId })
-          })
-        : Object.freeze({
-            status: result.status,
-            ...(generationId === undefined ? {} : { generationId })
-          })
+      return Object.freeze({
+        ...result,
+        status: upgradedGenerationId !== null ? ('synchronized' as const) : result.status,
+        ...(generationId === undefined ? {} : { generationId })
+      })
     })
     this.synchronizationQueue = operation.then(
       () => undefined,
@@ -507,9 +511,54 @@ export class CredentialLifecycleCoordinator {
   private async runRetainedV1Synchronization(
     password: string
   ): Promise<RetainedV1SynchronizationResult> {
-    const local = await chrome.storage.local.get(null)
+    let detachedHardwareWallet = false
+    const changedWallets = new Set<string>()
+    while (true) {
+      const local = await chrome.storage.local.get(null)
+      try {
+        const result = await this.synchronizeRetainedV1Inventory(
+          local,
+          password,
+          detachedHardwareWallet
+        )
+        return detachedHardwareWallet
+          ? Object.freeze({ ...result, detachedHardwareWallet })
+          : result
+      } catch (error) {
+        if (!(error instanceof IncompatibleRetainedHardwareWalletError)) throw error
+        const wallet = discoverV1Metadata(local).wallets.find(item => item.id === error.walletId)
+        if (!wallet || wallet.keySource === 'software') throw error
+        const pointer = await this.storageRepository.getActivePointer()
+        if (pointer) {
+          const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
+          if (!snapshot || snapshot.keyDomains.some(domain => domain.id === wallet.id)) throw error
+        }
+        const detached = await detachIncompatibleRetainedHardwareWallet(
+          wallet.id,
+          wallet.keySource,
+          local[WALLET_STATE_KEY],
+          local[wallet.credentialStorageKey]
+        )
+        if (detached) {
+          detachedHardwareWallet = true
+        } else {
+          if (changedWallets.has(wallet.id)) throw error
+          changedWallets.add(wallet.id)
+        }
+      }
+    }
+  }
+
+  private async synchronizeRetainedV1Inventory(
+    local: Readonly<Record<string, unknown>>,
+    password: string,
+    detachedHardwareWallet: boolean
+  ): Promise<RetainedV1SynchronizationResult> {
     let discovery = discoverV1Metadata(local)
     const pointer = await this.storageRepository.getActivePointer()
+    if (discovery.status === 'empty' && !pointer && detachedHardwareWallet) {
+      return Object.freeze({ status: 'no-compatible-wallets' })
+    }
     if (pointer && discovery.status === 'ready') {
       const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
       if (!snapshot) throw new Error('Active Storage V2 generation is missing')
