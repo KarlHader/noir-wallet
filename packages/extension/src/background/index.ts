@@ -4358,6 +4358,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'CONFIRM_RHEA_SWAP_SOLANA' ||
     message.type === 'CANCEL_RHEA_SWAP_SOLANA' ||
     message.type === 'PREPARE_RHEA_SWAP_NEAR' ||
+    message.type === 'READ_RHEA_SWAP_NEAR_NATIVE_HOLD' ||
     message.type === 'CONFIRM_RHEA_SWAP_NEAR' ||
     message.type === 'CANCEL_RHEA_SWAP_NEAR' ||
     message.type === 'RECORD_RHEA_SWAP_SUBMISSION' ||
@@ -4382,6 +4383,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     }
     if (
       (message.type === 'PREPARE_RHEA_SWAP_NEAR' ||
+        message.type === 'READ_RHEA_SWAP_NEAR_NATIVE_HOLD' ||
         message.type === 'CONFIRM_RHEA_SWAP_NEAR' ||
         message.type === 'CANCEL_RHEA_SWAP_NEAR') &&
       !nearCoordinator
@@ -4548,59 +4550,70 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                                       )
                                 )
                                 .then(() => Object.freeze({ success: true }))
-                            : message.type === 'PREPARE_RHEA_SWAP_NEAR'
-                              ? accountContextTransition.runActiveOperation(() =>
-                                  nearCoordinator
-                                    ? nearCoordinator.prepare(
-                                        message.quoteHandle as string,
-                                        message.binding
-                                      )
-                                    : Promise.reject(
-                                        new Error('RHEA Swap NEAR execution is unavailable')
-                                      )
-                                )
-                              : message.type === 'CONFIRM_RHEA_SWAP_NEAR'
+                            : message.type === 'READ_RHEA_SWAP_NEAR_NATIVE_HOLD'
+                              ? accountContextTransition.runActiveOperation(async () => {
+                                  if (!nearCoordinator) {
+                                    throw new Error('RHEA Swap NEAR execution is unavailable')
+                                  }
+                                  const holdRaw = await nearCoordinator.readNearDirectNativeHold(
+                                    message.quoteHandle as string,
+                                    message.sender as string
+                                  )
+                                  return Object.freeze({ holdRaw })
+                                })
+                              : message.type === 'PREPARE_RHEA_SWAP_NEAR'
                                 ? accountContextTransition.runActiveOperation(() =>
                                     nearCoordinator
-                                      ? nearCoordinator.confirm(
+                                      ? nearCoordinator.prepare(
                                           message.quoteHandle as string,
-                                          message.payloadFingerprint as string
+                                          message.binding
                                         )
                                       : Promise.reject(
                                           new Error('RHEA Swap NEAR execution is unavailable')
                                         )
                                   )
-                                : message.type === 'CANCEL_RHEA_SWAP_NEAR'
-                                  ? accountContextTransition
-                                      .runActiveOperation(() =>
-                                        nearCoordinator
-                                          ? nearCoordinator.cancel(message.quoteHandle as string)
-                                          : Promise.reject(
-                                              new Error('RHEA Swap NEAR execution is unavailable')
-                                            )
-                                      )
-                                      .then(() => Object.freeze({ success: true }))
-                                  : message.type === 'RECORD_RHEA_SWAP_SUBMISSION'
-                                    ? rheaSwapService.recordTransactionSubmission(
-                                        message.quoteHandle as string,
-                                        message.sourceHash as string
-                                      )
-                                    : message.type === 'REPORT_RHEA_SWAP_SUBMISSION'
-                                      ? rheaSwapService.reportSubmission(
-                                          message.quoteHandle as string
+                                : message.type === 'CONFIRM_RHEA_SWAP_NEAR'
+                                  ? accountContextTransition.runActiveOperation(() =>
+                                      nearCoordinator
+                                        ? nearCoordinator.confirm(
+                                            message.quoteHandle as string,
+                                            message.payloadFingerprint as string
+                                          )
+                                        : Promise.reject(
+                                            new Error('RHEA Swap NEAR execution is unavailable')
+                                          )
+                                    )
+                                  : message.type === 'CANCEL_RHEA_SWAP_NEAR'
+                                    ? accountContextTransition
+                                        .runActiveOperation(() =>
+                                          nearCoordinator
+                                            ? nearCoordinator.cancel(message.quoteHandle as string)
+                                            : Promise.reject(
+                                                new Error('RHEA Swap NEAR execution is unavailable')
+                                              )
                                         )
-                                      : message.type === 'GET_RHEA_SWAP_ORDER_STATUS'
-                                        ? rheaSwapService.getOrderStatus(
+                                        .then(() => Object.freeze({ success: true }))
+                                    : message.type === 'RECORD_RHEA_SWAP_SUBMISSION'
+                                      ? rheaSwapService.recordTransactionSubmission(
+                                          message.quoteHandle as string,
+                                          message.sourceHash as string
+                                        )
+                                      : message.type === 'REPORT_RHEA_SWAP_SUBMISSION'
+                                        ? rheaSwapService.reportSubmission(
                                             message.quoteHandle as string
                                           )
-                                        : message.type === 'SELECT_RHEA_SWAP_ROUTE'
-                                          ? runScopedSwap(message.quoteHandle as string, () =>
-                                              rheaSwapService.selectRoute(
-                                                message.quoteHandle as string,
-                                                message.routeIndex as number
-                                              )
+                                        : message.type === 'GET_RHEA_SWAP_ORDER_STATUS'
+                                          ? rheaSwapService.getOrderStatus(
+                                              message.quoteHandle as string
                                             )
-                                          : rheaSwapService.discard(message.quoteHandle as string)
+                                          : message.type === 'SELECT_RHEA_SWAP_ROUTE'
+                                            ? runScopedSwap(message.quoteHandle as string, () =>
+                                                rheaSwapService.selectRoute(
+                                                  message.quoteHandle as string,
+                                                  message.routeIndex as number
+                                                )
+                                              )
+                                            : rheaSwapService.discard(message.quoteHandle as string)
     void operation
       .then(result => {
         sendResponse(

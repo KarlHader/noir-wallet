@@ -1,5 +1,6 @@
 import { parseDisplayUnitAmount } from '@/lib/number-format'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import { parseNearAccountId } from '@/core/chains/near/identifiers'
 import { parseAssetId } from '@/core/chains/registry'
 import { getPrivateCrossChainTransferAssetGroup } from '@/core/chains/cross-chain-asset-group'
 import {
@@ -73,6 +74,67 @@ export function buildNearPrivateDepositReviewPath(input: {
     destinationChain: 'near',
     destinationAsset: destination.id,
     source: source.id,
+    amount: input.amount,
+    review: '1'
+  })
+  if (input.maximum) query.set('maximum', '1')
+  return `/swap?${query}`
+}
+
+const NEAR_IMPLICIT_ACCOUNT = /^[0-9a-f]{64}$/
+
+function canonicalNearRouteAccount(value: string): string | null {
+  try {
+    const accountId = parseNearAccountId(value)
+    return accountId === value ? accountId : null
+  } catch {
+    return null
+  }
+}
+
+function nearDirectRouteAsset(assetId: string) {
+  const asset = parseAssetId(assetId)
+  if (asset.chainId !== NEAR_MAINNET_CHAIN_ID) return null
+  const quote = nearDirectQuoteAsset({
+    id: asset.id,
+    chainId: asset.chainId,
+    kind: asset.id === NEAR_MAINNET_NATIVE_ASSET_ID ? 'native' : 'token',
+    reference: asset.reference
+  })
+  return quote ? asset : null
+}
+
+export function buildNearPrivateWithdrawReviewPath(input: {
+  readonly sourceAssetId: string
+  readonly destinationAssetId: string
+  readonly recipient: string
+  readonly peaAccountId: string
+  readonly amount: string
+  readonly maximum: boolean
+}): string {
+  const source = nearDirectRouteAsset(input.sourceAssetId)
+  const destination = nearDirectRouteAsset(input.destinationAssetId)
+  if (!source || !destination || source.id !== destination.id) {
+    throw new Error('Invalid NEAR source asset route')
+  }
+  const recipient = canonicalNearRouteAccount(input.recipient)
+  const peaAccountId = canonicalNearRouteAccount(input.peaAccountId)
+  if (
+    !recipient ||
+    !peaAccountId ||
+    !NEAR_IMPLICIT_ACCOUNT.test(peaAccountId) ||
+    recipient === peaAccountId
+  ) {
+    throw new Error('Invalid NEAR recipient route')
+  }
+  if (!/^\d+(?:\.\d+)?$/.test(input.amount)) throw new Error('Invalid NEAR transfer amount route')
+  const query = new URLSearchParams({
+    privateTransfer: '1',
+    balanceTransfer: '1',
+    destinationChain: 'near',
+    destinationAsset: destination.id,
+    source: source.id,
+    recipient,
     amount: input.amount,
     review: '1'
   })

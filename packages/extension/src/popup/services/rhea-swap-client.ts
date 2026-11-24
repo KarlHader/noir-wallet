@@ -113,6 +113,17 @@ function presentFromCatalog(
   })
 }
 
+function parseNearDirectNativeHold(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('RHEA Swap NEAR native hold is invalid')
+  }
+  const holdRaw = Reflect.get(value, 'holdRaw')
+  if (typeof holdRaw !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(holdRaw)) {
+    throw new Error('RHEA Swap NEAR native hold is invalid')
+  }
+  return holdRaw
+}
+
 function unwrap<T>(value: unknown, parse: (input: unknown) => T): T {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new RheaSwapClientError('RHEA Swap returned an invalid response')
@@ -412,6 +423,11 @@ export function createRheaSwapClient(
       unwrap(
         await send({ type: 'PREPARE_RHEA_SWAP_NEAR', quoteHandle, binding }),
         parseRheaSwapNearTransactionBatchReview
+      ),
+    readNearDirectNativeHold: async (quoteHandle: string, sender: string): Promise<string> =>
+      unwrap(
+        await send({ type: 'READ_RHEA_SWAP_NEAR_NATIVE_HOLD', quoteHandle, sender }),
+        parseNearDirectNativeHold
       ),
     confirmNearTransactionBatch: async (
       quoteHandle: string,

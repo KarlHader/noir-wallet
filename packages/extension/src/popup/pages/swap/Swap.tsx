@@ -489,6 +489,14 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const privateBalanceTransferRequested = Boolean(
     searchParams.get('balanceTransfer') === '1' && lockedAssetFlowRequested
   )
+  const nearBalanceWithdrawRequested = Boolean(
+    privateTransferRequested &&
+    privateBalanceTransferRequested &&
+    !crossChainWithdrawRequested &&
+    !publicPrivacySendRequested &&
+    !isPrivateFunding &&
+    privateFundingDestinationChain === 'near'
+  )
   const balanceAction = privateBalanceTransferRequested
     ? balanceTransferLabel(privateTransferRequested ? 'withdraw' : 'deposit')
     : null
@@ -2274,17 +2282,27 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             portfolio,
             receiveTargets
           })
-        : privateTransferRequested && lockedSourceToken
-          ? swap.destinationTokens.find(
-              token =>
-                token.assetId === lockedSourceToken.assetId &&
-                token.blockchain === lockedSourceToken.blockchain &&
-                isConfidentialSwapDestinationSupported(token)
-            )
-          : undefined,
+        : nearBalanceWithdrawRequested
+          ? resolveConfidentialFundingDestinationToken({
+              tokens: swap.destinationTokens,
+              destinationChain: 'near',
+              destinationAsset: privateFundingDestinationAsset,
+              portfolio,
+              receiveTargets
+            })
+          : privateTransferRequested && lockedSourceToken
+            ? swap.destinationTokens.find(
+                token =>
+                  token.assetId === lockedSourceToken.assetId &&
+                  token.blockchain === lockedSourceToken.blockchain &&
+                  isConfidentialSwapDestinationSupported(token)
+              )
+            : undefined,
     [
       crossChainWithdrawRequested,
       crossChainWithdrawRoute,
+      nearBalanceWithdrawRequested,
+      privateFundingDestinationAsset,
       portfolio,
       receiveTargets,
       privateTransferRequested,
@@ -2305,9 +2323,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         ? privateTransferDestinationToken &&
           swap.tokenOut?.rheaChainId === privateTransferDestinationToken.rheaChainId &&
           swap.tokenOut.rheaAddress === privateTransferDestinationToken.rheaAddress
-        : lockedSourceToken &&
-          swap.tokenOut?.assetId === lockedSourceToken.assetId &&
-          swap.tokenOut.blockchain === lockedSourceToken.blockchain)
+        : nearBalanceWithdrawRequested
+          ? privateTransferDestinationToken &&
+            isSameSwapTokenRouteIdentity(swap.tokenOut, privateTransferDestinationToken)
+          : lockedSourceToken &&
+            swap.tokenOut?.assetId === lockedSourceToken.assetId &&
+            swap.tokenOut.blockchain === lockedSourceToken.blockchain)
   )
   const lockedAssetFlowReady = lockedSourceMatchesRequest && lockedDestinationMatchesRequest
   const lockedAssetSelectionPending = Boolean(
@@ -2668,20 +2689,23 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       const initializationScope = [
         walletSourcesScope,
         requestedSourceToken?.assetId,
+        requestedSourceToken?.isNative,
+        nearBalanceWithdrawRequested ? privateFundingDestinationAsset : null,
+        nearBalanceWithdrawRequested ? privateTransferDestinationToken?.isNative : null,
         crossChainWithdrawRoute?.destinationAssetId,
         crossChainWithdrawRoute?.recipient,
         privateTransferRecipient,
         privateTransferAmount
       ].join(':')
       if (sourceToken && destinationToken) {
-        if (
-          swap.tokenIn?.assetId !== sourceToken.assetId ||
-          swap.tokenIn.blockchain !== sourceToken.blockchain ||
-          swap.tokenOut?.assetId !== destinationToken.assetId ||
-          swap.tokenOut.blockchain !== destinationToken.blockchain
-        ) {
-          swap.setTokenPair(sourceToken, destinationToken)
-        }
+        const pairMatchesRequest = nearBalanceWithdrawRequested
+          ? isSameSwapTokenRouteIdentity(swap.tokenIn, sourceToken) &&
+            isSameSwapTokenRouteIdentity(swap.tokenOut, destinationToken)
+          : swap.tokenIn?.assetId === sourceToken.assetId &&
+            swap.tokenIn.blockchain === sourceToken.blockchain &&
+            swap.tokenOut?.assetId === destinationToken.assetId &&
+            swap.tokenOut.blockchain === destinationToken.blockchain
+        if (!pairMatchesRequest) swap.setTokenPair(sourceToken, destinationToken)
       } else if (!swap.areTokensLoading && swap.tokenIn) {
         swap.clearTokenPairForFlow()
       }
@@ -2898,8 +2922,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     crossChainDraftScope,
     requestedDestinationToken?.assetId,
     requestedSourceToken?.assetId,
+    requestedSourceToken?.isNative,
+    nearBalanceWithdrawRequested,
+    privateFundingDestinationAsset,
     lockedSourceToken,
     privateTransferDestinationToken,
+    privateTransferDestinationToken?.isNative,
     savedTokenSelection,
     swapPreferencesHydrated,
     swapPreferenceScope,
@@ -2919,9 +2947,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     pairCrossChainDestinations,
     pairWalletSources,
     swap.tokenIn?.assetId,
+    swap.tokenIn?.isNative,
     swap.selectedSourceAssetId,
     swap.tokenIn?.decimals,
     swap.tokenOut?.assetId,
+    swap.tokenOut?.isNative,
     swap.tokens,
     swap.setTokenPair,
     swap.setProvisionalTokenIn,

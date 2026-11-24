@@ -8,7 +8,10 @@ import {
   assertNearPrivateQuoteRoute,
   NEAR_INCOGNITO_UNFUNDED_ERROR
 } from '../../../src/core/services/rhea-swap/rhea-swap-near-private-route.ts'
-import { prependRheaSwapNearWrap } from '../../../src/core/services/rhea-swap/rhea-swap-near-wrap.ts'
+import {
+  nearDirectNativeHoldYocto,
+  prependRheaSwapNearWrap
+} from '../../../src/core/services/rhea-swap/rhea-swap-near-wrap.ts'
 import { resolveIntentsWalletAsset } from '../../../src/core/services/intents-wallet-assets.ts'
 import { nearPeaRequestJson } from '../../../src/infrastructure/keyring/multichain/raw-wallet-engine.ts'
 import {
@@ -554,10 +557,92 @@ test('signs an Incognito NEAR swap with the PEA and refuses a public fallback', 
     wrappedBalance: '0',
     deriveNearPea: async () => ({ address: PEA })
   })
-  await expect(
-    unregistered.coordinator.prepare(swapBinding(PEA, true).quoteHandle, swapBinding(PEA, true))
-  ).rejects.toThrow(NEAR_INCOGNITO_UNFUNDED_ERROR)
-  expect(unregistered.prepared).toHaveLength(0)
+  await unregistered.coordinator.prepare(swapBinding(PEA, true).quoteHandle, swapBinding(PEA, true))
+  expect(unregistered.prepared).toHaveLength(2)
+  expect(unregistered.prepared.map(payload => payload.kind)).toEqual([
+    'pea-near-transaction',
+    'pea-near-transaction'
+  ])
+  expect(unregistered.prepared[0].transaction).toMatchObject({
+    signerId: PEA,
+    receiverId: 'wrap.near',
+    actions: [
+      {
+        type: 'functionCall',
+        methodName: 'near_deposit',
+        gas: '50000000000000',
+        depositYocto: (1000n + STORAGE_DEPOSIT).toString()
+      }
+    ]
+  })
+  expect(unregistered.prepared.every(payload => payload.transaction.signerId !== MAIN)).toBe(true)
+})
+
+test('keeps native NEAR registration, quote storage, gas, and account stake outside the amount', () => {
+  const amountIn = '157668920719240699999991'
+  const quoteStorage = '12500000000000000000000'
+  const storageGas = '50000000000000'
+  const transferGas = '30000000000000'
+  const gasPrice = 100_000_000n
+  const storageReserve = 2_000_000_000_000_000_000_000n
+  const zero = { executionGas: '0', sendNotSirGas: '0', sendSirGas: '0' }
+  const transactions = [
+    {
+      receiverId: 'wrap.near',
+      actions: [
+        {
+          type: 'functionCall',
+          methodName: 'storage_deposit',
+          args: { account_id: OTHER_PEA, registration_only: true },
+          gas: storageGas,
+          deposit: quoteStorage
+        },
+        {
+          type: 'functionCall',
+          methodName: 'ft_transfer',
+          args: { receiver_id: OTHER_PEA, amount: amountIn },
+          gas: transferGas,
+          deposit: '1'
+        }
+      ]
+    }
+  ]
+  const costs = {
+    actionReceiptCreation: zero,
+    transfer: zero,
+    functionCall: zero,
+    functionCallPerByte: zero
+  }
+  const unregisteredHold = nearDirectNativeHoldYocto({
+    transactions,
+    amountIn,
+    registered: false,
+    gasPriceYocto: gasPrice,
+    signerId: PEA,
+    costs,
+    storageReserveYocto: storageReserve
+  })
+  const prepaidGas = (50_000_000_000_000n + BigInt(storageGas) + BigInt(transferGas)) * gasPrice
+  expect(unregisteredHold).toBe(
+    STORAGE_DEPOSIT + BigInt(quoteStorage) + 1n + prepaidGas + storageReserve
+  )
+  const balance = BigInt(amountIn)
+  expect(unregisteredHold > BigInt(quoteStorage)).toBe(true)
+  expect(balance > unregisteredHold).toBe(true)
+  const max = balance - unregisteredHold
+  expect(max < balance).toBe(true)
+  expect(max + unregisteredHold).toBe(balance)
+  expect(BigInt(amountIn) + unregisteredHold > balance).toBe(true)
+  const registeredHold = nearDirectNativeHoldYocto({
+    transactions,
+    amountIn,
+    registered: true,
+    gasPriceYocto: gasPrice,
+    signerId: PEA,
+    costs,
+    storageReserveYocto: storageReserve
+  })
+  expect(registeredHold).toBe(unregisteredHold - STORAGE_DEPOSIT)
 })
 
 test('keeps the public NEAR wrap as a separate near_deposit batch', () => {

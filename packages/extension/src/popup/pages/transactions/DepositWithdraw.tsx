@@ -137,6 +137,7 @@ import {
   balanceTransferLabel,
   buildCrossChainPrivateWithdrawReviewPath,
   buildNearPrivateDepositReviewPath,
+  buildNearPrivateWithdrawReviewPath,
   buildPrivateDepositReviewPath,
   fixedTransferSide,
   normalizePrivateBalanceTransferInput,
@@ -178,11 +179,6 @@ import {
   nearWrappedClusterAsset,
   resolveNearIncognitoMove
 } from '@/core/chains/near/near-incognito-move'
-import {
-  cancelNearDirectMove,
-  confirmNearDirectMove,
-  prepareNearDirectMove
-} from '@/popup/services/near-incognito-move'
 
 type TransferAsset = { asset: PortfolioAssetView; chain: PortfolioChainView }
 
@@ -556,14 +552,6 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
   const actionLabel = balanceTransferLabel(intent ?? (to === 'public' ? 'withdraw' : 'deposit'))
   const [amount, setAmount] = useState(initialDraft.amount)
   const [method, setMethod] = useState<'cluster' | 'directly'>(initialDraft.method)
-  const [preparingNearDirect, setPreparingNearDirect] = useState(false)
-  const [nearDirectPrepared, setNearDirectPrepared] = useState<{
-    key: string
-    quoteHandle: string
-    payloadFingerprint: string
-  } | null>(null)
-  const nearDirectPreparedRef = useRef(nearDirectPrepared)
-  nearDirectPreparedRef.current = nearDirectPrepared
   const [evmMoveFee, setEvmMoveFee] = useState<EvmFeeSelection>({
     kind: 'tier',
     tier: 'standard'
@@ -1426,20 +1414,39 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       ? 'supported'
       : 'unsupported'
   const methodAvailable = supportedPair && routeState === 'supported'
+  const nearDirectNative =
+    nearPublicPrivate && selected?.asset.asset.kind === 'native' && method === 'directly'
+  const nearDirectHoldKey = `${selected?.asset.asset.id ?? ''}:${source?.sender ?? ''}:${method}`
+  const [nearDirectHold, setNearDirectHold] = useState<{
+    readonly key: string
+    readonly raw: string
+  } | null>(null)
+  const nearDirectHoldRaw =
+    nearDirectNative && nearDirectHold?.key === nearDirectHoldKey ? nearDirectHold.raw : null
+  const nearDirectMaximumRaw =
+    nearDirectHoldRaw !== null && source && /^(?:0|[1-9][0-9]*)$/.test(nearDirectHoldRaw)
+      ? (() => {
+          const available = BigInt(source.availableRaw)
+          const hold = BigInt(nearDirectHoldRaw)
+          return available > hold ? (available - hold).toString() : '0'
+        })()
+      : null
 
   const maximumRaw =
-    selected?.asset.asset.kind === 'native' &&
-    selected.chain.chain.family === 'evm' &&
-    source &&
-    from !== 'shield'
-      ? resolveNativeRouteMaximum({
-          family: 'evm',
-          chainId: selected.chain.chain.id,
-          availableRaw: source.availableRaw,
-          decimals: selected.asset.metadata.decimals,
-          priceUsd: findAssetPrice(assetPrices, selected.asset.asset.id)?.priceUsd
-        })
-      : null
+    nearDirectMaximumRaw !== null
+      ? nearDirectMaximumRaw
+      : selected?.asset.asset.kind === 'native' &&
+          selected.chain.chain.family === 'evm' &&
+          source &&
+          from !== 'shield'
+        ? resolveNativeRouteMaximum({
+            family: 'evm',
+            chainId: selected.chain.chain.id,
+            availableRaw: source.availableRaw,
+            decimals: selected.asset.metadata.decimals,
+            priceUsd: findAssetPrice(assetPrices, selected.asset.asset.id)?.priceUsd
+          })
+        : null
   const available =
     selected && source
       ? resolvePortfolioTransferAvailability({
@@ -1574,6 +1581,15 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       ? { ...clusterEstimate.value, sourceNetworkFee: clusterNetworkFee }
       : clusterEstimate.value
   const directQuoted = Boolean(canEstimateMethods && methodAvailable && directEstimate.value)
+  useEffect(() => {
+    const raw = directEstimate.value?.nativeHoldRaw
+    if (!nearDirectNative || !raw || !/^(?:0|[1-9][0-9]*)$/.test(raw)) return
+    setNearDirectHold(current =>
+      current?.key === nearDirectHoldKey && current.raw === raw
+        ? current
+        : { key: nearDirectHoldKey, raw }
+    )
+  }, [directEstimate.value, nearDirectHoldKey, nearDirectNative])
   const selectedEstimate = clusterSelected ? clusterEstimate : directEstimate
   const maxLoading = maxSelected && selectedEstimate.loading
   const clusterUnavailable = getSwapQuoteFailureMessage(clusterEstimate.errorMessage) === 'no route'
@@ -1661,6 +1677,7 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     !tokenFeeBalanceError &&
     (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
     (!maxSelected || amount === currentAmount) &&
+    !(nearDirectNative && maxSelected && nearDirectHoldRaw === null) &&
     amountState?.amountRaw
   )
   const canReviewShield = Boolean(
@@ -1703,77 +1720,6 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
     setPickerAccountId(effective?.accountId ?? null)
     setDomainPicker(side)
   }
-  const nearDirectKey = `${methodEstimateKey}:${method}`
-  const nearDirectKeyRef = useRef(nearDirectKey)
-  nearDirectKeyRef.current = nearDirectKey
-  useEffect(() => {
-    if (!nearDirectPrepared || nearDirectPrepared.key === nearDirectKey) return
-    void cancelNearDirectMove(nearDirectPrepared.quoteHandle)
-    setNearDirectPrepared(null)
-  }, [nearDirectKey, nearDirectPrepared])
-  useEffect(
-    () => () => {
-      const prepared = nearDirectPreparedRef.current
-      if (prepared) void cancelNearDirectMove(prepared.quoteHandle)
-    },
-    []
-  )
-  const startNearDirect = async () => {
-    if (
-      !canReview ||
-      !selected ||
-      !nearMove?.ok ||
-      !source ||
-      !amountState?.amountRaw ||
-      preparingNearDirect ||
-      !scopeStillCurrent()
-    )
-      return
-    setPreparingNearDirect(true)
-    setShieldError(null)
-    try {
-      const prepared = await prepareNearDirectMove({
-        chainId: selected.chain.chain.id,
-        assetId: selected.asset.asset.id,
-        asset: selected.asset.asset,
-        amountRaw: amountState.amountRaw,
-        sender: source.sender,
-        recipient: source.recipient,
-        executionMode: source.executionMode
-      })
-      if (!scopeStillCurrent() || nearDirectKeyRef.current !== nearDirectKey) {
-        await cancelNearDirectMove(prepared.quoteHandle)
-        return
-      }
-      setNearDirectPrepared({ key: nearDirectKey, ...prepared })
-    } catch (error) {
-      if (scopeStillCurrent()) {
-        setShieldError(error instanceof Error ? error.message : 'NEAR Move is unavailable.')
-      }
-    } finally {
-      if (mounted.current) setPreparingNearDirect(false)
-    }
-  }
-  const confirmNearDirect = async () => {
-    const prepared = nearDirectPrepared
-    if (!prepared || prepared.key !== nearDirectKey || !scopeStillCurrent()) return
-    setPreparingNearDirect(true)
-    setShieldError(null)
-    try {
-      await confirmNearDirectMove(prepared.quoteHandle, prepared.payloadFingerprint)
-      if (!scopeStillCurrent()) return
-      setNearDirectPrepared(null)
-      const activityDomain = fixedSide === 'to' ? to : fixedSide === 'from' ? from : walletMode
-      navigate(homeActivityPath(activityDomain))
-    } catch (error) {
-      if (scopeStillCurrent()) {
-        setShieldError(error instanceof Error ? error.message : 'NEAR Move is unavailable.')
-        setNearDirectPrepared(null)
-      }
-    } finally {
-      if (mounted.current) setPreparingNearDirect(false)
-    }
-  }
   const nearDepositDestination =
     nearPublicPrivate &&
     direction === 'main-to-private' &&
@@ -1781,12 +1727,25 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
       ? privateTransferDestination
       : null
   const review = () => {
+    if (!canReview || !selected || !effective || !scopeStillCurrent()) return
+    const activityDomain = fixedSide === 'to' ? to : fixedSide === 'from' ? from : walletMode
     if (nearPublicPrivate && !nearDepositDestination) {
-      void startNearDirect()
+      if (direction === 'private-to-main' && method === 'directly' && nearMove?.ok) {
+        navigate(
+          buildNearPrivateWithdrawReviewPath({
+            sourceAssetId: selected.asset.asset.id,
+            destinationAssetId: selected.asset.asset.id,
+            recipient: nearMove.recipient,
+            peaAccountId: nearMove.peaAccountId,
+            amount: currentAmount,
+            maximum: maxSelected
+          }),
+          { state: { activityDomain } }
+        )
+      }
       return
     }
-    if (!canReview || !selected || !effective || !mainAddress || !scopeStillCurrent()) return
-    const activityDomain = fixedSide === 'to' ? to : fixedSide === 'from' ? from : walletMode
+    if (!mainAddress) return
     navigate(
       direction === 'main-to-private'
         ? nearDepositDestination
@@ -2724,16 +2683,9 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
             <Button
               size="wallet"
               className="w-full"
-              disabled={
-                fundingRoute
-                  ? !canReviewShield || preparingShield
-                  : nearDirectPrepared
-                    ? preparingNearDirect
-                    : !canReview || preparingNearDirect
-              }
+              disabled={fundingRoute ? !canReviewShield || preparingShield : !canReview}
               isLoading={
                 preparingShield ||
-                preparingNearDirect ||
                 (shieldPair &&
                   (shieldConnecting ||
                     shieldConnection === 'checking' ||
@@ -2744,19 +2696,9 @@ function DepositWithdrawForm({ receiveEntry }: { readonly receiveEntry: boolean 
                   selectedEstimate.loading) ||
                 (crossChainPrivateTransfer && directEstimate.loading)
               }
-              onClick={
-                fundingRoute
-                  ? () => void prepareShield()
-                  : nearDirectPrepared
-                    ? () => void confirmNearDirect()
-                    : review
-              }
+              onClick={fundingRoute ? () => void prepareShield() : review}
             >
-              {nearDirectPrepared
-                ? `Confirm ${actionLabel}`
-                : clusterSelected
-                  ? `Review ${actionLabel}`
-                  : actionLabel}
+              {clusterSelected ? `Review ${actionLabel}` : actionLabel}
             </Button>
           </div>
         </>
