@@ -1207,6 +1207,17 @@ export class ConfidentialFundingCoordinator {
       return record
     }
     if (record.phase === 'refunded') {
+      if (
+        !record.refundTransactionHash &&
+        (force || !this.reconciledTerminalExternalDeposits.has(record.depositId))
+      ) {
+        const status = await this.readExternalDepositProviderStatus(record, force)
+        if (status && normalizeStatus(status.status) === 'REFUNDED' && status.transactionHash) {
+          record = Object.freeze({ ...record, refundTransactionHash: status.transactionHash })
+          await this.options.store.putExternalDeposit(record)
+          void this.options.onActivityChanged?.(record).catch(() => {})
+        }
+      }
       await this.updateExternalDepositGraph(record)
       await this.markExternalDepositGraphReconciled(record)
       return record
@@ -1293,6 +1304,9 @@ export class ConfidentialFundingCoordinator {
         providerStatus: normalized,
         ...(fundingObservedAt !== undefined ? { fundingObservedAt } : {}),
         ...(depositedAmountRaw !== undefined ? { depositedAmountRaw } : {}),
+        ...(nextPhase === 'refunded' && status.transactionHash
+          ? { refundTransactionHash: status.transactionHash }
+          : {}),
         errorStatus,
         ...(nextPhase === 'ready' &&
         status.settledAmountOutRaw &&

@@ -13,6 +13,7 @@ import {
 } from '@/core/services/rhea-swap/combined-swap-review'
 import { parseEvmFeeSelection, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { BackgroundEvmTransferRouter } from './evm-transfer-router'
+import type { EvmTransferExecutionMode } from './evm-transfer-controller'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
 
 export const COMBINED_EVM_SWAP_ALARM = 'combined-evm-swap'
@@ -33,6 +34,7 @@ export interface CombinedEvmSwapInput {
   readonly approvalId: string
   readonly approvalFingerprint: string
   readonly binding: RheaSwapTransactionBinding
+  readonly executionMode?: EvmTransferExecutionMode
   readonly feeBudgetWei: string
   readonly feeSelection: EvmFeeSelection
 }
@@ -64,7 +66,10 @@ interface Options {
     scope: TransactionAccountScope,
     id: string
   ) => Promise<TransactionGraph | null>
-  readonly validateQuote: (binding: RheaSwapTransactionBinding) => Promise<void>
+  readonly validateQuote: (
+    binding: RheaSwapTransactionBinding,
+    executionMode: EvmTransferExecutionMode
+  ) => Promise<void>
   readonly checkApproval: (scope: TransactionAccountScope, chainId: string) => Promise<void>
   readonly schedule: () => Promise<void>
 }
@@ -76,13 +81,17 @@ function parseInput(value: unknown): CombinedEvmSwapInput {
     typeof input.approvalFingerprint !== 'string' ||
     !/^[0-9a-f]{64}$/.test(input.approvalFingerprint) ||
     typeof input.feeBudgetWei !== 'string' ||
-    !/^[1-9][0-9]{0,77}$/.test(input.feeBudgetWei)
+    !/^[1-9][0-9]{0,77}$/.test(input.feeBudgetWei) ||
+    (input.executionMode !== undefined &&
+      input.executionMode !== 'main' &&
+      input.executionMode !== 'private')
   )
     throw new Error('Invalid Swap review')
   return {
     approvalId: parseTransactionId(input.approvalId),
     approvalFingerprint: input.approvalFingerprint,
     binding: parseRheaSwapTransactionBinding(input.binding),
+    executionMode: input.executionMode ?? 'main',
     feeBudgetWei: input.feeBudgetWei,
     feeSelection: parseEvmFeeSelection(input.feeSelection)
   }
@@ -233,7 +242,7 @@ export class CombinedEvmSwap {
     ) {
       throw new Error('Token approval does not match the reviewed Swap')
     }
-    await this.options.validateQuote(input.binding)
+    await this.options.validateQuote(input.binding, input.executionMode ?? 'main')
     const limit = getCombinedSwapFeeLimit(plan.transaction, summary.fields, input.feeBudgetWei)
     if (!limit || limit.approvalFeeWei + limit.swapFeeWei !== BigInt(input.feeBudgetWei)) {
       throw new Error('Swap fee needs to be reviewed again')
@@ -354,7 +363,7 @@ export class CombinedEvmSwap {
       plan.approval.transaction.to,
       plan.approval.spender,
       input.binding.sender,
-      'main'
+      input.executionMode ?? 'main'
     )
     if (BigInt(allowance) < BigInt(plan.approval.amountRaw)) {
       return Date.now() - (record.confirmedAt ?? Date.now()) >= ALLOWANCE_WAIT_MS
@@ -397,7 +406,8 @@ export class CombinedEvmSwap {
         calldata: plan.transaction.data
       },
       input.feeSelection,
-      input.binding
+      input.binding,
+      input.executionMode ?? 'main'
     )
     const { feeLimit } = record
     const summary = prepared.review.summary

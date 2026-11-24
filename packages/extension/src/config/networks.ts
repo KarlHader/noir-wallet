@@ -291,7 +291,7 @@ export const BUILTIN_EVM_NETWORKS = Object.freeze({
         decimals: 18,
         slip44Reference: '60'
       },
-      explorerUrl: 'https://base.blockscout.com',
+      explorerUrl: 'https://basescan.org',
       usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
     }),
     defineNetwork({

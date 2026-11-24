@@ -1,6 +1,7 @@
 import { Icon } from '@iconify/react'
 import { useState, type ReactNode } from 'react'
 import { getActivityAssetEffects, type ActivityItem } from '@/core/activity'
+import { isExternalShieldDepositActivity } from '@/core/activity/activity-balance-domains'
 import type { Network } from '@/types'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import { detectAddressType, formatSortAddress } from '@/lib/format'
@@ -844,12 +845,17 @@ export function ActivityTransactionProgress({
   readonly view: ActivityTransactionView
   readonly precedingProgress?: PrecedingProgress
 }) {
+  const { copyToClipboard, showToast, copyFailed, isCopied } = useCopyToClipboard()
   if (!view.isCrossChain && !precedingProgress) return null
   const referenceByStepId = new Map<string, ReactNode>()
   if (precedingProgress?.reference) {
     referenceByStepId.set(precedingProgress.step.id, precedingProgress.reference)
   }
   for (const segment of view.item.segments) {
+    const depositAddress =
+      segment.role === 'origin' && isExternalShieldDepositActivity(view.item)
+        ? segment.evidence?.externalReference
+        : undefined
     const hash = segment.evidence?.transactionHash
     const reference =
       segment.target.kind === 'onchain' &&
@@ -858,10 +864,30 @@ export function ActivityTransactionProgress({
         ? { hash, chainId: segment.target.chainId }
         : view.references.find(candidate => candidate.id === segment.id)
     const replacement = view.replacementReferences.find(candidate => candidate.id === segment.id)
-    if (!reference && !replacement) continue
+    if (!reference && !replacement && !depositAddress) continue
     referenceByStepId.set(
       segment.id,
       <div className="space-y-1">
+        {depositAddress && (
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-muted">Deposit address</span>
+            <AddressValue
+              address={depositAddress}
+              url={
+                segment.target.kind === 'onchain'
+                  ? formatChainAddressExplorerUrl(
+                      segment.target.chainId,
+                      depositAddress,
+                      view.network
+                    )
+                  : ''
+              }
+              copyKey="deposit"
+              copied={isCopied('deposit')}
+              onCopy={() => void copyToClipboard(depositAddress, 'deposit')}
+            />
+          </div>
+        )}
         {reference && (
           <TransactionReferenceValue
             hash={reference.hash}
@@ -895,13 +921,16 @@ export function ActivityTransactionProgress({
     )
   }
   return (
-    <TransactionProgressSteps
-      steps={
-        precedingProgress ? [precedingProgress.step, ...view.progressSteps] : view.progressSteps
-      }
-      referenceByStepId={referenceByStepId}
-      className="mt-5"
-    />
+    <>
+      <TransactionProgressSteps
+        steps={
+          precedingProgress ? [precedingProgress.step, ...view.progressSteps] : view.progressSteps
+        }
+        referenceByStepId={referenceByStepId}
+        className="mt-5"
+      />
+      <CopyToast show={showToast} error={copyFailed} message="Address copied" />
+    </>
   )
 }
 

@@ -450,6 +450,7 @@ test.describe('confidential funding safety rules', () => {
     let cachedBalance
     let signingCalls = 0
     let serviceStatus = 'PENDING_DEPOSIT'
+    const refundTransactionHash = `0x${'a'.repeat(64)}`
     let settledAmountOutRaw = '987'
     let serviceErrorStatus
     let depositedAmountRaw
@@ -523,6 +524,7 @@ test.describe('confidential funding safety rules', () => {
             ...(serviceStatus === 'SUCCESS' && settledAmountOutRaw !== undefined
               ? { settledAmountOutRaw }
               : {}),
+            ...(serviceStatus === 'REFUNDED' ? { transactionHash: refundTransactionHash } : {}),
             ...(serviceErrorStatus !== undefined ? { errorStatus: serviceErrorStatus } : {})
           }
         },
@@ -874,7 +876,10 @@ test.describe('confidential funding safety rules', () => {
       records.set(depositId, interrupted)
       await repository.create(createExternalShieldDepositGraph(interrupted))
     }
+    serviceStatus = 'REFUNDED'
+    await coordinator.refreshExternalDeposit('refund-recovery')
     await coordinator.resumeAll()
+    serviceStatus = 'SUCCESS'
     for (const [depositId, expectedStatus] of [
       ['refund-recovery', 'failed'],
       ['failure-recovery', 'failed'],
@@ -891,6 +896,15 @@ test.describe('confidential funding safety rules', () => {
       'tx:confidential-external:refund-recovery'
     )
     expect(refundGraph.root.failure.code).toBe('refunded')
+    const projectedRefund = projectExternalShieldDepositActivityGraph(
+      refundGraph,
+      records.get('refund-recovery')
+    )
+    expect(projectedRefund.segments.find(segment => segment.role === 'refund')).toMatchObject({
+      status: 'final',
+      target: { kind: 'onchain', chainId: created.source.chainId },
+      evidence: { transactionHash: refundTransactionHash }
+    })
     const readyGraph = await repository.get(
       { keyDomainId: 'wallet:one', accountId: 'account:one' },
       'tx:confidential-external:ready-recovery'

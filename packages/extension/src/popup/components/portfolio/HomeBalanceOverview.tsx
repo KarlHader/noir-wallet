@@ -17,6 +17,7 @@ export interface HomeBalanceOverviewProps {
   readonly showIncognito: boolean
   readonly incognitoEnabled: boolean
   readonly onEnableIncognito?: () => Promise<boolean>
+  readonly onAddIncognitoNetwork?: () => void
   readonly hidden: boolean
   readonly modeSelectionDisabled: boolean
   readonly quickShieldLabel?: string
@@ -31,6 +32,7 @@ export function HomeBalanceOverview({
   showIncognito,
   incognitoEnabled,
   onEnableIncognito,
+  onAddIncognitoNetwork,
   hidden,
   modeSelectionDisabled,
   quickShieldLabel,
@@ -142,14 +144,17 @@ export function HomeBalanceOverview({
                           )}
                         </div>
                       )}
-                      {cardDomain === 'public' && canSetUpIncognito && onEnableIncognito && (
-                        <IncognitoSetupButton
-                          disabled={modeSelectionDisabled}
-                          complete={onEnableIncognito}
-                          onCompleted={() => onSelect('private')}
-                          className="mt-auto ml-auto"
-                        />
-                      )}
+                      {cardDomain === 'public' &&
+                        canSetUpIncognito &&
+                        (onEnableIncognito || onAddIncognitoNetwork) && (
+                          <IncognitoSetupButton
+                            disabled={modeSelectionDisabled}
+                            complete={onEnableIncognito}
+                            onAddEvmNetwork={onAddIncognitoNetwork}
+                            onCompleted={() => onSelect('private')}
+                            className="mt-auto ml-auto"
+                          />
+                        )}
                     </div>
                   </div>
                 </div>

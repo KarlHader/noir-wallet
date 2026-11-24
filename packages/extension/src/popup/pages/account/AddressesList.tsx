@@ -15,6 +15,7 @@ import {
   accountNetworkAddressLabel,
   accountNetworkIconChain,
   accountNetworkLabel,
+  addIncognitoNetworkPath,
   zcashSettingsPath
 } from '@/popup/services/account-network-presentation'
 import { ChainIcon } from '../../components/common/ChainIcon'
@@ -601,7 +602,9 @@ function AccountAddressesList({
         className="shrink-0"
         onClick={() =>
           navigate(
-            `/account-networks?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}`
+            family === 'evm'
+              ? addIncognitoNetworkPath(walletId, accountId)
+              : `/account-networks?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}`
           )
         }
       >

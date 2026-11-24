@@ -644,8 +644,8 @@ const combinedEvmSwap = new CombinedEvmSwap({
     }
   },
   readGraph: (scope, id) => combinedSwapRepository.get(scope, parseTransactionId(id)),
-  validateQuote: async binding => {
-    await requireCurrentPrivateSwapQuote(binding.quoteHandle, 'main', binding)
+  validateQuote: async (binding, executionMode) => {
+    await requireCurrentPrivateSwapQuote(binding.quoteHandle, executionMode, binding)
   },
   checkApproval: async (scope, chainId) => {
     await evmTransactionMonitor?.pollApprovalScope(chainId, scope)

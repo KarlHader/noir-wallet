@@ -7,6 +7,8 @@ import { ConnectedDAppBar } from '../components/dapp/ConnectedDAppBar'
 import { HomeDAppList } from '../components/dapp/HomeDAppList'
 import { AccountSwitcher } from '../components/account/AccountSwitcher'
 import { useIncognitoSetup } from '@/popup/hooks/useIncognitoSetup'
+import { addIncognitoNetworkPath } from '@/popup/services/account-network-presentation'
+import { availableSoftwareAccountFamilies } from '@/popup/services/account-network-selection-client'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { HomeBalanceOverview } from '../components/portfolio/HomeBalanceOverview'
 import { openModal } from '../provider/ModalManager'
@@ -289,15 +291,20 @@ export function Home() {
     [multichainPortfolio, effectiveWalletId, effectiveAccountId]
   )
   const supportsIncognito = Boolean(
-    storageV2Account &&
-    supportsEvmPrivateExecution(storageV2Account.walletSource) &&
-    storageV2Account.networks.some(network => network.chain.family === 'evm')
+    storageV2Account && supportsEvmPrivateExecution(storageV2Account.walletSource)
   )
+  const hasIncognitoNetwork = storageV2Account?.networks.some(
+    network => network.chain.family === 'evm'
+  )
+  const needsIncognitoNetwork =
+    storageV2Account?.walletSource.kind === 'software' &&
+    !hasIncognitoNetwork &&
+    availableSoftwareAccountFamilies().includes('evm')
   const incognitoSetup = useIncognitoSetup(
     currentNetwork,
     effectiveWalletId,
     effectiveAccountId,
-    supportsIncognito && !accountContextChanging
+    supportsIncognito && Boolean(hasIncognitoNetwork) && !accountContextChanging
   )
   const existingIncognito = hasIncognitoHoldings || incognitoSetup.status === 'complete'
   useEffect(() => {
@@ -879,9 +886,21 @@ export function Home() {
             key={modeScopeKey}
             domain={assetDomain}
             display={balanceDisplay}
-            showIncognito={supportsIncognito}
+            showIncognito={
+              supportsIncognito && Boolean(hasIncognitoNetwork || needsIncognitoNetwork)
+            }
             hidden={balancesHidden}
-            incognitoEnabled={Boolean(enabledIncognito || existingIncognito)}
+            incognitoEnabled={Boolean(
+              hasIncognitoNetwork && (enabledIncognito || existingIncognito)
+            )}
+            onAddIncognitoNetwork={
+              needsIncognitoNetwork && effectiveWalletId && effectiveAccountId
+                ? () =>
+                    navigate.navigate(
+                      addIncognitoNetworkPath(effectiveWalletId, effectiveAccountId)
+                    )
+                : undefined
+            }
             onEnableIncognito={
               incognitoSetup.status === 'available' ? incognitoSetup.complete : undefined
             }

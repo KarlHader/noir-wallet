@@ -404,6 +404,8 @@ function parseExternalDeposit(value: unknown): ExternalShieldDeposit {
       (!Number.isSafeInteger(value.fundingObservedAt) ||
         (value.fundingObservedAt as number) < 0)) ||
     (value.providerStatus !== undefined && !isBoundedString(value.providerStatus, 64)) ||
+    (value.refundTransactionHash !== undefined &&
+      !isBoundedString(value.refundTransactionHash, 100)) ||
     (value.balanceRefreshedAt !== undefined &&
       (!Number.isSafeInteger(value.balanceRefreshedAt) ||
         (value.balanceRefreshedAt as number) < 0)) ||

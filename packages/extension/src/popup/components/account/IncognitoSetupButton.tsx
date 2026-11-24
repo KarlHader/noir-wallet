@@ -9,12 +9,14 @@ export function IncognitoSetupButton({
   className,
   disabled,
   complete,
+  onAddEvmNetwork,
   onOpen,
   onCompleted
 }: {
   readonly className?: string
   readonly disabled?: boolean
-  readonly complete: () => Promise<boolean>
+  readonly complete?: () => Promise<boolean>
+  readonly onAddEvmNetwork?: () => void
   readonly onOpen?: () => void
   readonly onCompleted?: () => void
 }) {
@@ -32,7 +34,7 @@ export function IncognitoSetupButton({
   }, [])
 
   async function create() {
-    if (pending.current || disabled) return
+    if (pending.current || disabled || !complete) return
     pending.current = true
     setBusy(true)
     setError(null)
@@ -57,10 +59,14 @@ export function IncognitoSetupButton({
         ref={trigger}
         type="button"
         aria-label="Enable Incognito"
-        aria-haspopup="dialog"
+        aria-haspopup={onAddEvmNetwork ? undefined : 'dialog'}
         disabled={disabled}
         onClick={() => {
           onOpen?.()
+          if (onAddEvmNetwork) {
+            onAddEvmNetwork()
+            return
+          }
           setError(null)
           setOpen(true)
         }}

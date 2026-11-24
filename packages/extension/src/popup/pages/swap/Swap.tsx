@@ -3986,7 +3986,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               const approvalSummary = approvalReview.review.summary
               const combinedFeeLimit =
                 (ordinarySwapRequested || crossChainSendRequested) &&
-                executionSourceMode === 'main' &&
                 !isHardwareWallet &&
                 approvalSummary.schema === 'evm.transaction.v1'
                   ? getCombinedSwapFeeLimit(
@@ -5251,6 +5250,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             approvalId: graph.root.id,
             approvalFingerprint: review.payloadFingerprint.digestHex,
             binding: reviewedCombined.binding,
+            executionMode: executionSourceMode,
             feeBudgetWei: (
               reviewedCombined.limit.approvalFeeWei + reviewedCombined.limit.swapFeeWei
             ).toString(),
