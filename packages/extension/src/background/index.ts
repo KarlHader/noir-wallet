@@ -78,12 +78,7 @@ import { formatHardwareSigningError } from '@/lib/hardware-signing-error'
 import { appendDiagnosticLog, exportDiagnosticLogs } from '@/lib/diagnostic-log-store'
 import { parseDiagnosticLogDraft, sanitizeDiagnosticMessage } from '@/lib/diagnostic-log'
 import { logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
-import {
-  hasWalletDb,
-  loadTransactions,
-  mutateTransactions,
-  observeLegacyTransactionCommits
-} from '@/lib/indexed-db'
+import { hasWalletDb, loadTransactions, observeLegacyTransactionCommits } from '@/lib/indexed-db'
 import { isExternalActivityReceipt } from '@/core/activity/activity-notification'
 import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
 import {
@@ -118,7 +113,7 @@ import {
   writePreparedHardwareSignRequest,
   type HardwareSignKind
 } from '@/lib/hardware-tab'
-import { applyTransactionBroadcast } from '@/lib/transaction-replacement'
+import { writeLocalZcashActivity } from '@/infrastructure/persistence/repositories/local-zcash-activity'
 import { WalletCleanupCoordinator } from './wallet-cleanup'
 import {
   getShieldableTransparentBalance,
@@ -6631,6 +6626,22 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     return true
   }
 
+  if (message.type === 'MARK_ZCASH_TRANSACTION_NOTIFIED') {
+    const { accountKey, transactionId, status } = message
+    void multichainStartupReady
+      .then(() =>
+        accountContextTransition.runActiveOperation(async () => {
+          if (!getZcashAccountScopes().some(scope => scope.accountKey === accountKey)) {
+            return { newlyNotified: false }
+          }
+          return transactionRecorder.markTerminalNotified(accountKey, transactionId, status)
+        })
+      )
+      .then(result => sendResponse({ success: true, ...result }))
+      .catch(() => sendResponse({ success: false }))
+    return true
+  }
+
   return false
 }
 
@@ -7785,14 +7796,11 @@ async function recordUncertainBroadcast(
   txHash: string,
   txHashes: string[] = [txHash]
 ): Promise<void> {
-  await mutateTransactions(accountKey, transactions => {
-    const pending = applyTransactionBroadcast(transactions, transactionId, txHash, undefined)
-    if (txHashes.length <= 1) return pending
-    return pending.map(transaction =>
-      transaction.id === transactionId
-        ? { ...transaction, chainHashes: txHashes.map(hash => ({ hash, chain: 'Zcash' })) }
-        : transaction
-    )
+  await writeLocalZcashActivity(accountKey, {
+    kind: 'broadcast',
+    id: transactionId,
+    hash: txHash,
+    hashes: txHashes
   })
 }
 
@@ -8106,18 +8114,12 @@ async function handleBackgroundZcashTx(params: {
             amount: onChainAmount
           })
         }
-        await mutateTransactions(accountKey, txs => {
-          if (!txs.some(tx => tx.id === transactionId)) return txs
-          const broadcasted = applyTransactionBroadcast(txs, transactionId, txid, expiryHeight)
-          if (txHashes.length === 1) return broadcasted
-          return broadcasted.map(tx =>
-            tx.id === transactionId
-              ? {
-                  ...tx,
-                  chainHashes: txHashes.map(txHash => ({ hash: txHash, chain: 'Zcash' }))
-                }
-              : tx
-          )
+        await writeLocalZcashActivity(accountKey, {
+          kind: 'broadcast',
+          id: transactionId,
+          hash: txid,
+          hashes: txHashes,
+          expiryHeight
         })
       } catch {
         logger.warn(`${actionLabel} post-broadcast record update deferred`, walletId, accountId)

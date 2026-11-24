@@ -35,7 +35,6 @@ import {
   getJournalManifest,
   clearJournalEntries,
   loadTransactions,
-  mutateTransactions,
   deleteVotingState,
   deleteWalletPersistenceAndQuarantine,
   deleteWalletRecords,
@@ -101,10 +100,9 @@ import {
 } from '@/core/wallet/balance-summary'
 import {
   fetchTransparentReceiveTransactions,
-  fetchMissingTransparentSendRecipients,
-  mergeTransactionsWithWasmHistory,
-  associateIncomingIntentsTransactions
+  fetchMissingTransparentSendRecipients
 } from '@/core/wallet/transparent-history'
+import { writeLocalZcashActivity } from '@/infrastructure/persistence/repositories/local-zcash-activity'
 import { shouldMarkSyncJobInterrupted, syncJobStore } from '@/lib/sync-job-store'
 import {
   runSpendabilitySnapshotRefresh,
@@ -384,7 +382,7 @@ export class BackgroundZcashWalletRuntime {
         cacheKey: accountKey,
         signal
       }),
-    mutate: mutateTransactions,
+    write: writeLocalZcashActivity,
     notify: async accountKey => {
       await chrome.runtime
         .sendMessage({
@@ -3002,17 +3000,13 @@ export class BackgroundZcashWalletRuntime {
         logger.warn('transparent receive history fetch failed', walletId, accountId)
       }
 
-      let newWasmTransactionCount = 0
-      const persistedTransactions = await mutateTransactions(accountKey, currentTransactions => {
-        const merged = mergeTransactionsWithWasmHistory(
-          currentTransactions,
-          wasmTransactions,
-          transparentReceiveTransactions,
-          account.addresses
-        )
-        newWasmTransactionCount = merged.newWasmTransactionCount
-        return associateIncomingIntentsTransactions(merged.transactions)
-      })
+      const { transactions: persistedTransactions, newWasmTransactionCount } =
+        await writeLocalZcashActivity(accountKey, {
+          kind: 'history',
+          wasm: wasmTransactions,
+          receipts: transparentReceiveTransactions,
+          addresses: account.addresses
+        })
       if (canApplyStatus()) {
         if (transparentHistoryFailed) this.historyRefreshFailures.add(historyScope)
         else this.historyRefreshFailures.delete(historyScope)

@@ -1,13 +1,11 @@
 import { buildAccountKey } from '@/core/wallet/account-scope'
 import {
-  applyExternalReceiveConfirmations,
-  associateIncomingIntentsTransactions,
   fetchTransparentReceiveTransactions,
-  mergeTransactionsWithWasmHistory,
   readExternalReceiveConfirmations
 } from '@/core/wallet/transparent-history'
 import { DedupPromise } from '@/lib/async-utils'
-import { loadTransactions, mutateTransactions } from '@/lib/indexed-db'
+import { loadTransactions } from '@/lib/indexed-db'
+import { writeLocalZcashActivity } from '@/infrastructure/persistence/repositories/local-zcash-activity'
 import { getNetworkConfig } from '@/lib/runtime-network'
 import type { AccountData, Network, Transaction } from '@/types/wallet'
 
@@ -33,11 +31,7 @@ export async function discoverZcashTransparentReceipts(
     walletCreatedTxids: sent
   })
   if (incoming.length > 0) {
-    await mutateTransactions(accountKey, transactions =>
-      associateIncomingIntentsTransactions(
-        mergeTransactionsWithWasmHistory(transactions, [], incoming).transactions
-      )
-    )
+    await writeLocalZcashActivity(accountKey, { kind: 'history', receipts: incoming })
   }
   return true
 }
@@ -66,15 +60,10 @@ export async function refreshZcashReceiveConfirmations(
         baseUrl,
         AbortSignal.timeout(8_000)
       )
-      if (applyExternalReceiveConfirmations(transactions, observed) === transactions) {
-        return loadTransactions(accountKey)
-      }
-
-      let changed = false
-      const updated = await mutateTransactions(accountKey, current => {
-        const next = applyExternalReceiveConfirmations(current, observed)
-        changed = next !== current
-        return next
+      if (observed.size === 0) return loadTransactions(accountKey)
+      const { changed, transactions: updated } = await writeLocalZcashActivity(accountKey, {
+        kind: 'receive-confirmations',
+        observed
       })
       if (changed) {
         void chrome.runtime.sendMessage({ type: 'TRANSACTION_UPDATED', accountKey }).catch(() => {})

@@ -1087,6 +1087,13 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       transactionId: isShortString,
       updates: isRecord
     }
+  },
+  MARK_ZCASH_TRANSACTION_NOTIFIED: {
+    required: {
+      accountKey: isShortString,
+      transactionId: isShortString,
+      status: value => value === 'success' || value === 'failed'
+    }
   }
 })
 
@@ -1281,7 +1288,8 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     RECHECK_FAST_PENDING_TRANSACTIONS: ['extension-page'],
     GET_TRANSACTION_HISTORY: ['extension-page'],
     ADD_TRANSACTION: ['extension-page'],
-    UPDATE_TRANSACTION: ['extension-page']
+    UPDATE_TRANSACTION: ['extension-page'],
+    MARK_ZCASH_TRANSACTION_NOTIFIED: ['extension-page']
   })
 
 const trustedRuntimeSchemaTypes = Object.keys(TRUSTED_RUNTIME_SCHEMAS).sort()
