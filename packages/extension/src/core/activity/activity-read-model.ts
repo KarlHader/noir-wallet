@@ -710,13 +710,19 @@ export function buildActivityReadModel(input: {
           byChain.set(origin.target.chainId, { status, createdAt })
           cancellations.set(relation.transactionId, byChain)
         }
+        const winningHash = origin.evidence.replacementTransactionHash?.toLowerCase()
         if (
           originalOrigin?.target.kind === 'onchain' &&
           originalOrigin.target.chainId === origin.target.chainId &&
-          isKnownNonMinedEvmFailure(graph)
+          (isKnownNonMinedEvmFailure(graph) ||
+            (status === 'failed' &&
+              origin.failure?.code === 'dropped' &&
+              originalOrigin.status === 'final' &&
+              winningHash !== undefined &&
+              winningHash === originalOrigin.evidence?.transactionHash?.toLowerCase()))
         ) {
           const hashes = failedCancellationHashes.get(relation.transactionId) ?? new Set<string>()
-          hashes.add(origin.evidence.transactionHash)
+          hashes.add(origin.evidence.transactionHash.toLowerCase())
           failedCancellationHashes.set(relation.transactionId, hashes)
         }
       }
@@ -746,9 +752,9 @@ export function buildActivityReadModel(input: {
         }
         const replacementHash = origin?.evidence?.replacementTransactionHash
         if (
-          origin?.status === 'broadcast' &&
+          origin &&
           replacementHash &&
-          failedCancellationHashes.get(graph.root.id)?.has(replacementHash)
+          failedCancellationHashes.get(graph.root.id)?.has(replacementHash.toLowerCase())
         ) {
           item = Object.freeze({
             ...item,

@@ -272,6 +272,44 @@ test.describe('Activity read model', () => {
     expect(readOriginal([original, cancellation]).cancellationStatus).toBeUndefined()
   })
 
+  test('omits an unmined EVM cancellation hash after the original confirms', () => {
+    const cancellationHash = `0x${'b'.repeat(64)}`
+    const original = graph({ id: 'transaction:original-confirmed-before-cancel' })
+    original.root.status = 'final'
+    original.segments[0].status = 'final'
+    original.segments[0].evidence = {
+      transactionHash: evmHash,
+      blockHeight: 100,
+      replacementTransactionHash: cancellationHash
+    }
+    const cancellation = graph({ id: 'transaction:unmined-cancel', hash: cancellationHash })
+    cancellation.root.kind = 'cancel'
+    cancellation.root.status = 'failed'
+    cancellation.root.relation = { kind: 'replacement-of', transactionId: original.root.id }
+    cancellation.root.failure = { code: 'dropped', occurredAt: 1_100 }
+    cancellation.segments[0].status = 'failed'
+    cancellation.segments[0].failure = cancellation.root.failure
+
+    for (const winningHash of [undefined, evmHash.toLowerCase()]) {
+      cancellation.segments[0].evidence = {
+        transactionHash: cancellationHash,
+        ...(winningHash === undefined ? {} : { replacementTransactionHash: winningHash })
+      }
+      const { items } = parseActivityReadModel(
+        buildActivityReadModel({ scope, localGraphs: [original, cancellation] })
+      )
+      expect(items).toHaveLength(1)
+      expect(items[0]).toMatchObject({
+        id: original.root.id,
+        status: 'final',
+        cancellationStatus: 'failed',
+        segments: [{ evidence: { transactionHash: evmHash, blockHeight: 100 } }]
+      })
+      expect(items[0].segments[0].evidence).not.toHaveProperty('replacementTransactionHash')
+      expect(original.segments[0].evidence.replacementTransactionHash).toBe(cancellationHash)
+    }
+  })
+
   test('orders cross-chain source and destination records by transaction time', () => {
     const origin = graph({ id: 'transaction:cross-chain', updatedAt: 2_000 })
     const received = supplemental({
