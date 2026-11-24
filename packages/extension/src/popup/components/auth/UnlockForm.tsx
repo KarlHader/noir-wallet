@@ -93,6 +93,12 @@ export function UnlockForm({
 
     try {
       const result = await zcashWalletRuntimeClient.unlock(password)
+      if (result.needsWalletImport) {
+        await rehydrateWalletStore()
+        setPassword('')
+        replace('/onboarding')
+        return
+      }
       if (result.upgradeFailed) {
         setWalletUpgradeFailed(true)
         return

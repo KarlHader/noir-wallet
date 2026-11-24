@@ -5,7 +5,8 @@ import {
 } from '@/core/keyring/domain'
 import {
   parseStoredHardwareCredential,
-  type StoredHardwareCredential
+  type StoredHardwareCredential,
+  zcashHardwareMetadataForKeySource
 } from '@/core/wallet/hardware-wallet-data'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import type { V1EncryptedCredentialEnvelope } from './v1-credential-envelope'
@@ -29,7 +30,13 @@ export function hardwareCredentialMatchesMetadata(
   credential: StoredHardwareCredential,
   metadata: HardwareCredentialMetadata
 ): boolean {
-  return hardwareCredentialMetadataEquals(credentialMetadata(credential), metadata)
+  return (
+    hardwareCredentialMetadataEquals(credentialMetadata(credential), metadata) ||
+    (credential.vendor === 'ledger' &&
+      credential.schemaVersion === 3 &&
+      credential.capabilities.includes('zcash') &&
+      hardwareCredentialMetadataEquals(zcashHardwareMetadataForKeySource('ledger'), metadata))
+  )
 }
 
 export function hardwareCredentialEnvelopeEquals(

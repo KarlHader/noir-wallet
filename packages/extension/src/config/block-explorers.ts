@@ -84,7 +84,9 @@ export const CHAIN_BLOCK_EXPLORER_ALTERNATIVES: Readonly<
   'eip155:42161': [
     { label: 'Blockscout', baseUrl: 'https://arbitrum.blockscout.com', transactionPath: 'tx' }
   ],
-  'eip155:8453': [{ label: 'Basescan', baseUrl: 'https://basescan.org', transactionPath: 'tx' }],
+  'eip155:8453': [
+    { label: 'Blockscout', baseUrl: 'https://base.blockscout.com', transactionPath: 'tx' }
+  ],
   'eip155:10': [
     { label: 'Blockscout', baseUrl: 'https://optimism.blockscout.com', transactionPath: 'tx' }
   ],

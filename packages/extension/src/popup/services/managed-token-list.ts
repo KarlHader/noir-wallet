@@ -1,3 +1,5 @@
+import type { EvmNetworkConfig } from '@/config/networks'
+import { getEvmAssetDefinitions } from '@/core/chains/registry/product-chain-definitions'
 import type { DetectedEvmAssetRecord, UserEvmAssetRecord } from '@/core/chains/user-assets'
 import { getBundledInitialProductAssetDefinitions } from '@/core/chains/registry'
 import type { DetectedNearAssetRecord } from '@/infrastructure/chains/near/near-detected-asset-catalog'
@@ -77,40 +79,20 @@ export function buildManagedNearTokens(
   ])
 }
 
-interface ManagedTokenNetwork {
-  readonly chainId: string
-  readonly iconChain: string
-  readonly usdcContract?: string
-}
-
 const TOKEN_ORDER = ['USDC', 'USDT'] as const
 
 export function buildManagedTokenRows(input: {
-  readonly networks: readonly ManagedTokenNetwork[]
+  readonly networks: readonly EvmNetworkConfig[]
   readonly userAssets: readonly UserEvmAssetRecord[]
   readonly detectedAssets: readonly DetectedEvmAssetRecord[]
   readonly catalogAssets: readonly IntentsManagedAsset[]
   readonly protocolAssetIds: ReadonlySet<string>
   readonly nearTokens?: readonly ManagedNearToken[]
 }): readonly ManagedTokenRow[] {
-  const networkByChainId = new Map(input.networks.map(network => [network.chainId, network]))
-  const bundled: ManagedTokenRow[] = input.networks.flatMap(network =>
-    network.usdcContract
-      ? [
-          {
-            assetId: `${network.chainId}/erc20:${network.usdcContract.toLowerCase()}`,
-            chainId: network.chainId,
-            reference: network.usdcContract.toLowerCase(),
-            blockchain: network.iconChain,
-            metadata: { name: 'USD Coin', symbol: 'USDC', decimals: 6 },
-            source: 'bundled' as const,
-            registered: true
-          }
-        ]
-      : []
+  const networkByChainId = new Map<string, EvmNetworkConfig>(
+    input.networks.map(network => [network.chainId, network])
   )
   const local: ManagedTokenRow[] = [
-    ...bundled,
     ...input.userAssets.map(asset => ({
       assetId: asset.assetId,
       chainId: asset.chainId,
@@ -138,7 +120,24 @@ export function buildManagedTokenRows(input: {
       metadata: asset.metadata,
       source: asset.source,
       registered: true
-    }))
+    })),
+    ...input.networks.flatMap(network =>
+      getEvmAssetDefinitions(network).flatMap(asset => {
+        if (asset.namespace !== 'erc20') return []
+        const reference = asset.reference.toLowerCase()
+        return [
+          {
+            assetId: `${asset.chainId}/${asset.namespace}:${reference}`,
+            chainId: asset.chainId,
+            reference,
+            blockchain: network.iconChain,
+            metadata: asset.metadata,
+            source: 'bundled' as const,
+            registered: true
+          }
+        ]
+      })
+    )
   ]
   const localById = new Map(local.map(asset => [asset.assetId, asset]))
   const rows: ManagedTokenRow[] = input.catalogAssets

@@ -50,6 +50,7 @@ export function ManageAccountNetworks() {
   const chainEndpointSettings = useSettingsStore(state => state.chainEndpointSettings)
   const loadSettings = useSettingsStore(state => state.loadSettings)
   const account = wallet?.accounts.find(item => item.id === accountId)
+  const addEvm = params.get('add') === 'evm'
   const guideMode =
     params.get('guide') === 'v1' && isRetainedV1UpgradeAccount(wallet, account, currentNetwork)
   const available = useMemo<readonly AccountNetworkFamily[]>(
@@ -80,7 +81,11 @@ export function ManageAccountNetworks() {
       ),
     [account, available]
   )
-  const [selected, setSelected] = useState<readonly AccountNetworkFamily[]>(initial)
+  const suggested = useMemo(
+    () => available.filter(family => initial.includes(family) || (addEvm && family === 'evm')),
+    [addEvm, available, initial]
+  )
+  const [selected, setSelected] = useState<readonly AccountNetworkFamily[]>(suggested)
   const [history, setHistory] = useState<ZcashHistory>('new')
   const [date, setDate] = useState<dayjs.Dayjs | null>(null)
   const [height, setHeight] = useState('')
@@ -153,10 +158,10 @@ export function ManageAccountNetworks() {
       initializedScope.current = null
       return
     }
-    const scope = `${currentNetwork}:${walletId}:${accountId}`
+    const scope = `${currentNetwork}:${walletId}:${accountId}:${addEvm}`
     if (initializedScope.current === scope) return
     initializedScope.current = scope
-    setSelected(initial)
+    setSelected(suggested)
     setHistory('new')
     setDate(null)
     setHeight('')
@@ -164,7 +169,7 @@ export function ManageAccountNetworks() {
     attempts.current.invalidate()
     savingRef.current = false
     setSaving(false)
-  }, [walletId, accountId, currentNetwork, account, initial])
+  }, [walletId, accountId, currentNetwork, account, addEvm, suggested])
 
   if (
     !walletId ||

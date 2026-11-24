@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import type { Network } from '@/types'
 import {
   NOIR_RECEIVE_REFERRAL,
@@ -52,6 +53,8 @@ import {
 } from '@/core/chains/registry'
 import {
   CONFIDENTIAL_WITHDRAW_DEFAULT_COUNT,
+  CONFIDENTIAL_WITHDRAW_MIN_COUNT,
+  type ConfidentialFundingPurpose,
   CONFIDENTIAL_SESSION_REQUIRED_ERROR,
   buildConfidentialPortfolioView,
   aggregateConfidentialSettlement,
@@ -270,7 +273,7 @@ interface ConfidentialFundingRouteInput {
   readonly dedupKey?: string
   readonly externalRecipient?: string
   readonly confidentialRecipient?: string
-  readonly purpose?: 'move' | 'native-zec-swap'
+  readonly purpose?: ConfidentialFundingPurpose
 }
 
 export type PrepareConfidentialFundingInput = ConfidentialFundingRouteInput &
@@ -455,13 +458,13 @@ function quoteDeadline(quote: ConfidentialQuote): number {
   return value
 }
 
-function minimumAmountError(error: unknown): boolean {
+function minimumAmountError(error: unknown): error is ConfidentialFundingApiError {
   return (
     error instanceof ConfidentialFundingApiError &&
     error.status !== null &&
     error.status >= 400 &&
     error.status < 500 &&
-    /minimum|min(?:imum)? amount|too small|below/i.test(error.message)
+    /minimum|min amount|too (?:small|low)|below/i.test(error.message)
   )
 }
 
@@ -1482,6 +1485,17 @@ export class ConfidentialFundingCoordinator {
       return record
     }
     if (record.phase === 'refunded') {
+      if (
+        !record.refundTransactionHash &&
+        (force || !this.reconciledTerminalExternalDeposits.has(record.depositId))
+      ) {
+        const status = await this.readExternalDepositProviderStatus(record, force)
+        if (status && normalizeStatus(status.status) === 'REFUNDED' && status.transactionHash) {
+          record = Object.freeze({ ...record, refundTransactionHash: status.transactionHash })
+          await this.options.store.putExternalDeposit(record)
+          void this.options.onActivityChanged?.(record).catch(() => {})
+        }
+      }
       await this.updateExternalDepositGraph(record)
       await this.markExternalDepositGraphReconciled(record)
       return record
@@ -1568,6 +1582,9 @@ export class ConfidentialFundingCoordinator {
         providerStatus: normalized,
         ...(fundingObservedAt !== undefined ? { fundingObservedAt } : {}),
         ...(depositedAmountRaw !== undefined ? { depositedAmountRaw } : {}),
+        ...(nextPhase === 'refunded' && status.transactionHash
+          ? { refundTransactionHash: status.transactionHash }
+          : {}),
         errorStatus,
         ...(nextPhase === 'ready' &&
         status.settledAmountOutRaw &&
@@ -1677,7 +1694,11 @@ export class ConfidentialFundingCoordinator {
     const transactionId = parseTransactionId(record.transactionId)
     if (!(await this.options.repository.get(scope, transactionId))) {
       const result = await this.options.store.withExternalDepositScope(record, () =>
-        this.options.repository.create(createExternalShieldDepositGraph(record))
+        writeLocalActivity(
+          'create',
+          this.options.repository,
+          createExternalShieldDepositGraph(record)
+        )
       )
       if (result.status === 'id-conflict')
         throw new Error('External Shield deposit transaction ID conflicts')
@@ -1713,7 +1734,7 @@ export class ConfidentialFundingCoordinator {
           break
         // Release the metadata lock before applying: the committed event awaits observers that reacquire it.
         await this.options.store.withExternalDepositScope(record, async () => {})
-        const result = await this.options.repository.applySegmentEvent({
+        const result = await writeLocalActivity('applySegmentEvent', this.options.repository, {
           scope,
           transactionId,
           segmentId: segment.id,
@@ -1978,7 +1999,8 @@ export class ConfidentialFundingCoordinator {
       spendRaw: depositQuote?.quote.amountOut ?? input.source.amountRaw,
       signerId: withdrawSigner,
       recipient: destinationAddress,
-      slippageBps: input.slippageBps
+      slippageBps: input.slippageBps,
+      settlement: 'cluster'
     })
     const currentIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
     this.assertSameAccount(sourceIdentity, currentIdentity)
@@ -2726,7 +2748,8 @@ export class ConfidentialFundingCoordinator {
       spendRaw,
       signerId: withdrawSigner,
       recipient: destinationAddress,
-      slippageBps: input.slippageBps
+      slippageBps: input.slippageBps,
+      settlement: 'cluster'
     })
     const preparedDeposit = depositQuote
       ? await this.depositAdapter(sourceIdentity, {
@@ -4362,6 +4385,7 @@ export class ConfidentialFundingCoordinator {
     readonly signerId: string
     readonly recipient: string
     readonly slippageBps: number
+    readonly settlement?: 'cluster'
   }): Promise<Readonly<{ amounts: readonly string[]; quotes: readonly ConfidentialQuote[] }>> {
     const attempt = async (count: number) => {
       const amounts = splitConfidentialFundingAmount(input.spendRaw, count)
@@ -4378,6 +4402,7 @@ export class ConfidentialFundingCoordinator {
             refundType: 'CONFIDENTIAL_INTENTS',
             recipientType: 'DESTINATION_CHAIN',
             slippageBps: input.slippageBps,
+            settlement: input.settlement,
             dry: true
           })
         )
@@ -4408,8 +4433,27 @@ export class ConfidentialFundingCoordinator {
     try {
       return await attempt(CONFIDENTIAL_WITHDRAW_DEFAULT_COUNT)
     } catch (error) {
-      if (!minimumAmountError(error) && !quotedFeeTooSmall(error)) throw error
-      return attempt(2)
+      if (quotedFeeTooSmall(error)) return attempt(2)
+      if (!minimumAmountError(error)) throw error
+      try {
+        return await attempt(CONFIDENTIAL_WITHDRAW_MIN_COUNT)
+      } catch (fallbackError) {
+        if (minimumAmountError(fallbackError)) {
+          const match = /amount is too low for bridge,?\s*try at least ([0-9]+)/i.exec(
+            fallbackError.message
+          )
+          if (match?.[1]) {
+            const minimum = BigInt(match[1]) * BigInt(CONFIDENTIAL_WITHDRAW_MIN_COUNT)
+            throw new ConfidentialFundingApiError(
+              `Amount is too low for bridge, try at least ${minimum}`,
+              fallbackError.status,
+              fallbackError.ambiguous,
+              fallbackError.businessCode
+            )
+          }
+        }
+        throw fallbackError
+      }
     }
   }
 
@@ -4581,6 +4625,7 @@ export class ConfidentialFundingCoordinator {
           refundType: 'CONFIDENTIAL_INTENTS',
           recipientType: 'DESTINATION_CHAIN',
           slippageBps: plan.slippageBps,
+          settlement: 'cluster',
           dry: false
         })
       )
@@ -5800,15 +5845,19 @@ export class ConfidentialFundingCoordinator {
             ? existing
             : await this.options.repository.get(scope, parseTransactionId(plan.transactionId))
         if (!current) return
-        const result = await this.options.repository.backfillConfidentialEvmOrigin({
-          scope,
-          transactionId: parseTransactionId(plan.transactionId),
-          expectedRootRevision: current.root.revision,
-          transactionHash: plan.preparedDeposit.transactionHash,
-          legacySenderAddress: plan.source.address,
-          preparedTransfer: plan.preparedDeposit.preparedTransfer,
-          observedAt: this.now()
-        })
+        const result = await writeLocalActivity(
+          'backfillConfidentialEvmOrigin',
+          this.options.repository,
+          {
+            scope,
+            transactionId: parseTransactionId(plan.transactionId),
+            expectedRootRevision: current.root.revision,
+            transactionHash: plan.preparedDeposit.transactionHash,
+            legacySenderAddress: plan.source.address,
+            preparedTransfer: plan.preparedDeposit.preparedTransfer,
+            observedAt: this.now()
+          }
+        )
         if (result.status === 'revision-conflict') continue
         if (result.status === 'applied') this.notifyActivityChanged(plan)
         return
@@ -5831,7 +5880,7 @@ export class ConfidentialFundingCoordinator {
         : undefined
     const graph = createConfidentialFundingGraph({
       planId: plan.planId,
-      ...(plan.purpose === 'native-zec-swap' ? { purpose: plan.purpose } : {}),
+      ...(plan.purpose ? { purpose: plan.purpose } : {}),
       ...(plan.operation
         ? {
             operation: plan.operation,
@@ -5896,16 +5945,13 @@ export class ConfidentialFundingCoordinator {
         expectedAmountRaw: plan.expectedOutputRaw,
         address: plan.destination.address
       },
-      externalRecipient:
-        Boolean(plan.externalRecipient) &&
-        plan.purpose !== 'move' &&
-        plan.purpose !== 'native-zec-swap',
+      externalRecipient: Boolean(plan.externalRecipient) && plan.purpose === undefined,
       withdrawDepositAddresses: plan.withdraws.map(row => row.depositAddress || null),
       requiresDeposit: plan.requiresDeposit,
       signedWithdrawFingerprint: plan.requestFingerprint,
       now: plan.createdAt
     })
-    const result = await this.options.repository.create(graph)
+    const result = await writeLocalActivity('create', this.options.repository, graph)
     if (result.status === 'id-conflict') {
       throw new Error('Confidential funding transaction ID conflicts')
     }
@@ -5933,7 +5979,7 @@ export class ConfidentialFundingCoordinator {
         observedAt: this.now()
       })
       if (!event) return
-      const result = await this.options.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.options.repository, {
         scope,
         transactionId,
         segmentId: segment.id,
@@ -5977,7 +6023,7 @@ export class ConfidentialFundingCoordinator {
           ? { failure: { code: failure ?? 'relay-failed', occurredAt: now } }
           : {})
       }
-      const result = await this.options.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.options.repository, {
         scope,
         transactionId,
         segmentId,
@@ -6260,7 +6306,7 @@ export class ConfidentialFundingCoordinator {
   }
 
   private assertOwnZcashMoveRecipient(value: {
-    readonly purpose?: 'move' | 'native-zec-swap'
+    readonly purpose?: ConfidentialFundingPurpose
     readonly operation?: string
     readonly sourceDomain?: string
     readonly destinationDomain?: string
@@ -6272,7 +6318,8 @@ export class ConfidentialFundingCoordinator {
     readonly externalRecipient?: string
   }): void {
     if (value.purpose === undefined) return
-    const isMove = value.purpose === 'move'
+    const sameAssetSwap = value.purpose === 'same-asset-zec-swap'
+    const isMove = value.purpose === 'move' || sameAssetSwap
     const isNativeZecSwap = value.purpose === 'native-zec-swap'
     const active = this.options.getNativeZecActiveAccount?.()
     const assetId = `${getZcashChainId(this.options.network)}/slip44:133`
@@ -6299,6 +6346,8 @@ export class ConfidentialFundingCoordinator {
           : 'ZEC transfers must use a receive address from the current account'
       )
     const parsed = parseZcashAddress(value.externalRecipient, this.options.network)
+    if (sameAssetSwap && parsed.scheme !== 'zcash-full-unified')
+      throw new Error('This ZEC swap requires the current account’s unified receive address')
     if (
       !parsed.scheme.startsWith('zcash-transparent-') &&
       !value.externalRecipient.startsWith(this.options.network === 'mainnet' ? 'u1' : 'utest1')

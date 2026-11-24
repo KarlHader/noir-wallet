@@ -12,6 +12,7 @@ import { formatSortAddress, formatSymbol } from '@/lib/format'
 import { detectZcashAddressType } from '@/lib/zcash-memo'
 import { parseAssetId } from '@/core/chains/registry'
 import { ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { resolveEvmChainIconAlias } from '@/config/icons'
 import type {
   ActivityAssetMetadata,
   ActivityChainMetadata
@@ -246,6 +247,11 @@ export function hasMatchingActivityTokenIcons(route: ActivitySwapPresentation): 
   if (source.assetId === destination.assetId) return true
   if (source.symbol.toUpperCase() !== destination.symbol.toUpperCase()) return false
   return !source.iconUrl || !destination.iconUrl || source.iconUrl === destination.iconUrl
+}
+
+export function resolveActivityEvmAssetChainIconAlias(assetId?: string): string | undefined {
+  const network = /^(?:eip155|rhea):([1-9]\d*)\//.exec(assetId ?? '')?.[1]
+  return network ? resolveEvmChainIconAlias(`eip155:${network}`) : undefined
 }
 
 export function buildActivityExecutionAddressModes(
@@ -700,21 +706,11 @@ export function getActivityDetailTitle(
   route?: ActivitySwapPresentation | null
 ): string {
   if (item.snapshot?.shield) {
-    const label = getActivityAction(item, perspective, route).label
-    return label === 'Swap' ? 'Shield Swap' : label
+    return getActivityAction(item, perspective, route).label
   }
   if (route?.sourceFundingSource) return getActivityAction(item, perspective, route).label
-  if (isConfidentialFundingActivity(item)) return 'Add to Confidential'
+  if (isConfidentialFundingActivity(item)) return item.kind === 'swap' ? 'Swap' : 'Deposit'
   if (item.failureCode === 'refunded') return 'Refund'
-  if (
-    item.kind === 'transfer' &&
-    item.snapshot?.protocol?.provider === 'rhea-cross-chain-dex' &&
-    item.snapshot.protocol.userAction === 'transfer'
-  ) {
-    return item.snapshot.protocol.balanceTransfer === 'withdraw'
-      ? getActivityAction(item, perspective, route).label
-      : 'Transfer'
-  }
   if (item.kind === 'transfer') return getActivityAction(item, perspective, route).label
   switch (item.kind) {
     case 'receive':
@@ -1169,7 +1165,7 @@ function getActivityTitle(
   route?: ActivitySwapPresentation | null
 ): string {
   if (item.snapshot?.shield) return getActivityAction(item, perspective, route).label
-  if (isConfidentialFundingActivity(item)) return 'Added to Confidential'
+  if (isConfidentialFundingActivity(item)) return item.kind === 'swap' ? 'Swap' : 'Deposit'
   if (item.failureCode === 'refunded') return 'Refunded'
   const protocol = item.snapshot?.protocol
   if (protocol?.provider === 'rhea-cross-chain-dex' && protocol.balanceTransfer === 'withdraw')
@@ -1204,12 +1200,12 @@ export function getActivityRowTextPresentation(
     return {
       title: perspective.viewedDomain
         ? symbol
-          ? `${getActivityAction(item, perspective, route).label} ${symbol}`
-          : getActivityAction(item, perspective, route).label
+          ? `${action.label} ${symbol}`
+          : action.label
         : symbol
           ? `Shielded ${symbol}`
           : 'Shielded',
-      subtitle: action.label === 'Send' ? 'Shield' : 'Transparent → Shielded'
+      subtitle: 'Transparent → Shielded'
     }
   }
 

@@ -11,6 +11,7 @@ import { lookupTokenContractIcon } from './token-contract-icon'
 import { openTokenManager } from './token-manager-window'
 import { handleEvmWalletChoiceMessage } from './evm-wallet-choice'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
+import { isNativeHardwareWalletId } from '@/core/wallet/native-hardware-identity'
 import {
   isAccountChainEnabled,
   isAccountNetworkEnabled,
@@ -52,7 +53,7 @@ import {
 import { toShieldProviderErrorShape } from '@/core/dapp/shield-provider'
 import { evmDAppOperationStore } from './evm-dapp-operation-store'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
-import { UI_CONFIG } from '@/config/extension'
+import { DEFAULT_REQUEST_TIMEOUT_MS, UI_CONFIG } from '@/config/extension'
 import { WALLET_CONFIG, ZEC_DECIMALS, type MnemonicWordCount } from '@/config/wallet'
 import {
   DEFAULT_NETWORK,
@@ -77,12 +78,7 @@ import { formatHardwareSigningError } from '@/lib/hardware-signing-error'
 import { appendDiagnosticLog, exportDiagnosticLogs } from '@/lib/diagnostic-log-store'
 import { parseDiagnosticLogDraft, sanitizeDiagnosticMessage } from '@/lib/diagnostic-log'
 import { logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
-import {
-  hasWalletDb,
-  loadTransactions,
-  mutateTransactions,
-  observeLegacyTransactionCommits
-} from '@/lib/indexed-db'
+import { hasWalletDb, loadTransactions, observeLegacyTransactionCommits } from '@/lib/indexed-db'
 import { isExternalActivityReceipt } from '@/core/activity/activity-notification'
 import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
 import {
@@ -117,7 +113,7 @@ import {
   writePreparedHardwareSignRequest,
   type HardwareSignKind
 } from '@/lib/hardware-tab'
-import { applyTransactionBroadcast } from '@/lib/transaction-replacement'
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { WalletCleanupCoordinator } from './wallet-cleanup'
 import {
   getShieldableTransparentBalance,
@@ -287,7 +283,7 @@ import { CONFIDENTIAL_FUNDING_MONITOR_ALARM } from './confidential-funding'
 import type { ConfidentialFundingCoordinator } from './confidential-funding-coordinator'
 import type { NativeZecIntentsSwapReview } from '@/core/services/native-zec-intents-swap'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
-import { createEvmWalletRuntimeError } from '@/core/chains/evm'
+import { createEvmWalletRuntimeError, supportsEvmPrivateExecution } from '@/core/chains/evm'
 import {
   applyTokenDisplayPolicy,
   isPortfolioTokenVisible,
@@ -403,6 +399,7 @@ import { connectionHasEvmAuthorization, dappManager } from '@/core/dapp/dapp-man
 import {
   DAppExecutionModeConfirmationRequiredError,
   DAppExecutionModeTransitionCoordinator,
+  parseDAppExecutionModeScope,
   type DAppExecutionMode,
   type DAppExecutionModeScope,
   type DAppExecutionModeState
@@ -649,8 +646,8 @@ const combinedEvmSwap = new CombinedEvmSwap({
     }
   },
   readGraph: (scope, id) => combinedSwapRepository.get(scope, parseTransactionId(id)),
-  validateQuote: async binding => {
-    await requireCurrentPrivateSwapQuote(binding.quoteHandle, 'main', binding)
+  validateQuote: async (binding, executionMode) => {
+    await requireCurrentPrivateSwapQuote(binding.quoteHandle, executionMode, binding)
   },
   checkApproval: async (scope, chainId) => {
     await evmTransactionMonitor?.pollApprovalScope(chainId, scope)
@@ -4265,6 +4262,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       sendResponse({ error: createEvmWalletRuntimeError('unavailable') })
       return true
     }
+    const refreshAll = message.action === 'refresh' && !Array.isArray(message.chainIds)
+    const waitForTokenDiscovery =
+      refreshAll &&
+      message.waitForTokenDiscovery === true &&
+      typeof message.expectedWalletId === 'string' &&
+      typeof message.expectedAccountId === 'string'
     const operation = async () => {
       const refreshChainIds = Array.isArray(message.chainIds)
         ? (message.chainIds as readonly string[])
@@ -4279,13 +4282,15 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           typeof message.expectedAccountId !== 'string'
         )
           return false
-        return coordinator.isActiveAccount({
-          keyDomainId: message.expectedWalletId,
-          accountId: message.expectedAccountId
-        })
+        return (
+          (await portfolioCoordinator?.isActiveAccount({
+            keyDomainId: message.expectedWalletId,
+            accountId: message.expectedAccountId
+          })) ?? false
+        )
       }
       if (!(await expectedScopeMatches())) throw new Error('Portfolio Account changed')
-      const model =
+      let model =
         message.action === 'read'
           ? await coordinator.readCachedActive()
           : await coordinator.refreshActive(refreshChainIds, {
@@ -4293,6 +4298,23 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               refreshConfidential: message.refreshConfidential !== false
             })
       if (!(await expectedScopeMatches())) throw new Error('Portfolio Account changed')
+      if (waitForTokenDiscovery && model?.chains.some(chain => chain.chain.family === 'evm')) {
+        const discovered = await withTimeout(
+          refreshDetectedEvmAssetsForActiveAccount(model.scope, message.forceDiscovery === true),
+          DEFAULT_REQUEST_TIMEOUT_MS,
+          'Initial token discovery'
+        )
+          .then(() => portfolioCoordinator?.readCachedActive())
+          .catch(() => null)
+        model = discovered ?? model
+        if (
+          !(await expectedScopeMatches()) ||
+          model.scope.keyDomainId !== message.expectedWalletId ||
+          model.scope.accountId !== message.expectedAccountId
+        ) {
+          throw new Error('Portfolio Account changed')
+        }
+      }
       if (message.action === 'refresh' && model) {
         void assetPriceService
           .readCached()
@@ -4323,13 +4345,14 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     void operation()
       .then(result => {
         sendResponse({ result })
-        // Discovery may wait on an indexer; return RPC balances before starting it.
-        if (message.action === 'refresh' && !Array.isArray(message.chainIds) && result.model) {
+        if (refreshAll && result.model) {
           void refreshIntentsProtocolAssets().catch(() => {})
-          void refreshDetectedEvmAssetsForActiveAccount(
-            result.model.scope,
-            message.forceDiscovery === true
-          ).catch(() => {})
+          if (!waitForTokenDiscovery) {
+            void refreshDetectedEvmAssetsForActiveAccount(
+              result.model.scope,
+              message.forceDiscovery === true
+            ).catch(() => {})
+          }
         }
       })
       .catch(error => {
@@ -5331,6 +5354,51 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       .catch(error =>
         sendResponse({
           error: error instanceof Error ? error.message : 'Unable to read dApp execution mode'
+        })
+      )
+    return true
+  }
+
+  if (
+    message.type === 'GET_ACCOUNT_INCOGNITO_SETUP' ||
+    message.type === 'COMPLETE_ACCOUNT_INCOGNITO_SETUP'
+  ) {
+    const complete = message.type === 'COMPLETE_ACCOUNT_INCOGNITO_SETUP'
+    void accountContextTransition
+      .runActiveOperation(async () => {
+        const scope = parseDAppExecutionModeScope(message.scope)
+        if (scope.network !== DEFAULT_NETWORK) {
+          throw new Error('Wallet network changed. Open Addresses again.')
+        }
+        if (walletLockCleanupPending || !(await credentialSession.hasUnlockSession())) {
+          throw new Error('Unlock the wallet to manage Incognito addresses.')
+        }
+        if (!complete) return dappExecutionModeCoordinator.readPrivateSetup(scope)
+
+        const catalog = await accountNetworksCoordinator.readCatalog({
+          deriveMissingAddresses: false
+        })
+        const account = catalog?.accounts.find(
+          candidate =>
+            candidate.walletId === scope.keyDomainId && candidate.accountId === scope.accountId
+        )
+        if (
+          !account ||
+          !supportsEvmPrivateExecution(account.walletSource) ||
+          !account.networks.some(network => parseChainId(network.chainId).namespace === 'eip155')
+        ) {
+          throw new Error('Incognito is unavailable for this account.')
+        }
+        if (walletLockCleanupPending || !(await credentialSession.hasUnlockSession())) {
+          throw new Error('Unlock the wallet to manage Incognito addresses.')
+        }
+        await dappExecutionModeCoordinator.completePrivateSetup(scope)
+        return true
+      })
+      .then(setupCompleted => sendResponse({ success: true, setupCompleted }))
+      .catch(error =>
+        sendResponse({
+          error: error instanceof Error ? error.message : 'Unable to open the Incognito address.'
         })
       )
     return true
@@ -6677,6 +6745,22 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     return true
   }
 
+  if (message.type === 'MARK_ZCASH_TRANSACTION_NOTIFIED') {
+    const { accountKey, transactionId, status } = message
+    void multichainStartupReady
+      .then(() =>
+        accountContextTransition.runActiveOperation(async () => {
+          if (!getZcashAccountScopes().some(scope => scope.accountKey === accountKey)) {
+            return { newlyNotified: false }
+          }
+          return transactionRecorder.markTerminalNotified(accountKey, transactionId, status)
+        })
+      )
+      .then(result => sendResponse({ success: true, ...result }))
+      .catch(() => sendResponse({ success: false }))
+    return true
+  }
+
   return false
 }
 
@@ -7125,10 +7209,20 @@ async function performWalletUnlock(password: string): Promise<any> {
       }
     }
 
-    const result = await backgroundZcashWalletRuntime.unlock(password, {
+    let result = await backgroundZcashWalletRuntime.unlock(password, {
       allowMissingCredentialRecovery: true
     })
-    if (!result.success) {
+    const previousWalletId = useWalletStore.getState().currentWalletId
+    const previousWallet = previousWalletId
+      ? useWalletStore.getState().getWallet(previousWalletId)
+      : undefined
+    const canRecoverIncompatibleHardware =
+      result.failure === 'credential_invalid' &&
+      previousWallet !== undefined &&
+      previousWallet !== null &&
+      isZcashHardwareKeySource(previousWallet.keySource) &&
+      !isNativeHardwareWalletId(previousWallet.id)
+    if (!result.success && !canRecoverIncompatibleHardware) {
       return result
     }
 
@@ -7140,6 +7234,21 @@ async function performWalletUnlock(password: string): Promise<any> {
             result.recoveredWalletId
           )
         : await credentialLifecycle.synchronizeRetainedV1(password)
+    if (!result.success && !credentials.detachedHardwareWallet) return result
+    if (credentials.detachedHardwareWallet) {
+      await rehydrateWalletStore()
+      if (credentials.status === 'no-compatible-wallets') {
+        await performWalletLockState()
+        return { success: false, needsWalletImport: true }
+      }
+      if (useWalletStore.getState().currentWalletId !== previousWalletId) {
+        await backgroundZcashWalletRuntime.lock()
+        if (useWalletStore.getState().currentWalletId) {
+          result = await backgroundZcashWalletRuntime.unlock(password)
+          if (!result.success) return result
+        }
+      }
+    }
     if (result.recoveredWalletId && result.recoveredAccountId) {
       const selection = await credentialLifecycle.selectActiveAccount(
         result.recoveredWalletId,
@@ -7806,14 +7915,11 @@ async function recordUncertainBroadcast(
   txHash: string,
   txHashes: string[] = [txHash]
 ): Promise<void> {
-  await mutateTransactions(accountKey, transactions => {
-    const pending = applyTransactionBroadcast(transactions, transactionId, txHash, undefined)
-    if (txHashes.length <= 1) return pending
-    return pending.map(transaction =>
-      transaction.id === transactionId
-        ? { ...transaction, chainHashes: txHashes.map(hash => ({ hash, chain: 'Zcash' })) }
-        : transaction
-    )
+  await writeLocalActivity('legacy-zcash', accountKey, {
+    kind: 'broadcast',
+    id: transactionId,
+    hash: txHash,
+    hashes: txHashes
   })
 }
 
@@ -8127,18 +8233,12 @@ async function handleBackgroundZcashTx(params: {
             amount: onChainAmount
           })
         }
-        await mutateTransactions(accountKey, txs => {
-          if (!txs.some(tx => tx.id === transactionId)) return txs
-          const broadcasted = applyTransactionBroadcast(txs, transactionId, txid, expiryHeight)
-          if (txHashes.length === 1) return broadcasted
-          return broadcasted.map(tx =>
-            tx.id === transactionId
-              ? {
-                  ...tx,
-                  chainHashes: txHashes.map(txHash => ({ hash: txHash, chain: 'Zcash' }))
-                }
-              : tx
-          )
+        await writeLocalActivity('legacy-zcash', accountKey, {
+          kind: 'broadcast',
+          id: transactionId,
+          hash: txid,
+          hashes: txHashes,
+          expiryHeight
         })
       } catch {
         logger.warn(`${actionLabel} post-broadcast record update deferred`, walletId, accountId)

@@ -2,12 +2,48 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { getEvmNetworkConfigs, getKnownEvmNetworkIdentities } from '../../../src/config/networks.ts'
 import { resolveManagedIntentsAssets } from '../../../src/core/services/intents-managed-assets.ts'
+import { buildManagedTokenRows } from '../../../src/popup/services/managed-token-list.ts'
 import {
   resolveIntentsEvmAssets,
   resolveIntentsEvmChainId
 } from '../../../src/core/services/intents-evm-assets.ts'
 
 const updatedAt = '2026-08-25T00:00:00.000Z'
+
+test('uses the registered BNB Chain USDC when the Intents catalog lists its contract', () => {
+  const networks = getEvmNetworkConfigs('mainnet')
+  const contractAddress = '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'
+  const catalogAssets = resolveManagedIntentsAssets(
+    [
+      {
+        assetId: `nep141:bnb-${contractAddress}.omdep.near`,
+        blockchain: 'bnb',
+        contractAddress,
+        symbol: 'USDC',
+        decimals: 18,
+        price: 1,
+        priceUpdatedAt: updatedAt
+      }
+    ],
+    'mainnet',
+    networks
+  )
+  const rows = buildManagedTokenRows({
+    networks,
+    userAssets: [],
+    detectedAssets: [],
+    catalogAssets,
+    protocolAssetIds: new Set()
+  })
+  expect(rows.filter(row => row.reference === contractAddress)).toEqual([
+    expect.objectContaining({
+      assetId: `eip155:56/erc20:${contractAddress}`,
+      source: 'bundled',
+      registered: true,
+      metadata: { name: 'USD Coin', symbol: 'USDC', decimals: 18 }
+    })
+  ])
+})
 
 test('resolves an EVM chain alias without requiring Token contract metadata', () => {
   const networks = getEvmNetworkConfigs('mainnet')

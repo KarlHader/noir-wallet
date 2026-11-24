@@ -1,7 +1,9 @@
 import {
   DAPP_EXECUTION_MODES,
+  parseDAppExecutionModeScope,
   type DAppExecutionMode,
   type DAppExecutionModeChangeImpact,
+  type DAppExecutionModeScope,
   type DAppExecutionModeState
 } from '@/core/dapp/dapp-execution-mode'
 
@@ -90,10 +92,47 @@ function parseResponse(value: unknown): DAppExecutionModeState {
   })
 }
 
+function parseSetupResponse(value: unknown): boolean {
+  const response = readRecord(value)
+  if (hasExactKeys(response, ['error']) && typeof response.error === 'string') {
+    throw new DAppExecutionModeClientError('request-failed', response.error)
+  }
+  if (
+    !hasExactKeys(response, ['success', 'setupCompleted']) ||
+    response.success !== true ||
+    typeof response.setupCompleted !== 'boolean'
+  ) {
+    throw new DAppExecutionModeClientError('invalid-response', 'Invalid Incognito setup response')
+  }
+  return response.setupCompleted
+}
+
 export function createDAppExecutionModeClient(sendMessage: DAppExecutionModeRuntimeMessenger) {
   return Object.freeze({
     read: async (): Promise<DAppExecutionModeState> =>
       parseResponse(await sendMessage({ type: 'GET_DAPP_EXECUTION_MODE' })),
+    readPrivateSetup: async (scope: DAppExecutionModeScope): Promise<boolean> =>
+      parseSetupResponse(
+        await sendMessage({
+          type: 'GET_ACCOUNT_INCOGNITO_SETUP',
+          scope: parseDAppExecutionModeScope(scope)
+        })
+      ),
+    completePrivateSetup: async (scope: DAppExecutionModeScope): Promise<void> => {
+      const completed = parseSetupResponse(
+        await sendMessage({
+          type: 'COMPLETE_ACCOUNT_INCOGNITO_SETUP',
+          scope: parseDAppExecutionModeScope(scope),
+          confirmPrivateSetup: true
+        })
+      )
+      if (!completed) {
+        throw new DAppExecutionModeClientError(
+          'invalid-response',
+          'Incognito setup was not completed'
+        )
+      }
+    },
     set: async (
       mode: DAppExecutionMode,
       options: Readonly<{

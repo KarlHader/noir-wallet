@@ -4,7 +4,10 @@ import { parseNearAccountId } from '@/core/chains/near/identifiers'
 import { getZcashChainId } from '@/core/chains/registry'
 import { externalRecipientsMatch, isValidExternalRecipient } from './confidential-funding-recipient'
 import { withMetadataLock, withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
-import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
+import {
+  CONFIDENTIAL_FUNDING_PURPOSES,
+  type ConfidentialFundingPlan
+} from '@/core/services/confidential-funding'
 import type { ExternalShieldDeposit } from '@/core/services/confidential-funding'
 import { getConfidentialFundingPlanId } from '@/core/services/confidential-funding/confidential-funding-graph'
 import type {
@@ -266,7 +269,7 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
       plan.operation !== 'swap' &&
       plan.operation !== 'confidential-transfer') ||
     (plan.purpose !== undefined &&
-      (!['move', 'native-zec-swap'].includes(plan.purpose) ||
+      (!CONFIDENTIAL_FUNDING_PURPOSES.includes(plan.purpose) ||
         plan.operation !== 'withdraw' ||
         plan.sourceDomain !== 'shield' ||
         plan.destinationDomain !== 'public' ||
@@ -455,6 +458,8 @@ function parseExternalDeposit(value: unknown): ExternalShieldDeposit {
       (!Number.isSafeInteger(value.fundingObservedAt) ||
         (value.fundingObservedAt as number) < 0)) ||
     (value.providerStatus !== undefined && !isBoundedString(value.providerStatus, 64)) ||
+    (value.refundTransactionHash !== undefined &&
+      !isBoundedString(value.refundTransactionHash, 100)) ||
     (value.balanceRefreshedAt !== undefined &&
       (!Number.isSafeInteger(value.balanceRefreshedAt) ||
         (value.balanceRefreshedAt as number) < 0)) ||

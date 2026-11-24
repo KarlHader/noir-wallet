@@ -180,14 +180,13 @@ export function useAppRouting() {
     const showNotifications = async () => {
       const pendingNotifications = getPendingNotifications()
       for (const tx of pendingNotifications) {
-        if (tx.status === 'success') {
+        if (tx.status === 'success' && (await markAsNotified(tx.id, tx.status))) {
           const copy = getTransactionToastCopy('success', tx.amount)
           toast.success(copy.title, copy.message)
-        } else if (tx.status === 'failed') {
+        } else if (tx.status === 'failed' && (await markAsNotified(tx.id, tx.status))) {
           const copy = getTransactionToastCopy('failed', tx.amount)
           toast.error(copy.title, copy.message)
         }
-        await markAsNotified(tx.id)
       }
     }
     showNotifications()

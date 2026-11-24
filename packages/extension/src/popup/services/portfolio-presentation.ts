@@ -25,7 +25,7 @@ import { isSelectableChainFamily } from './chain-selection-availability'
 import type { AssetDomain } from './asset-domains'
 
 const ASSET_FALLBACK_ORDER = ['USDC', 'USDT', 'ZEC', 'BTC', 'ETH', 'SOL', 'NEAR'] as const
-const MAINNET_STARTER_ASSET_RANKS = new Map(
+export const MAINNET_STARTER_ASSET_RANKS: ReadonlyMap<string, number> = new Map(
   MAINNET_STARTER_PORTFOLIO_ASSET_IDS.map((assetId, rank) => [assetId, rank])
 )
 const ETHEREUM_CHAIN_IDS = new Set<string>(
@@ -177,7 +177,7 @@ function compareUsdValues(left: string | null, right: string | null): number {
   return leftValue.gt(rightValue) ? -1 : 1
 }
 
-function compareFallbackOrder(left: string, right: string): number {
+export function comparePortfolioSymbolOrder(left: string, right: string): number {
   const normalizedLeft = left.toUpperCase()
   const normalizedRight = right.toUpperCase()
   const leftIndex = ASSET_FALLBACK_ORDER.indexOf(
@@ -255,7 +255,9 @@ export function sortPortfolioAssets(
       getPortfolioAssetUsdValue(left, prices),
       getPortfolioAssetUsdValue(right, prices)
     )
-    return valueComparison || compareFallbackOrder(left.metadata.symbol, right.metadata.symbol)
+    return (
+      valueComparison || comparePortfolioSymbolOrder(left.metadata.symbol, right.metadata.symbol)
+    )
   })
 }
 
@@ -364,7 +366,7 @@ export function buildPortfolioAssetGroups(
           }
         }
         const valueComparison = compareUsdValues(groupValue(left), groupValue(right))
-        return valueComparison || compareFallbackOrder(left.symbol, right.symbol)
+        return valueComparison || comparePortfolioSymbolOrder(left.symbol, right.symbol)
       })
   )
 }

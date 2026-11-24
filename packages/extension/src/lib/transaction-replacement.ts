@@ -112,7 +112,8 @@ export function applyTransactionBroadcast(
   transactions: Transaction[],
   transactionId: string,
   txHash: string,
-  expiryHeight: number | undefined
+  expiryHeight: number | undefined,
+  txHashes: readonly string[] = [txHash]
 ): Transaction[] {
   const broadcastTransaction = transactions.find(tx => tx.id === transactionId)
   if (!broadcastTransaction) return transactions
@@ -130,7 +131,10 @@ export function applyTransactionBroadcast(
         txHash,
         status: tx.status === 'confirming' ? 'confirming' : 'pending',
         notified: false,
-        expiryHeight
+        expiryHeight: expiryHeight ?? tx.expiryHeight,
+        ...(txHashes.length > 1 && {
+          chainHashes: txHashes.map(hash => ({ hash, chain: 'Zcash' }))
+        })
       }
     }
 
@@ -183,19 +187,11 @@ export function applyZcashWorkerBroadcast(
     return transactions
   }
 
-  const broadcasted = applyTransactionBroadcast(
+  return applyTransactionBroadcast(
     transactions,
     context.transactionId,
     result.txHash,
-    transaction.expiryHeight
-  )
-  if (result.txHashes.length === 1) return broadcasted
-  return broadcasted.map(record =>
-    record.id === context.transactionId
-      ? {
-          ...record,
-          chainHashes: result.txHashes.map(hash => ({ hash, chain: 'Zcash' }))
-        }
-      : record
+    transaction.expiryHeight,
+    result.txHashes
   )
 }

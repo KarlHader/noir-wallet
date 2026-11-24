@@ -26,6 +26,7 @@ import { RouteProviderLabel } from '../transaction/RouteProviderLabel'
 import { SendRecipientInputCard } from '../transaction/SendInputCards'
 import { safeBig } from '@/lib/big'
 import { shouldDeferSwapAmountFocus } from '@/popup/services/swap-page-model'
+import { getSwapCatalogChainForAsset } from '@/popup/services/swap-catalog-loading'
 import { TransactionNotice } from '../transaction/TransactionNotice'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
@@ -81,6 +82,8 @@ export function SwapProviderCard({
 interface SwapInputViewProps {
   tokenIn: SwapToken | null
   tokenOut: SwapToken | null
+  tokenInAssetId?: string
+  tokenOutAssetId?: string
   tokenInSymbol?: string
   tokenOutSymbol?: string
   isZecSource: boolean
@@ -155,6 +158,7 @@ interface SwapInputViewProps {
 interface SwapAssetCardProps {
   direction: 'From' | 'To'
   token: SwapToken | null
+  fallbackAssetId?: string
   fallbackSymbol?: string
   tokenBadgeBlockchain?: string
   tokenNetworkLabel?: string
@@ -237,6 +241,7 @@ function ReceiveAddressSkeleton() {
 export function SwapAssetCard({
   direction,
   token,
+  fallbackAssetId,
   fallbackSymbol,
   tokenBadgeBlockchain,
   tokenNetworkLabel,
@@ -301,6 +306,8 @@ export function SwapAssetCard({
     return () => observer.disconnect()
   }, [amount, isReadOnly])
   if (tokenSelectDisabled && !fallbackSymbol) return <SwapAssetCardSkeleton direction={direction} />
+  const blockchain = token?.blockchain ?? getSwapCatalogChainForAsset(fallbackAssetId)?.blockchain
+  const symbol = formatSymbol(token?.symbol ?? fallbackSymbol)
 
   return (
     <section className="min-h-[126px] py-3">
@@ -395,15 +402,15 @@ export function SwapAssetCard({
           <span className="size-[30px] shrink-0">
             <TokenIcon
               token={token || undefined}
-              blockchain={tokenBadgeBlockchain ?? token?.blockchain}
+              assetId={fallbackAssetId}
+              symbol={symbol}
+              blockchain={tokenBadgeBlockchain ?? blockchain}
               size={30}
             />
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1 text-xl font-semibold leading-[26px]">
-              <span className="min-w-0 truncate">
-                {formatSymbol(token?.symbol ?? fallbackSymbol) || 'Select'}
-              </span>
+              <span className="min-w-0 truncate">{symbol || 'Select'}</span>
               {!tokenSelectLocked && (
                 <Icon
                   icon="lucide:chevron-down"
@@ -415,9 +422,7 @@ export function SwapAssetCard({
             </span>
             <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-4 text-muted">
               <span className="truncate">
-                {token
-                  ? (tokenNetworkLabel ?? formatChainName(token.blockchain))
-                  : 'Choose network'}
+                {blockchain ? (tokenNetworkLabel ?? formatChainName(blockchain)) : 'Choose network'}
               </span>
               {zcashFundingSource && <ZcashFundingBadge source={zcashFundingSource} />}
             </span>
@@ -564,6 +569,8 @@ export function SwapDestinationPanel({
 export function SwapInputView({
   tokenIn,
   tokenOut,
+  tokenInAssetId,
+  tokenOutAssetId,
   tokenInSymbol,
   tokenOutSymbol,
   isZecSource,
@@ -663,6 +670,7 @@ export function SwapInputView({
           <SwapAssetCard
             direction="From"
             token={tokenIn}
+            fallbackAssetId={tokenInAssetId}
             fallbackSymbol={tokenInSymbol}
             zcashFundingSource={isZecSource ? sourceZcashFundingSource : undefined}
             amount={amountIn}
@@ -695,6 +703,7 @@ export function SwapInputView({
             hideSwitchAssets={hideSwitchAssets}
             onSwitchAssets={onSwitchTokens}
             token={tokenOut}
+            fallbackAssetId={tokenOutAssetId}
             fallbackSymbol={tokenOutSymbol}
             zcashFundingSource={isZecDestination ? addressType : undefined}
             amount={estimatedOut}

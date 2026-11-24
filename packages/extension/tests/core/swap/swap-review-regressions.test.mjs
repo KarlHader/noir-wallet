@@ -56,7 +56,7 @@ import {
   getPublicPrivateSendRouteCost
 } from '../../../src/popup/services/public-private-send-preview.ts'
 
-function combinedSwapFixture(t) {
+function combinedSwapFixture(t, executionMode) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 10_000 })
   const owner = `0x${'1'.repeat(40)}`
   const target = `0x${'2'.repeat(40)}`
@@ -105,6 +105,7 @@ function combinedSwapFixture(t) {
     approvalId,
     approvalFingerprint,
     binding,
+    ...(executionMode ? { executionMode } : {}),
     feeBudgetWei: '550000',
     feeSelection: 'standard'
   }
@@ -181,7 +182,9 @@ function combinedSwapFixture(t) {
         ? { status: 'signed-pending-broadcast', graph: setStatus(id, 'swap', 'signed', swapHash) }
         : { status: 'broadcast', graph: setStatus(id, 'swap', 'broadcast', swapHash) }
     },
-    prepareContractCall: async () => {
+    prepareContractCall: async (_intent, _fee, reviewedBinding, mode) => {
+      assert.equal(mode, executionMode ?? 'main')
+      assert.equal(reviewedBinding.sender, owner)
       calls.push('prepare-swap')
       return {
         graph: setStatus(swapId, 'swap', 'prepared'),
@@ -191,7 +194,11 @@ function combinedSwapFixture(t) {
         }
       }
     },
-    getTokenAllowance: async () => allowance,
+    getTokenAllowance: async (_chain, _token, _spender, allowanceOwner, mode) => {
+      assert.equal(mode, executionMode ?? 'main')
+      assert.equal(allowanceOwner, owner)
+      return allowance
+    },
     resumeBroadcast: async id => {
       assert.equal(id, swapId)
       calls.push('retry-same-signed-swap')
@@ -231,7 +238,7 @@ function combinedSwapFixture(t) {
       const graph = graphs.get(id)
       return graph?.root.status === 'prepared' ? null : (graph ?? null)
     },
-    validateQuote: async () => {},
+    validateQuote: async (_binding, mode) => assert.equal(mode, executionMode ?? 'main'),
     checkApproval: async () => {},
     schedule: async () => {}
   }
@@ -254,27 +261,34 @@ function combinedSwapFixture(t) {
 }
 
 it('resumes an approved swap from background storage and retries only the same signed transaction', async t => {
-  const fixture = combinedSwapFixture(t)
-  const original = fixture.create()
-  assert.equal((await original.start(fixture.input)).status, 'approving')
-  fixture.approveOnchain()
-  fixture.delayBroadcast()
-  const resumed = fixture.create()
-  await resumed.poll()
-  assert.deepEqual(fixture.calls, ['approve-token'])
-  fixture.setAllowance()
-  await resumed.poll()
-  assert.equal((await resumed.get(fixture.input.approvalId)).status, 'submitting')
-  const restarted = fixture.create()
-  await Promise.all([restarted.poll(), restarted.poll()])
-  await restarted.poll()
-  assert.equal((await restarted.get(fixture.input.approvalId)).status, 'broadcast')
-  assert.deepEqual(fixture.calls, [
-    'approve-token',
-    'prepare-swap',
-    'sign-swap',
-    'retry-same-signed-swap'
-  ])
+  for (const [name, mode] of [
+    ['Public', undefined],
+    ['Incognito', 'private']
+  ]) {
+    await t.test(name, async subtest => {
+      const fixture = combinedSwapFixture(subtest, mode)
+      const original = fixture.create()
+      assert.equal((await original.start(fixture.input)).status, 'approving')
+      fixture.approveOnchain()
+      fixture.delayBroadcast()
+      const resumed = fixture.create()
+      await resumed.poll()
+      assert.deepEqual(fixture.calls, ['approve-token'])
+      fixture.setAllowance()
+      await resumed.poll()
+      assert.equal((await resumed.get(fixture.input.approvalId)).status, 'submitting')
+      const restarted = fixture.create()
+      await Promise.all([restarted.poll(), restarted.poll()])
+      await restarted.poll()
+      assert.equal((await restarted.get(fixture.input.approvalId)).status, 'broadcast')
+      assert.deepEqual(fixture.calls, [
+        'approve-token',
+        'prepare-swap',
+        'sign-swap',
+        'retry-same-signed-swap'
+      ])
+    })
+  }
 })
 
 it('stops before signing when token approval fails, the quote expires or consent belongs to another unlock', async t => {
@@ -1197,10 +1211,10 @@ it('ranks Shield Swap destinations by wallet balance value and distinguishes EVM
   assert.deepEqual(
     sortShieldSwapPickerRows(rows).map(row => [row.key, row.chainName, row.badgeBlockchain]),
     [
-      [ethereum.managed.assetId, 'Ethereum', 'eth'],
       ['native-zec-destination:shielded', 'Zcash', 'zec'],
-      [base.managed.assetId, 'Base', 'base'],
-      ['native-zec-destination:transparent', 'Zcash', 'zec']
+      ['native-zec-destination:transparent', 'Zcash', 'zec'],
+      [ethereum.managed.assetId, 'Ethereum', 'eth'],
+      [base.managed.assetId, 'Base', 'base']
     ]
   )
 })
@@ -1269,7 +1283,7 @@ it('only routes same-asset Confidential ZEC to the account Unified Address and b
     nativeZecFundingSource: 'shielded'
   }
   const request = buildShieldSwapRequest(input)
-  assert.equal(request.purpose, 'move')
+  assert.equal(request.purpose, 'same-asset-zec-swap')
   assert.equal(request.operation, 'withdraw')
   assert.equal(request.sourceDomain, 'shield')
   assert.equal(request.destinationDomain, 'public')
@@ -1289,7 +1303,7 @@ it('only routes same-asset Confidential ZEC to the account Unified Address and b
   }
 
   const review = {
-    purpose: 'move',
+    purpose: 'same-asset-zec-swap',
     operation: 'withdraw',
     sourceDomain: 'shield',
     destinationDomain: 'public',

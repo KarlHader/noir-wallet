@@ -153,6 +153,7 @@ export interface EvmWalletClient {
     action: 'read' | 'refresh',
     options?: {
       readonly forceDiscovery?: boolean
+      readonly waitForTokenDiscovery?: boolean
       readonly refreshConfidential?: boolean
       readonly chainIds?: readonly string[]
       readonly automatic?: boolean
@@ -925,6 +926,7 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
       action: 'read' | 'refresh',
       options: {
         readonly forceDiscovery?: boolean
+        readonly waitForTokenDiscovery?: boolean
         readonly refreshConfidential?: boolean
         readonly chainIds?: readonly string[]
         readonly automatic?: boolean
@@ -951,6 +953,7 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         type: 'GET_PORTFOLIO',
         action,
         ...(options.forceDiscovery === undefined ? {} : { forceDiscovery: options.forceDiscovery }),
+        ...(options.waitForTokenDiscovery ? { waitForTokenDiscovery: true } : {}),
         ...(options.refreshConfidential === undefined
           ? {}
           : { refreshConfidential: options.refreshConfidential }),

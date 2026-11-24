@@ -14,12 +14,13 @@ import {
   parseDisplayUnitAmount
 } from '@/lib/number-format'
 import type { PrepareConfidentialFundingRequest } from './confidential-funding-client'
-import { sortSendAssetsByBalanceValue } from './send-asset-order'
+import { sortTokenPickerRows } from './token-selector-visibility'
 import {
   buildExternalShieldWithdrawRequest,
   getZcashTokenPickerChain,
   matchesExternalShieldWithdrawReview,
   shieldFundingAvailableRaw,
+  shieldTokenPickerBalance,
   type ShieldFundingAsset,
   type ShieldTokenPickerItem
 } from './shield-transfer'
@@ -40,17 +41,7 @@ export function shieldSwapPickerChain(asset: ShieldFundingAsset) {
 export function sortShieldSwapPickerRows<Row extends ShieldTokenPickerItem>(
   rows: readonly Row[]
 ): readonly Row[] {
-  return sortSendAssetsByBalanceValue(
-    rows.map(row => ({
-      key: row.key,
-      amount:
-        row.availableRaw === undefined
-          ? null
-          : formatBaseUnitDecimalAmount(row.availableRaw, row.decimals),
-      priceUsd: row.priceUsd ?? null,
-      row
-    }))
-  ).map(({ row }) => row)
+  return sortTokenPickerRows(rows, shieldTokenPickerBalance, 'all')
 }
 
 function isNativeZecAsset(asset: ShieldFundingAsset, network: Network): boolean {
@@ -316,7 +307,7 @@ export function buildShieldSwapRequest(
         destination: input.to,
         slippageBps: input.slippageBps
       }),
-      purpose: 'move' as const
+      purpose: 'same-asset-zec-swap' as const
     })
   }
   if (nativeZecSwap) {
@@ -366,9 +357,9 @@ export function matchesShieldSwapReview(
   review: ConfidentialFundingReview,
   request: PrepareConfidentialFundingRequest
 ): boolean {
-  if (request.purpose === 'move') {
+  if (request.purpose === 'same-asset-zec-swap') {
     return (
-      review.purpose === 'move' &&
+      review.purpose === request.purpose &&
       review.externalRecipient === request.externalRecipient &&
       review.destinationAddress === request.externalRecipient &&
       matchesExternalShieldWithdrawReview(review, request)

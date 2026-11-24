@@ -2,9 +2,11 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   hasExternalShieldDepositFunding,
   isLegacyShieldWithdrawActivityGraph,
+  isLegacyUnifiedZecMoveActivityGraph,
   projectConfidentialAppFeeRejection,
   projectExternalShieldDepositActivityGraph,
   projectLegacyShieldWithdrawActivityGraph,
+  projectLegacyUnifiedZecSwapActivityGraph,
   projectShieldDepositSettlement
 } from '@/core/services/confidential-funding'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
@@ -12,6 +14,7 @@ import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-setting
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import {
   inferPrivateExecutionAddressFromLocalGraphs,
+  mergeActivityHistoryItems,
   type ActivityItem,
   type ActivityScope
 } from '@/core/activity'
@@ -31,6 +34,7 @@ import {
 } from '@/infrastructure/chains/bitcoin'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm'
 import { listEvmHistoryCacheByScope } from '@/infrastructure/chains/evm/evm-activity-history-cache'
+import { BASE_ACROSS_CHAIN_ID } from '@/infrastructure/chains/evm/evm-base-across-receipts'
 import { filterTrackedEvmTokenActivity } from '@/infrastructure/chains/evm/evm-indexed-activity'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 import type { StorageV2ReadRepository } from '@/ports/repositories'
@@ -224,35 +228,6 @@ function filterItemsForChain(
   return Object.freeze(items.filter(item => activityItemIncludesChain(item, chainId)))
 }
 
-function mergeBoundedActivityItems(
-  previous: readonly ActivityItem[],
-  fresh: readonly ActivityItem[],
-  limit = ACTIVITY_HISTORY_CACHE_ITEM_LIMIT
-): readonly ActivityItem[] {
-  const cacheKey = (item: ActivityItem) => {
-    const chainIds = [
-      ...new Set(
-        item.segments.flatMap(segment =>
-          segment.target.kind === 'onchain' ? [segment.target.chainId] : []
-        )
-      )
-    ].sort()
-    return `${item.source}:${item.id}:${chainIds.join(',')}`
-  }
-  const byId = new Map(previous.map(item => [cacheKey(item), item] as const))
-  for (const item of fresh) byId.set(cacheKey(item), item)
-  return Object.freeze(
-    [...byId.values()]
-      .sort(
-        (left, right) =>
-          right.updatedAt - left.updatedAt ||
-          right.createdAt - left.createdAt ||
-          left.id.localeCompare(right.id)
-      )
-      .slice(0, limit)
-  )
-}
-
 function solanaSignature(item: ActivityItem): string | null {
   const prefix = 'rpc:solana:'
   return item.id.startsWith(prefix) ? item.id.slice(prefix.length) : null
@@ -289,6 +264,7 @@ export function createBackgroundActivityCoordinator(
     bitcoinNetwork,
     bitcoinHistory,
     evmBatchHistory,
+    baseAcrossHistory,
     evmHistorySources,
     solanaNetwork,
     solanaHistory,
@@ -346,7 +322,7 @@ export function createBackgroundActivityCoordinator(
           .map(observation => observation.derived.address)
       })
       onHistoryRead?.(scope, bitcoinNetwork.chainId)
-      return mergeBoundedActivityItems(fallbackItems, fresh)
+      return mergeActivityHistoryItems(fallbackItems, fresh, ACTIVITY_HISTORY_CACHE_ITEM_LIMIT)
     } catch (error) {
       logger.warn(
         `Bitcoin activity refresh failed: ${formatLogError(error)}`,
@@ -394,6 +370,15 @@ export function createBackgroundActivityCoordinator(
         : evmHistorySources.filter(
             entry => chainIds.has(entry.chainId) && evmBatchHistory?.chainIds.has(entry.chainId)
           )
+    const baseAcrossResults =
+      baseAcrossHistory && historyPageCount === 1 && chainIds.has(BASE_ACROSS_CHAIN_ID)
+        ? Promise.allSettled(
+            selectedAddresses.map(async selected => ({
+              selected,
+              items: await baseAcrossHistory({ scope, address: selected.address })
+            }))
+          )
+        : []
     const batchResults = await Promise.allSettled(
       selectedAddresses.map(async selected => ({
         selected,
@@ -492,10 +477,22 @@ export function createBackgroundActivityCoordinator(
         )
       )
     }
+    for (const result of await baseAcrossResults) {
+      if (result.status !== 'fulfilled') continue
+      for (const item of result.value.items) {
+        items.push(scopeEvmActivityMode(item, result.value.selected.accountMode))
+      }
+    }
     if (onHistoryRead && historyPageCount === 1) {
       const records = await listEvmHistoryCacheByScope(scope).catch(() => [])
       for (const record of records) {
-        if (!chainIds.has(record.chainId) || record.successfulSyncAt === null) continue
+        if (
+          !chainIds.has(record.chainId) ||
+          record.successfulSyncAt === null ||
+          record.baseAcrossCursor
+        ) {
+          continue
+        }
         const selected = selectedAddresses.find(entry => entry.address === record.address)
         if (selected) onHistoryRead(scope, record.chainId, selected.accountMode)
       }
@@ -505,7 +502,7 @@ export function createBackgroundActivityCoordinator(
       return supported ? [supported] : []
     })
     return historyPageCount > 1
-      ? mergeBoundedActivityItems([], supportedItems, 10_000)
+      ? mergeActivityHistoryItems([], supportedItems, 10_000)
       : Object.freeze(supportedItems)
   }
 
@@ -538,7 +535,9 @@ export function createBackgroundActivityCoordinator(
       const mode = record.address === account.main ? 'main' : 'private'
       if (mode === 'private' && !account.privateAvailable) continue
       if (accountMode !== 'all' && mode !== accountMode) continue
-      if (record.successfulSyncAt !== null) onHistoryRead?.(scope, record.chainId, mode)
+      if (record.successfulSyncAt !== null && !record.baseAcrossCursor) {
+        onHistoryRead?.(scope, record.chainId, mode)
+      }
       if (record.hasMore) {
         hasMoreByChainId.add(record.chainId)
         hasMoreKeys.add(`${record.chainId}:${record.address}`)
@@ -587,7 +586,7 @@ export function createBackgroundActivityCoordinator(
         ...(untilSignature === undefined ? {} : { untilSignature })
       })
       onHistoryRead?.(scope, solanaNetwork.chainId)
-      return mergeBoundedActivityItems(fallbackItems, fresh)
+      return mergeActivityHistoryItems(fallbackItems, fresh, ACTIVITY_HISTORY_CACHE_ITEM_LIMIT)
     } catch (error) {
       logger.warn(
         `Solana activity refresh failed: ${formatLogError(error)}`,
@@ -631,7 +630,11 @@ export function createBackgroundActivityCoordinator(
           privateItems = fallbackItems.filter(item => item.accountMode === 'private')
         }
       }
-      return mergeBoundedActivityItems(fallbackItems, [...mainItems, ...privateItems])
+      return mergeActivityHistoryItems(
+        fallbackItems,
+        [...mainItems, ...privateItems],
+        ACTIVITY_HISTORY_CACHE_ITEM_LIMIT
+      )
     } catch (error) {
       logger.warn(
         `NEAR activity refresh failed: ${formatLogError(error)}`,
@@ -672,7 +675,7 @@ export function createBackgroundActivityCoordinator(
       })
     )
     const activeItems = activeCache?.items ?? []
-    const cachedItems = mergeBoundedActivityItems(activeItems, cachedEvm.items, 10_000)
+    const cachedItems = mergeActivityHistoryItems(activeItems, cachedEvm.items, 10_000)
     const currentTime = Date.now()
     const supportedChainIds = Object.freeze([
       ...(bitcoinHistory ? [bitcoinNetwork.chainId] : []),
@@ -756,18 +759,19 @@ export function createBackgroundActivityCoordinator(
         .catch(() => {})
         .then(async () => {
           const latest = await historyCache.read(scope, cachePartition).catch(() => activeCache)
-          const retainedItems = mergeBoundedActivityItems(
+          const retainedItems = mergeActivityHistoryItems(
             cachedItems,
             latest?.items ?? [],
             10_000
           ).filter(item => !staleChainIds.some(chainId => activityItemIncludesChain(item, chainId)))
-          committedItems = mergeBoundedActivityItems(retainedItems, refreshedItems, 10_000)
+          committedItems = mergeActivityHistoryItems(retainedItems, refreshedItems, 10_000)
           const retainedNonEvmItems = (latest?.items ?? activeItems).filter(
             item => !staleChainIds.some(chainId => activityItemIncludesChain(item, chainId))
           )
-          const nonEvmItems = mergeBoundedActivityItems(
+          const nonEvmItems = mergeActivityHistoryItems(
             retainedNonEvmItems,
-            refreshedItems.filter(item => !isEvmActivityItem(item))
+            refreshedItems.filter(item => !isEvmActivityItem(item)),
+            ACTIVITY_HISTORY_CACHE_ITEM_LIMIT
           )
           const refreshedAtByChainId = Object.freeze({
             ...(latest?.refreshedAtByChainId ?? activeCache?.refreshedAtByChainId ?? {}),
@@ -808,7 +812,7 @@ export function createBackgroundActivityCoordinator(
     const partition = bitcoinActivityCachePartition(addressType)
     const snapshot = await historyCache.read(scope, partition).catch(() => null)
     const evm = await loadCachedEvmItems(scope, accountMode).catch(() => ({ items: [] }))
-    return mergeBoundedActivityItems(snapshot?.items ?? [], evm.items, 10_000)
+    return mergeActivityHistoryItems(snapshot?.items ?? [], evm.items, 10_000)
   }
 
   const loadSupplementalHasMore = async (
@@ -836,6 +840,7 @@ export function createBackgroundActivityCoordinator(
         graph =>
           (graph.root.status === 'final' && graph.root.intent?.shield?.operation === 'deposit') ||
           (graph.root.status === 'failed' && graph.root.intent?.shield !== undefined) ||
+          isLegacyUnifiedZecMoveActivityGraph(graph) ||
           (privateExecutionAddresses.length > 0 && isLegacyShieldWithdrawActivityGraph(graph))
       )
       .map(graph => graph.root.id)
@@ -868,6 +873,10 @@ export function createBackgroundActivityCoordinator(
         continue
       }
       const plan = fundingPlans.get(graph.root.id)
+      if (isLegacyUnifiedZecMoveActivityGraph(graph)) {
+        projectedGraphs.push(projectLegacyUnifiedZecSwapActivityGraph(graph, plan, DEFAULT_NETWORK))
+        continue
+      }
       const routed =
         graph.root.intent?.shield?.operation === 'deposit'
           ? projectShieldDepositSettlement(graph, plan, DEFAULT_NETWORK)

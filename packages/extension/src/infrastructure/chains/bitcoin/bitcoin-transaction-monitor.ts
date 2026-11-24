@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { parseAccountId } from '@/core/accounts/domain'
 import { parseChainId } from '@/core/chains/registry'
 import { parseKeyDomainId } from '@/core/keyring/domain'
@@ -320,7 +321,7 @@ export class BitcoinTransactionMonitor {
       observedAt: parseObservedAt(this.now())
     })
     if (!event) return 'unchanged'
-    const result = await this.repository.applySegmentEvent({
+    const result = await writeLocalActivity('applySegmentEvent', this.repository, {
       scope: graph.root.scope,
       transactionId: graph.root.id,
       segmentId: segment.id,

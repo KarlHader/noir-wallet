@@ -17,6 +17,7 @@ import {
   getConfirmedFailedActivityAmount,
   isOwnedAccountTransfer,
   resolveActivityDisplayAmount,
+  resolveActivityEvmAssetChainIconAlias,
   type ActivityDisplayAmount,
   type ActivitySwapPresentation
 } from '@/popup/services/multichain-activity-presentation'
@@ -188,6 +189,10 @@ function RouteActivityRow({
   const failed = item.status === 'failed'
   const showCredit = presentation.isExternalDeposit || focus === 'destination'
   const reviewedAmount = showCredit ? presentation.destination : presentation.source
+  const chainIconAlias = presentation.isExternalDeposit
+    ? presentation.sourceChainIconAlias
+    : (resolveActivityEvmAssetChainIconAlias(reviewedAmount?.assetId) ??
+      (showCredit ? presentation.destinationChainIconAlias : presentation.sourceChainIconAlias))
   const amount = failed
     ? getConfirmedFailedActivityAmount(
         item,
@@ -239,11 +244,7 @@ function RouteActivityRow({
         ) : (
           <ActivityAvatar
             primary={reviewedAmount}
-            chainIconAlias={
-              showCredit && !presentation.isExternalDeposit
-                ? presentation.destinationChainIconAlias
-                : presentation.sourceChainIconAlias
-            }
+            chainIconAlias={chainIconAlias}
             interaction={null}
           />
         )}

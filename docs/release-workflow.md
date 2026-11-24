@@ -237,7 +237,7 @@ After deployment, check `GET https://www.zknoir.com/api/frost-signups` for HTTP 
 
 ## History Proxy Deployment
 
-The existing Worker source is `packages/evm-history-worker/`; its production hostname is `https://history-proxy.zknoir.com`. It serves the bounded Ankr methods used by the extension. Bitcoin, Solana, NEAR, and Blockscout providers remain direct client requests.
+The existing Worker source is `packages/evm-history-worker/`; its production hostname is `https://history-proxy.zknoir.com`. It serves the bounded Ankr methods used by the extension. Base Across native ETH receipts and Bitcoin, Solana, NEAR, and Blockscout history use direct client requests.
 
 Runtime caching is enabled in the [History proxy configuration](../packages/evm-history-worker/wrangler.json) and [RPC registry configuration](../packages/rpc-registry/wrangler.json), so deployments retain the setting. Public icon and registry responses use their existing cache headers; History and token-discovery responses use `Cache-Control: no-store`.
 
@@ -251,5 +251,7 @@ pnpm --filter @noir-wallet/evm-history-worker deploy
 Missing or invalid keys return service-unavailable errors. When using a Cloudflare Git build, select `main` and the repository-relative `packages/evm-history-worker` root. A retry of an old build still uses that build's source revision.
 
 Before enabling a new deployment, verify supported chains, native and token history, bounded or partial responses, account isolation, rate limiting, and failure fallback. A remote failure must retain existing cache and locally initiated transactions. Deployment and live-service verification are separate from local unit tests and extension builds.
+
+The Worker also exposes a standalone Base Across receipt index backed by a SQLite Durable Object migration and cron trigger. Its first scan starts at Base block `61274000` and advances through finalized blocks using public Base RPC endpoints.
 
 The website Beta guide pins an existing published ZIP in `packages/web/src/lib/v2-beta-release.ts`. Advance that link only after verifying the new Release download; a source merge alone does not make a Beta available.

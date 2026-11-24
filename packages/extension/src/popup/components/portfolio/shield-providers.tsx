@@ -18,18 +18,22 @@ export const SHIELD_PROVIDERS: Readonly<
     name: 'NEAR Confidential',
     detailName: 'NEAR Confidential Intents',
     description:
-      'Confidential Intents extend the NEAR Intents protocol with privacy-preserving swaps. Market makers can provide liquidity on a private chain where balances and swap details are shielded from public view.',
+      'Confidential Intents processes transfers and swaps on a private NEAR shard. Your balance and transaction details stay out of public view.',
     logo: nearLogo,
     tint: '#0c6e57'
   },
   'zcash-shield': {
     name: 'Zcash Shield',
     detailName: 'Zcash Shield',
-    description: 'Receive ZEC directly to your shielded address on Zcash.',
+    description:
+      'Shielding moves your ZEC into Zcash’s shielded pool. Transfers within the pool keep both wallet addresses and the amount private.',
     logo: zcashLogo,
     tint: '#424252'
   }
 }
+
+export const IRONWOOD_SHIELD_DESCRIPTION =
+  'Shielding moves your ZEC into Ironwood, Zcash’s shielded pool. Transfers within the pool keep both wallet addresses and the amount private.'
 
 export function ShieldProviderSupport({
   provider,

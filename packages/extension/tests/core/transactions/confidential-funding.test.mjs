@@ -283,7 +283,7 @@ test('Shield Receive defaults ZEC to Native, requires an explicit multichain cho
   const nativeOnly = listShieldReceiveTokens(network, account, [])
   expect(resolveShieldReceiveSelection(nativeOnly, null, generic, false).route).toBeNull()
   expect(resolveShieldReceiveSelection(nativeOnly, null, generic, true)).toEqual({
-    token: nativeOnly[0],
+    token: null,
     route: null
   })
   const oneNetwork = listShieldReceiveTokens(network, account, [catalog[1]])
@@ -633,6 +633,7 @@ test.describe('confidential funding safety rules', () => {
     let cachedBalance
     let signingCalls = 0
     let serviceStatus = 'PENDING_DEPOSIT'
+    const refundTransactionHash = `0x${'a'.repeat(64)}`
     let settledAmountOutRaw = '987'
     let serviceErrorStatus
     let depositedAmountRaw
@@ -670,7 +671,7 @@ test.describe('confidential funding safety rules', () => {
           }
         },
         async quoteFlexibleDeposit(request) {
-          expect(request.quoteAmountRaw).toBe('8000000000000000')
+          const amountRaw = '38500000000002'
           return {
             correlationId: 'flexible-external-quote',
             quoteRequest: {
@@ -679,7 +680,7 @@ test.describe('confidential funding safety rules', () => {
               confidentiality: 'basic',
               originAsset: request.originAsset,
               destinationAsset: request.originAsset,
-              amount: request.quoteAmountRaw,
+              amount: amountRaw,
               refundTo: request.refundTo,
               depositType: 'ORIGIN_CHAIN',
               refundType: 'ORIGIN_CHAIN',
@@ -688,10 +689,10 @@ test.describe('confidential funding safety rules', () => {
               slippageTolerance: request.slippageBps
             },
             quote: {
-              amountIn: request.quoteAmountRaw,
+              amountIn: amountRaw,
               minAmountIn: '35000000000001',
-              amountOut: request.quoteAmountRaw,
-              minAmountOut: request.quoteAmountRaw,
+              amountOut: amountRaw,
+              minAmountOut: amountRaw,
               depositAddress: '0x4444444444444444444444444444444444444444',
               deadline: new Date(now + 60_000).toISOString()
             }
@@ -706,6 +707,7 @@ test.describe('confidential funding safety rules', () => {
             ...(serviceStatus === 'SUCCESS' && settledAmountOutRaw !== undefined
               ? { settledAmountOutRaw }
               : {}),
+            ...(serviceStatus === 'REFUNDED' ? { transactionHash: refundTransactionHash } : {}),
             ...(serviceErrorStatus !== undefined ? { errorStatus: serviceErrorStatus } : {})
           }
         },
@@ -1057,7 +1059,10 @@ test.describe('confidential funding safety rules', () => {
       records.set(depositId, interrupted)
       await repository.create(createExternalShieldDepositGraph(interrupted))
     }
+    serviceStatus = 'REFUNDED'
+    await coordinator.refreshExternalDeposit('refund-recovery')
     await coordinator.resumeAll()
+    serviceStatus = 'SUCCESS'
     for (const [depositId, expectedStatus] of [
       ['refund-recovery', 'failed'],
       ['failure-recovery', 'failed'],
@@ -1074,6 +1079,15 @@ test.describe('confidential funding safety rules', () => {
       'tx:confidential-external:refund-recovery'
     )
     expect(refundGraph.root.failure.code).toBe('refunded')
+    const projectedRefund = projectExternalShieldDepositActivityGraph(
+      refundGraph,
+      records.get('refund-recovery')
+    )
+    expect(projectedRefund.segments.find(segment => segment.role === 'refund')).toMatchObject({
+      status: 'final',
+      target: { kind: 'onchain', chainId: created.source.chainId },
+      evidence: { transactionHash: refundTransactionHash }
+    })
     const readyGraph = await repository.get(
       { keyDomainId: 'wallet:one', accountId: 'account:one' },
       'tx:confidential-external:ready-recovery'
@@ -1112,8 +1126,8 @@ test.describe('confidential funding safety rules', () => {
     const minimumDeposit = await coordinator.createExternalDeposit(minimumRequest)
     expect(minimumDeposit).toMatchObject({
       amountMode: 'minimum',
-      amountRaw: '8000000000000000',
-      source: { amountRaw: '8000000000000000' },
+      amountRaw: '38500000000002',
+      source: { amountRaw: '38500000000002' },
       slippageBps: 125,
       quote: { quoteRequest: { slippageTolerance: 125 } }
     })
@@ -1156,7 +1170,7 @@ test.describe('confidential funding safety rules', () => {
     ).toBeNull()
   })
 
-  test('discovers the provider minimum and binds a flexible external deposit quote', async () => {
+  test('adds a rounded-up 10% buffer to the discovered external deposit minimum', async () => {
     const originalFetch = globalThis.fetch
     const requests = []
     const signerId = '0x1111111111111111111111111111111111111111'
@@ -1165,7 +1179,7 @@ test.describe('confidential funding safety rules', () => {
     let tamper = false
     let drySucceeds = false
     let finalMinimumTooHigh = false
-    let bridgeMinimumRaw = '35000000000001'
+    const bridgeMinimumRaw = '35000000000001'
     globalThis.fetch = async (_url, init) => {
       const request = JSON.parse(init.body)
       requests.push(request)
@@ -1183,11 +1197,7 @@ test.describe('confidential funding safety rules', () => {
           quoteRequest: { ...request, recipient: tamper ? refundTo : request.recipient },
           quote: {
             amountIn: request.amount,
-            minAmountIn: request.dry
-              ? '35000000000001'
-              : finalMinimumTooHigh
-                ? '35000000000002'
-                : request.amount,
+            minAmountIn: finalMinimumTooHigh && !request.dry ? '38500000000003' : bridgeMinimumRaw,
             amountOut: request.amount,
             minAmountOut: request.amount,
             depositAddress: '0x3333333333333333333333333333333333333333',
@@ -1200,21 +1210,17 @@ test.describe('confidential funding safety rules', () => {
     try {
       const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', '')
       const input = { originAsset: asset, signerId, refundTo, slippageBps: 125 }
-      const pricedInput = { ...input, quoteAmountRaw: '8000000000000000' }
-      await expect(api.quoteFlexibleDeposit(pricedInput)).resolves.toMatchObject({
-        quote: { amountIn: pricedInput.quoteAmountRaw }
-      })
-      expect(requests.splice(0).map(request => [request.dry, request.amount])).toEqual([
-        [false, '8000000000000000']
-      ])
       const quote = await api.quoteFlexibleDeposit(input)
       expect(requests.map(request => [request.dry, request.amount, request.swapType])).toEqual([
         [true, '1', 'FLEX_INPUT'],
-        [false, '35000000000001', 'FLEX_INPUT']
+        [false, '38500000000002', 'FLEX_INPUT']
       ])
       expect(requests.map(request => request.slippageTolerance)).toEqual([125, 125])
       expect(requests.every(request => request.referral === 'noir_receive')).toBe(true)
-      expect(quote.quote.minAmountIn).toBe('35000000000001')
+      expect(quote.quote).toMatchObject({
+        amountIn: '38500000000002',
+        minAmountIn: bridgeMinimumRaw
+      })
       tamper = true
       await expect(api.quoteFlexibleDeposit(input)).rejects.toThrow(
         'Flexible external Shield quote does not match'
@@ -1224,22 +1230,16 @@ test.describe('confidential funding safety rules', () => {
       const discovered = await api.quoteFlexibleDeposit(input)
       expect(requests.slice(-2).map(request => [request.dry, request.amount])).toEqual([
         [true, '1'],
-        [false, '35000000000001']
+        [false, '38500000000002']
       ])
-      expect(discovered.quote.minAmountIn).toBe('35000000000001')
+      expect(discovered.quote).toMatchObject({
+        amountIn: '38500000000002',
+        minAmountIn: bridgeMinimumRaw
+      })
       finalMinimumTooHigh = true
       await expect(api.quoteFlexibleDeposit(input)).rejects.toThrow(
         'Flexible external Shield quote does not match'
       )
-      finalMinimumTooHigh = false
-      bridgeMinimumRaw = '9000000000000000'
-      await expect(api.quoteFlexibleDeposit(pricedInput)).resolves.toMatchObject({
-        quote: { amountIn: bridgeMinimumRaw }
-      })
-      expect(requests.slice(-2).map(request => [request.dry, request.amount])).toEqual([
-        [false, '8000000000000000'],
-        [false, '9000000000000000']
-      ])
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1601,6 +1601,76 @@ test.describe('confidential funding safety rules', () => {
       })
       expect(requests.every(request => request.appFees === undefined)).toBe(true)
       expect(deposit.quoteRequest.appFees).toBeUndefined()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('binds Cluster quotes to the application fees required by batch submission', async () => {
+    const originalFetch = globalThis.fetch
+    const charges = [
+      { recipient: 'wallet.near', fee: 35 },
+      { recipient: 'platform.near', fee: 50 }
+    ]
+    const requests = []
+    let feeReads = 0
+    let appliedCharges = charges
+    let echoCharges = true
+    globalThis.fetch = async (url, init) => {
+      if (url === 'https://example.test/api/swap/confidential-app-fee') {
+        expect(init.headers.Authorization).toBe('Bearer swap-jwt')
+        feeReads += 1
+        return Response.json({
+          code: 0,
+          data: {
+            confidentialAppFeeBps: appliedCharges[0]?.fee ?? 0,
+            confidentialAppFeeRecipient: appliedCharges[0]?.recipient ?? '',
+            confidentialPlatformFeeBps: appliedCharges[1]?.fee ?? 0,
+            confidentialPlatformFeeRecipient: appliedCharges[1]?.recipient ?? ''
+          }
+        })
+      }
+      expect(url).toBe('https://example.test/1click/quote')
+      const request = JSON.parse(init.body)
+      requests.push(request)
+      return Response.json({
+        correlationId: 'cluster-quote',
+        quoteRequest: { ...request, ...(!echoCharges ? { appFees: [] } : {}) },
+        quote: { amountIn: request.amount, amountOut: '900' }
+      })
+    }
+    try {
+      const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', 'swap-jwt')
+      const cluster = {
+        referral: 'noir_send',
+        originAsset: 'nep141:eth.omft.near',
+        destinationAsset: 'nep141:eth.omft.near',
+        amountRaw: '1000',
+        signerId: '0x1111111111111111111111111111111111111111',
+        recipient: '0x2222222222222222222222222222222222222222',
+        depositType: 'CONFIDENTIAL_INTENTS',
+        refundType: 'CONFIDENTIAL_INTENTS',
+        recipientType: 'DESTINATION_CHAIN',
+        slippageBps: 50,
+        settlement: 'cluster'
+      }
+      await Promise.all([
+        api.quote({ ...cluster, dry: true }),
+        api.quote({ ...cluster, dry: false })
+      ])
+      expect(feeReads).toBe(1)
+      expect(requests.map(({ dry, appFees }) => ({ dry, appFees }))).toEqual([
+        { dry: true, appFees: charges },
+        { dry: false, appFees: charges }
+      ])
+
+      echoCharges = false
+      await expect(api.quote({ ...cluster, dry: false })).rejects.toThrow('app fees do not match')
+
+      appliedCharges = []
+      echoCharges = true
+      await api.quote({ ...cluster, dry: false })
+      expect(requests.at(-1)).not.toHaveProperty('appFees')
     } finally {
       globalThis.fetch = originalFetch
     }

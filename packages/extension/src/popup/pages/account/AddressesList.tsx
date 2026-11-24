@@ -15,12 +15,13 @@ import {
   accountNetworkAddressLabel,
   accountNetworkIconChain,
   accountNetworkLabel,
+  addIncognitoNetworkPath,
   zcashSettingsPath
 } from '@/popup/services/account-network-presentation'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import evmGroupIcon from '@/images/figma-evm-group.svg'
 import { Button } from '../../components/ui/button'
-import { ListSkeleton } from '../../components/ui/skeleton'
+import { ListSkeleton, Skeleton } from '../../components/ui/skeleton'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../components/ui/dialog'
 import { SearchInput } from '../../components/ui/input'
 import { Tooltip } from '../../components/ui/tooltip'
@@ -37,6 +38,8 @@ import { useWalletStore } from '@/store/wallet-store'
 import { AccountAvatar } from '../../components/account/AccountAvatar'
 import { availableSoftwareAccountFamilies } from '@/popup/services/account-network-selection-client'
 import { useDAppExecutionMode } from '@/popup/hooks/useDAppExecutionMode'
+import { useIncognitoSetup } from '@/popup/hooks/useIncognitoSetup'
+import { IncognitoSetupButton } from '@/popup/components/account/IncognitoSetupButton'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import {
@@ -477,41 +480,67 @@ export function AddressesList({
   readonly receive?: boolean
   readonly receiveAccount?: ActiveAccountIdentity
 }) {
-  const { navigate } = useNavigate()
   const location = useLocation()
-  const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
   const [searchParams] = useSearchParams()
-  const currentWalletId = useWalletStore(state => state.currentWalletId)
-  const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const activeWalletId = useWalletStore(state => state.currentWalletId)
+  const activeAccountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
   const walletId =
-    searchParams.get('walletId') ?? (receive ? (receiveAccount?.walletId ?? currentWalletId) : null)
+    searchParams.get('walletId') ?? (receive ? (receiveAccount?.walletId ?? activeWalletId) : null)
   const accountId =
     searchParams.get('accountId') ??
-    (receive ? (receiveAccount?.accountId ?? currentAccountId) : null)
+    (receive ? (receiveAccount?.accountId ?? activeAccountId) : null)
   const requestedIncognito =
     searchParams.get('mode') === 'incognito' || searchParams.get('mode') === 'private'
-  const currentShieldedAddress = useWalletStore(state =>
-    walletId && accountId
-      ? state.getAccount(walletId, accountId)?.networkAddresses?.[DEFAULT_NETWORK]?.shielded
-      : undefined
+
+  if (!walletId || !accountId) {
+    return (
+      <div className="page-container">
+        <PageHeader title="Address" showBack />
+        <div className="flex flex-1 items-center justify-center px-5">
+          <p className="text-center text-muted">No account available</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <AccountAddressesList
+      key={JSON.stringify([network, walletId, accountId, location.key, requestedIncognito])}
+      network={network}
+      walletId={walletId}
+      accountId={accountId}
+      active={walletId === activeWalletId && accountId === activeAccountId}
+      receive={receive}
+      requestedIncognito={requestedIncognito}
+    />
   )
-  const account = useWalletStore(state =>
-    walletId && accountId ? state.getAccount(walletId, accountId) : undefined
+}
+
+function AccountAddressesList({
+  walletId,
+  accountId,
+  network,
+  active,
+  receive,
+  requestedIncognito
+}: {
+  readonly walletId: string
+  readonly accountId: string
+  readonly network: typeof DEFAULT_NETWORK
+  readonly active: boolean
+  readonly receive: boolean
+  readonly requestedIncognito: boolean
+}) {
+  const { navigate } = useNavigate()
+  const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
+  const currentShieldedAddress = useWalletStore(
+    state => state.getAccount(walletId, accountId)?.networkAddresses?.[network]?.shielded
   )
+  const account = useWalletStore(state => state.getAccount(walletId, accountId))
   const wallet = useWalletStore(state => state.wallets.find(item => item.id === walletId))
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
-  const executionMode = useDAppExecutionMode(
-    Boolean(
-      !receive &&
-      walletId &&
-      accountId &&
-      walletId === currentWalletId &&
-      accountId === currentAccountId
-    ),
-    walletId,
-    accountId,
-    DEFAULT_NETWORK
-  )
+  const executionMode = useDAppExecutionMode(!receive && active, walletId, accountId, network)
   const [privateExecutionSupported, setPrivateExecutionSupported] = useState(false)
   const defaultMode =
     !receive && privateExecutionSupported && executionMode.state?.mode === 'private'
@@ -519,7 +548,7 @@ export function AddressesList({
       : 'public'
   const [networkQuery, setNetworkQuery] = useState('')
   const availableFamilies = useMemo(() => availableSoftwareAccountFamilies(), [])
-  const selectedFamilies = account?.networkSelections?.[DEFAULT_NETWORK] ?? availableFamilies
+  const selectedFamilies = account?.networkSelections?.[network] ?? availableFamilies
   const canManageNetworks =
     Boolean(wallet && account) &&
     (wallet?.keySource === undefined || wallet.keySource === 'software')
@@ -572,12 +601,6 @@ export function AddressesList({
     setCanRetry(false)
     setLoading(Boolean(walletId && accountId))
 
-    if (!walletId || !accountId) {
-      return () => {
-        cancelled = true
-      }
-    }
-
     void (async () => {
       try {
         const catalog = await accountNetworksClient.getCatalog()
@@ -615,7 +638,19 @@ export function AddressesList({
     return () => {
       cancelled = true
     }
-  }, [walletId, accountId, currentShieldedAddress, loadAttempt, location.key])
+  }, [walletId, accountId, currentShieldedAddress, loadAttempt])
+
+  const hasPrivateAddresses = networks.some(
+    network => network.chain.family === 'evm' && Boolean(network.privateExecutionAddress)
+  )
+
+  const incognitoSetup = useIncognitoSetup(network, walletId, accountId, hasPrivateAddresses)
+  const privateSetupCompleted = incognitoSetup.status === 'complete'
+  useEffect(() => {
+    if (privateSetupCompleted) return
+    setQrTarget(target => (target?.confidential ? null : target))
+    setPrivateAddressAction(null)
+  }, [privateSetupCompleted])
 
   const filteredNetworks = useMemo(() => {
     const query = networkQuery.trim().toLowerCase()
@@ -635,20 +670,20 @@ export function AddressesList({
   const hasNearIncognito = networks.some(
     network => nearReceiveSelection(network, 'private', accountKeySource)?.status === 'address'
   )
-  const hasPrivateAddresses =
-    hasNearIncognito ||
-    networks.some(
-      network => network.chain.family === 'evm' && Boolean(network.privateExecutionAddress)
-    )
-  const canOpenIncognito = hasPrivateAddresses || hasNearAccount
+  const canOpenIncognito = hasPrivateAddresses || hasNearIncognito || hasNearAccount
   const evmNetworks = filteredNetworks.filter(network => network.chain.family === 'evm')
   const otherNetworks = filteredNetworks.filter(network => network.chain.family !== 'evm')
   const otherChainNetworks = otherNetworks.filter(network => network.chain.family !== 'zcash')
   const showOtherChains = evmNetworks.length > 0 || otherChainNetworks.length > 0
   const firstEvm = evmNetworks[0]
+  const privateEvmClosed = mode === 'private' && privateSetupCompleted !== true
   const evmAddress =
     firstEvm &&
-    (mode === 'private' ? firstEvm.privateExecutionAddress : firstEvm.addresses[0]?.value)
+    (mode === 'private'
+      ? privateSetupCompleted === true
+        ? firstEvm.privateExecutionAddress
+        : undefined
+      : firstEvm.addresses[0]?.value)
 
   const renderNetwork = (network: AccountNetworkView) => (
     <AddressNetworkGroup
@@ -665,7 +700,7 @@ export function AddressesList({
           : setQrTarget(target)
       }
       onOpenSettings={
-        network.chain.family === 'zcash' && walletId && accountId
+        network.chain.family === 'zcash'
           ? () => navigate(zcashSettingsPath(walletId, accountId))
           : undefined
       }
@@ -693,7 +728,9 @@ export function AddressesList({
         className="shrink-0"
         onClick={() =>
           navigate(
-            `/account-networks?walletId=${encodeURIComponent(walletId!)}&accountId=${encodeURIComponent(accountId!)}`
+            family === 'evm'
+              ? addIncognitoNetworkPath(walletId, accountId)
+              : `/account-networks?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}`
           )
         }
       >
@@ -702,17 +739,6 @@ export function AddressesList({
       </Button>
     </div>
   )
-
-  if (!walletId || !accountId) {
-    return (
-      <div className="page-container">
-        <PageHeader title="Address" showBack />
-        <div className="flex flex-1 items-center justify-center px-5">
-          <p className="text-center text-muted">No account available</p>
-        </div>
-      </div>
-    )
-  }
 
   const AddressLoadError = receive ? TransactionNotice : InlineError
 
@@ -783,13 +809,38 @@ export function AddressesList({
                       Incognito
                     </button>
                   </div>
-                  {mode === 'private' && <PrivateAddressRisk />}
+                  {mode === 'private' && !privateEvmClosed && <PrivateAddressRisk />}
                 </div>
               </div>
             )}
             {firstEvm && (
               <div className="mt-2">
-                {evmExpanded ? (
+                {privateEvmClosed ? (
+                  <>
+                    <div className="flex min-h-[68px] items-center gap-[13px]">
+                      <img
+                        src={evmGroupIcon}
+                        alt=""
+                        aria-hidden="true"
+                        className="size-8 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 text-base font-medium">
+                        Ethereum &amp; EVM
+                      </span>
+                      {incognitoSetup.status === 'error' ? (
+                        <Button type="button" variant="outline" onClick={incognitoSetup.retry}>
+                          Retry
+                        </Button>
+                      ) : incognitoSetup.status === 'loading' ? (
+                        <div role="status" aria-label="Loading Incognito setup">
+                          <Skeleton className="h-8 w-14" />
+                        </div>
+                      ) : incognitoSetup.status === 'available' ? (
+                        <IncognitoSetupButton complete={incognitoSetup.complete} />
+                      ) : null}
+                    </div>
+                  </>
+                ) : evmExpanded ? (
                   <button
                     type="button"
                     aria-expanded="true"
@@ -878,7 +929,7 @@ export function AddressesList({
                     )}
                   </div>
                 )}
-                {evmExpanded && evmNetworks.map(renderNetwork)}
+                {!privateEvmClosed && evmExpanded && evmNetworks.map(renderNetwork)}
               </div>
             )}
             {mode === 'private' && hasNearAccount && !hasNearIncognito && (

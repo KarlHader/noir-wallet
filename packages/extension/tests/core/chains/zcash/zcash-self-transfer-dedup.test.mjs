@@ -2,7 +2,10 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { ZCASH_CHAIN_IDS } from '../../../../src/core/chains/registry/chain-ids.ts'
-import { mergeTransactionsWithTransparentReceives } from '../../../../src/core/wallet/transparent-history.ts'
+import {
+  mergeTransactionsWithTransparentReceives,
+  mergeTransactionsWithWasmHistory
+} from '../../../../src/core/wallet/transparent-history.ts'
 import { buildActivityReadModel } from '../../../../src/core/activity/index.ts'
 import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastructure/activity/zcash-v1-activity-source.ts'
 import { filterActivityItems } from '../../../../src/popup/services/activity-list-model.ts'
@@ -67,6 +70,61 @@ test('preserves the transparent receive side of an Unshield transaction', () => 
     unshield,
     receivedSide
   ])
+})
+
+test('shows a scanned Shield credit from a regular Public ZEC send to the same account', () => {
+  const addresses = { transparent: 't1wallet', shielded: 'u1wallet', fullUnified: 'u1full' }
+  const publicSend = transaction({
+    to: addresses.fullUnified,
+    from: addresses.transparent,
+    fromType: 'transparent'
+  })
+  const shieldCredit = transaction({
+    id: 'wasm_self-transfer',
+    type: 'shield',
+    amount: '0.0009',
+    to: '',
+    confirmations: 3
+  })
+  const scope = { keyDomainId: 'wallet:activity', accountId: 'account:activity' }
+  const history = mergeTransactionsWithWasmHistory(
+    [publicSend],
+    [shieldCredit],
+    [],
+    addresses
+  ).transactions
+  const refreshed = mergeTransactionsWithWasmHistory(
+    history,
+    [shieldCredit],
+    [],
+    addresses
+  ).transactions
+  const { items } = buildActivityReadModel({
+    scope,
+    localGraphs: [],
+    supplementalItems: refreshed.map(entry => mapZcashV1TransactionToActivityItem(entry, scope))
+  })
+  const byDomain = domain =>
+    filterActivityItems({ items, domain, selectedChainIds: [ZCASH_CHAIN_IDS.mainnet] })
+  expect(byDomain('public')).toMatchObject([
+    { id: publicSend.id, kind: 'transfer', snapshot: { direction: 'outgoing' } }
+  ])
+  expect(byDomain('shield')).toMatchObject([
+    {
+      id: shieldCredit.id,
+      kind: 'receive',
+      snapshot: { direction: 'incoming', primaryAmount: { amountRaw: '90000' } }
+    }
+  ])
+  const externalSend = { ...publicSend, to: 'u1external' }
+  expect(
+    mergeTransactionsWithWasmHistory(
+      [externalSend],
+      [shieldCredit],
+      [],
+      addresses
+    ).transactions.map(entry => entry.type)
+  ).toEqual(['send'])
 })
 
 test('only projects a Public ZEC credit for an owned transparent recipient', () => {

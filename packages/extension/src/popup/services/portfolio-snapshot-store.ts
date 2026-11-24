@@ -24,11 +24,13 @@ export interface PortfolioSnapshot {
   readonly model: PortfolioReadModel | null
   readonly status: 'loading' | 'ready' | 'error'
   readonly settled: boolean
+  readonly initialChainBalancesPending: boolean
 }
 
 interface Entry {
   readonly scope: PortfolioSnapshotScope
   snapshot: PortfolioSnapshot
+  initialChainBalancesPending?: boolean
   readonly listeners: Set<() => void>
   read?: Promise<PortfolioReadModel | null>
   readonly refreshes: Map<string, Promise<boolean>>
@@ -37,7 +39,8 @@ interface Entry {
 const emptySnapshot: PortfolioSnapshot = Object.freeze({
   model: null,
   status: 'ready',
-  settled: true
+  settled: true,
+  initialChainBalancesPending: false
 })
 const entries = new Map<string, Entry>()
 let listenerInstalled = false
@@ -62,7 +65,7 @@ function getEntry(key: string, scope?: PortfolioSnapshotScope): Entry | undefine
     scope,
     snapshot: sharedSnapshot?.model?.assets.some(row => row.asset.id === scope.detailAssetId)
       ? sharedSnapshot
-      : { model: null, status: 'loading', settled: false },
+      : { model: null, status: 'loading', settled: false, initialChainBalancesPending: true },
     listeners: new Set(),
     refreshes: new Map()
   }
@@ -70,11 +73,19 @@ function getEntry(key: string, scope?: PortfolioSnapshotScope): Entry | undefine
   return entry
 }
 
-function publish(entry: Entry, snapshot: PortfolioSnapshot): void {
+function publish(entry: Entry, data: Omit<PortfolioSnapshot, 'initialChainBalancesPending'>): void {
+  if (entry.initialChainBalancesPending === undefined && data.model) {
+    entry.initialChainBalancesPending = data.model.chains.some(
+      chain => chain.chain.family !== 'zcash' && chain.status === 'loading'
+    )
+  }
+  const initialChainBalancesPending = entry.initialChainBalancesPending ?? true
+  const snapshot = { ...data, initialChainBalancesPending }
   if (
     entry.snapshot.model === snapshot.model &&
     entry.snapshot.status === snapshot.status &&
-    entry.snapshot.settled === snapshot.settled
+    entry.snapshot.settled === snapshot.settled &&
+    entry.snapshot.initialChainBalancesPending === initialChainBalancesPending
   )
     return
   entry.snapshot = snapshot
@@ -189,12 +200,17 @@ export function refreshBalanceSnapshot(
   const requestKey = balanceRefreshRequestKey(request)
   const pending = entry.refreshes.get(requestKey)
   if (pending) return pending
+  const coversAllChains =
+    request.source === 'chain' && !request.chainIds?.length && !request.additionalChainIds?.length
   const run = Promise.resolve().then(async () => {
     if (!scopeIsActive(entry)) return false
     if (!entry.snapshot.model) {
       publish(entry, { ...entry.snapshot, status: 'loading', settled: false })
     }
-    await runBalanceRefresh(entry.scope, entry.snapshot.model, request)
+    await runBalanceRefresh(entry.scope, entry.snapshot.model, request, {
+      waitForTokenDiscovery:
+        coversAllChains && entry.initialChainBalancesPending === true && !entry.scope.detailAssetId
+    })
     if (!scopeIsActive(entry)) return false
     let model = await readPortfolioSnapshot(key, true)
     if (!scopeIsActive(entry)) return false
@@ -210,13 +226,12 @@ export function refreshBalanceSnapshot(
   })
   const operation = run.finally(() => {
     entry.refreshes.delete(requestKey)
-    if (
-      scopeIsActive(entry) &&
-      !entry.snapshot.model &&
-      entry.refreshes.size === 0 &&
-      !entry.read
-    ) {
+    if (!scopeIsActive(entry)) return
+    if (coversAllChains) entry.initialChainBalancesPending = false
+    if (!entry.snapshot.model && entry.refreshes.size === 0 && !entry.read) {
       publish(entry, { model: null, status: 'error', settled: true })
+    } else if (coversAllChains) {
+      publish(entry, entry.snapshot)
     }
   })
   entry.refreshes.set(requestKey, operation)

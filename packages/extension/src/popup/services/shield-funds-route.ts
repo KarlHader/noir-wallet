@@ -10,11 +10,11 @@ export type ShieldFundsDirection = 'shield' | 'unshield'
 export interface ShieldFundsFormState {
   readonly reviewing: boolean
   readonly busy: boolean
+  readonly fullHeight: boolean
 }
 
 export interface ShieldFundsFormProps {
   readonly direction: ShieldFundsDirection
-  readonly reviewMaximum?: boolean
   readonly assetId?: string | null
   readonly provider?: ShieldProvider | null
   readonly onBack?: () => void
@@ -70,11 +70,13 @@ export function buildFixedShieldFundsRequest(
   > & {
     readonly direction: ShieldFundsDirection
     readonly ownTransparentAddress?: string
+    readonly accountDomain?: 'public' | 'private'
   }
 ) {
-  const { direction, ownTransparentAddress, ...transfer } = input
+  const { direction, ownTransparentAddress, accountDomain = 'public', ...transfer } = input
   if (direction === 'unshield' && transfer.chain.chain.id === getZcashChainId(transfer.network)) {
     if (
+      accountDomain !== 'public' ||
       !ownTransparentAddress ||
       !parseZcashAddress(ownTransparentAddress, transfer.network).scheme.startsWith(
         'zcash-transparent-'
@@ -95,7 +97,9 @@ export function buildFixedShieldFundsRequest(
   }
   return buildShieldTransferRequest({
     ...transfer,
-    ...fixedShieldFundsDomains(direction),
+    ...(direction === 'shield'
+      ? { from: accountDomain, to: 'shield' }
+      : { from: 'shield', to: accountDomain }),
     destination: undefined,
     method: 'directly'
   })
@@ -104,17 +108,17 @@ export function buildFixedShieldFundsRequest(
 export function matchesFixedShieldFundsRecipient(
   review: ConfidentialFundingReview,
   request: PrepareConfidentialFundingRequest,
-  ownPublicAddress: string
+  ownAccountAddress: string
 ) {
-  if (!ownPublicAddress) return false
+  if (!ownAccountAddress) return false
   if (request.purpose === 'move') {
     return (
       review.purpose === 'move' &&
-      review.externalRecipient === ownPublicAddress &&
-      review.destinationAddress === ownPublicAddress
+      review.externalRecipient === ownAccountAddress &&
+      review.destinationAddress === ownAccountAddress
     )
   }
-  const publicAddress =
+  const accountAddress =
     request.operation === 'deposit' ? review.sourceAddress : review.destinationAddress
-  return publicAddress.toLowerCase() === ownPublicAddress.toLowerCase()
+  return accountAddress.toLowerCase() === ownAccountAddress.toLowerCase()
 }

@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
@@ -1155,7 +1156,7 @@ export class RheaSwapNearCoordinator {
       },
       now: pending.graphCreatedAt
     })
-    const created = await this.options.repository.create(graph)
+    const created = await writeLocalActivity('create', this.options.repository, graph)
     if (created.status === 'id-conflict') {
       throw new Error('RHEA Swap NEAR transaction ID conflicts with an existing record')
     }
@@ -1359,7 +1360,7 @@ export class RheaSwapNearCoordinator {
         }
         return current
       }
-      const result = await this.options.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.options.repository, {
         scope: current.root.scope,
         transactionId: current.root.id,
         segmentId: origin.id,

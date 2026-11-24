@@ -12,6 +12,7 @@ import {
   selectDomainBalanceRaw,
   type PortfolioDomain
 } from '@/core/portfolio/domain-balance-policy'
+import { withConfidentialAssetPrices } from './portfolio-prices'
 import {
   summarizeNearConfidentialHoldings,
   type NearConfidentialSummary
@@ -228,6 +229,7 @@ export function summarizeAssetDomainsUsd(
   model: PortfolioReadModel,
   prices: AssetPriceReadModel | null
 ): AssetDomainFiatSummary {
+  const onchainPrices = withConfidentialAssetPrices(model, prices)
   const independentConfidential = portfolioUsesIndependentConfidentialValuation(model)
   const sums = { public: new Big(0), shield: new Big(0), private: new Big(0) }
   const unknown = { public: false, shield: false, private: false }
@@ -236,7 +238,7 @@ export function summarizeAssetDomainsUsd(
   for (const asset of model.assets) {
     const embeddedConfidential = embeddedConfidentialRaw(asset, independentConfidential)
     if (BigInt(asset.balance.totalRaw) - embeddedConfidential === 0n) continue
-    const quote = findAssetPrice(prices, asset.asset.id)
+    const quote = findAssetPrice(onchainPrices, asset.asset.id)
     for (const domain of ['public', 'shield', 'private'] as const) {
       if (independentConfidential && domain === 'shield' && embeddedConfidential > 0n) continue
       const raw = getAssetDomainRaw(asset, domain)

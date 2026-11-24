@@ -131,6 +131,7 @@ export function summarizePortfolioFiat(
   let pricedAssetCount = 0
   let missingAssetCount = 0
   let staleAssetCount = 0
+  const onchainPrices = withConfidentialAssetPrices(portfolio, prices)
   const independentConfidential = portfolioUsesIndependentConfidentialValuation(portfolio)
   for (const asset of portfolio.assets) {
     const embeddedConfidential = embeddedConfidentialRaw(asset, independentConfidential)
@@ -148,7 +149,7 @@ export function summarizePortfolioFiat(
       continue
     }
     if (onchainRaw === 0n) continue
-    const quote = findAssetPrice(prices, asset.asset.id)
+    const quote = findAssetPrice(onchainPrices, asset.asset.id)
     if (!quote) {
       missingAssetCount += 1
       continue

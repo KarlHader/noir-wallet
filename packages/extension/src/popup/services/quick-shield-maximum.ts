@@ -6,6 +6,20 @@ import { evmWalletClient } from './evm-wallet-client'
 import { quickShieldSpendableRaw } from './quick-shield'
 import { matchesShieldReview } from './shield-transfer'
 import { matchesFixedShieldFundsRecipient } from './shield-funds-route'
+import { getTransferDomainBalanceRaw } from './private-balance-transfer'
+
+export async function estimateQuickShieldNativeFee(
+  assetId: string,
+  sender: string,
+  sourceDomain: PrepareConfidentialFundingRequest['sourceDomain'],
+  feeSelection: PrepareConfidentialFundingRequest['feeSelection']
+) {
+  const estimate = await evmWalletClient.estimateTransferFee(
+    { assetId, recipient: sender, amountRaw: '1' },
+    { executionMode: sourceDomain === 'private' ? 'private' : 'main', feeSelection }
+  )
+  return estimate.maximumFeeWei
+}
 
 export async function readQuickShieldBalances(request: PrepareConfidentialFundingRequest) {
   const { chainId, assetId } = request.source
@@ -19,8 +33,12 @@ export async function readQuickShieldBalances(request: PrepareConfidentialFundin
   const chain = portfolio?.chains.find(item => item.chain.id === chainId)
   const asset = chain?.assets.find(item => item.asset.id === assetId)
   const native = chain?.assets.find(item => item.asset.kind === 'native')
-  const assetRaw = asset && quickShieldSpendableRaw(asset)
-  const gasRaw = native && quickShieldSpendableRaw(native)
+  const sourceRaw =
+    request.sourceDomain === 'private'
+      ? (entry: NonNullable<typeof asset>) => getTransferDomainBalanceRaw(entry, 'private')
+      : quickShieldSpendableRaw
+  const assetRaw = asset && sourceRaw(asset)
+  const gasRaw = native && sourceRaw(native)
   if (
     portfolio?.scope.keyDomainId !== request.keyDomainId ||
     portfolio.scope.accountId !== request.accountId ||
@@ -60,11 +78,13 @@ export async function prepareQuickShieldMaximum(
   if (!current()) return null
   let amountRaw = balances.assetRaw.toString()
   if (balances.native) {
-    const estimate = await evmWalletClient.estimateTransferFee(
-      { assetId: request.source.assetId, recipient: sender, amountRaw: '1' },
-      { executionMode: 'main', feeSelection: request.feeSelection }
+    const feeRaw = await estimateQuickShieldNativeFee(
+      request.source.assetId,
+      sender,
+      request.sourceDomain,
+      request.feeSelection
     )
-    amountRaw = quickShieldMaximum(balances, estimate.maximumFeeWei)
+    amountRaw = quickShieldMaximum(balances, feeRaw)
   }
   for (let attempt = 0; attempt < 3 && current(); attempt++) {
     const candidate = {

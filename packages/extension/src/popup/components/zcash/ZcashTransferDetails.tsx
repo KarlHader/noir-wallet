@@ -82,16 +82,17 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
   const { review, networkName, action } = transfer
   const { quote } = review
   const chain = { name: networkName, icon: 'zcash' }
+  const title = `Confirm ${action.label}`
   return (
     <TransactionReviewDialog
       open={review.open}
-      title={`Confirm ${action.label}`}
+      title={title}
       description="Review the amount, destination, and fee."
       fullHeight={review.submitting}
       onOpenChange={review.onOpenChange}
     >
       <TransactionReviewView
-        title={`Confirm ${action.label}`}
+        title={title}
         showTitle
         variant="figma"
         asset={{ symbol: 'ZEC', nativeChain: 'zcash' }}

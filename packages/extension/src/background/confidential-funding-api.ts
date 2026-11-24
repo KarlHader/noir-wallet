@@ -12,6 +12,7 @@ import {
 } from '@/config/intents'
 import { parseNearAccountId } from '@/core/chains/near/identifiers'
 import { readRheaDestinationHash } from '@/core/services/rhea-swap/rhea-order-status'
+import { DedupPromise } from '@/lib/async-utils'
 import { parseSiweMessage } from 'viem/siwe'
 import { isAddress } from 'viem'
 import type {
@@ -170,6 +171,30 @@ function positiveRaw(value: unknown, label: string): string {
 
 function optionalRaw(value: unknown): string | undefined {
   return typeof value === 'string' && /^\d+$/.test(value) ? value : undefined
+}
+
+function parseClusterAppFees(value: unknown): readonly IntentsAppFee[] {
+  if (!isRecord(value)) throw new Error('Cluster app fee config is invalid')
+  const fees: IntentsAppFee[] = []
+  for (const [rateKey, recipientKey] of [
+    ['confidentialAppFeeBps', 'confidentialAppFeeRecipient'],
+    ['confidentialPlatformFeeBps', 'confidentialPlatformFeeRecipient']
+  ] as const) {
+    const fee = value[rateKey]
+    if (typeof fee !== 'number' || !Number.isInteger(fee) || fee < 0 || fee > 10_000) {
+      throw new Error('Cluster app fee rate is invalid')
+    }
+    if (fee > 0) {
+      fees.push({
+        recipient: parseNearAccountId(value[recipientKey], 'Cluster app fee recipient'),
+        fee
+      })
+    }
+  }
+  if (fees.reduce((sum, entry) => sum + entry.fee, 0) > 10_000) {
+    throw new Error('Cluster app fee total is invalid')
+  }
+  return fees
 }
 
 export function readConfidentialQuoteAppFees(
@@ -547,6 +572,8 @@ function parseSession(value: unknown, previous?: ConfidentialSession): Confident
 }
 
 export class ConfidentialFundingApi {
+  private readonly clusterAppFeeLookup = new DedupPromise<readonly IntentsAppFee[]>()
+
   constructor(
     private readonly config: ConfidentialFundingNetworkConfig,
     private readonly nearRpcUrl: string,
@@ -904,11 +931,13 @@ export class ConfidentialFundingApi {
       readonly recipientType: 'CONFIDENTIAL_INTENTS' | 'DESTINATION_CHAIN'
       readonly slippageBps: number
       readonly dry: boolean
+      readonly settlement?: 'cluster'
     },
     signal?: AbortSignal
   ): Promise<ConfidentialQuote> {
     const isWithdrawal =
       input.depositType === 'CONFIDENTIAL_INTENTS' && input.recipientType === 'DESTINATION_CHAIN'
+    const isClusterWithdrawal = input.settlement === 'cluster'
     const isDeposit =
       input.depositType === 'ORIGIN_CHAIN' && input.recipientType === 'CONFIDENTIAL_INTENTS'
     const isPublicTransfer =
@@ -930,11 +959,12 @@ export class ConfidentialFundingApi {
       input.recipient.toLowerCase() !== input.signerId.toLowerCase() &&
       input.refundTo === undefined
     if (
-      !isWithdrawal &&
-      !isDeposit &&
-      !isInternalSwap &&
-      !isConfidentialAccountTransfer &&
-      !isPublicTransfer
+      (isClusterWithdrawal && !isWithdrawal) ||
+      (!isWithdrawal &&
+        !isDeposit &&
+        !isInternalSwap &&
+        !isConfidentialAccountTransfer &&
+        !isPublicTransfer)
     ) {
       throw new Error('Confidential quote route is invalid')
     }
@@ -963,41 +993,65 @@ export class ConfidentialFundingApi {
       quoteWaitingTimeMs: 0,
       confidentiality: 'basic'
     }
+    const appFees = isClusterWithdrawal
+      ? await this.clusterAppFeeLookup.run(async () =>
+          parseClusterAppFees(
+            await requestJson(
+              this.swapUrl('/api/swap/confidential-app-fee'),
+              {},
+              this.requireSwapToken()
+            )
+          )
+        )
+      : walletAppFees
     // Successful confidential withdrawals settle this provider fee. Request it only
     // when the dry quote omitted every app fee, so it is never stacked to 100 bps.
     const acceptObservedWithdrawFee =
-      isWithdrawal && input.referral === NOIR_SEND_REFERRAL && walletAppFees.length === 0
-    const { quote: baseline, fees: providerFees } = await this.quoteProviderFees(
-      request,
-      signal,
-      acceptObservedWithdrawFee
-    )
-    assertConfidentialQuoteBinding(baseline, normalized)
-    if (nearSource && baseline.quote.depositMemo) {
-      throw new Error('NEAR Shield quote must not include a memo')
-    }
-    const appFees =
-      acceptObservedWithdrawFee && providerFees.length === 0
-        ? [CONFIDENTIAL_WITHDRAW_PROVIDER_APP_FEE]
-        : walletAppFees
-    if (input.dry && appFees.length === 0) return baseline
-    if (appFees.some(appFee => providerFees.some(fee => fee.recipient === appFee.recipient))) {
-      throw new Error('Confidential provider fee quote already includes the wallet fee recipient')
+      !isClusterWithdrawal &&
+      isWithdrawal &&
+      input.referral === NOIR_SEND_REFERRAL &&
+      walletAppFees.length === 0
+    let providerFees: readonly IntentsAppFee[] = []
+    let quotedAppFees = appFees
+    if (!isClusterWithdrawal) {
+      const { quote: baseline, fees } = await this.quoteProviderFees(
+        request,
+        signal,
+        acceptObservedWithdrawFee
+      )
+      assertConfidentialQuoteBinding(baseline, normalized)
+      if (nearSource && baseline.quote.depositMemo) {
+        throw new Error('NEAR Shield quote must not include a memo')
+      }
+      providerFees = fees
+      quotedAppFees =
+        acceptObservedWithdrawFee && providerFees.length === 0
+          ? [CONFIDENTIAL_WITHDRAW_PROVIDER_APP_FEE]
+          : walletAppFees
+      if (input.dry && quotedAppFees.length === 0) return baseline
+      if (
+        quotedAppFees.some(appFee => providerFees.some(fee => fee.recipient === appFee.recipient))
+      ) {
+        throw new Error('Confidential provider fee quote already includes the wallet fee recipient')
+      }
     }
     const value = await requestJson(this.oneClickUrl('/quote'), {
       method: 'POST',
       signal,
-      body: JSON.stringify({ ...request, ...(appFees.length > 0 ? { appFees } : {}) })
+      body: JSON.stringify({
+        ...request,
+        ...(quotedAppFees.length > 0 ? { appFees: quotedAppFees } : {})
+      })
     })
     const quote = parseQuote(value)
     if (Object.entries(request).some(([key, value]) => quote.quoteRequest[key] !== value)) {
       throw new Error('Confidential quote does not match the requested funding route')
     }
-    assertQuoteAppFees(quote, appFees, providerFees)
+    assertQuoteAppFees(quote, quotedAppFees, providerFees)
     if (nearSource && quote.quote.depositMemo) {
       throw new Error('NEAR Shield quote must not include a memo')
     }
-    if (isPublicTransfer) assertConfidentialQuoteBinding(quote, normalized)
+    if (isPublicTransfer || isClusterWithdrawal) assertConfidentialQuoteBinding(quote, normalized)
     return quote
   }
 
@@ -1046,7 +1100,7 @@ export class ConfidentialFundingApi {
       recipientType: 'CONFIDENTIAL_INTENTS' as const,
       slippageBps: input.slippageBps
     }
-    let amountRaw: string
+    let minimumInputRaw: string
     try {
       const quote = parseQuote(
         await requestJson(this.oneClickUrl('/quote'), {
@@ -1059,7 +1113,7 @@ export class ConfidentialFundingApi {
         throw new Error('NEAR Shield quote must not include a memo')
       }
       if (!request.dry) return quote
-      amountRaw = quote.quote.minAmountIn!
+      minimumInputRaw = quote.quote.minAmountIn!
     } catch (error) {
       const minimum =
         error instanceof ConfidentialFundingApiError && error.status === 400
@@ -1068,8 +1122,12 @@ export class ConfidentialFundingApi {
             )?.[1]
           : undefined
       if (!minimum || minimum.length > 78 || BigInt(minimum) <= BigInt(request.amount)) throw error
-      amountRaw = minimum
+      minimumInputRaw = minimum
     }
+    if (minimumInputRaw.length > 78) throw new Error('Confidential minimum input is invalid')
+    const minimum = BigInt(minimumInputRaw)
+    const amountRaw = request.dry ? (minimum + (minimum + 9n) / 10n).toString() : minimumInputRaw
+    if (amountRaw.length > 78) throw new Error('Confidential input amount is invalid')
     const quote = parseQuote(
       await requestJson(this.oneClickUrl('/quote'), {
         method: 'POST',

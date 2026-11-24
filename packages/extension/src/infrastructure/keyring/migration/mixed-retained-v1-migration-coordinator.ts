@@ -46,7 +46,7 @@ import {
 } from '@/ports/repositories'
 import { CompatibilityWorkerHost } from './compatibility-worker-host'
 import type { CompatibilityWorkerResult } from './compatibility-worker-protocol'
-import { assertKeystoneZcashVerificationMatches } from './keystone-hardware-verification'
+import { verifyRetainedZcashHardwareWallet } from './keystone-hardware-verification'
 import type {
   KeystoneZcashVerificationPort,
   KeystoneZcashVerificationResult
@@ -470,24 +470,22 @@ export class MixedRetainedV1MigrationCoordinator {
         }
 
         const account = wallet.accounts[0]
-        const verification = await this.keystoneVerifier.verifyZcash({
-          vendor: wallet.keySource as 'keystone' | 'ledger',
-          envelope: envelopes[index].value,
-          password: input.password,
-          network: input.chains.zcashNetwork,
-          chainId: input.chains.zcashChainId,
-          account: {
-            accountIndex: account.accountIndex,
-            birthdayHeight: account.birthdayHeight,
-            expected: account.addresses
+        const verification = await verifyRetainedZcashHardwareWallet(
+          this.keystoneVerifier,
+          wallet.id,
+          {
+            vendor: wallet.keySource as 'keystone' | 'ledger',
+            envelope: envelopes[index].value,
+            password: input.password,
+            network: input.chains.zcashNetwork,
+            chainId: input.chains.zcashChainId,
+            account: {
+              accountIndex: account.accountIndex,
+              birthdayHeight: account.birthdayHeight,
+              expected: account.addresses
+            }
           }
-        })
-        assertKeystoneZcashVerificationMatches(verification, {
-          accountIndex: account.accountIndex,
-          expected: account.addresses,
-          chainId: input.chains.zcashChainId,
-          network: input.chains.zcashNetwork
-        })
+        )
         prepared.push(
           Object.freeze({
             ...base,

@@ -5,6 +5,14 @@ import { ChainIcon } from '../common/ChainIcon'
 import { ChainSelector } from '../common/ChainSelector'
 import { ListSkeleton } from '../ui/skeleton'
 import { SearchInput } from '../ui/input'
+import { Button } from '../ui/button'
+import {
+  hasTokenPickerBalance,
+  isExtraTokenPickerAsset,
+  sortTokenPickerRows,
+  type TokenPickerBalance,
+  type TokenPickerPolicy
+} from '@/popup/services/token-selector-visibility'
 import { TokenIcon } from './TokenIcon'
 import { sortTokenSelectorNetworks } from '@/popup/services/token-selector-chain-order'
 import { useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
@@ -40,6 +48,7 @@ export interface TokenSelectionItem {
 
 export interface TokenPickerAdapter<Row> {
   readonly chainId: (row: Row) => string
+  readonly matchesNetwork?: (row: Row, network: string) => boolean
   readonly searchFields: (row: Row) => TokenSearchFields
 }
 
@@ -50,6 +59,8 @@ interface TokenPickerProps<Row> {
   readonly toItem: (row: Row) => TokenSelectionItem
   readonly onSelect: (row: Row) => void
   readonly isDisabled?: (row: Row) => boolean
+  readonly visibility?: { policy: TokenPickerPolicy; balance: (row: Row) => TokenPickerBalance }
+  readonly emptyAction?: { label: string; onClick: () => void }
   readonly initialNetwork?: string
   readonly filter?: {
     readonly search: string
@@ -71,10 +82,12 @@ export function TokenPicker<Row>({
   adapter,
   rows,
   toItem,
-  networks,
+  networks: suppliedNetworks,
   initialNetwork = 'all',
   filter,
   isDisabled,
+  visibility,
+  emptyAction,
   selectedKey,
   onSelect,
   emptyMessage = 'No tokens found',
@@ -87,6 +100,14 @@ export function TokenPicker<Row>({
   const [localSearch, setSearch] = useState('')
   const [localNetwork, setNetwork] = useState(initialNetwork)
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
+  const [showExtraAssets, setShowExtraAssets] = useState(false)
+  const policy = visibility?.policy
+  const balance = visibility?.balance
+  const networks = policy === 'withdrawal' ? [] : suppliedNetworks
+  const orderedRows = useMemo(
+    () => (policy && balance ? sortTokenPickerRows(rows, balance, policy) : rows),
+    [rows, policy, balance]
+  )
   const search = filter?.search ?? localSearch
   const onSearchChange = filter?.onSearchChange ?? setSearch
   const selectNetwork = filter?.onNetworkChange ?? setNetwork
@@ -98,14 +119,36 @@ export function TokenPicker<Row>({
       : 'all'
   const deferredSearch = useDeferredValue(search)
   const deferredNetwork = useDeferredValue(effectiveNetwork)
-  const filtered = useMemo(
-    () => (adapter ? filterTokenPickerRows(rows, deferredNetwork, deferredSearch, adapter) : rows),
-    [rows, deferredNetwork, deferredSearch, adapter]
+  const matching = useMemo(
+    () =>
+      adapter
+        ? filterTokenPickerRows(orderedRows, deferredNetwork, deferredSearch, adapter)
+        : orderedRows,
+    [orderedRows, deferredNetwork, deferredSearch, adapter]
   )
+  const grouped = policy === 'grouped' || policy === 'grouped-source'
+  const extras = useMemo(
+    () =>
+      grouped && balance && !deferredSearch.trim()
+        ? new Set(matching.filter(row => isExtraTokenPickerAsset(balance(row))))
+        : null,
+    [grouped, balance, deferredSearch, matching]
+  )
+  const hasExtraAssets = Boolean(extras?.size)
+  const filtered = useMemo(
+    () => (extras?.size && !showExtraAssets ? matching.filter(row => !extras.has(row)) : matching),
+    [extras, matching, showExtraAssets]
+  )
+  const disabledReason = (row: Row) =>
+    policy === 'grouped-source' && balance && !hasTokenPickerBalance(balance(row))
+      ? 'No available balance'
+      : undefined
   const virtualWindow = useTokenSelectorWindow(
-    filter?.queryKey ?? `${deferredNetwork}:${deferredSearch}`,
+    `${filter?.queryKey ?? `${deferredNetwork}:${deferredSearch}`}:${showExtraAssets}`,
     filtered.length,
-    isDisabled ? index => isDisabled(filtered[index]!) : undefined
+    isDisabled || policy === 'grouped-source'
+      ? index => Boolean(isDisabled?.(filtered[index]!) || disabledReason(filtered[index]!))
+      : undefined
   )
   const entries = useMemo(
     () =>
@@ -281,7 +324,7 @@ export function TokenPicker<Row>({
             {entries.map(({ row, item }, index) => (
               <TokenPickerRow
                 key={item.key}
-                item={item}
+                item={{ ...item, disabledReason: item.disabledReason ?? disabledReason(row) }}
                 selected={selectedKey === item.key}
                 onSelect={() => onSelect(row)}
                 position={{
@@ -300,6 +343,23 @@ export function TokenPicker<Row>({
           </div>
         )}
         {afterRows}
+        {emptyAction && !loading && orderedRows.length === 0 && !search.trim() && (
+          <div className="px-3 py-3">
+            <Button size="wallet" className="w-full" onClick={emptyAction.onClick}>
+              {emptyAction.label}
+            </Button>
+          </div>
+        )}
+        {hasExtraAssets && (
+          <button
+            type="button"
+            className="wallet-interactive w-full rounded-lg px-3 py-3 text-sm font-medium text-primary hover:bg-white/5"
+            aria-expanded={showExtraAssets}
+            onClick={() => setShowExtraAssets(value => !value)}
+          >
+            {showExtraAssets ? 'Show fewer assets' : 'Show more assets'}
+          </button>
+        )}
       </div>
     </div>
   )

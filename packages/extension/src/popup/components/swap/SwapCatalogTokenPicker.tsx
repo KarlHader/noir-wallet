@@ -236,7 +236,6 @@ export function SwapCatalogTokenPicker({
             amount={balance}
             symbol={symbol}
             priceUsd={pricesByTokenKey?.get(tokenKey(token)) ?? token.price}
-            approximateFiat
           />
         )
     }

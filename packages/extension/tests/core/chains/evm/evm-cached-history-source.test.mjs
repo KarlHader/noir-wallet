@@ -107,6 +107,8 @@ test.describe('cached EVM history source', () => {
 
     const fresh = activityItem({
       id: `rpc:evm:${chainId}:${hash}:native`,
+      kind: 'contract-call',
+      snapshot: { ...activityItem().snapshot, direction: 'contract' },
       segments: [
         {
           ...old.segments[0],
@@ -139,9 +141,15 @@ test.describe('cached EVM history source', () => {
 
   test('replaces a legacy token row when a fresh grouped row has the same chain and hash', async () => {
     const hash = `0x${'a'.repeat(64)}`
-    const old = activityItem({ id: `rpc:evm:${chainId}:${hash}:token` })
+    const old = activityItem({
+      id: `rpc:evm:${chainId}:${hash}:token`,
+      kind: 'contract-call',
+      snapshot: { ...activityItem().snapshot, direction: 'contract' }
+    })
     const fresh = activityItem({
       id: `rpc:evm:${chainId}:${hash}:native`,
+      kind: 'contract-call',
+      snapshot: { ...activityItem().snapshot, direction: 'contract' },
       segments: [
         {
           ...old.segments[0],

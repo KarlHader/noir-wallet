@@ -90,8 +90,7 @@ import {
   nativeZecDestinationKey,
   shieldSwapFormAmountError,
   shieldSwapFormBalance,
-  shieldSwapPickerChain,
-  sortShieldSwapPickerRows
+  shieldSwapPickerChain
 } from '@/popup/services/shield-swap-form'
 import {
   buildShieldSwapZecSourceOptions,
@@ -359,10 +358,6 @@ function ShieldSwapForm({
     nativeZecDestination && zcashAccountEnabled
       ? nativeZecAddresses?.[nativeZecDestination]
       : undefined
-  const canSelectConfidentialZec =
-    to?.managed.protocolAssetId !== ZEC_ZCASH_ASSET ||
-    (nativeZecDestination === 'shielded' &&
-      canMoveShieldSwapZecToUnifiedAddress(to, nativeZecRecipient, network))
   const sameAssetNativeDestination =
     nativeZecDestination !== null &&
     from !== null &&
@@ -396,6 +391,12 @@ function ShieldSwapForm({
   const canReverse =
     reverseUnavailableReason === null &&
     Boolean(to && sourceChoices.some(asset => asset.asset.asset.id === to.asset.asset.id))
+  const canReverseFromPicker = from !== null && nativeZecDestination === null && canReverse
+  const canSelectConfidentialZec =
+    to?.managed.protocolAssetId !== ZEC_ZCASH_ASSET ||
+    canReverseFromPicker ||
+    (nativeZecDestination === 'shielded' &&
+      canMoveShieldSwapZecToUnifiedAddress(to, nativeZecRecipient, network))
   const previewRequest = useMemo(() => {
     if (
       !account ||
@@ -460,6 +461,28 @@ function ShieldSwapForm({
     const token = tokens.find(token => token.assetId === asset.managed.protocolAssetId)
     if (token) useSwapPreferences.getState().setSavedSwapToken(preferenceScope, side, token)
   }
+  const switchAssets = () => {
+    if (!from || !to || !canReverse) return
+    if (nativeZecDestination && fromToken) {
+      const destination = confidentialDestinationFormToken(from, fromToken)
+      if (!destination) return
+      if (nativeZecDestination === 'transparent') onSelectTransparentZecSwap?.(destination)
+      else onSelectNativeZecSwap?.(destination)
+      return
+    }
+    setFromId(to.asset.asset.id)
+    setToId(from.asset.asset.id)
+    if (preferenceScope && fromToken && toToken) {
+      useSwapPreferences.getState().setSavedTokenSelection(preferenceScope, {
+        tokenInId: toToken.assetId,
+        tokenOutId: fromToken.assetId,
+        tokenInSymbol: toToken.symbol,
+        tokenOutSymbol: fromToken.symbol
+      })
+    }
+    setAmount('')
+    setError(null)
+  }
   const displayOutput =
     previewOutput ??
     (previewLoading
@@ -483,7 +506,7 @@ function ShieldSwapForm({
     if (!fromPickerReady) return []
     const zecPrice = tokenPrices.get(ZEC_ZCASH_ASSET)
     const transparentZecRow: ShieldTokenPickerItem[] =
-      nativeZecTransparentRaw !== null
+      onSelectTransparentZecSwap && nativeZecTransparentRaw !== null
         ? [
             {
               key: SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID,
@@ -499,7 +522,9 @@ function ShieldSwapForm({
           ]
         : []
     const zecRows = zecSourceOptions
-      .filter(option => option.kind !== 'intents' || canSelectConfidentialZec)
+      .filter(option =>
+        option.kind === 'intents' ? canSelectConfidentialZec : Boolean(onSelectNativeZecSwap)
+      )
       .map(option =>
         Object.freeze({
           key: option.selectionId,
@@ -512,7 +537,9 @@ function ShieldSwapForm({
           chainId: option.chainId,
           badgeBlockchain: option.badgeBlockchain,
           nativeIconChain: 'zcash',
-          availableRaw: option.availableRaw,
+          availableRaw:
+            option.kind === 'intents' && !displayBalances ? undefined : option.availableRaw,
+          displayBalance: option.kind === 'intents' && !displayBalances ? '—' : undefined,
           decimals: option.decimals,
           priceUsd: zecPrice,
           disabledReason: option.disabledReason
@@ -522,7 +549,7 @@ function ShieldSwapForm({
       .filter(
         asset =>
           asset.managed.protocolAssetId !== ZEC_ZCASH_ASSET &&
-          asset.managed.protocolAssetId !== to?.managed.protocolAssetId
+          (asset.managed.protocolAssetId !== to?.managed.protocolAssetId || canReverseFromPicker)
       )
       .map(asset =>
         Object.freeze({
@@ -533,22 +560,28 @@ function ShieldSwapForm({
           searchTerms: [asset.asset.metadata.name, asset.asset.asset.reference],
           iconUrl: asset.asset.metadata.iconUrl,
           ...shieldSwapPickerChain(asset),
-          availableRaw: shieldFundingAvailableRaw(asset, displayBalances),
+          availableRaw: displayBalances
+            ? shieldFundingAvailableRaw(asset, displayBalances)
+            : undefined,
+          displayBalance: displayBalances ? undefined : '—',
           decimals: asset.asset.metadata.decimals,
           priceUsd: tokenPrices.get(asset.managed.protocolAssetId) ?? null
         })
       )
-    return sortShieldSwapPickerRows([...transparentZecRow, ...zecRows, ...nonZecRows])
+    return [...transparentZecRow, ...zecRows, ...nonZecRows]
   }, [
     network,
     fromPickerReady,
     sourceChoices,
     to?.managed.protocolAssetId,
+    canReverseFromPicker,
     canSelectConfidentialZec,
     zecSourceOptions,
     displayBalances,
     tokenPrices,
-    nativeZecTransparentRaw
+    nativeZecTransparentRaw,
+    onSelectNativeZecSwap,
+    onSelectTransparentZecSwap
   ])
   const fromPickerChain = from ? shieldSwapPickerChain(from) : undefined
   const toPickerChain = to ? shieldSwapPickerChain(to) : undefined
@@ -577,16 +610,14 @@ function ShieldSwapForm({
   const toPickerRows = useMemo(
     () =>
       toPickerReady
-        ? sortShieldSwapPickerRows(
-            buildShieldDestinationPickerRows({
-              options,
-              tokens,
-              balances: displayBalances,
-              network,
-              source: from,
-              nativeZecDestinations
-            })
-          )
+        ? buildShieldDestinationPickerRows({
+            options,
+            tokens,
+            balances: displayBalances,
+            network,
+            source: from,
+            nativeZecDestinations
+          })
         : [],
     [toPickerReady, options, tokens, displayBalances, network, from, nativeZecDestinations]
   )
@@ -604,7 +635,7 @@ function ShieldSwapForm({
     scopeStillCurrent() &&
     active &&
     latestDraft.current.revision === draftRevision &&
-    (previewRequest?.purpose !== 'move' ||
+    (previewRequest?.purpose !== 'same-asset-zec-swap' ||
       useWalletStore.getState().getCurrentAccount()?.addresses.shielded ===
         previewRequest.externalRecipient)
   const openActivity = (transactionId: string) => {
@@ -739,7 +770,7 @@ function ShieldSwapForm({
   const reviewMatchesDraft =
     prepared !== null &&
     previewRequest !== null &&
-    (prepared.request.purpose !== 'move' || validAmount) &&
+    (prepared.request.purpose !== 'same-asset-zec-swap' || validAmount) &&
     JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
   const refreshReview = async () => {
     if (!prepared || busy || uncertain || !canManageNear || !scopeStillCurrent()) return
@@ -1187,6 +1218,7 @@ function ShieldSwapForm({
         <SwapAssetCard
           direction="From"
           token={fromToken}
+          fallbackAssetId={preferredSourceId ?? undefined}
           fallbackSymbol={
             sharedPair?.tokenInSymbol ?? findSavedSwapToken(tokens, preferredSourceId)?.symbol
           }
@@ -1197,9 +1229,7 @@ function ShieldSwapForm({
           balance={hidden ? '••••' : (balance ?? '—')}
           balanceLoading={!hidden && balanceLoading}
           tokenSelectDisabled={tokens.length === 0}
-          onTokenSelect={() => {
-            setPicker('from')
-          }}
+          onTokenSelect={() => setPicker('from')}
           tokenSelectLocked={busy}
           amountFocusToken={
             active && amountFocusToken && amountFocusToken > 0 ? amountFocusToken : undefined
@@ -1225,29 +1255,9 @@ function ShieldSwapForm({
           reverseUnavailableReason={
             canReverse ? undefined : (reverseUnavailableReason ?? 'Reverse route is unavailable')
           }
-          onSwitchAssets={() => {
-            if (!from || !to || !canReverse) return
-            if (nativeZecDestination && fromToken) {
-              const destination = confidentialDestinationFormToken(from, fromToken)
-              if (!destination) return
-              if (nativeZecDestination === 'transparent') onSelectTransparentZecSwap?.(destination)
-              else onSelectNativeZecSwap?.(destination)
-              return
-            }
-            setFromId(to.asset.asset.id)
-            setToId(from.asset.asset.id)
-            if (preferenceScope && fromToken && toToken) {
-              useSwapPreferences.getState().setSavedTokenSelection(preferenceScope, {
-                tokenInId: toToken.assetId,
-                tokenOutId: fromToken.assetId,
-                tokenInSymbol: toToken.symbol,
-                tokenOutSymbol: fromToken.symbol
-              })
-            }
-            setAmount('')
-            setError(null)
-          }}
+          onSwitchAssets={switchAssets}
           token={toToken}
+          fallbackAssetId={preferredDestinationId ?? undefined}
           fallbackSymbol={
             sharedPair?.tokenOutSymbol ?? findSavedSwapToken(tokens, preferredDestinationId)?.symbol
           }
@@ -1255,17 +1265,13 @@ function ShieldSwapForm({
             nativeDestinationChain?.badgeBlockchain ?? toPickerChain?.badgeBlockchain
           }
           tokenNetworkLabel={
-            nativeDestinationChain?.chainName ??
-            toPickerChain?.sourceLabel ??
-            toPickerChain?.chainName
+            nativeDestinationChain?.chainName ?? (to ? 'NEAR Confidential' : undefined)
           }
           zcashFundingSource={nativeZecDestination ?? undefined}
           accountAddress={nativeZecRecipient}
           amount={displayOutput}
           fiatValue={toToken?.price ? toFiat : ''}
-          onTokenSelect={() => {
-            setPicker('to')
-          }}
+          onTokenSelect={() => setPicker('to')}
           tokenSelectDisabled={tokens.length === 0}
           tokenSelectLocked={busy}
           isAmountLoading={previewLoading}
@@ -1373,6 +1379,7 @@ function ShieldSwapForm({
         <TokenSelectorDialog open onOpenChange={open => !open && setPicker(null)}>
           <ShieldTokenPicker
             rows={toPickerRows}
+            policy="grouped"
             balancesHidden={hidden}
             loading={!toPickerReady}
             emptyMessage="No tokens found"
@@ -1408,6 +1415,7 @@ function ShieldSwapForm({
         {active && picker === 'from' && (
           <ShieldTokenPicker
             rows={fromPickerItems}
+            policy="grouped-source"
             balancesHidden={hidden}
             loading={!fromPickerReady || status === 'loading'}
             selectedKey={
@@ -1434,6 +1442,11 @@ function ShieldSwapForm({
                   key === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID
                     ? (intents?.intentsWalletAssetId ?? key)
                     : key
+                if (canReverseFromPicker && assetId === to?.asset.asset.id) {
+                  switchAssets()
+                  setPicker(null)
+                  return
+                }
                 setFromId(assetId)
                 rememberToken(
                   'in',

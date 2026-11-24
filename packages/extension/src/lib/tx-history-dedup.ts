@@ -37,7 +37,7 @@ export function isTransparentReceive(tx: Transaction): boolean {
 export function localTxHashSet(txs: Transaction[]): Set<string> {
   const hashes = new Set<string>()
   for (const tx of txs) {
-    if (tx.id.startsWith('wasm_')) continue
+    if (tx.id.startsWith('wasm_') || tx.type === 'receive') continue
     const hash = normalizeTxHash(tx.txHash)
     if (hash) hashes.add(hash)
     for (const chainHash of tx.chainHashes ?? []) {
@@ -53,7 +53,7 @@ export function localTxHashSet(txs: Transaction[]): Set<string> {
 
 /**
  * A WASM history row duplicates a local record when it shares the same txid and
- * is not a transparent receive. A swap/supply is a single on-chain send, so the
+ * is not a receive. A swap/supply is a single on-chain send, so the
  * richer local record wins and the `wasm_` send row is dropped — including rows
  * already persisted from an earlier merge, which lets stale duplicates self-heal.
  *
@@ -65,7 +65,7 @@ export function localTxHashSet(txs: Transaction[]): Set<string> {
 export function isDuplicateWasmRow(tx: Transaction, localHashes: ReadonlySet<string>): boolean {
   return (
     tx.id.startsWith('wasm_') &&
-    !isTransparentReceive(tx) &&
+    tx.type !== 'receive' &&
     localHashes.has(normalizeTxHash(tx.txHash))
   )
 }

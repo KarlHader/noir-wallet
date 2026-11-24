@@ -128,7 +128,7 @@ function rpcActivity(transactionHash, overrides = {}) {
     status: 'final',
     snapshot: {
       schemaVersion: 1,
-      direction: 'incoming',
+      direction: 'outgoing',
       primaryAmount: { assetId: 'eip155:1/slip44:60', amountRaw: '42' },
       sender: { chainId: 'eip155:1', address: `0x${'3'.repeat(40)}` },
       recipient: { chainId: 'eip155:1', address: `0x${'1'.repeat(40)}` }

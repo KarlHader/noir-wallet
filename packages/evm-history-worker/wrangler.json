@@ -9,6 +9,11 @@
   "vars": {
     "ALLOWED_ORIGIN": "*"
   },
+  "triggers": { "crons": ["* * * * *"] },
+  "durable_objects": {
+    "bindings": [{ "name": "BASE_ACROSS_RECEIPTS", "class_name": "BaseAcrossReceiptIndex" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BaseAcrossReceiptIndex"] }],
   "ratelimits": [
     {
       "name": "HISTORY_RATE_LIMITER",

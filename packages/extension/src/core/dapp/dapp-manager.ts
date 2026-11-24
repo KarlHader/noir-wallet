@@ -859,15 +859,13 @@ export function replaceDAppCaip25Session(
     item => !replacementIds.has(item.chainId)
   )
   const evm = replacements.filter(item => isEvmChain(item.chainId))
-  if (
-    evm.some(
+  const sharedEvm =
+    evm.length > 0 &&
+    evm.every(
       item =>
-        !sameAccountSet(item.accounts, evm[0].accounts) ||
-        !accountRefsEqual(item.binding, evm[0].binding)
+        sameAccountSet(item.accounts, evm[0].accounts) &&
+        accountRefsEqual(item.binding, evm[0].binding)
     )
-  ) {
-    throw new Error('CAIP-25 EVM scopes require one shared Account selection')
-  }
   const sessionWithSnapshots =
     evm.length === 0
       ? session
@@ -926,13 +924,16 @@ export function replaceDAppCaip25Session(
     }),
     lastActiveAt: activityTime,
     chainAuthorizations: [...remaining, ...replacements].filter(
-      item => !isEvmChain(item.chainId) || evm.length === 0
+      item =>
+        !isEvmChain(item.chainId) ||
+        evm.length === 0 ||
+        (!sharedEvm &&
+          (replacementIds.has(item.chainId) ||
+            !existing?.caip25Session?.scopes.some(scope => scope.chainId === item.chainId)))
     ),
-    ...(evm.length === 0
-      ? existing?.evmAuthorization === undefined
-        ? {}
-        : { evmAuthorization: existing.evmAuthorization }
-      : { evmAuthorization: { accounts: evm[0].accounts, binding: evm[0].binding } }),
+    ...(sharedEvm
+      ? { evmAuthorization: { accounts: evm[0].accounts, binding: evm[0].binding } }
+      : {}),
     ...(evmNetworkState === undefined ? {} : { evmNetworkState }),
     evmNetworkConsentInvalidated:
       evm.length > 0 ? undefined : existing?.evmNetworkConsentInvalidated,

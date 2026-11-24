@@ -211,6 +211,19 @@ export function formatMinimumDepositPaymentAmount(
   })
 }
 
+export function formatShieldReceiveNetworkMinimum(
+  record: ExternalShieldDeposit,
+  priceUsd: number | undefined
+): string | null {
+  const minimumRaw = record.minimumInputRaw ?? record.amountRaw
+  const amount = formatDepositAmount(minimumRaw, record.sourceDecimals)
+  if (amount === null) return null
+  if (priceUsd !== undefined && Number.isFinite(priceUsd) && priceUsd > 0) {
+    if (new Big(amount).times(priceUsd).lte(1)) return null
+  }
+  return formatMinimumDepositPaymentAmount(minimumRaw, record.sourceDecimals)
+}
+
 export function hasDepositSettlementShortfall(record: ExternalShieldDeposit): boolean {
   return (
     record.phase === 'ready' &&
