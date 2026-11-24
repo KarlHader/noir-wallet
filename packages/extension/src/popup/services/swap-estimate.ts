@@ -1,4 +1,8 @@
 import Big, { safeBig } from '@/lib/big'
+import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
+import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
+import type { RheaSwapToken } from '@/core/services/rhea-swap'
+import type { Network } from '@/types'
 
 interface SwapAmountValuesInput {
   readonly amountIn: string
@@ -12,18 +16,26 @@ export function formatSwapReviewFiat(amount: string, price: number | string | un
   return amount && marketPrice.gt(0) ? safeBig(amount).times(marketPrice).toFixed() : ''
 }
 
+export function resolveSwapMarketPrice(
+  token: Pick<RheaSwapToken, 'assetId' | 'price'> | null,
+  prices: AssetPriceReadModel | null,
+  network: Network
+): number | undefined {
+  if (!token) return undefined
+  const assetId = prices && resolveRheaSwapCanonicalAssetId(token.assetId, network)
+  const marketPrice = assetId ? Number(findAssetPrice(prices, assetId)?.priceUsd) : NaN
+  if (Number.isFinite(marketPrice) && marketPrice > 0) return marketPrice
+  return Number.isFinite(token.price) && token.price > 0 ? token.price : undefined
+}
+
 export function getSwapAmountValues(input: SwapAmountValuesInput) {
   return {
     rate:
       input.amountIn && input.amountOut && safeBig(input.amountIn).gt(0)
         ? safeBig(input.amountOut).div(input.amountIn).toFixed()
         : '...',
-    fromFiat: safeBig(input.amountIn || '0')
-      .times(input.tokenInPrice || 0)
-      .toFixed(),
-    toFiat: safeBig(input.amountOut || '0')
-      .times(input.tokenOutPrice || 0)
-      .toFixed()
+    fromFiat: formatSwapReviewFiat(input.amountIn, input.tokenInPrice ?? undefined),
+    toFiat: formatSwapReviewFiat(input.amountOut, input.tokenOutPrice ?? undefined)
   }
 }
 

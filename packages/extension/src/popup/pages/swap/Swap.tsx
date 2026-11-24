@@ -819,6 +819,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         network => network.chain.family === 'evm' && network.privateExecutionAddress
       )?.chain.id)
     : undefined
+  const cachedAssetPrices = useCachedAssetPrices(currentNetwork)
   const swap = useSwapState(
     lockedAssetFlowRequested ||
       crossChainSendRequested ||
@@ -852,7 +853,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 !activeSharedPair
               ? privateSwapChainId
               : defaultSwapChainId
-    }
+    },
+    currentNetwork,
+    cachedAssetPrices
   )
   const sharedSourceMatches =
     !activeSharedPair?.tokenInId ||
@@ -1225,7 +1228,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       currentWallet?.keySource
     ]
   )
-  const cachedAssetPrices = useCachedAssetPrices(currentNetwork)
   const nativeZecAssetId = resolveRheaSwapCanonicalAssetId(ZEC_ZCASH_ASSET, currentNetwork)
   const walletZecPrice = nativeZecAssetId
     ? findAssetPrice(cachedAssetPrices, nativeZecAssetId)?.priceUsd
@@ -6666,8 +6668,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           priceImpact={calculateSwapPriceImpact({
             amountIn: swap.amountIn,
             amountOut: swap.amountOut,
-            tokenInPrice: swap.tokenIn.price,
-            tokenOutPrice: swap.tokenOut.price
+            tokenInPrice: swap.tokenInPrice,
+            tokenOutPrice: swap.tokenOutPrice
           })}
           slippage={swap.slippage}
           provider="near-confidential"
@@ -6718,13 +6720,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         rheaReview.estimatedOut,
         swap.tokenOut.decimals
       )
-      const reviewPrice = (token: RheaSwapToken) => {
-        if (token.price > 0) return token.price
-        const assetId = resolveRheaSwapCanonicalAssetId(token.assetId, currentNetwork)
-        return assetId ? findAssetPrice(cachedAssetPrices, assetId)?.priceUsd : undefined
-      }
-      const fromFiat = formatSwapReviewFiat(reviewedAmountIn, reviewPrice(swap.tokenIn))
-      const toFiat = formatSwapReviewFiat(reviewedAmountOut, reviewPrice(swap.tokenOut))
+      const fromFiat = formatSwapReviewFiat(reviewedAmountIn, swap.tokenInPrice)
+      const toFiat = formatSwapReviewFiat(reviewedAmountOut, swap.tokenOutPrice)
       const combinedLimit = pendingRheaEvmAfterApproval?.combined?.limit
       const combinedNetworkFee =
         combinedLimit && preparedQuoteTransfer?.family === 'evm'
@@ -6741,8 +6738,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       const priceImpact = calculateSwapPriceImpact({
         amountIn: swap.amountIn,
         amountOut: swap.amountOut,
-        tokenInPrice: swap.tokenIn.price,
-        tokenOutPrice: swap.tokenOut.price
+        tokenInPrice: swap.tokenInPrice,
+        tokenOutPrice: swap.tokenOutPrice
       })
       const quoteChanges = (
         <QuoteReviewChanges

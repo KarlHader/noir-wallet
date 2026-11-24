@@ -16,7 +16,13 @@ import {
   isSameSwapTokenRouteIdentity,
   type SwapInitialCatalogOptions
 } from '@/popup/services/swap-catalog-loading'
-import { estimateSwapOutputFromPrices, getSwapAmountValues } from '@/popup/services/swap-estimate'
+import {
+  estimateSwapOutputFromPrices,
+  getSwapAmountValues,
+  resolveSwapMarketPrice
+} from '@/popup/services/swap-estimate'
+import type { AssetPriceReadModel } from '@/core/prices'
+import type { Network } from '@/types'
 import {
   getSavedSwapDestinationAssetId,
   getSwapDestinationTokens
@@ -25,7 +31,9 @@ import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
 
 export function useSwapState(
   preferenceScope: string | null,
-  options: SwapInitialCatalogOptions = {}
+  options: SwapInitialCatalogOptions,
+  network: Network,
+  prices: AssetPriceReadModel | null
 ) {
   const enabledChainKey = options.enabledChains?.map(chain => chain.id).join('|')
   const catalogScope = options.catalogScope === undefined ? preferenceScope : options.catalogScope
@@ -463,15 +471,17 @@ export function useSwapState(
 
   // Derived state
   const isZecSource = isZecToken(tokenIn)
+  const tokenInPrice = resolveSwapMarketPrice(tokenIn, prices, network)
+  const tokenOutPrice = resolveSwapMarketPrice(tokenOut, prices, network)
 
   const provisionalAmountOut = useMemo(
     () =>
       estimateSwapOutputFromPrices({
         amountIn,
-        tokenInPrice: tokenIn?.price,
-        tokenOutPrice: tokenOut?.price
+        tokenInPrice,
+        tokenOutPrice
       }),
-    [amountIn, tokenIn?.price, tokenOut?.price]
+    [amountIn, tokenInPrice, tokenOutPrice]
   )
   const displayOut = amountOut || (quoteError ? '' : provisionalAmountOut)
   const isEstimatedOut = amountOut === '' && displayOut !== ''
@@ -482,8 +492,8 @@ export function useSwapState(
   } = getSwapAmountValues({
     amountIn,
     amountOut: displayOut,
-    tokenInPrice: tokenIn?.price,
-    tokenOutPrice: tokenOut?.price
+    tokenInPrice,
+    tokenOutPrice
   })
   const rate = displayOut ? displayRate : '...'
 
@@ -762,6 +772,8 @@ export function useSwapState(
     isEstimatedOut,
     fromFiat,
     toFiat,
+    tokenInPrice,
+    tokenOutPrice,
 
     // Setters
     setAmountOut,
