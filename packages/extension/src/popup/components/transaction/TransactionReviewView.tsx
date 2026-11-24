@@ -39,6 +39,7 @@ export function TransactionReviewDialog({
   titleId,
   description,
   fullHeight = false,
+  quickShield = false,
   children
 }: {
   readonly open: boolean
@@ -47,17 +48,23 @@ export function TransactionReviewDialog({
   readonly titleId?: string
   readonly description: string
   readonly fullHeight?: boolean
+  readonly quickShield?: boolean
   readonly children: ReactNode
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         position="bottom"
+        overlayClassName={quickShield ? 'bg-black/55 backdrop-blur-none' : undefined}
         showCloseButton={false}
         aria-label={titleId ? undefined : title}
         aria-labelledby={titleId}
         scroll="body"
-        className={cn('gap-0 p-0', fullHeight && fullHeightTransactionDialogClassName)}
+        className={cn(
+          'gap-0 p-0',
+          quickShield && 'home-wallet-sheet h-[70dvh] rounded-t-[20px]',
+          fullHeight && fullHeightTransactionDialogClassName
+        )}
       >
         <DialogTitle className="sr-only" aria-hidden={titleId ? true : undefined}>
           {title}
@@ -81,7 +88,7 @@ interface TransactionReviewViewProps {
   readonly title: string
   readonly titleId?: string
   readonly showTitle?: boolean
-  readonly variant?: 'default' | 'figma'
+  readonly variant?: 'default' | 'figma' | 'quick-shield'
   readonly asset: TransactionReviewAsset | null
   readonly amount: string
   readonly amountPrefix?: string
@@ -183,7 +190,8 @@ export function TransactionReviewView({
   onCancel,
   onConfirm
 }: TransactionReviewViewProps) {
-  const figma = variant === 'figma'
+  const compact = variant === 'quick-shield'
+  const figma = variant !== 'default'
   if (submitting) {
     return (
       <TransactionResult
@@ -232,7 +240,12 @@ export function TransactionReviewView({
   return (
     <div className="flex min-h-0 flex-1 flex-col" aria-busy={preparing || confirming}>
       {showTitle && figma && (
-        <div className="flex h-14 shrink-0 items-center justify-between bg-background px-5">
+        <div
+          className={cn(
+            'flex h-14 shrink-0 items-center justify-between bg-background',
+            compact ? 'px-4' : 'px-5'
+          )}
+        >
           <h2 id={titleId} className="min-w-0 truncate text-lg font-medium leading-[23px]">
             {title}
           </h2>
@@ -250,7 +263,7 @@ export function TransactionReviewView({
       <div
         className={
           figma
-            ? 'min-h-0 flex-1 overflow-y-auto px-5 pb-4'
+            ? cn('min-h-0 flex-1 overflow-y-auto pb-4', compact ? 'px-4' : 'px-5')
             : 'min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-5'
         }
       >
@@ -263,12 +276,14 @@ export function TransactionReviewView({
         {summary ?? (
           <div
             className={
-              figma
-                ? 'flex flex-col items-start pb-14 pt-10'
-                : 'flex flex-col items-center pb-4 pt-4'
+              compact
+                ? 'flex flex-col items-center gap-2 pb-4'
+                : figma
+                  ? 'flex flex-col items-start pb-14 pt-10'
+                  : 'flex flex-col items-center pb-4 pt-4'
             }
           >
-            {!figma &&
+            {(!figma || compact) &&
               (asset ? (
                 <TokenIcon
                   assetId={asset.assetId}
@@ -276,16 +291,19 @@ export function TransactionReviewView({
                   icon={asset.icon}
                   blockchain={asset.blockchain}
                   nativeChain={asset.nativeChain}
-                  size="xl"
+                  showChainBadge={compact}
+                  size={compact ? 46 : 'xl'}
                 />
               ) : (
                 <Skeleton className="size-16 rounded-full" />
               ))}
             <div
               className={
-                figma
-                  ? 'max-w-full min-w-0 break-all text-left text-[40px] font-semibold leading-tight'
-                  : 'mt-3 max-w-full min-w-0 text-center text-xl font-bold leading-tight'
+                compact
+                  ? 'max-w-full min-w-0 text-center text-[32px] font-medium leading-tight'
+                  : figma
+                    ? 'max-w-full min-w-0 break-all text-left text-[40px] font-semibold leading-tight'
+                    : 'mt-3 max-w-full min-w-0 text-center text-xl font-bold leading-tight'
               }
             >
               {amount && asset ? (
@@ -293,13 +311,13 @@ export function TransactionReviewView({
                   value={amount}
                   symbol={asset.symbol}
                   prefix={amountPrefix}
-                  className={figma ? 'justify-start gap-x-1' : undefined}
+                  symbolClassName={compact ? 'text-lg font-normal' : undefined}
                 />
               ) : (
                 <Skeleton className="h-7 w-36" />
               )}
             </div>
-            {fiatValue && (
+            {fiatValue && !compact && (
               <p className={figma ? 'mt-2 text-base text-muted' : 'mt-2 text-sm text-muted'}>
                 {figma ? fiatValue : `≈${fiatValue}`}
               </p>
@@ -319,7 +337,10 @@ export function TransactionReviewView({
               key={`${row.label}-${index}`}
               className={
                 figma
-                  ? 'flex min-w-0 items-start justify-between gap-4 border-b border-border/60 py-4'
+                  ? cn(
+                      'flex min-w-0 items-start justify-between gap-4 border-b border-border/60',
+                      compact ? 'py-1.5 last:border-b-0' : 'py-4'
+                    )
                   : 'flex min-w-0 items-start justify-between gap-4 py-2.5'
               }
             >
@@ -350,24 +371,33 @@ export function TransactionReviewView({
         {error}
       </div>
 
-      <div className={figma ? 'page-footer' : 'shrink-0 p-5 pt-3'}>
+      <div className={cn(figma ? 'page-footer' : 'shrink-0 p-5 pt-3', compact && 'px-4 pb-6')}>
         {quoteChanges}
         <DialogFooter
-          className={figma ? 'grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2.5' : 'gap-3'}
+          className={
+            compact
+              ? 'grid-cols-1'
+              : figma
+                ? 'grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2.5'
+                : 'gap-3'
+          }
         >
-          <Button
-            variant="outline"
-            size={figma ? 'wallet' : 'default'}
-            className={figma ? 'border-white/10 bg-card' : undefined}
-            disabled={cancelDisabled || confirming}
-            onClick={onCancel}
-          >
-            Cancel
-          </Button>
+          {!compact && (
+            <Button
+              variant="outline"
+              size={figma ? 'wallet' : 'default'}
+              className={figma ? 'border-white/10 bg-card' : undefined}
+              disabled={cancelDisabled || confirming}
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+          )}
           <Button
             size={figma ? 'wallet' : 'default'}
             className={cn(
               'text-center',
+              compact && 'w-full',
               confirmTone === 'warning' && 'bg-warning text-black hover:bg-warning/90'
             )}
             disabled={confirmDisabled || preparing}

@@ -787,6 +787,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     required: { action: isPortfolioAction },
     optional: {
       forceDiscovery: isBoolean,
+      waitForTokenDiscovery: isBoolean,
       refreshConfidential: isBoolean,
       automatic: isBoolean,
       chainIds: isChainIdArray,

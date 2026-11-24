@@ -26,7 +26,8 @@ export type ConfidentialBalanceErrorCode =
   | 'authorization_required'
   | 'account_unavailable'
   | 'balance_unavailable'
-export type ExternalShieldDeposit = Omit<StoredExternalShieldDeposit, 'quote'>
+export type ExternalShieldDeposit = Omit<StoredExternalShieldDeposit, 'quote'> &
+  Readonly<{ minimumInputRaw?: string }>
 export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
 
 export { CONFIDENTIAL_SESSION_REQUIRED_ERROR as CONFIDENTIAL_PREVIEW_CONNECTION_ERROR } from '@/core/services/confidential-funding'
@@ -391,8 +392,16 @@ function parseExternalDeposit(value: unknown): ExternalShieldDeposit {
   ) {
     throw new Error('External Shield deposit response is invalid')
   }
-  const { quote: _quote, ...view } = value
-  return Object.freeze(view) as ExternalShieldDeposit
+  const { quote, ...view } = value
+  const minimumInputRaw = isRecord(quote) && isRecord(quote.quote) ? quote.quote.minAmountIn : null
+  return Object.freeze({
+    ...view,
+    ...(value.amountMode === 'minimum' &&
+    typeof minimumInputRaw === 'string' &&
+    /^[1-9]\d{0,77}$/.test(minimumInputRaw)
+      ? { minimumInputRaw }
+      : {})
+  }) as ExternalShieldDeposit
 }
 
 export function createConfidentialFundingClient(

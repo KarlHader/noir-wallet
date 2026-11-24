@@ -142,7 +142,7 @@ test.describe('EVM Blockscout history client', () => {
         snapshot: expect.objectContaining({ direction: 'contract' })
       }),
       expect.objectContaining({
-        id: `rpc:evm:eip155:1:${hash('d')}:token`,
+        id: expect.stringContaining(`rpc:evm:eip155:1:${hash('d')}:token-receive:`),
         source: 'rpc',
         status: 'final',
         completeness: 'complete',
@@ -259,7 +259,7 @@ test.describe('EVM Blockscout history client', () => {
 
     const [item] = await client.readAddressActivity({ scope: SCOPE, address: ADDRESS })
     expect(item).toMatchObject({
-      id: `rpc:evm:eip155:1:${hash('d')}:token`,
+      id: expect.stringContaining(`rpc:evm:eip155:1:${hash('d')}:token-receive:`),
       completeness: 'complete',
       segments: [
         {
@@ -327,7 +327,7 @@ test.describe('EVM Blockscout history client', () => {
       partialClient.readAddressActivity({ scope: SCOPE, address: ADDRESS })
     ).resolves.toEqual([
       expect.objectContaining({
-        id: `rpc:evm:eip155:1:${hash('d')}:token`,
+        id: expect.stringContaining(`rpc:evm:eip155:1:${hash('d')}:token-receive:`),
         completeness: 'partial'
       }),
       expect.objectContaining({

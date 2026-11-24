@@ -552,11 +552,11 @@ export function mergeTransactionsWithWasmHistory(
   const newWasmTransactions = reconciledWasmTransactions.filter(
     tx => !isDuplicateWasmRow(tx, localHashes)
   )
-  const newWasmHashes = new Set(newWasmTransactions.map(tx => normalizeTxHash(tx.txHash)))
+  const newWasmIds = new Set(newWasmTransactions.map(tx => tx.id))
   const preservedTransactions = refreshedCurrentTransactions.filter(tx => {
     if (isDuplicateWasmRow(tx, localHashes)) return false
     if (!tx.id.startsWith('wasm_')) return true
-    return !newWasmHashes.has(normalizeTxHash(tx.txHash))
+    return !newWasmIds.has(tx.id)
   })
   const mergedWasmTransactions = [...preservedTransactions, ...newWasmTransactions].sort(
     (a, b) => b.timestamp - a.timestamp
@@ -577,32 +577,46 @@ export function mergeTransactionsWithTransparentReceives(
   existingTransactions: Transaction[],
   transparentReceives: Transaction[]
 ): Transaction[] {
-  const receiptsByHash = new Map<string, Transaction>()
+  const receiptsById = new Map<string, Transaction>()
   const preservedTransactions: Transaction[] = []
   for (const transaction of [...existingTransactions, ...transparentReceives]) {
-    const hash = normalizeTxHash(transaction.txHash)
-    if (!hash || !isTransparentReceive(transaction)) {
+    if (!normalizeTxHash(transaction.txHash) || !isTransparentReceive(transaction)) {
       preservedTransactions.push(transaction)
       continue
     }
-    const existing = receiptsByHash.get(hash)
+    const previous = receiptsById.get(transaction.id)
+    receiptsById.set(
+      transaction.id,
+      previous ? mergeZcashReceiveObservation(previous, transaction) : transaction
+    )
+  }
+  const transactionScopedReceipts = new Map<string, Transaction>()
+  for (const transaction of receiptsById.values()) {
+    const hash = normalizeTxHash(transaction.txHash)
+    const id = transaction.id.toLowerCase()
+    if (id !== `wasm_${hash}` && id !== `rpc_treceive_${hash}`) {
+      preservedTransactions.push(transaction)
+      continue
+    }
+    const key = JSON.stringify([transaction.network, hash, transaction.to, transaction.amount])
+    const existing = transactionScopedReceipts.get(key)
     if (!existing) {
-      receiptsByHash.set(hash, transaction)
+      transactionScopedReceipts.set(key, transaction)
       continue
     }
     const [previous, observed] =
       existing.id.startsWith('rpc_treceive_') && transaction.id.startsWith('wasm_')
         ? [transaction, existing]
         : [existing, transaction]
-    receiptsByHash.set(
-      hash,
+    transactionScopedReceipts.set(
+      key,
       mergeZcashReceiveObservation(
         previous,
         previous.status === 'failed' ? { ...observed, id: previous.id } : observed
       )
     )
   }
-  return [...preservedTransactions, ...receiptsByHash.values()].sort(
+  return [...preservedTransactions, ...transactionScopedReceipts.values()].sort(
     (left, right) => right.timestamp - left.timestamp
   )
 }

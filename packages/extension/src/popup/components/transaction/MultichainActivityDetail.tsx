@@ -389,13 +389,6 @@ export function MultichainActivityDetail({
   const recipientMode = visibleItem.snapshot?.recipient?.address
     ? executionAddressModes.get(visibleItem.snapshot.recipient.address.toLowerCase())
     : undefined
-  const accountRoute =
-    visibleItem.kind === 'transfer' && senderMode && recipientMode && senderMode !== recipientMode
-      ? ([
-          senderMode === 'Confidential' ? 'private' : 'public',
-          recipientMode === 'Confidential' ? 'private' : 'public'
-        ] as const)
-      : null
   const interaction = getActivityInteractionPresentation(visibleItem, primaryChainId)
   const approval = getActivityApprovalDetails(visibleItem, assetMetadata)
   const title = swap
@@ -602,29 +595,6 @@ export function MultichainActivityDetail({
 
       <ActivityTransactionBody view={sharedView} showDate showAccountRoute />
       <div className="mb-6 space-y-4">
-        {!swap && primaryChainId?.startsWith('eip155:') && (
-          <DetailRow label="Account">
-            <span className="flex items-center gap-1.5">
-              {accountRoute ? (
-                <>
-                  <AccountDomainBadge domain={accountRoute[0]} />
-                  <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
-                  <AccountDomainBadge domain={accountRoute[1]} />
-                </>
-              ) : (
-                <AccountDomainBadge
-                  domain={
-                    visibleItem.assetDomains?.includes('shield')
-                      ? 'shield'
-                      : visibleItem.accountMode === 'private'
-                        ? 'private'
-                        : 'public'
-                  }
-                />
-              )}
-            </span>
-          </DetailRow>
-        )}
         {visibleItem.kind === 'shield' && !visibleItem.snapshot?.shield && (
           <DetailRow label="Privacy">
             <span className="flex items-center gap-1.5">

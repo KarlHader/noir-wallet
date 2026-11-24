@@ -3,7 +3,6 @@ import type { ConfidentialQuote } from './confidential-funding-model'
 import { parseAccountId } from '@/core/accounts/domain'
 import { parseAssetId, parseChainId } from '@/core/chains/registry'
 import { parseKeyDomainId } from '@/core/keyring/domain'
-import Big from '@/lib/big'
 import {
   parseTransactionGraph,
   parseTransactionId,
@@ -66,21 +65,6 @@ export type ExternalShieldDepositScope = Pick<
   ExternalShieldDeposit,
   'network' | 'keyDomainId' | 'accountId'
 >
-
-const EXTERNAL_SHIELD_QUOTE_USD = 20
-
-export function externalShieldQuoteAmountRaw(
-  decimals: number,
-  priceUsd: number | undefined
-): string | undefined {
-  if (priceUsd === undefined || !Number.isFinite(priceUsd) || priceUsd <= 0) return undefined
-  const amount = new Big(`1e${decimals}`)
-    .times(EXTERNAL_SHIELD_QUOTE_USD)
-    .div(priceUsd)
-    .toFixed(0, Big.roundUp)
-  if (amount.length > 78) return undefined
-  return amount === '0' ? '1' : amount
-}
 
 export type ExternalShieldDepositFailureStage =
   | 'request'

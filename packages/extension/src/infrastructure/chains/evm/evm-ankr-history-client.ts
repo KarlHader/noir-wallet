@@ -5,6 +5,7 @@ import { parseAssetId } from '@/core/chains/registry'
 import { readBoundedResponseText } from '@/lib/fetch-utils'
 import {
   mapEvmIndexedActivity,
+  indexedTransferLogIndex,
   EVM_ACTIVITY_ITEM_LIMIT,
   type EvmConfirmedReplacement,
   type FindEvmConfirmedReplacementInput,
@@ -139,6 +140,7 @@ function parseTransfer(
   }
   if (transfer.tokenDecimals !== asset.decimals) invalid('token decimals')
   const raw = transfer.valueRawInteger || transfer.value
+  const logIndex = indexedTransferLogIndex(transfer.logIndex)
   return Object.freeze({
     transactionHash: hash(transfer.transactionHash, 'token transaction hash'),
     blockHeight: transfer.blockHeight as number,
@@ -146,6 +148,7 @@ function parseTransfer(
     from: address(transfer.fromAddress, 'token sender'),
     to: address(transfer.toAddress, 'token recipient'),
     amountRaw: tokenInteger(raw, 'token amount'),
+    ...(logIndex === undefined ? {} : { logIndex }),
     timestamp: timestamp(transfer.timestamp as number, 'token timestamp'),
     assetId: parseAssetId(asset.assetId).id
   })

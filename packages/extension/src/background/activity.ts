@@ -32,6 +32,7 @@ import {
 } from '@/infrastructure/chains/bitcoin'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm'
 import { listEvmHistoryCacheByScope } from '@/infrastructure/chains/evm/evm-activity-history-cache'
+import { BASE_ACROSS_CHAIN_ID } from '@/infrastructure/chains/evm/evm-base-across-receipts'
 import { filterTrackedEvmTokenActivity } from '@/infrastructure/chains/evm/evm-indexed-activity'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 import type { StorageV2ReadRepository } from '@/ports/repositories'
@@ -272,6 +273,7 @@ export function createBackgroundActivityCoordinator(
     bitcoinNetwork,
     bitcoinHistory,
     evmBatchHistory,
+    baseAcrossHistory,
     evmHistorySources,
     solanaNetwork,
     solanaHistory,
@@ -377,6 +379,15 @@ export function createBackgroundActivityCoordinator(
         : evmHistorySources.filter(
             entry => chainIds.has(entry.chainId) && evmBatchHistory?.chainIds.has(entry.chainId)
           )
+    const baseAcrossResults =
+      baseAcrossHistory && historyPageCount === 1 && chainIds.has(BASE_ACROSS_CHAIN_ID)
+        ? Promise.allSettled(
+            selectedAddresses.map(async selected => ({
+              selected,
+              items: await baseAcrossHistory({ scope, address: selected.address })
+            }))
+          )
+        : []
     const batchResults = await Promise.allSettled(
       selectedAddresses.map(async selected => ({
         selected,
@@ -475,10 +486,22 @@ export function createBackgroundActivityCoordinator(
         )
       )
     }
+    for (const result of await baseAcrossResults) {
+      if (result.status !== 'fulfilled') continue
+      for (const item of result.value.items) {
+        items.push(scopeEvmActivityMode(item, result.value.selected.accountMode))
+      }
+    }
     if (onHistoryRead && historyPageCount === 1) {
       const records = await listEvmHistoryCacheByScope(scope).catch(() => [])
       for (const record of records) {
-        if (!chainIds.has(record.chainId) || record.successfulSyncAt === null) continue
+        if (
+          !chainIds.has(record.chainId) ||
+          record.successfulSyncAt === null ||
+          record.baseAcrossCursor
+        ) {
+          continue
+        }
         const selected = selectedAddresses.find(entry => entry.address === record.address)
         if (selected) onHistoryRead(scope, record.chainId, selected.accountMode)
       }
@@ -521,7 +544,9 @@ export function createBackgroundActivityCoordinator(
       const mode = record.address === account.main ? 'main' : 'private'
       if (mode === 'private' && !account.privateAvailable) continue
       if (accountMode !== 'all' && mode !== accountMode) continue
-      if (record.successfulSyncAt !== null) onHistoryRead?.(scope, record.chainId, mode)
+      if (record.successfulSyncAt !== null && !record.baseAcrossCursor) {
+        onHistoryRead?.(scope, record.chainId, mode)
+      }
       if (record.hasMore) {
         hasMoreByChainId.add(record.chainId)
         hasMoreKeys.add(`${record.chainId}:${record.address}`)

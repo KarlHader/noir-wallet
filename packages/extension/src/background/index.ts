@@ -53,7 +53,7 @@ import {
 import { toShieldProviderErrorShape } from '@/core/dapp/shield-provider'
 import { evmDAppOperationStore } from './evm-dapp-operation-store'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
-import { UI_CONFIG } from '@/config/extension'
+import { DEFAULT_REQUEST_TIMEOUT_MS, UI_CONFIG } from '@/config/extension'
 import { WALLET_CONFIG, ZEC_DECIMALS, type MnemonicWordCount } from '@/config/wallet'
 import {
   DEFAULT_NETWORK,
@@ -4208,6 +4208,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       sendResponse({ error: createEvmWalletRuntimeError('unavailable') })
       return true
     }
+    const refreshAll = message.action === 'refresh' && !Array.isArray(message.chainIds)
+    const waitForTokenDiscovery =
+      refreshAll &&
+      message.waitForTokenDiscovery === true &&
+      typeof message.expectedWalletId === 'string' &&
+      typeof message.expectedAccountId === 'string'
     const operation = async () => {
       const refreshChainIds = Array.isArray(message.chainIds)
         ? (message.chainIds as readonly string[])
@@ -4222,13 +4228,15 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           typeof message.expectedAccountId !== 'string'
         )
           return false
-        return coordinator.isActiveAccount({
-          keyDomainId: message.expectedWalletId,
-          accountId: message.expectedAccountId
-        })
+        return (
+          (await portfolioCoordinator?.isActiveAccount({
+            keyDomainId: message.expectedWalletId,
+            accountId: message.expectedAccountId
+          })) ?? false
+        )
       }
       if (!(await expectedScopeMatches())) throw new Error('Portfolio Account changed')
-      const model =
+      let model =
         message.action === 'read'
           ? await coordinator.readCachedActive()
           : await coordinator.refreshActive(refreshChainIds, {
@@ -4236,6 +4244,23 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               refreshConfidential: message.refreshConfidential !== false
             })
       if (!(await expectedScopeMatches())) throw new Error('Portfolio Account changed')
+      if (waitForTokenDiscovery && model?.chains.some(chain => chain.chain.family === 'evm')) {
+        const discovered = await withTimeout(
+          refreshDetectedEvmAssetsForActiveAccount(model.scope, message.forceDiscovery === true),
+          DEFAULT_REQUEST_TIMEOUT_MS,
+          'Initial token discovery'
+        )
+          .then(() => portfolioCoordinator?.readCachedActive())
+          .catch(() => null)
+        model = discovered ?? model
+        if (
+          !(await expectedScopeMatches()) ||
+          model.scope.keyDomainId !== message.expectedWalletId ||
+          model.scope.accountId !== message.expectedAccountId
+        ) {
+          throw new Error('Portfolio Account changed')
+        }
+      }
       if (message.action === 'refresh' && model) {
         void assetPriceService
           .readCached()
@@ -4266,13 +4291,14 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     void operation()
       .then(result => {
         sendResponse({ result })
-        // Discovery may wait on an indexer; return RPC balances before starting it.
-        if (message.action === 'refresh' && !Array.isArray(message.chainIds) && result.model) {
+        if (refreshAll && result.model) {
           void refreshIntentsProtocolAssets().catch(() => {})
-          void refreshDetectedEvmAssetsForActiveAccount(
-            result.model.scope,
-            message.forceDiscovery === true
-          ).catch(() => {})
+          if (!waitForTokenDiscovery) {
+            void refreshDetectedEvmAssetsForActiveAccount(
+              result.model.scope,
+              message.forceDiscovery === true
+            ).catch(() => {})
+          }
         }
       })
       .catch(error => {

@@ -483,6 +483,7 @@ function NativeZcashMoveForm({
             <QuickShieldReviewSkeleton />
           ))}
         <ZcashTransferReview
+          quickShield
           transfer={{
             ...transfer,
             review: {
@@ -1842,10 +1843,16 @@ function DepositWithdrawForm({
   stateChange.current = fixedShield?.onStateChange
   const reviewing = Boolean(activeShieldReview || shieldActivity || nativeReceiveState.reviewing)
   const busy = preparingShield || confirmingShield || cancellingShield || nativeReceiveState.busy
+  const submittingShield =
+    confirmingShield && confirmAttemptedPlanId.current === activeShieldReview?.planId
+  const fullHeight = Boolean(shieldActivity || submittingShield)
   useLayoutEffect(() => {
-    stateChange.current?.({ reviewing, busy })
-  }, [reviewing, busy])
-  useLayoutEffect(() => () => stateChange.current?.({ reviewing: false, busy: false }), [])
+    stateChange.current?.({ reviewing, busy, fullHeight })
+  }, [reviewing, busy, fullHeight])
+  useLayoutEffect(
+    () => () => stateChange.current?.({ reviewing: false, busy: false, fullHeight: false }),
+    []
+  )
   useEffect(() => {
     if (!preparedShield || preparedShield.key === shieldReviewKey) return
     if (confirmAttemptedPlanId.current !== preparedShield.review.planId)
@@ -2497,17 +2504,34 @@ function DepositWithdrawForm({
     return (
       <div className="page-container">
         <TransactionReviewView
-          variant="figma"
-          title={`Confirm ${actionLabel}`}
+          variant={quickMaximum ? 'quick-shield' : 'figma'}
+          title={quickMaximum ? 'Quick Shield' : `Confirm ${actionLabel}`}
           asset={{
             assetId: selected.asset.asset.id,
             symbol,
-            icon: selected.asset.metadata.iconUrl
+            icon: selected.asset.metadata.iconUrl,
+            blockchain: resolveChainIconAlias(
+              selected.chain.chain.family,
+              selected.chain.chain.displayName,
+              selected.chain.chain.id
+            )
           }}
           amount={currentAmount}
           fiatValue={moveReviewFiatValue}
           network={selected.chain.chain.displayName}
           rows={[
+            ...(quickMaximum
+              ? [
+                  {
+                    label: 'Provider',
+                    content: (
+                      <span className="inline-flex items-center gap-1.5">
+                        <ShieldProviderLogo provider="near-confidential" size={16} /> Confidential
+                      </span>
+                    )
+                  }
+                ]
+              : []),
             {
               label: 'From',
               content: (
@@ -2554,7 +2578,7 @@ function DepositWithdrawForm({
             (activeShieldReview.quoteTimeEstimateSeconds ?? 0) > 0
               ? [
                   {
-                    label: 'Estimated time',
+                    label: quickMaximum ? 'Est. time' : 'Estimated time',
                     content: formatShieldQuoteTime(activeShieldReview.quoteTimeEstimateSeconds!)
                   }
                 ]
@@ -2631,11 +2655,11 @@ function DepositWithdrawForm({
               />
             ) : undefined
           }
-          confirmLabel={confirmUncertain ? 'Check status' : actionLabel}
-          confirming={confirmingShield}
-          submitting={
-            confirmingShield && confirmAttemptedPlanId.current === activeShieldReview.planId
+          confirmLabel={
+            confirmUncertain ? 'Check status' : quickMaximum ? `Shield ${symbol}` : actionLabel
           }
+          confirming={confirmingShield}
+          submitting={submittingShield}
           cancelDisabled={cancellingShield}
           confirmDisabled={
             !scopeStillCurrent() ||

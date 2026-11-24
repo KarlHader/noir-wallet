@@ -10,6 +10,7 @@ export type ShieldFundsDirection = 'shield' | 'unshield'
 export interface ShieldFundsFormState {
   readonly reviewing: boolean
   readonly busy: boolean
+  readonly fullHeight: boolean
 }
 
 export interface ShieldFundsFormProps {

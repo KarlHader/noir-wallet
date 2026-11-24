@@ -185,7 +185,7 @@ test.describe('Confirmed transaction wallet settlement', () => {
   })
 })
 
-test.describe('Withdraw and Received merge via destinationTxHash', () => {
+test.describe('Withdraw and Received sharing destinationTxHash', () => {
   test('localTxHashSet includes destinationTxHash from withdraw records', () => {
     const withdrawTx = tx({
       id: 'tx_withdraw_1',
@@ -198,7 +198,7 @@ test.describe('Withdraw and Received merge via destinationTxHash', () => {
     expect(hashes.has(normalizeTxHash('dest_zcash_hash'))).toBe(true)
   })
 
-  test('WASM receive matching withdraw destinationTxHash is deduplicated', () => {
+  test('keeps a shielded WASM receive matching a withdraw destinationTxHash', () => {
     const withdrawTx = tx({
       id: 'tx_withdraw_1',
       txHash: 'near_hash',
@@ -212,7 +212,7 @@ test.describe('Withdraw and Received merge via destinationTxHash', () => {
       fromType: 'shielded'
     })
     const hashes = localTxHashSet([withdrawTx])
-    expect(isDuplicateWasmRow(wasmReceive, hashes)).toBe(true)
+    expect(isDuplicateWasmRow(wasmReceive, hashes)).toBe(false)
   })
 
   test('unrelated WASM receive with same amount is NOT deduplicated (no fuzzy match)', () => {

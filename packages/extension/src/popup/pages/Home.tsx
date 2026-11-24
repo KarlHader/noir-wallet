@@ -24,7 +24,9 @@ import { hasLegacyOrchardBalance } from '@/lib/legacy-pool-privacy-notice'
 import { WalletActionButton } from '@/popup/components/portfolio/WalletActionButton'
 import { WalletActionIcon } from '@/popup/components/portfolio/WalletActionIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
-import { HomeAssetView } from '../components/portfolio/HomeAssetView'
+import { useHomeQuickShield } from '../components/portfolio/HomeQuickShield'
+import { MultichainPortfolioPanel } from '../components/portfolio/MultichainPortfolioPanel'
+import { Button } from '../components/ui/button'
 import { HomeShieldProviders } from '../components/portfolio/ShieldProviderGrid'
 import { resolveConfidentialDetailAssetId } from '../services/near-confidential-holdings'
 import { getHomeZcashSyncIssue } from '../services/home-zcash-sync-issue'
@@ -193,11 +195,14 @@ export function Home() {
     }
   }, [effectiveWalletId, effectiveAccountId, currentNetwork, swapEnabledChainKey, swapSelections])
   const {
-    model: multichainPortfolio,
-    status: portfolioLoadStatus,
+    model: portfolioSnapshot,
+    status: portfolioSnapshotStatus,
     settled: portfolioSettled,
+    initialChainBalancesPending,
     refresh: refreshPortfolio
   } = useHomePortfolio(effectiveWalletId, effectiveAccountId)
+  const multichainPortfolio = initialChainBalancesPending ? null : portfolioSnapshot
+  const portfolioLoadStatus = initialChainBalancesPending ? 'loading' : portfolioSnapshotStatus
   const supportsEvmDAppExecutionMode =
     storageV2Account?.networks.some(network => network.chain.family === 'evm') ??
     Boolean(evmOperationsEnabled && currentAccount)
@@ -732,7 +737,22 @@ export function Home() {
   const showZcashSyncStatus = supportsZcash && walletMode === 'public'
   const showInlineSyncProgress = showZcashSyncStatus && isSyncing
   const syncIssue = showZcashSyncStatus && !isSyncing ? getHomeZcashSyncIssue(syncReason) : null
-
+  const quickShield = useHomeQuickShield({
+    active: !accountContextChanging,
+    activeAccount: storageV2Account,
+    walletId: effectiveWalletId,
+    accountId: effectiveAccountId,
+    domain: assetDomain,
+    model: multichainPortfolio,
+    prices: assetPrices,
+    balancesHidden
+  })
+  const shieldPortfolioEmpty =
+    portfolioSettled &&
+    !balanceDisplay.loading.shield &&
+    multichainPortfolio?.assets.every(asset => getAssetDomainRaw(asset, 'shield') === '0')
+  const showShieldEmpty = isShieldView && quickShield.eligible && shieldPortfolioEmpty
+  const showProviders = isShieldView
   const dappModeControl =
     !hardwareWallet && supportsEvmDAppExecutionMode
       ? {
@@ -785,80 +805,90 @@ export function Home() {
         open={legacyPoolPrivacyNotice.isOpen}
         onDismiss={legacyPoolPrivacyNotice.dismiss}
       />
-      {/* Header */}
-      <header className="flex h-[58px] shrink-0 items-center justify-between gap-3 px-4">
-        <AccountSwitcher
-          accountName={accountDisplayName}
-          accountIdentity={effectiveAccount}
-          accountCatalog={accountCatalog}
-          publicAccountCatalog={publicAccountCatalog}
-          accountCatalogError={accountNetworksError}
-          defaultEvmMode={walletMode}
-          className="min-w-0"
-        />
-        <div data-testid="home-header-actions" className="flex items-center justify-end">
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                aria-label="Open menu"
-                title="Menu"
-                className="wallet-interactive flex size-7 items-center justify-center rounded-md hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-              >
-                <Icon icon="lucide:menu" width={21} height={21} />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="end" sideOffset={8} className="w-48 border-white/10 p-1">
-              {(
-                [
-                  ['Accounts', 'lucide:wallet', '/account-list'],
-                  ['DApp connections', 'lucide:plug', '/dapp-connections'],
-                  ['Settings', 'lucide:settings', '/settings']
-                ] as const
-              ).map(([label, icon, path]) => (
-                <button
-                  key={path}
-                  type="button"
-                  onClick={() =>
-                    path === '/dapp-connections' ? void handleDAppClick() : navigate.navigate(path)
-                  }
-                  disabled={
-                    path === '/dapp-connections' && (!modeActionsReady || modeSwitchPending)
-                  }
-                  className="wallet-interactive flex h-10 w-full items-center gap-3 rounded-md px-3 text-left text-sm hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  <Icon icon={icon} width={16} height={16} />
-                  {label}
-                </button>
-              ))}
-            </PopoverContent>
-          </Popover>
-        </div>
-      </header>
-
-      <ExtensionUpdateBanner />
-
       <div
         data-testid="home-scroll-container"
         className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
       >
-        <HomeBalanceOverview
-          domain={assetDomain}
-          display={balanceDisplay}
-          showIncognito={!hardwareWallet}
-          hidden={balancesHidden}
-          incognitoEnabled={Boolean(enabledIncognito || existingIncognito)}
-          modeSelectionDisabled={
-            accountContextChanging || !effectiveAccountId || !effectiveWalletId
-          }
-          onToggleHidden={() => setBalancesHidden(!balancesHidden)}
-          onSelect={selectAssetDomain}
-        />
+        <div className="home-wallet-header shrink-0 overflow-hidden rounded-b-[20px]">
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 px-4">
+            <AccountSwitcher
+              accountName={accountDisplayName}
+              accountIdentity={effectiveAccount}
+              accountCatalog={accountCatalog}
+              publicAccountCatalog={publicAccountCatalog}
+              accountCatalogError={accountNetworksError}
+              defaultEvmMode={walletMode}
+              className="min-w-0"
+            />
+            <div data-testid="home-header-actions" className="flex items-center justify-end">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Open menu"
+                    title="Menu"
+                    className="wallet-interactive flex size-7 items-center justify-center rounded-md hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                  >
+                    <Icon icon="lucide:menu" width={21} height={21} />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="end" sideOffset={8} className="w-48 border-white/10 p-1">
+                  {(
+                    [
+                      ['Accounts', 'lucide:wallet', '/account-list'],
+                      ['DApp connections', 'lucide:plug', '/dapp-connections'],
+                      ['Settings', 'lucide:settings', '/settings']
+                    ] as const
+                  ).map(([label, icon, path]) => (
+                    <button
+                      key={path}
+                      type="button"
+                      onClick={() =>
+                        path === '/dapp-connections'
+                          ? void handleDAppClick()
+                          : navigate.navigate(path)
+                      }
+                      disabled={
+                        path === '/dapp-connections' && (!modeActionsReady || modeSwitchPending)
+                      }
+                      className="wallet-interactive flex h-10 w-full items-center gap-3 rounded-md px-3 text-left text-sm hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <Icon icon={icon} width={16} height={16} />
+                      {label}
+                    </button>
+                  ))}
+                </PopoverContent>
+              </Popover>
+            </div>
+          </header>
+
+          <HomeBalanceOverview
+            key={modeScopeKey}
+            domain={assetDomain}
+            display={balanceDisplay}
+            showIncognito={!hardwareWallet}
+            hidden={balancesHidden}
+            incognitoEnabled={Boolean(enabledIncognito || existingIncognito)}
+            modeSelectionDisabled={
+              accountContextChanging || !effectiveAccountId || !effectiveWalletId
+            }
+            quickShieldLabel={
+              !shieldPortfolioEmpty && quickShield.eligible
+                ? (quickShield.label ?? 'Assets')
+                : undefined
+            }
+            onQuickShield={quickShield.onOpen}
+            onToggleHidden={() => setBalancesHidden(!balancesHidden)}
+            onSelect={selectAssetDomain}
+          />
+        </div>
+
+        <ExtensionUpdateBanner />
 
         <div
           data-testid="home-mode-content"
           data-wallet-palette={assetDomain === 'public' ? 'public' : undefined}
-          className="home-mode-content flex min-h-0 flex-1 flex-col rounded-t-[20px] bg-background pt-4 text-foreground"
+          className="home-mode-content flex min-h-0 flex-1 flex-col bg-background pt-5 text-foreground"
         >
           {accountNetworksError && !storageV2Account && (
             <InlineError
@@ -964,8 +994,8 @@ export function Home() {
             <div className="home-portfolio-tabs flex h-10 shrink-0 items-center gap-3 bg-background px-[17px]">
               <PageTabsList className="h-full flex-1 gap-9">
                 <PageTabsTrigger value="assets">Tokens</PageTabsTrigger>
-                <PageTabsTrigger value={isShieldView ? 'providers' : 'dapp'}>
-                  {isShieldView ? 'Providers' : 'DApps'}
+                <PageTabsTrigger value={showProviders ? 'providers' : 'dapp'}>
+                  {showProviders ? 'Providers' : 'DApps'}
                 </PageTabsTrigger>
                 <PageTabsTrigger value="activity">Activity</PageTabsTrigger>
               </PageTabsList>
@@ -1021,7 +1051,7 @@ export function Home() {
                   )}
                 </div>
               )}
-              {isShieldView ? (
+              {showProviders ? (
                 <TabsContent value="providers" className="mt-0">
                   {activeTab === 'providers' && (
                     <HomeShieldProviders
@@ -1046,39 +1076,61 @@ export function Home() {
                 value="assets"
                 className="mt-0 flex flex-col data-[state=inactive]:hidden"
               >
-                <HomeAssetView
-                  active={activeTab === 'assets' && !accountContextChanging}
-                  domain={assetDomain}
-                  activeAccount={storageV2Account}
-                  walletId={effectiveWalletId}
-                  accountId={effectiveAccountId}
-                  model={multichainPortfolio}
-                  status={portfolioLoadStatus}
-                  accountLoading={
-                    !storageV2Account &&
-                    !accountNetworksError &&
-                    (accountNetworksLoading || accountContextChanging)
-                  }
-                  prices={assetPrices}
-                  priceStatus={assetPriceStatus}
-                  balancesHidden={balancesHidden}
-                  onRefresh={refreshPortfolio}
-                  onRetryPrices={refreshAssetPrices}
-                  onSelectAsset={assetId => {
-                    navigate.navigate(
-                      `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=${assetDomain}&mode=${walletMode}`
-                    )
-                  }}
-                  onSelectConfidentialAsset={tokenId => {
-                    const assetId = resolveConfidentialDetailAssetId(multichainPortfolio, tokenId)
-                    navigate.navigate(
-                      assetId
-                        ? `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=shield&mode=${walletMode}`
-                        : `/shield-provider?provider=near-confidential&assetId=${encodeURIComponent(tokenId)}`
-                    )
-                  }}
-                  onManageTokens={() => navigate.navigate('/manage-tokens')}
-                />
+                {showShieldEmpty ? (
+                  <section className="mx-4 mt-12 rounded-lg bg-wallet-surface px-4 py-6 text-center">
+                    <p className="text-base font-medium">
+                      {quickShield.label
+                        ? `${quickShield.label} available to shield`
+                        : 'Assets available to shield'}
+                    </p>
+                    <p className="mt-1 text-sm text-wallet-secondary">
+                      Move eligible tokens from Public to Shield.
+                    </p>
+                    <Button
+                      size="wallet"
+                      className="mt-4 h-10 gap-1 px-7"
+                      aria-haspopup="dialog"
+                      onClick={event => quickShield.onOpen(event.currentTarget)}
+                    >
+                      Shield tokens now{' '}
+                      <Icon icon="lucide:arrow-right" width={14} aria-hidden="true" />
+                    </Button>
+                  </section>
+                ) : (
+                  <MultichainPortfolioPanel
+                    domain={assetDomain}
+                    activeAccount={storageV2Account}
+                    walletId={effectiveWalletId}
+                    accountId={effectiveAccountId}
+                    model={multichainPortfolio}
+                    status={portfolioLoadStatus}
+                    accountLoading={
+                      !storageV2Account &&
+                      !accountNetworksError &&
+                      (accountNetworksLoading || accountContextChanging)
+                    }
+                    prices={assetPrices}
+                    priceStatus={assetPriceStatus}
+                    balancesHidden={balancesHidden}
+                    onShieldForAsset={quickShield.onShieldForAsset}
+                    onRefresh={refreshPortfolio}
+                    onRetryPrices={refreshAssetPrices}
+                    onSelectAsset={assetId => {
+                      navigate.navigate(
+                        `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=${assetDomain}&mode=${walletMode}`
+                      )
+                    }}
+                    onSelectConfidentialAsset={tokenId => {
+                      const assetId = resolveConfidentialDetailAssetId(multichainPortfolio, tokenId)
+                      navigate.navigate(
+                        assetId
+                          ? `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=shield&mode=${walletMode}`
+                          : `/shield-provider?provider=near-confidential&assetId=${encodeURIComponent(tokenId)}`
+                      )
+                    }}
+                    onManageTokens={() => navigate.navigate('/manage-tokens')}
+                  />
+                )}
                 {showV1NetworkGuide && currentWalletId && currentAccountId && (
                   <div className="mt-auto pt-5">
                     <button
@@ -1175,6 +1227,7 @@ export function Home() {
       )}
 
       {speedUpSheet}
+      {quickShield.dialog}
     </div>
   )
 }

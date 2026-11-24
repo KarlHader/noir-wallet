@@ -1,6 +1,10 @@
-import type { ActivityItem, ActivityScope } from '@/core/activity'
+import { isActivityReceive, type ActivityItem, type ActivityScope } from '@/core/activity'
 import { EvmRpcError } from './evm-rpc-client'
-import { isZeroValueEvmTokenActivity } from './evm-indexed-activity'
+import {
+  isIndexedBaseAcrossReceipt,
+  isZeroValueEvmTokenActivity,
+  removeSupersededEvmReceipts
+} from './evm-indexed-activity'
 import {
   indexedDbEvmHistoryCache,
   type EvmHistoryCacheRecord,
@@ -113,7 +117,7 @@ function normalizeItems(
     if (!byId.has(normalized.id)) byId.set(normalized.id, normalized)
   }
   return rescopeItems(
-    [...byId.values()]
+    removeSupersededEvmReceipts([...byId.values()])
       .sort(
         (left, right) =>
           right.updatedAt - left.updatedAt ||
@@ -146,6 +150,7 @@ function incrementalStartBlock(
   if (record.items.some(isLegacyInferredEvmActivity)) return undefined
   if (record.items.some(item => item.completeness === 'partial')) return undefined
   const heights = record.items.flatMap(item => {
+    if (isIndexedBaseAcrossReceipt(item)) return []
     const height = itemBlockHeight(item)
     return height === null ? [] : [height]
   })
@@ -163,6 +168,7 @@ function mergeItems(
     const segment = item.segments.find(value => value.role === 'origin')
     if (
       item.source === 'rpc' &&
+      !isActivityReceive(item) &&
       segment?.target.kind === 'onchain' &&
       segment.evidence?.transactionHash &&
       item.id.startsWith(`rpc:evm:${segment.target.chainId}:${segment.evidence.transactionHash}:`)
@@ -172,6 +178,7 @@ function mergeItems(
       for (const [id, cached] of byId) {
         if (
           cached.source === 'rpc' &&
+          !isActivityReceive(cached) &&
           cached.id.startsWith(`rpc:evm:${chainId}:${hash}:`) &&
           cached.segments?.some(
             value =>

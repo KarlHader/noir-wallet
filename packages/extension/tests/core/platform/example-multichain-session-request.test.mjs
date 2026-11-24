@@ -10,7 +10,11 @@ test('SDK example requests only the scopes exposed by a two-chain wallet', () =>
 
   assert.deepEqual(Object.keys(request.scopes).sort(), [
     'bip122:00040fe8ec8471911baa1db1266ea15d',
-    'eip155:1'
+    'eip155:1',
+    'eip155:137',
+    'eip155:42161',
+    'eip155:56',
+    'eip155:8453'
   ])
   assert.deepEqual(request.scopes['eip155:1'].methods, [
     'eth_chainId',
@@ -33,6 +37,10 @@ test('SDK example preserves all available scopes and the selected testnet EVM ch
     'bip122:000000000933ea01ad0ee984209779ba',
     'bip122:05a60a92d99d85997cce3b87616c089f',
     'eip155:11155111',
+    'eip155:421614',
+    'eip155:80002',
+    'eip155:84532',
+    'eip155:97',
     'near:testnet',
     'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
   ])

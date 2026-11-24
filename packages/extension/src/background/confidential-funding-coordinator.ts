@@ -13,7 +13,6 @@ import {
   projectExternalDepositResult
 } from '@/lib/analytics/operations'
 import {
-  externalShieldQuoteAmountRaw,
   hasExternalShieldDepositFunding,
   isExternalShieldDepositExpired,
   shouldAutoRefreshExternalShieldDeposit,
@@ -923,7 +922,6 @@ export class ConfidentialFundingCoordinator {
     const quote = minimumMode
       ? await this.options.api.quoteFlexibleDeposit({
           originAsset: input.source.protocolAssetId,
-          quoteAmountRaw: externalShieldQuoteAmountRaw(asset.metadata.decimals, token?.price),
           signerId: identity.address,
           refundTo: input.refundAddress,
           slippageBps
@@ -1615,7 +1613,8 @@ export class ConfidentialFundingCoordinator {
       spendRaw: depositQuote?.quote.amountOut ?? input.source.amountRaw,
       signerId: sourceIdentity.address,
       recipient: destinationAddress,
-      slippageBps: input.slippageBps
+      slippageBps: input.slippageBps,
+      settlement: 'cluster'
     })
     const currentIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
     this.assertSameAccount(sourceIdentity, currentIdentity)
@@ -2318,7 +2317,8 @@ export class ConfidentialFundingCoordinator {
       spendRaw,
       signerId: sourceIdentity.address,
       recipient: destinationAddress,
-      slippageBps: input.slippageBps
+      slippageBps: input.slippageBps,
+      settlement: 'cluster'
     })
     const prepared = depositQuote
       ? await buildEvmTransfer({
@@ -3628,6 +3628,7 @@ export class ConfidentialFundingCoordinator {
     readonly signerId: string
     readonly recipient: string
     readonly slippageBps: number
+    readonly settlement?: 'cluster'
   }): Promise<Readonly<{ amounts: readonly string[]; quotes: readonly ConfidentialQuote[] }>> {
     const attempt = async (count: number) => {
       const amounts = splitConfidentialFundingAmount(input.spendRaw, count)
@@ -3644,6 +3645,7 @@ export class ConfidentialFundingCoordinator {
             refundType: 'CONFIDENTIAL_INTENTS',
             recipientType: 'DESTINATION_CHAIN',
             slippageBps: input.slippageBps,
+            settlement: input.settlement,
             dry: true
           })
         )
@@ -3855,6 +3857,7 @@ export class ConfidentialFundingCoordinator {
           refundType: 'CONFIDENTIAL_INTENTS',
           recipientType: 'DESTINATION_CHAIN',
           slippageBps: plan.slippageBps,
+          settlement: 'cluster',
           dry: false
         })
       )

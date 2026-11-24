@@ -1187,6 +1187,7 @@ function ShieldSwapForm({
         <SwapAssetCard
           direction="From"
           token={fromToken}
+          fallbackAssetId={preferredSourceId ?? undefined}
           fallbackSymbol={
             sharedPair?.tokenInSymbol ?? findSavedSwapToken(tokens, preferredSourceId)?.symbol
           }
@@ -1248,6 +1249,7 @@ function ShieldSwapForm({
             setError(null)
           }}
           token={toToken}
+          fallbackAssetId={preferredDestinationId ?? undefined}
           fallbackSymbol={
             sharedPair?.tokenOutSymbol ?? findSavedSwapToken(tokens, preferredDestinationId)?.symbol
           }

@@ -16,6 +16,7 @@ export interface PortfolioCacheScope {
 
 interface PortfolioRefreshOptions {
   readonly forceDiscovery?: boolean
+  readonly waitForTokenDiscovery?: boolean
   readonly forceRefresh?: boolean
   readonly refreshConfidential?: boolean
   readonly allowStaleOnError?: boolean
@@ -53,6 +54,7 @@ export async function refreshPortfolioFromCache(
   try {
     const refreshed = await evmWalletClient.getPortfolio('refresh', {
       forceDiscovery: options.forceDiscovery,
+      waitForTokenDiscovery: options.waitForTokenDiscovery,
       refreshConfidential: options.refreshConfidential,
       chainIds:
         options.refreshChainIds?.length || options.additionalChainIds?.length

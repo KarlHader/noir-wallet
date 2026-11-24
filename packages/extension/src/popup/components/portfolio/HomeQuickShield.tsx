@@ -5,7 +5,6 @@ import { formatTokenQuantity, formatFiatAmount } from '@/lib/number-format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { cn } from '@/lib/utils'
 import { useWalletStore } from '@/store/wallet-store'
-import type { Network } from '@/types'
 import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { isPortfolioModelForScope } from '@/popup/services/portfolio-cache'
 import {
@@ -21,12 +20,13 @@ import { SHIELD_PROVIDERS, ShieldProviderLogo } from './shield-providers'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { Dialog, DialogContent, DialogTitle } from '@/popup/components/ui/dialog'
 import { Button } from '@/popup/components/ui/button'
-import {
-  MultichainPortfolioPanel,
-  type MultichainPortfolioPanelProps
-} from './MultichainPortfolioPanel'
+import { fullHeightTransactionDialogClassName } from '@/popup/components/transaction/TransactionResult'
+import type { MultichainPortfolioPanelProps } from './MultichainPortfolioPanel'
 
-interface HomeAssetViewProps extends Omit<MultichainPortfolioPanelProps, 'onShieldForAsset'> {
+interface HomeQuickShieldProps extends Pick<
+  MultichainPortfolioPanelProps,
+  'activeAccount' | 'walletId' | 'accountId' | 'model' | 'domain' | 'prices' | 'balancesHidden'
+> {
   readonly active: boolean
 }
 
@@ -38,38 +38,32 @@ type QuickShieldSelection =
       readonly provider: ShieldProvider
     }
 
-export function HomeAssetView(props: HomeAssetViewProps) {
-  const network = useWalletStore(state => state.currentNetwork)
-  const scopeKey = JSON.stringify([
-    network,
-    props.walletId,
-    props.accountId,
-    props.domain,
-    props.active
-  ])
-  return <ScopedHomeAssetView key={scopeKey} {...props} network={network} />
-}
-
-function ScopedHomeAssetView({
+export function useHomeQuickShield({
   active,
-  network,
-  ...panel
-}: HomeAssetViewProps & { readonly network: Network }) {
-  const [selection, setSelection] = useState<QuickShieldSelection | null>(null)
+  activeAccount,
+  walletId,
+  accountId,
+  model,
+  domain,
+  prices,
+  balancesHidden = false
+}: HomeQuickShieldProps) {
+  const network = useWalletStore(state => state.currentNetwork)
+  const scopeKey = JSON.stringify([network, walletId, accountId, domain, active])
+  const [draft, setDraft] = useState<{ scopeKey: string; selection: QuickShieldSelection | null }>({
+    scopeKey,
+    selection: null
+  })
+  if (draft.scopeKey !== scopeKey) setDraft({ scopeKey, selection: null })
+  const selection = draft.scopeKey === scopeKey ? draft.selection : null
+  const setSelection = (next: QuickShieldSelection | null) =>
+    setDraft({ scopeKey, selection: next })
   const [formState, setFormState] = useState<ShieldFundsFormState>({
     busy: false,
-    reviewing: false
+    reviewing: false,
+    fullHeight: false
   })
   const entryButton = useRef<HTMLButtonElement>(null)
-  const {
-    activeAccount,
-    walletId,
-    accountId,
-    model,
-    domain,
-    prices,
-    balancesHidden = false
-  } = panel
   const account =
     active &&
     (domain === 'public' || domain === 'shield') &&
@@ -111,34 +105,46 @@ function ScopedHomeAssetView({
     if (!formState.busy) setSelection(null)
   }
   const formOpen = selection?.step === 'form'
+  const formHeight = formState.fullHeight
+    ? fullHeightTransactionDialogClassName
+    : formState.reviewing
+      ? 'h-[70dvh]'
+      : 'h-[50dvh]'
   const selected = selection && selection.step !== 'asset' ? byId.get(selection.assetId) : null
+  const { totalUsd, partial } = summarizeQuickShieldAssets(assets)
+  const label =
+    assets.length === 0
+      ? undefined
+      : balancesHidden
+        ? '••••'
+        : totalUsd === null
+          ? undefined
+          : `≈ ${formatFiatAmount(totalUsd, { showSign: true })}${partial ? ' (priced assets)' : ''}`
 
-  return (
-    <>
-      <MultichainPortfolioPanel
-        {...panel}
-        listHeader={
-          domain === 'shield' &&
-          assets.length > 0 && (
-            <QuickShieldSummary assets={assets} balancesHidden={balancesHidden} onOpen={open} />
-          )
-        }
-        onShieldForAsset={assetId => {
-          const asset = byId.get(assetId)
-          return asset ? trigger => open(trigger, asset) : undefined
-        }}
-      />
-      <Dialog open={Boolean(selection && account)} onOpenChange={visible => !visible && close()}>
+  return {
+    eligible: assets.length > 0,
+    label,
+    onOpen: (trigger: HTMLButtonElement) => open(trigger, null),
+    onShieldForAsset: (assetId: string) => {
+      const asset = byId.get(assetId)
+      return asset ? (trigger: HTMLButtonElement) => open(trigger, asset) : undefined
+    },
+    dialog: (
+      <Dialog
+        key={scopeKey}
+        open={Boolean(selection && account)}
+        onOpenChange={visible => !visible && close()}
+      >
         <DialogContent
           position="bottom"
+          overlayClassName="bg-black/55 backdrop-blur-none"
           scroll="body"
           showCloseButton={!formOpen}
-          className={formOpen ? 'h-[50dvh] gap-0 p-0' : 'gap-3 px-4 pt-5 pb-4'}
-          style={
-            formOpen && formState.reviewing
-              ? { height: '100dvh', maxHeight: '100dvh', borderRadius: 0 }
-              : undefined
-          }
+          className={cn(
+            'home-wallet-sheet rounded-t-[20px]',
+            formOpen ? 'gap-0 p-0' : 'gap-3 px-4 pt-5 pb-4',
+            formOpen && formHeight
+          )}
           aria-describedby={undefined}
           onEscapeKeyDown={event => {
             if (formState.busy) event.preventDefault()
@@ -153,12 +159,17 @@ function ScopedHomeAssetView({
             trigger.focus()
           }}
         >
-          <DialogTitle className={formOpen ? 'sr-only' : 'min-h-7 pr-10 leading-7'}>
-            {formOpen
-              ? 'Shield'
-              : selected
-                ? `Shield ${formatSymbol(selected.asset.metadata.symbol)}`
-                : 'Select asset'}
+          <DialogTitle
+            asChild={formOpen}
+            className={formOpen ? 'sr-only' : 'min-h-7 pr-10 leading-7'}
+          >
+            {formOpen ? (
+              <span>Quick Shield</span>
+            ) : selected ? (
+              `Shield ${formatSymbol(selected.asset.metadata.symbol)}`
+            ) : (
+              'Select asset'
+            )}
           </DialogTitle>
           {selection && account && (
             <div
@@ -214,60 +225,8 @@ function ScopedHomeAssetView({
           )}
         </DialogContent>
       </Dialog>
-    </>
-  )
-}
-
-function QuickShieldSummary({
-  assets,
-  balancesHidden,
-  onOpen
-}: {
-  readonly assets: readonly QuickShieldAsset[]
-  readonly balancesHidden: boolean
-  readonly onOpen: (trigger: HTMLButtonElement, asset: null) => void
-}) {
-  const { totalUsd, partial } = summarizeQuickShieldAssets(assets)
-  return (
-    <section
-      aria-label="Assets available to shield"
-      className="mx-4 mt-2 mb-3 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border border-border bg-wallet-surface px-3 py-2"
-    >
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-        <div aria-hidden="true" className="flex shrink-0 items-center -space-x-2">
-          {assets.slice(0, 3).map(row => (
-            <QuickShieldTokenIcon
-              key={row.asset.asset.id}
-              row={row}
-              size={24}
-              className="rounded-full ring-2 ring-wallet-surface"
-            />
-          ))}
-        </div>
-        {assets.length > 3 && (
-          <span className="shrink-0 text-xs text-muted">+{assets.length - 3}</span>
-        )}
-        <div className="min-w-0">
-          <p className="text-sm font-medium">Available to shield</p>
-          <p className="text-xs text-muted">
-            {balancesHidden
-              ? '••••'
-              : totalUsd === null
-                ? 'Value unavailable'
-                : `≈ ${formatFiatAmount(totalUsd, { showSign: true })}${partial ? ' · Partial estimate' : ''}`}
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        aria-haspopup="dialog"
-        className="wallet-interactive min-h-11 shrink-0 rounded-lg px-2 text-sm font-semibold text-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-primary"
-        onClick={event => onOpen(event.currentTarget, null)}
-      >
-        Shield
-      </button>
-    </section>
-  )
+    )
+  }
 }
 
 function QuickShieldAssetList({
@@ -314,13 +273,11 @@ function QuickShieldAssetList({
 function QuickShieldTokenIcon({
   row,
   size,
-  showChainBadge = false,
-  className
+  showChainBadge = false
 }: {
   readonly row: QuickShieldAsset
   readonly size: number
   readonly showChainBadge?: boolean
-  readonly className?: string
 }) {
   return (
     <TokenIcon
@@ -330,7 +287,7 @@ function QuickShieldTokenIcon({
       blockchain={resolveChainIconAlias(row.chain.family, row.chain.displayName, row.chain.id)}
       showChainBadge={showChainBadge}
       size={size}
-      className={cn('shrink-0', className)}
+      className="shrink-0"
     />
   )
 }
