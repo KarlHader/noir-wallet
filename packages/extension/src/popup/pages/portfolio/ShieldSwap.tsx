@@ -88,6 +88,8 @@ import {
   formatShieldSwapPreviewRate,
   matchesShieldSwapReview,
   nativeZecDestinationKey,
+  resolveShieldFormCatalogToken,
+  shieldFormDisplaySymbol,
   shieldSwapFormAmountError,
   shieldSwapFormBalance,
   shieldSwapPickerChain
@@ -454,12 +456,18 @@ function ShieldSwapForm({
     preview && to
       ? formatBaseUnitDecimalAmount(preview.amountOutRaw, to.asset.metadata.decimals)
       : null
-  const fromToken = tokens.find(token => token.assetId === from?.managed.protocolAssetId) ?? null
-  const toToken = tokens.find(token => token.assetId === to?.managed.protocolAssetId) ?? null
+  const fromToken = resolveShieldFormCatalogToken(tokens, from)
+  const toToken = resolveShieldFormCatalogToken(tokens, to)
+  const fromDisplaySymbol = shieldFormDisplaySymbol(from)
+  const toDisplaySymbol = shieldFormDisplaySymbol(to)
   const rememberToken = (side: 'in' | 'out', asset: ShieldFundingAsset | undefined) => {
     if (!preferenceScope || !asset) return
-    const token = tokens.find(token => token.assetId === asset.managed.protocolAssetId)
-    if (token) useSwapPreferences.getState().setSavedSwapToken(preferenceScope, side, token)
+    const token = resolveShieldFormCatalogToken(tokens, asset)
+    const symbol = shieldFormDisplaySymbol(asset)
+    if (!token) return
+    useSwapPreferences
+      .getState()
+      .setSavedSwapToken(preferenceScope, side, symbol ? { ...token, symbol } : token)
   }
   const switchAssets = () => {
     if (!from || !to || !canReverse) return
@@ -476,8 +484,8 @@ function ShieldSwapForm({
       useSwapPreferences.getState().setSavedTokenSelection(preferenceScope, {
         tokenInId: toToken.assetId,
         tokenOutId: fromToken.assetId,
-        tokenInSymbol: toToken.symbol,
-        tokenOutSymbol: fromToken.symbol
+        tokenInSymbol: toDisplaySymbol ?? toToken.symbol,
+        tokenOutSymbol: fromDisplaySymbol ?? fromToken.symbol
       })
     }
     setAmount('')
@@ -1222,6 +1230,7 @@ function ShieldSwapForm({
           fallbackSymbol={
             sharedPair?.tokenInSymbol ?? findSavedSwapToken(tokens, preferredSourceId)?.symbol
           }
+          displaySymbol={fromDisplaySymbol}
           tokenBadgeBlockchain={fromPickerChain?.badgeBlockchain}
           tokenNetworkLabel={fromPickerChain?.sourceLabel ?? fromPickerChain?.chainName}
           amount={amount}
@@ -1261,6 +1270,7 @@ function ShieldSwapForm({
           fallbackSymbol={
             sharedPair?.tokenOutSymbol ?? findSavedSwapToken(tokens, preferredDestinationId)?.symbol
           }
+          displaySymbol={toDisplaySymbol}
           tokenBadgeBlockchain={
             nativeDestinationChain?.badgeBlockchain ?? toPickerChain?.badgeBlockchain
           }

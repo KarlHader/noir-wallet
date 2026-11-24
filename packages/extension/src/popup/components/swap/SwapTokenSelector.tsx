@@ -19,7 +19,10 @@ import {
 import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import type { AdditionalReceiveTargetsView } from '@/popup/services/receive-targets-client'
 import { receiveTargetsClient } from '@/popup/services/receive-targets-client'
-import { buildWalletSwapSourceBalances } from '@/popup/services/swap-page-model'
+import {
+  buildWalletSwapSourceBalances,
+  swapTokenBalanceKey
+} from '@/popup/services/swap-page-model'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
 import { filterManuallyHiddenSwapTokens } from '@/popup/services/swap-token-visibility'
 import { useManagedTokenCatalog } from '@/popup/hooks/useManagedTokenCatalog'
@@ -337,7 +340,7 @@ export function SwapTokenSelector({
     const displayPrices = new Map<string, string>()
     const zecAssetId = resolveRheaSwapCanonicalAssetId(ZEC_ZCASH_ASSET, network)
     for (const token of resolvedItems.tokens) {
-      if (!balances.has(token.assetId)) continue
+      if (!balances.has(swapTokenBalanceKey(token))) continue
       const evmChainId = /^[1-9]\d*$/.test(token.rheaChainId) ? `eip155:${token.rheaChainId}` : null
       const assetId = isZecToken(token)
         ? zecAssetId
@@ -370,7 +373,12 @@ export function SwapTokenSelector({
   useEffect(() => {
     const { search, network } = filter
     const requestKey = `${network}:${search}`
-    if (scopeInvalidated.current || !search || loadedNetworks.current.has(network)) {
+    // A selected chain needs its catalog even before the user types a search.
+    if (
+      scopeInvalidated.current ||
+      (!search && network === 'all') ||
+      loadedNetworks.current.has(network)
+    ) {
       setLoadingNetwork(null)
       return
     }

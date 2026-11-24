@@ -4741,7 +4741,6 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         )
       })
       .catch(error => {
-        console.log('%c handleRuntimeMessage error: %o', 'background:green;color:#fff;', error)
         const safeMessage = getSafeRheaSwapRuntimeErrorMessage(error)
         console.error('[RHEA Swap] Request failed', {
           operation: message.type,

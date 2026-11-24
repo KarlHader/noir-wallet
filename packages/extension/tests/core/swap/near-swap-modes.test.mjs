@@ -16,6 +16,8 @@ import { resolveIntentsWalletAsset } from '../../../src/core/services/intents-wa
 import { nearPeaRequestJson } from '../../../src/infrastructure/keyring/multichain/raw-wallet-engine.ts'
 import {
   nearPrivateSwapExecutionAvailable,
+  projectNearPublicSendAsset,
+  readNearSendSpendableRaw,
   readNearSwapBalanceRaw,
   selectNearQuoteAssetExecution
 } from '../../../src/popup/services/near-quote-asset-execution.ts'
@@ -54,6 +56,58 @@ test('reads Main, Incognito, and Shield NEAR balances from separate buckets', ()
       'incognito'
     )
   ).toBeUndefined()
+})
+
+test('limits Public Send to the Main account and Incognito send to the PEA', () => {
+  const split = {
+    totalRaw: '1015240',
+    spendableRaw: '915500',
+    availableRaw: '915500',
+    mainRaw: '815700',
+    privateRaw: '199540',
+    privateOnchainRaw: '99800',
+    confidentialRaw: '99740'
+  }
+  const asset = {
+    asset: { id: 'near:mainnet/nep141:usdt.tether-token.near', kind: 'token' },
+    metadata: { decimals: 6, symbol: 'USDT' },
+    balance: split
+  }
+  const projected = projectNearPublicSendAsset(asset)
+  expect(projected.balance.availableRaw).toBe('815700')
+  expect(projected.balance.spendableRaw).toBe('815700')
+  expect(projected.balance.totalRaw).toBe(split.totalRaw)
+  expect(projected.balance.privateOnchainRaw).toBe(split.privateOnchainRaw)
+  expect(readNearSendSpendableRaw(split, 'incognito')).toBe('99800')
+  expect(
+    readNearSendSpendableRaw(
+      { availableRaw: '100', mainRaw: '40', privateRaw: '60', confidentialRaw: '15' },
+      'incognito'
+    )
+  ).toBe('0')
+
+  const native = projectNearPublicSendAsset({
+    ...asset,
+    asset: { id: 'near:mainnet/slip44:397', kind: 'native' },
+    balance: {
+      totalRaw: '155',
+      spendableRaw: '130',
+      availableRaw: '130',
+      mainRaw: '120',
+      privateRaw: '35',
+      privateOnchainRaw: '35',
+      confidentialRaw: '0'
+    }
+  })
+  expect(native.balance.availableRaw).toBe('120')
+  expect(native.balance.spendableRaw).toBe('120')
+
+  const unsplit = {
+    ...asset,
+    balance: { totalRaw: '120', spendableRaw: '100', availableRaw: '100' }
+  }
+  expect(projectNearPublicSendAsset(unsplit)).toBe(unsplit)
+  expect(projectNearPublicSendAsset(unsplit).balance.availableRaw).toBe('100')
 })
 
 test('selects the PEA balance and refund address for Incognito NEAR execution', () => {

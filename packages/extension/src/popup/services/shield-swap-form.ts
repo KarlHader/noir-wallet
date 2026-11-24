@@ -2,12 +2,16 @@ import type { Network } from '@/types'
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { parseZcashAddress } from '@/core/address-book/address-book'
+import {
+  nearDirectCatalogToken,
+  nearDirectQuoteAsset
+} from '@/core/chains/near/near-incognito-move'
 import { getZcashChainId } from '@/core/chains/registry'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
 import type { SwapToken } from '@/core/services/intents-api'
 import Big from '@/lib/big'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
-import { formatInsufficientBalance, formatSortAddress } from '@/lib/format'
+import { formatInsufficientBalance, formatShieldSymbol, formatSortAddress } from '@/lib/format'
 import {
   formatBaseUnitDecimalAmount,
   formatTokenQuantity,
@@ -27,6 +31,39 @@ import {
 
 export const nativeZecDestinationKey = (source: 'transparent' | 'shielded') =>
   `native-zec-destination:${source}`
+
+type ShieldCatalogMatch = {
+  readonly assetId: string
+  readonly rheaAddress?: string
+  readonly rheaChainId?: string
+  readonly isNative?: boolean
+}
+
+/** Prefer the native NEAR catalog row when it shares wNEAR's protocol asset id. */
+export function resolveShieldFormCatalogToken<T extends ShieldCatalogMatch>(
+  tokens: readonly T[],
+  asset: ShieldFundingAsset | null | undefined
+): T | null {
+  if (!asset) return null
+  const quote = nearDirectQuoteAsset(asset.asset.asset)
+  if (quote) {
+    const routable = tokens.filter(
+      (token): token is T & { readonly rheaAddress: string; readonly rheaChainId: string } =>
+        typeof token.rheaAddress === 'string' && typeof token.rheaChainId === 'string'
+    )
+    const matched = nearDirectCatalogToken(routable, quote)
+    if (matched) return matched
+  }
+  return tokens.find(token => token.assetId === asset.managed.protocolAssetId) ?? null
+}
+
+/** Shield spends native NEAR, so a wNEAR catalog symbol still displays as NEAR. */
+export function shieldFormDisplaySymbol(
+  asset: ShieldFundingAsset | null | undefined
+): string | undefined {
+  const symbol = asset?.asset.metadata.symbol
+  return symbol ? formatShieldSymbol(symbol) : undefined
+}
 
 export function shieldSwapPickerChain(asset: ShieldFundingAsset) {
   const chain = asset.chain.chain

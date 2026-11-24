@@ -49,7 +49,6 @@ export class RheaSwapClientError extends Error {
 }
 
 export function getRheaSwapErrorMessage(error: unknown): string {
-  console.log('%c getRheaSwapErrorMessage error: %o', 'background:green;color:#fff;', error)
   if (isSwapQuotePriceMoved(error))
     return getSwapQuoteFailureMessage(error) ?? classifyError(error).userMessage
   if (!(error instanceof RheaSwapClientError)) return classifyError(error).userMessage
@@ -130,7 +129,6 @@ function unwrap<T>(value: unknown, parse: (input: unknown) => T): T {
     throw new RheaSwapClientError('RHEA Swap returned an invalid response')
   }
   const response = value as Record<string, unknown>
-  console.log('%c unwrap response: %o', 'background:green;color:#fff;', response)
   if (typeof response.error === 'string') throw new RheaSwapClientError(response.error)
   if (!Object.prototype.hasOwnProperty.call(response, 'result')) {
     throw new RheaSwapClientError('RHEA Swap returned an invalid response')

@@ -1,6 +1,7 @@
 import { hasTokenPickerBalance, sortTokenPickerRows } from './token-selector-visibility'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { resolveEvmSendAvailableRaw } from '@/popup/services/evm-send-routing'
+import { readNearSwapBalanceRaw } from '@/popup/services/near-quote-asset-execution'
 import { filterTokenPickerRows } from '@/popup/services/swap-token-selection'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
@@ -162,7 +163,9 @@ export function buildSendAssetSelectionModel(input: {
     const raw =
       entry.chain.chain.family === 'evm'
         ? resolveEvmSendAvailableRaw(entry.asset.balance, 'main')
-        : entry.asset.balance.availableRaw
+        : entry.chain.chain.family === 'near'
+          ? (readNearSwapBalanceRaw(entry.asset.balance, 'main') ?? null)
+          : entry.asset.balance.availableRaw
     if (!raw || BigInt(raw) <= 0n) return []
     return [
       {

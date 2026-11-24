@@ -5,6 +5,7 @@ import {
 } from '@/core/chains/near'
 
 const NEAR_IMPLICIT_ACCOUNT = /^[0-9a-f]{64}$/
+const RAW_AMOUNT = /^(?:0|[1-9][0-9]*)$/
 
 export type NearSwapBalanceMode = 'main' | 'incognito' | 'shield'
 
@@ -38,6 +39,40 @@ export function readNearSwapBalanceRaw(
     return balance.availableRaw
   }
   return balance.mainRaw ?? balance.availableRaw
+}
+
+/**
+ * Public Send spends the Main account. Incognito spends the PEA on-chain
+ * balance and does not fall back to privateRaw, which also contains Shield.
+ */
+export function readNearSendSpendableRaw(
+  balance: NearSwapBalanceRaw & { readonly availableRaw?: string },
+  source: 'main' | 'incognito'
+): string {
+  const value = readNearSwapBalanceRaw(balance, source)
+  if (value !== undefined && RAW_AMOUNT.test(value)) return value
+  return source === 'incognito' ? '0' : (balance.availableRaw ?? '0')
+}
+
+/** Limits a Public Send asset to the Main-account balance before transfer checks. */
+export function projectNearPublicSendAsset<
+  T extends {
+    readonly balance: NearSwapBalanceRaw & {
+      readonly availableRaw: string
+      readonly spendableRaw: string
+    }
+  }
+>(asset: T): T {
+  const raw = readNearSendSpendableRaw(asset.balance, 'main')
+  if (raw === asset.balance.availableRaw && raw === asset.balance.spendableRaw) return asset
+  return Object.freeze({
+    ...asset,
+    balance: Object.freeze({
+      ...asset.balance,
+      availableRaw: raw,
+      spendableRaw: raw
+    })
+  })
 }
 
 function selectNearBalance(
