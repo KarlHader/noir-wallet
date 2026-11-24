@@ -3007,7 +3007,8 @@ export class BackgroundZcashWalletRuntime {
         const merged = mergeTransactionsWithWasmHistory(
           currentTransactions,
           wasmTransactions,
-          transparentReceiveTransactions
+          transparentReceiveTransactions,
+          account.addresses
         )
         newWasmTransactionCount = merged.newWasmTransactionCount
         return associateIncomingIntentsTransactions(merged.transactions)
