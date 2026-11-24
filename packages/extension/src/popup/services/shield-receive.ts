@@ -117,7 +117,6 @@ export function sortShieldReceiveTokens(
     let amount: Big | null = null
     let fiat = new Big(0)
     let missingPrice = false
-    let firstPrice: Big | null = null
     const seen = new Set<string>()
     for (const route of token.routes) {
       const catalogAsset = route.provider === 'near-confidential' ? route.asset.token : null
@@ -137,7 +136,6 @@ export function sortShieldReceiveTokens(
         [findAssetPrice(prices, route.assetId)?.priceUsd, holding?.priceUsd, catalogAsset?.price]
           .map(parseTokenBalanceDecimal)
           .find(value => value?.gt(0)) ?? null
-      firstPrice ??= price
       if (raw === null) continue
       const quantity = new Big(
         formatBaseUnitDecimalAmount(raw, catalogAsset?.decimals ?? ZEC_DECIMALS)
@@ -152,19 +150,16 @@ export function sortShieldReceiveTokens(
       balance: {
         symbol: token.symbol,
         pinned: token.id === 'native-zec',
+        isNative: token.routes.some(route => route.assetId.startsWith(`${route.chain.id}/slip44:`)),
         amount: amount?.toFixed() ?? '—',
         decimals:
           token.routes.find(route => route.provider === 'near-confidential')?.asset.token
             .decimals ?? ZEC_DECIMALS,
-        priceUsd: amount?.gt(0)
-          ? missingPrice
-            ? null
-            : fiat.div(amount).toFixed()
-          : (firstPrice?.toFixed() ?? null)
+        valueUsd: missingPrice ? null : fiat.toFixed()
       }
     }
   })
-  return sortTokenPickerRows(rows, row => row.balance, 'all').map(row => row.token)
+  return sortTokenPickerRows(rows, row => row.balance, 'grouped').map(row => row.token)
 }
 
 export function resolveShieldReceiveSelection(
