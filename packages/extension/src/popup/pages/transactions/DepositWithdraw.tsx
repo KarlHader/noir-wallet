@@ -387,6 +387,32 @@ export function DepositWithdraw({
   )
 }
 
+function QuickShieldReviewSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Preparing Shield review"
+      className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-4 pt-2 pb-4"
+    >
+      <div className="flex shrink-0 items-center gap-3">
+        <Skeleton className="size-9 rounded-full" />
+        <Skeleton className="h-7 w-28" />
+      </div>
+      <div className="space-y-3 rounded-xl bg-card px-3 py-3">
+        <div className="flex justify-between gap-4">
+          <Skeleton className="h-3 w-12" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+        <div className="flex justify-between gap-4">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+      </div>
+      <Skeleton className="mt-auto h-11 w-full shrink-0 rounded-lg" />
+    </div>
+  )
+}
+
 function NativeZcashMoveForm({
   reviewMaximum = false,
   onExit,
@@ -446,15 +472,14 @@ function NativeZcashMoveForm({
     }
     return (
       <>
-        <div className="p-4" aria-live="polite">
-          {issue ? (
-            <TransactionNotice {...issue} />
-          ) : sync.progress ? (
-            <ZcashTransferSyncStatus sync={sync} />
+        {!transfer.review.open &&
+          (issue || sync.progress ? (
+            <div className="overflow-y-auto p-4" aria-live="polite">
+              {issue ? <TransactionNotice {...issue} /> : <ZcashTransferSyncStatus sync={sync} />}
+            </div>
           ) : (
-            'Preparing Shield…'
-          )}
-        </div>
+            <QuickShieldReviewSkeleton />
+          ))}
         <ZcashTransferReview
           transfer={{
             ...transfer,
@@ -2750,8 +2775,8 @@ function DepositWithdrawForm({
     return (
       <div className="page-container">
         <PageHeader title="Shield" showBack onBack={exitForm} />
-        <div className="p-4" aria-live="polite">
-          {error ? (
+        {error ? (
+          <div className="overflow-y-auto p-4" aria-live="polite">
             <TransactionNotice
               message={error}
               onRetry={() => {
@@ -2762,10 +2787,10 @@ function DepositWithdrawForm({
                 }
               }}
             />
-          ) : (
-            'Preparing Shield…'
-          )}
-        </div>
+          </div>
+        ) : (
+          <QuickShieldReviewSkeleton />
+        )}
       </div>
     )
   }

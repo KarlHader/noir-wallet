@@ -915,19 +915,6 @@ export class ConfidentialFundingCoordinator {
       ) {
         throw new Error('External Shield deposit request ID was reused with different details')
       }
-      if (
-        !(await this.options.repository.get(
-          {
-            keyDomainId: parseKeyDomainId(existing.keyDomainId),
-            accountId: parseAccountId(existing.accountId)
-          },
-          parseTransactionId(existing.transactionId)
-        ))
-      ) {
-        await this.options.store.withExternalDepositScope(existing, () =>
-          this.options.repository.create(createExternalShieldDepositGraph(existing))
-        )
-      }
       return existing
     }
     setStage('quote')
@@ -1046,13 +1033,7 @@ export class ConfidentialFundingCoordinator {
     })
     setStage('storage')
     await this.options.store.putExternalDeposit(record)
-    const result = await this.options.store.withExternalDepositScope(record, () =>
-      this.options.repository.create(createExternalShieldDepositGraph(record))
-    )
-    if (result.status === 'id-conflict')
-      throw new Error('External Shield deposit transaction ID conflicts')
     await this.scheduleMonitoring()
-    void this.options.onActivityChanged?.(record).catch(() => {})
     return record
   }
 
@@ -1184,19 +1165,6 @@ export class ConfidentialFundingCoordinator {
     force: boolean
   ): Promise<ExternalShieldDeposit> {
     let record = await this.getExternalDeposit(depositId)
-    if (
-      !(await this.options.repository.get(
-        {
-          keyDomainId: parseKeyDomainId(record.keyDomainId),
-          accountId: parseAccountId(record.accountId)
-        },
-        parseTransactionId(record.transactionId)
-      ))
-    ) {
-      await this.options.store.withExternalDepositScope(record, () =>
-        this.options.repository.create(createExternalShieldDepositGraph(record))
-      )
-    }
     if (record.phase === 'ready') {
       if (record.settledOutputRaw === undefined) {
         const status = await this.readExternalDepositProviderStatus(record, force)
@@ -1345,7 +1313,8 @@ export class ConfidentialFundingCoordinator {
     if (record.phase === 'ready') record = await this.refreshExternalDepositBalance(record)
     await this.markExternalDepositGraphReconciled(record)
     if (shouldAutoRefreshExternalShieldDeposit(record, this.now())) await this.scheduleMonitoring()
-    void this.options.onActivityChanged?.(record).catch(() => {})
+    if (hasExternalShieldDepositFunding(record))
+      void this.options.onActivityChanged?.(record).catch(() => {})
     return record
   }
 
@@ -1423,11 +1392,19 @@ export class ConfidentialFundingCoordinator {
   }
 
   private async updateExternalDepositGraph(record: ExternalShieldDeposit): Promise<void> {
+    if (!hasExternalShieldDepositFunding(record)) return
     const scope = {
       keyDomainId: parseKeyDomainId(record.keyDomainId),
       accountId: parseAccountId(record.accountId)
     }
     const transactionId = parseTransactionId(record.transactionId)
+    if (!(await this.options.repository.get(scope, transactionId))) {
+      const result = await this.options.store.withExternalDepositScope(record, () =>
+        this.options.repository.create(createExternalShieldDepositGraph(record))
+      )
+      if (result.status === 'id-conflict')
+        throw new Error('External Shield deposit transaction ID conflicts')
+    }
     for (const suffix of ['origin', 'relay', 'destination']) {
       const targetStatus =
         record.phase === 'ready' || (record.phase === 'refunded' && suffix === 'origin')

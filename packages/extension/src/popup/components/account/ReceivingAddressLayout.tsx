@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Icon } from '@iconify/react'
 import { QRCodeSVG } from 'qrcode.react'
+import { cn } from '@/lib/utils'
 
 interface ReceivingAddressLayoutProps {
   readonly onClose?: () => void
@@ -11,6 +12,7 @@ interface ReceivingAddressLayoutProps {
   readonly qrValue?: string
   readonly qrLabel?: string
   readonly qrSize?: number
+  readonly qrClassName?: string
   readonly warning?: ReactNode
   readonly children?: ReactNode
   readonly footer?: ReactNode
@@ -25,6 +27,7 @@ export function ReceivingAddressLayout({
   qrValue,
   qrLabel = 'Receiving address QR code',
   qrSize = 208,
+  qrClassName,
   warning,
   children,
   footer
@@ -58,7 +61,7 @@ export function ReceivingAddressLayout({
           )}
           {beforeQr && <div className="mt-5 w-full">{beforeQr}</div>}
           {qrValue && (
-            <div className="mt-6 rounded-lg bg-white p-3">
+            <div className={cn('mt-6 rounded-lg bg-white p-3', qrClassName)}>
               <QRCodeSVG
                 value={qrValue}
                 size={qrSize}

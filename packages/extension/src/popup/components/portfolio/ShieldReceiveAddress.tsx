@@ -12,6 +12,7 @@ import type { Network } from '@/types'
 import { formatSortAddress, formatSymbol } from '@/lib/format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { resolveEvmChainIconAlias } from '@/config/icons'
+import { cn } from '@/lib/utils'
 import { useWalletStore } from '@/store/wallet-store'
 import { ReceivingAddressLayout } from '@/popup/components/account/ReceivingAddressLayout'
 import {
@@ -20,6 +21,7 @@ import {
   useCopyToClipboard
 } from '@/popup/components/common/CopyToast'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
+import { Skeleton } from '@/popup/components/ui/skeleton'
 import { ShieldProviderLogo, SHIELD_PROVIDERS } from './shield-providers'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
@@ -70,6 +72,17 @@ function sameScope(
 ): boolean {
   return (
     record.network === network && record.keyDomainId === walletId && record.accountId === accountId
+  )
+}
+
+export function ShieldReceiveAddressSkeleton() {
+  return (
+    <div role="status" aria-label="Loading receive address" className="pb-5">
+      <Skeleton className="mx-auto mt-14 size-[184px] rounded-xl" />
+      <Skeleton className="mt-12 h-4 w-44" />
+      <Skeleton className="mt-2 h-[62px] w-full rounded-xl" />
+      <Skeleton className="mt-4 h-3 w-4/5" />
+    </div>
   )
 }
 
@@ -213,7 +226,7 @@ export function ShieldReceiveAddress({
     }
   }, [visible, currentRecord?.depositId, currentRecord?.phase, scope, refreshRecord])
 
-  const createAddress = async () => {
+  const createAddress = async (newAddress = false) => {
     if (busyRef.current || !canGenerate) return
     setError(null)
     if (provider === 'zcash-shield') {
@@ -221,9 +234,15 @@ export function ShieldReceiveAddress({
       return
     }
     if (!asset || !sourceAssetId || !account) return
-    if (currentRecord) {
+    if (currentRecord && !newAddress) {
       setOpen(true)
       return
+    }
+    if (newAddress) {
+      setRecord(null)
+      setCheckError(null)
+      setChecked(false)
+      pendingRequest.current = null
     }
     const requestScope = scope
     const requestWallet = useWalletStore.getState()
@@ -341,6 +360,22 @@ export function ShieldReceiveAddress({
     currentRecord?.source.chainName ??
     account?.networks.find(item => item.chain.family === 'zcash')?.chain.displayName ??
     'Zcash'
+  const receiveWarning = `Only send ${symbol} on ${displayNetwork}. Using a different asset or network can result in loss of funds.`
+  const paymentRequirement = currentRecord && canPay && !payment?.hasDeposit && (
+    <>
+      {currentRecord.amountMode === 'minimum' ? 'Send at least' : 'Send exactly'}{' '}
+      {(currentRecord.amountMode === 'minimum'
+        ? formatMinimumDepositPaymentAmount
+        : formatDepositAmount)(currentRecord.amountRaw, currentRecord.sourceDecimals)}{' '}
+      {symbol}
+    </>
+  )
+  const inlineWarning = (
+    <div className="mt-4 flex items-start gap-2 text-xs leading-4 text-muted">
+      <Icon icon="lucide:circle-alert" width={24} className="shrink-0" aria-hidden="true" />
+      <p>{receiveWarning}</p>
+    </div>
+  )
 
   const statusAction = currentRecord && (
     <button
@@ -363,7 +398,8 @@ export function ShieldReceiveAddress({
   const addressContent = (
     <ReceivingAddressLayout
       onClose={inline ? undefined : () => setOpen(false)}
-      qrSize={160}
+      qrSize={inline ? 154 : 160}
+      qrClassName={inline ? 'mt-14 rounded-xl p-[15px]' : undefined}
       headerAction={statusAction}
       identity={
         inline ? undefined : (
@@ -390,14 +426,8 @@ export function ShieldReceiveAddress({
         )
       }
       beforeQr={
-        currentRecord && canPay && !payment?.hasDeposit ? (
-          <p className="text-center text-base font-medium">
-            {currentRecord.amountMode === 'minimum' ? 'Send at least' : 'Send exactly'}{' '}
-            {(currentRecord.amountMode === 'minimum'
-              ? formatMinimumDepositPaymentAmount
-              : formatDepositAmount)(currentRecord.amountRaw, currentRecord.sourceDecimals)}{' '}
-            {symbol}
-          </p>
+        !inline && paymentRequirement ? (
+          <p className="text-center text-base font-medium">{paymentRequirement}</p>
         ) : undefined
       }
       qrValue={currentRecord ? (canPay ? currentRecord.depositAddress : undefined) : zcashAddress}
@@ -407,17 +437,12 @@ export function ShieldReceiveAddress({
           : 'Zcash shielded receiving address QR code'
       }
       warning={
-        (!currentRecord || canPay) && (
-          <TransactionNotice
-            tone="warning"
-            message={`Only send ${symbol} on ${displayNetwork}. Using a different asset or network can result in loss of funds.`}
-          />
-        )
+        !inline &&
+        (!currentRecord || canPay) && <TransactionNotice tone="warning" message={receiveWarning} />
       }
     >
-      {inline && statusAction && <div className="mt-2 self-end">{statusAction}</div>}
       {currentRecord ? (
-        <div className="mt-7 w-full text-sm">
+        <div className={inline && canPay ? 'mt-12 w-full text-sm' : 'mt-7 w-full text-sm'}>
           {canPay && (
             <>
               <p
@@ -426,9 +451,16 @@ export function ShieldReceiveAddress({
               >
                 One-time receive address
               </p>
-              <div className="mt-2 flex min-h-12 items-center gap-2 rounded-lg bg-wallet-surface px-3">
+              <div
+                className={cn(
+                  'mt-2 flex items-center gap-2',
+                  inline
+                    ? 'min-h-[62px] rounded-xl bg-accent px-4'
+                    : 'min-h-12 rounded-lg bg-wallet-surface px-3'
+                )}
+              >
                 <span
-                  className="min-w-0 flex-1 truncate font-mono"
+                  className={cn('min-w-0 flex-1 truncate', !inline && 'font-mono')}
                   title={currentRecord.depositAddress}
                 >
                   {formatSortAddress(currentRecord.depositAddress)}
@@ -485,9 +517,18 @@ export function ShieldReceiveAddress({
                   </button>
                 </div>
               )}
+              {inline && inlineWarning}
+              {inline && paymentRequirement && (
+                <p className="mt-2 pl-8 text-xs text-muted">{paymentRequirement}</p>
+              )}
             </>
           )}
-          <div className="mt-6 flex items-start justify-between gap-3">
+          <div
+            className={cn(
+              'mt-6 items-start justify-between gap-3',
+              inline && canPay && !payment?.hasDeposit ? 'hidden' : 'flex'
+            )}
+          >
             <span className="flex shrink-0 items-center gap-1 text-muted">
               Refund address
               <button
@@ -522,7 +563,7 @@ export function ShieldReceiveAddress({
               </span>
             </span>
           </div>
-          {showRefundInfo && (
+          {showRefundInfo && (!inline || !canPay || payment?.hasDeposit) && (
             <p className="mt-2 text-xs text-muted">
               If this deposit cannot complete, funds return to this address on the sending network.
             </p>
@@ -538,10 +579,13 @@ export function ShieldReceiveAddress({
               <button
                 type="button"
                 onClick={() => {
-                  setRecord(null)
-                  setOpen(false)
-                  setError(null)
-                  pendingRequest.current = null
+                  if (inline) void createAddress(true)
+                  else {
+                    setRecord(null)
+                    setOpen(false)
+                    setError(null)
+                    pendingRequest.current = null
+                  }
                 }}
                 className="wallet-interactive text-sm text-primary hover:underline"
               >
@@ -641,9 +685,12 @@ export function ShieldReceiveAddress({
             retrying={refreshing}
             className="mt-3"
           />
+          {inline && (!canPay || payment?.hasDeposit) && statusAction && (
+            <div className="mt-2 flex justify-end">{statusAction}</div>
+          )}
         </div>
       ) : (
-        <div className="mt-8 w-full">
+        <div className={inline ? 'mt-12 w-full' : 'mt-8 w-full'}>
           <p className="mb-2 text-base text-muted">Receive address</p>
           <div className="flex min-h-12 items-center gap-2 rounded-lg bg-wallet-surface px-3">
             <span className="min-w-0 flex-1 truncate font-mono text-sm" title={zcashAddress}>
@@ -662,6 +709,7 @@ export function ShieldReceiveAddress({
               {isCopied('zcash-shield-address') ? 'Copied' : 'Copy'}
             </button>
           </div>
+          {inline && inlineWarning}
         </div>
       )}
     </ReceivingAddressLayout>
@@ -672,6 +720,8 @@ export function ShieldReceiveAddress({
       <>
         {currentRecord || (provider === 'zcash-shield' && zcashAddress) ? (
           addressContent
+        ) : !error && canGenerate ? (
+          <ShieldReceiveAddressSkeleton />
         ) : (
           <div className="mt-5">
             {error ? (
@@ -681,9 +731,7 @@ export function ShieldReceiveAddress({
                 retrying={busy}
               />
             ) : (
-              <p role="status" className="text-center text-sm text-muted">
-                {canGenerate ? 'Generating receive address…' : 'Receiving address unavailable'}
-              </p>
+              <TransactionNotice tone="muted" message="Receiving address unavailable" />
             )}
           </div>
         )}

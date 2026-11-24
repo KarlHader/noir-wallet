@@ -9,7 +9,7 @@ import { InMemoryTransactionRepository } from '../../../src/infrastructure/persi
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 import {
   createExternalShieldDepositGraph,
-  isExternalShieldDepositAutoHidden,
+  hasExternalShieldDepositFunding,
   isExternalShieldDepositPending,
   shouldAutoRefreshExternalShieldDeposit,
   projectExternalShieldDepositActivityGraph
@@ -639,6 +639,8 @@ test.describe('confidential funding safety rules', () => {
       requestId: 'create-one'
     }
     const created = await coordinator.createExternalDeposit(request)
+    const depositScope = { keyDomainId: 'wallet:one', accountId: 'account:one' }
+    expect(await repository.get(depositScope, created.transactionId)).toBeNull()
     expect(canPayShieldDeposit(created, now)).toBe(true)
     expect(canPayShieldDeposit(created, created.expiresAt)).toBe(false)
     expect(isExternalShieldDepositPending(created, created.expiresAt)).toBe(false)
@@ -650,9 +652,8 @@ test.describe('confidential funding safety rules', () => {
     expect(depositStatusLabel(providerExpired, now)).toBe('Quote expired')
     expect(canPayShieldDeposit(providerExpired, now)).toBe(false)
     expect(isExternalShieldDepositPending(providerExpired, now)).toBe(false)
-    expect(
-      isExternalShieldDepositAutoHidden(providerExpired, created.createdAt + 24 * 60 * 60 * 1000)
-    ).toBe(true)
+    expect(hasExternalShieldDepositFunding(providerExpired)).toBe(false)
+    expect(hasExternalShieldDepositFunding({ ...providerExpired, phase: 'failed' })).toBe(false)
     records.set(created.depositId, providerExpired)
     await expect(coordinator.createExternalDeposit(request)).rejects.toThrow('quote has expired')
     records.set(created.depositId, created)
@@ -741,16 +742,14 @@ test.describe('confidential funding safety rules', () => {
     await new ConfidentialFundingCoordinator(coordinatorOptions).resumeAll()
     expect({ statusCalls, monitoringCalls }).toEqual(beforePause)
     expect(await coordinator.getExternalDeposit(created.depositId)).toEqual(unfunded)
-    expect(
-      isExternalShieldDepositAutoHidden(unfunded, created.createdAt + 24 * 60 * 60 * 1000 - 1)
-    ).toBe(false)
+    expect(await repository.get(depositScope, created.transactionId)).toBeNull()
     now = created.createdAt + 24 * 60 * 60 * 1000
-    expect(isExternalShieldDepositAutoHidden(unfunded, now)).toBe(true)
 
     // A manual refresh can discover late funding even after automatic monitoring stops.
     serviceStatus = 'INCOMPLETE_DEPOSIT'
     const fundedWithoutAmount = await coordinator.refreshExternalDeposit(created.depositId)
     expect(fundedWithoutAmount.fundingObservedAt).toBe(now)
+    expect((await repository.get(depositScope, created.transactionId))?.root.status).toBe('created')
     expect(monitoringCalls).toBeGreaterThan(beforePause.monitoringCalls)
     serviceStatus = 'EXPIRED'
     now += 24 * 60 * 60 * 1000
@@ -760,7 +759,7 @@ test.describe('confidential funding safety rules', () => {
     expect(expiredPartial.fundingObservedAt).toBe(fundedWithoutAmount.fundingObservedAt)
     expect(canPayShieldDeposit(expiredPartial, now)).toBe(false)
     expect(isExternalShieldDepositPending(expiredPartial, now)).toBe(true)
-    expect(isExternalShieldDepositAutoHidden(expiredPartial, now)).toBe(false)
+    expect(hasExternalShieldDepositFunding(expiredPartial)).toBe(true)
     const beforeRecovery = statusCalls
     await new ConfidentialFundingCoordinator(coordinatorOptions).resumeAll()
     expect(statusCalls).toBe(beforeRecovery + 1)
@@ -869,6 +868,7 @@ test.describe('confidential funding safety rules', () => {
         depositId,
         transactionId: `tx:confidential-external:${depositId}`,
         phase,
+        fundingObservedAt: created.createdAt,
         ...(phase === 'ready' ? { settledOutputRaw: '987', balanceRefreshedAt: 1_000 } : {})
       }
       records.set(depositId, interrupted)
