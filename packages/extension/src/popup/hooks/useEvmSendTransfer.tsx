@@ -26,7 +26,7 @@ import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {
   createNativeTransferSource,
   estimateNativeTransferMaximum,
-  resolveNativeRouteMaximum,
+  resolveTransferMaximum,
   fallbackTransferMaximum,
   isTransferAmountSpendable
 } from '@/popup/services/transfer-maximum'
@@ -418,7 +418,8 @@ export function useEvmSendTransfer({
   }, [intentKey, review])
   const confidentialMaximumRaw =
     route === 'confidential' && asset.asset.kind === 'native'
-      ? resolveNativeRouteMaximum({
+      ? resolveTransferMaximum({
+          mode: 'reserve',
           family: 'evm',
           chainId: chain.chain.id,
           availableRaw,
@@ -1151,7 +1152,12 @@ export function useEvmSendTransfer({
     }
     setError(null)
     setMaxSelected(true)
-    setAmount(transferAvailability.display)
+    const maximumRaw = resolveTransferMaximum({
+      mode: 'reserve',
+      availableRaw,
+      payFeeFromAsset: false
+    })
+    setAmount(formatBaseUnitDecimalAmount(maximumRaw, asset.metadata.decimals))
   }
   const selectShield = (domain: string) => {
     if (domain === 'shield') onSelectShield(validRecipient ? recipient : '', amount)

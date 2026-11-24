@@ -131,21 +131,14 @@ import {
   shieldQuoteFeeRaw
 } from '@/popup/services/shield-transfer'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
-import {
-  estimateQuickShieldNativeFee,
-  prepareQuickShieldMaximum,
-  quickShieldMaximum,
-  readQuickShieldBalances
-} from '@/popup/services/quick-shield-maximum'
-import type { PrepareConfidentialFundingRequest } from '@/popup/services/confidential-funding-client'
 import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import {
   ConfidentialActivityView,
   openConfidentialActivity,
   type ConfidentialActivityDisplay
 } from '@/popup/components/transaction/ConfidentialActivitySheet'
-import { homeActivityPath } from '@/popup/services/home-navigation'
-import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
+import { homeActivityPath, homeAssetDomainPath } from '@/popup/services/home-navigation'
+import { resolveTransferMaximum } from '@/popup/services/transfer-maximum'
 import {
   balanceTransferDomainLabel as domainLabel,
   balanceTransferLabel,
@@ -648,7 +641,6 @@ function DepositWithdrawForm({
     tier: 'standard'
   })
   const [maxSelected, setMaxSelected] = useState(initialDraft.maxSelected)
-  const [maxRequestRevision, setMaxRequestRevision] = useState(0)
   const maximumShield = fixedDirection === 'shield' && maxSelected
   const [loadedPreference, setLoadedPreference] = useState<{
     key: string
@@ -708,7 +700,6 @@ function DepositWithdrawForm({
   const [preparedShield, setPreparedShield] = useState<{
     key: string
     review: ConfidentialFundingReview
-    quickRequest?: PrepareConfidentialFundingRequest
   } | null>(null)
 
   useEffect(() => {
@@ -1597,39 +1588,17 @@ function DepositWithdrawForm({
       : 'unsupported'
   const methodAvailable = supportedPair && routeState === 'supported'
 
-  const nativeShieldMaxEstimate = Boolean(
-    maximumShield &&
-    selected?.chain.chain.family === 'evm' &&
-    selected.asset.asset.kind === 'native'
-  )
-  const maxSender = from === 'private' ? privateAddress : mainAddress
-  const shieldMaxEstimate = useBalanceTransferEstimate({
-    enabled: nativeShieldMaxEstimate && Boolean(maxSender && shieldSourceRaw),
-    requestKey: JSON.stringify([routeKey, shieldSourceRaw, evmMoveFee, maxRequestRevision]),
-    estimate: async () => {
-      const feeRaw = await estimateQuickShieldNativeFee(
-        selected!.asset.asset.id,
-        maxSender,
-        from,
-        evmMoveFee
-      )
-      const balance = BigInt(shieldSourceRaw!)
-      return quickShieldMaximum({ native: true, assetRaw: balance, gasRaw: balance }, feeRaw)
-    }
-  })
-  const maximumRaw = nativeShieldMaxEstimate
-    ? shieldMaxEstimate.value
-    : selected?.asset.asset.kind === 'native' &&
-        selected.chain.chain.family === 'evm' &&
-        source &&
-        from !== 'shield' &&
-        fixedDirection !== 'shield'
-      ? resolveNativeRouteMaximum({
-          family: 'evm',
+  const maximumBalanceRaw = fundingRoute ? shieldSourceRaw : source?.availableRaw
+  const maximumRaw =
+    selected && maximumBalanceRaw != null
+      ? resolveTransferMaximum({
+          mode: 'reserve',
+          family: selected.chain.chain.family,
           chainId: selected.chain.chain.id,
-          availableRaw: source.availableRaw,
+          availableRaw: maximumBalanceRaw,
           decimals: selected.asset.metadata.decimals,
-          priceUsd: findAssetPrice(assetPrices, selected.asset.asset.id)?.priceUsd
+          priceUsd: findAssetPrice(assetPrices, selected.asset.asset.id)?.priceUsd,
+          payFeeFromAsset: from !== 'shield' && selected.asset.asset.kind === 'native'
         })
       : null
   const available =
@@ -1667,9 +1636,7 @@ function DepositWithdrawForm({
   const maxAmount =
     selected && maximumRaw !== null
       ? formatBaseUnitDecimalAmount(maximumRaw, selected.asset.metadata.decimals)
-      : nativeShieldMaxEstimate
-        ? ''
-        : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
+      : ''
   const currentAmount = maxSelected ? maxAmount : amount
   useEffect(() => {
     if (maxSelected) setAmount(maxAmount)
@@ -1765,7 +1732,7 @@ function DepositWithdrawForm({
       : clusterEstimate.value
   const directQuoted = Boolean(canEstimateMethods && methodAvailable && directEstimate.value)
   const selectedEstimate = clusterSelected ? clusterEstimate : directEstimate
-  const maxLoading = maxSelected && (selectedEstimate.loading || shieldMaxEstimate.loading)
+  const maxLoading = maxSelected && selectedEstimate.loading
   const clusterUnavailable = !clusterAvailable || clusterEstimate.error
   const directUnavailable =
     directEstimate.errorMessage === 'Move route unavailable' ||
@@ -1830,24 +1797,21 @@ function DepositWithdrawForm({
     clusterEstimate.error
   ])
   const shieldReviewKeyForFee = (feeSelection: EvmFeeSelection) =>
-    maximumShield
-      ? JSON.stringify([
-          routeKey,
-          fixedProvider,
-          from === 'private' ? privateAddress : mainAddress,
-          managedAsset?.protocolAssetId,
-          sourceRaw,
-          nativeFeeRaw,
-          selected?.asset.balance.availableRaw,
-          nativeFeeAsset?.balance.availableRaw,
-          slippageBps,
-          feeSelection,
-          retry
-        ])
-      : `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${slippageBps}:${JSON.stringify(feeSelection)}`
-  const submittedQuickReview =
-    preparedShield?.quickRequest && confirmAttemptedPlanId.current === preparedShield.review.planId
-  const shieldReviewKey = submittedQuickReview
+    JSON.stringify([
+      routeKey,
+      method,
+      fixedProvider,
+      managedAsset?.protocolAssetId,
+      from === 'private' ? privateAddress : mainAddress,
+      targetAddress,
+      shieldAmountState?.amountRaw,
+      maxSelected,
+      slippageBps,
+      feeSelection
+    ])
+  const submittedShieldReview =
+    preparedShield && confirmAttemptedPlanId.current === preparedShield.review.planId
+  const shieldReviewKey = submittedShieldReview
     ? preparedShield.key
     : shieldReviewKeyForFee(evmMoveFee)
   const latestShieldReviewKey = useRef(shieldReviewKey)
@@ -1910,8 +1874,6 @@ function DepositWithdrawForm({
     (from !== 'shield' || (destination && targetAddress)) &&
     effective &&
     fundingReady &&
-    (!nativeShieldMaxEstimate ||
-      (!shieldMaxEstimate.loading && !shieldMaxEstimate.error && shieldMaxEstimate.value)) &&
     shieldSourceRaw !== null &&
     !tokenFeeBalanceError &&
     (!maxSelected || amount === currentAmount) &&
@@ -2083,7 +2045,6 @@ function DepositWithdrawForm({
     setSelectedAssetId(selected.asset.asset.id)
     setMaxSelected(true)
     setAmount(maxAmount)
-    setMaxRequestRevision(value => value + 1)
   }
 
   const scopeStillCurrent = () => {
@@ -2181,16 +2142,7 @@ function DepositWithdrawForm({
             method: clusterSelected ? 'cluster' : 'directly',
             ...(from === 'shield' && destination ? { destination } : {})
           })
-      const maximum = maximumShield
-        ? await prepareQuickShieldMaximum(
-            request,
-            addressFor(from),
-            () => scopeStillCurrent() && latestShieldReviewKey.current === expectedKey
-          )
-        : null
-      if (maximumShield && !maximum) return false
-      const reviewedRequest = maximum?.request ?? request
-      const result = maximum?.review ?? (await confidentialFundingClient.prepare(reviewedRequest))
+      const result = await confidentialFundingClient.prepare(request)
       if (!scopeStillCurrent() || latestShieldReviewKey.current !== expectedKey) {
         if (result.phase === 'prepared')
           void confidentialFundingClient.cancel(result.planId).catch(() => {})
@@ -2206,11 +2158,11 @@ function DepositWithdrawForm({
         return false
       }
       if (
-        !matchesShieldReview(result, reviewedRequest) ||
+        !matchesShieldReview(result, request) ||
         (fixedDirection &&
           !matchesFixedShieldFundsRecipient(
             result,
-            reviewedRequest,
+            request,
             fixedDirection === 'unshield' ? targetAddress : addressFor(from)
           ))
       ) {
@@ -2221,7 +2173,7 @@ function DepositWithdrawForm({
       setConfirmUncertain(false)
       reviewAttempt.current = null
       if (replacingReview) setEvmMoveFee(feeSelection)
-      setPreparedShield({ key, review: result, quickRequest: maximum?.request })
+      setPreparedShield({ key, review: result })
       return true
     } catch (error) {
       if (scopeStillCurrent()) {
@@ -2257,7 +2209,7 @@ function DepositWithdrawForm({
       setConfirmUncertain(false)
       reviewAttempt.current = null
       updateFeeRefresh(null)
-      const domain = plan.sourceDomain ?? from
+      const domain = fixedDirection ? 'shield' : (plan.sourceDomain ?? from)
       const display: ConfidentialActivityDisplay | undefined = selected
         ? {
             operation: 'move',
@@ -2359,19 +2311,6 @@ function DepositWithdrawForm({
           setShieldError('Transfer not started. Review and try again.')
         return
       }
-      if (preparedShield?.quickRequest) {
-        const balances = await readQuickShieldBalances(preparedShield.quickRequest)
-        if (!scopeStillCurrent() || latestShieldReviewKey.current !== shieldReviewKey) return
-        if (
-          quickShieldMaximum(balances, pending.sourceNetworkFee!.raw) !== pending.sourceAmountRaw ||
-          pending.expiresAt <= Date.now()
-        ) {
-          await confidentialFundingClient.cancel(pending.planId)
-          setPreparedShield(null)
-          setShieldError('Balance or quote changed. Review the maximum again.')
-          return
-        }
-      }
       confirmAttemptedPlanId.current = pending.planId
       const plan = await confidentialFundingClient.confirm(
         pending.planId,
@@ -2380,14 +2319,6 @@ function DepositWithdrawForm({
       if (hasShieldTransferStarted(plan)) openShieldActivity(plan)
       else await checkShieldPlan(plan.planId)
     } catch (error) {
-      if (preparedShield?.quickRequest && confirmAttemptedPlanId.current !== pending.planId) {
-        if (scopeStillCurrent()) {
-          void confidentialFundingClient.cancel(pending.planId).catch(() => {})
-          setPreparedShield(null)
-          setShieldError(classifyError(error).userMessage)
-        }
-        return
-      }
       const status = await checkShieldPlan(pending.planId)
       if (status === 'prepared' && scopeStillCurrent())
         setShieldError(classifyError(error).userMessage)
@@ -2457,14 +2388,15 @@ function DepositWithdrawForm({
   if (shieldActivity && draftScope === scopeKey) {
     const { plan, display } = shieldActivity
     return (
-      <div className="page-container">
+      <div className="page-container" data-wallet-mode="shield">
         <ConfidentialActivityView
           plan={plan}
           display={display}
-          onDone={exitForm}
-          onViewActivity={() =>
-            navigate(homeActivityPath(plan.sourceDomain ?? from, plan.transactionId))
-          }
+          onDone={() => {
+            fixedShield?.onBack?.()
+            navigate(homeAssetDomainPath('', 'shield'), { replace: true })
+          }}
+          onViewActivity={() => navigate(homeActivityPath('shield', plan.transactionId))}
         />
       </div>
     )
@@ -3110,12 +3042,6 @@ function DepositWithdrawForm({
                 className="mt-2"
                 message={shieldError ?? 'Shield balance unavailable.'}
                 onRetry={() => void refreshShield(shieldNeedsAuthorization)}
-              />
-            ) : shieldMaxEstimate.error ? (
-              <TransactionNotice
-                className="mt-2"
-                message={shieldMaxEstimate.errorMessage ?? 'Could not calculate maximum amount.'}
-                onRetry={handleMax}
               />
             ) : transferError ? (
               <TransactionNotice className="mt-2" message={transferError} tone="warning" />

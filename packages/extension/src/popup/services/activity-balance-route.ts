@@ -97,6 +97,22 @@ function receiptIdentity(
   ])
 }
 
+function zcashReceiptIdentity(item: ActivityItem, hash: string): string | null {
+  const recipient = item.snapshot?.recipient
+  if (
+    !recipient ||
+    (recipient.chainId !== ZCASH_CHAIN_IDS.mainnet && recipient.chainId !== ZCASH_CHAIN_IDS.testnet)
+  )
+    return null
+  return JSON.stringify([
+    item.scope.keyDomainId,
+    item.scope.accountId,
+    recipient.chainId,
+    recipient.address,
+    hash.toLowerCase()
+  ])
+}
+
 export function resolveActivityReceipts(
   items: readonly ActivityItem[],
   domain: ActivityBalanceDomain,
@@ -106,8 +122,21 @@ export function resolveActivityReceipts(
   readonly depositReceiptIds: ReadonlySet<string>
 } {
   const receipts = new Map<string, string | null>()
+  const observedZcashReceipts = new Set<string>()
   const depositReceiptIds = new Set<string>()
   for (const item of items) {
+    if (
+      domain === 'public' &&
+      isActivityReceive(item) &&
+      getActivityBalanceDomains(item).includes(domain) &&
+      (item.status === 'final' || item.status === 'confirming')
+    ) {
+      const observation = item.segments.find(
+        segment => segment.role === 'origin' && segment.target.kind === 'onchain'
+      )?.evidence?.transactionHash
+      const key = observation && zcashReceiptIdentity(item, observation)
+      if (key) observedZcashReceipts.add(key)
+    }
     if (
       item.status !== 'final' ||
       item.reconfirming ||
@@ -195,6 +224,9 @@ export function resolveActivityReceipts(
       )
         continue
       if (onchainCredit) {
+        const zcashReceipt =
+          shield && domain === 'public' && zcashReceiptIdentity(item, onchainCredit)
+        if (zcashReceipt && observedZcashReceipts.has(zcashReceipt)) continue
         const key = receiptIdentity(item, domain, amount, onchainCredit)
         const observedReceiptId = receipts.get(key)
         if (incognitoDeposit && observedReceiptId) depositReceiptIds.add(observedReceiptId)

@@ -93,8 +93,8 @@ test('keeps unfunded deposits discoverable without offering them for withdrawal'
   const assets = [
     { symbol: 'OTHER', amount: '0' },
     { symbol: 'ZEC', amount: '0', pinned: true },
-    { symbol: 'ETH', amount: '0', isNative: true },
     { symbol: 'USDT', amount: '0' },
+    { symbol: 'ETH', amount: '0', isNative: true },
     { symbol: 'MISSING', amount: '1000' },
     { symbol: 'USDC', availableRaw: '3000000', decimals: 6, priceUsd: '1' },
     { symbol: 'BNB', amount: '0.1', priceUsd: '50' }

@@ -633,6 +633,79 @@ test.describe('Activity read model', () => {
     expect(filterActivityItems({ ...selection, selectedChainIds: [arbitrumChainId] })).toEqual([])
   })
 
+  test('prefers observed Zcash receipts for a Shield send without merging distinct credits', () => {
+    const hash = 'd'.repeat(64)
+    const recipient = { chainId: zcashChainId, address: `t1${'a'.repeat(33)}` }
+    const payout = supplemental({
+      id: 'zcash:credit:0',
+      source: 'zcash-v1',
+      chainId: zcashChainId,
+      assetId: zecAssetId,
+      hash,
+      updatedAt: 1_100
+    })
+    const receive = {
+      ...payout,
+      kind: 'receive',
+      assetDomains: ['public'],
+      snapshot: { ...payout.snapshot, recipient }
+    }
+    const send = {
+      ...payout,
+      id: 'tx:confidential:zcash-send',
+      source: 'wallet-v2',
+      kind: 'withdraw',
+      snapshot: {
+        ...payout.snapshot,
+        direction: 'outgoing',
+        shield: {
+          schemaVersion: 1,
+          operation: 'withdraw',
+          sourceDomain: 'shield',
+          destinationDomain: 'public'
+        },
+        counterAmount: { assetId: zecAssetId, amountRaw: '95' },
+        recipient
+      },
+      segments: [
+        {
+          ...payout.segments[0],
+          id: 'tx:confidential:zcash-send:destination',
+          role: 'destination',
+          evidence: {
+            transactionHash: hash,
+            settledAmount: { assetId: zecAssetId, amountRaw: '95' }
+          }
+        }
+      ]
+    }
+    const selection = {
+      selectedChainIds: [zcashChainId],
+      executionAddressModes: new Map([[`${zcashChainId}:${recipient.address}`, 'Public']])
+    }
+    const publicActivity = items => filterActivityItems({ ...selection, items, domain: 'public' })
+    const pending = {
+      ...receive,
+      status: 'confirming',
+      segments: [{ ...receive.segments[0], status: 'confirming' }]
+    }
+    const separate = {
+      ...receive,
+      id: 'zcash:credit:1',
+      segments: [{ ...receive.segments[0], id: 'zcash:credit:1:origin' }]
+    }
+
+    expect(publicActivity([send, pending])).toEqual([pending])
+    expect(publicActivity([send, receive])).toEqual([receive])
+    expect(publicActivity([send, receive, separate])).toEqual([receive, separate])
+    expect(publicActivity([send])).toMatchObject([
+      { kind: 'receive', snapshot: { primaryAmount: { amountRaw: '95' } } }
+    ])
+    expect(filterActivityItems({ ...selection, items: [send, receive], domain: 'shield' })).toEqual(
+      [send]
+    )
+  })
+
   test('All Networks and NEAR Confidential show Shield sends on unavailable chains', () => {
     const zcashChainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
     const zcash = {

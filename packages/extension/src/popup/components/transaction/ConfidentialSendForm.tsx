@@ -32,6 +32,7 @@ import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { SHIELD_PROVIDERS } from '@/popup/components/portfolio/shield-providers'
 import type { ShieldTokenPickerItem } from '@/popup/services/shield-transfer'
+import { resolveTransferMaximum } from '@/popup/services/transfer-maximum'
 import { sortSendAssetsByBalanceValue, sortSendNetworks } from '@/popup/services/send-asset-order'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import {
@@ -1296,7 +1297,12 @@ export function ConfidentialSendForm({
             onClick: () => {
               if (!source) return
               keepSelectedSource()
-              setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))
+              const maximumRaw = resolveTransferMaximum({
+                mode: 'reserve',
+                availableRaw,
+                payFeeFromAsset: false
+              })
+              setAmount(formatBaseUnitDecimalAmount(maximumRaw, source.asset.metadata.decimals))
             }
           }
         }}

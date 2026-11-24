@@ -135,6 +135,18 @@ test.describe('Multichain Activity presentation', () => {
       label: 'Send',
       side: 'source'
     })
+    const sameAssetRoute = {
+      source: { assetId: 'eip155:8453/slip44:60' },
+      destination: { assetId: 'eip155:8453/slip44:60' }
+    }
+    expect(getActivityAction(item, { viewedDomain: 'private' }, sameAssetRoute)).toEqual({
+      label: 'Unshield',
+      side: 'destination'
+    })
+    expect(getActivityAction(item, { viewedDomain: 'shield' }, sameAssetRoute)).toEqual({
+      label: 'Unshield',
+      side: 'source'
+    })
     const zcashWithdrawal = {
       ...item,
       snapshot: {

@@ -141,6 +141,7 @@ export function getActivityAction(
       return { label: 'Withdraw', side: 'source' }
     }
     if (source === 'shield' && destination === 'private' && shield?.operation === 'withdraw') {
+      if (sourceAssetId && sourceAssetId === destinationAssetId) return { label: 'Unshield', side }
       return viewed === 'private'
         ? { label: 'Deposit', side: 'destination' }
         : { label: 'Send', side: 'source' }

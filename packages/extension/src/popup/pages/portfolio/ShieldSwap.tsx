@@ -92,6 +92,7 @@ import {
   shieldSwapFormBalance,
   shieldSwapPickerChain
 } from '@/popup/services/shield-swap-form'
+import { resolveTransferMaximum } from '@/popup/services/transfer-maximum'
 import {
   buildShieldSwapZecSourceOptions,
   resolveShieldConfidentialFromAssetId,
@@ -1249,9 +1250,14 @@ function ShieldSwapForm({
           }}
           amountErrorId={visibleAmountError ? amountErrorId : undefined}
           onMaxClick={() => {
-            if (!from || currentBalance === null) return
+            if (!from || !trustedBalances) return
             if (!fromId) setFromId(from.asset.asset.id)
-            setAmount(currentBalance)
+            const maximumRaw = resolveTransferMaximum({
+              mode: 'reserve',
+              availableRaw: shieldFundingAvailableRaw(from, trustedBalances),
+              payFeeFromAsset: false
+            })
+            setAmount(formatBaseUnitDecimalAmount(maximumRaw, from.asset.metadata.decimals))
             setError(null)
           }}
           maxDisabled={busy || connecting || currentBalance === null || currentBalance === '0'}

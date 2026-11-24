@@ -4,7 +4,6 @@ import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import { resolveSwapTokenIconUrl, type SwapToken } from '@/core/services/intents-api'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import Big from '@/lib/big'
-import { formatChainIconUrl } from '@/lib/chain-icon'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { Network } from '@/types/wallet'
 import type { AccountNetworksView } from './account-networks-client'
@@ -12,8 +11,8 @@ import { getAssetDomainRaw, type ShieldProvider } from './asset-domains'
 import { getPrivateTransferChainIds } from './private-balance-transfer'
 import { listDepositTokenChoices } from './shield-deposit-options'
 import { listExternalShieldReceiveAssets } from './shield-deposit-route'
-import type { ShieldTokenPickerItem } from './shield-transfer'
 import { parseTokenBalanceDecimal } from './token-balance-format'
+import { sortTokenPickerRows } from './token-selector-visibility'
 import { getConfidentialZcashTransferRecipients } from './zcash-self-transfer'
 
 type ExternalAsset = ReturnType<typeof listExternalShieldReceiveAssets>[number]
@@ -32,6 +31,7 @@ export interface ShieldReceiveToken {
   readonly id: string
   readonly symbol: string
   readonly name?: string
+  readonly contractAddress?: string
   readonly iconUrl?: string
   readonly subtitle?: string
   readonly routes: readonly ShieldReceiveRoute[]
@@ -55,12 +55,13 @@ export function listShieldReceiveTokens(
       id: choice.id,
       symbol: choice.token.symbol,
       name: choice.token.name,
+      contractAddress: choice.token.contractAddress || undefined,
       iconUrl: resolveSwapTokenIconUrl(choice.token),
       subtitle: choice.distinguish
-        ? [byProtocolId.get(choice.token.assetId)?.chain.displayName, choice.token.contractAddress]
-            .filter(Boolean)
-            .join(' · ')
-        : choice.token.name,
+        ? choice.token.contractAddress || choice.token.name
+        : choice.token.name !== choice.token.symbol
+          ? choice.token.name
+          : undefined,
       routes: choice.assetIds.flatMap(protocolId => {
         const asset = byProtocolId.get(protocolId)
         return asset
@@ -99,33 +100,27 @@ export function listShieldReceiveTokens(
     tokens.splice(zecIndex, 1)
     return [{ ...token, id: 'native-zec', routes: [native, ...token.routes] }, ...tokens]
   }
-  return [{ id: 'native-zec', symbol: 'ZEC', subtitle: 'Zcash', routes: [native] }, ...tokens]
+  return [{ id: 'native-zec', symbol: 'ZEC', name: 'Zcash', routes: [native] }, ...tokens]
 }
 
-export function buildShieldReceivePickerRows(
+export function sortShieldReceiveTokens(
   tokens: readonly ShieldReceiveToken[],
   model: PortfolioReadModel | null,
   prices: AssetPriceReadModel | null
-): readonly ShieldTokenPickerItem[] {
+): readonly ShieldReceiveToken[] {
   const nativeAssets = new Map<string, PortfolioReadModel['assets'][number]>(
     model?.assets.map(asset => [asset.asset.id, asset])
   )
   const confidential = model?.confidential?.status === 'ready' ? model.confidential.assets : null
   const nearAssets = new Map(confidential?.map(asset => [asset.protocolAssetId, asset]))
-  return tokens.flatMap(token => {
-    const firstRoute = token.routes[0]
-    if (!firstRoute) return []
-
+  const rows = tokens.map(token => {
     let amount: Big | null = null
     let fiat = new Big(0)
     let missingPrice = false
     let firstPrice: Big | null = null
-    const searchTerms = new Set<string>()
     const seen = new Set<string>()
     for (const route of token.routes) {
-      searchTerms.add(route.chain.displayName)
       const catalogAsset = route.provider === 'near-confidential' ? route.asset.token : null
-      if (catalogAsset?.contractAddress) searchTerms.add(catalogAsset.contractAddress)
       const balanceKey = catalogAsset?.assetId ?? route.id
       if (seen.has(balanceKey)) continue
       seen.add(balanceKey)
@@ -152,35 +147,24 @@ export function buildShieldReceivePickerRows(
       else if (quantity.gt(0)) missingPrice = true
     }
 
-    const displayBalance = amount?.toFixed() ?? '—'
-    return [
-      {
-        key: token.id,
-        assetId: firstRoute.assetId,
+    return {
+      token,
+      balance: {
         symbol: token.symbol,
-        name: token.name,
-        subtitle: token.subtitle,
-        iconUrl:
-          firstRoute.provider === 'zcash-shield' ? formatChainIconUrl('zcash') : token.iconUrl,
-        chainId: firstRoute.chain.id,
-        chainIds: [...new Set(token.routes.map(route => route.chain.id))],
-        chainName: firstRoute.chain.displayName,
-        isNative: token.routes.some(route => route.assetId.startsWith(`${route.chain.id}/slip44:`)),
-        pinned: firstRoute.provider === 'zcash-shield',
-        nativeIconChain: firstRoute.provider === 'zcash-shield' ? 'zcash' : undefined,
-        badgeBlockchain: firstRoute.provider === 'zcash-shield' ? 'zec' : undefined,
-        searchTerms: [...searchTerms],
+        pinned: token.id === 'native-zec',
+        amount: amount?.toFixed() ?? '—',
         decimals:
-          firstRoute.provider === 'zcash-shield' ? ZEC_DECIMALS : firstRoute.asset.token.decimals,
-        displayBalance,
+          token.routes.find(route => route.provider === 'near-confidential')?.asset.token
+            .decimals ?? ZEC_DECIMALS,
         priceUsd: amount?.gt(0)
           ? missingPrice
             ? null
             : fiat.div(amount).toFixed()
           : (firstPrice?.toFixed() ?? null)
       }
-    ]
+    }
   })
+  return sortTokenPickerRows(rows, row => row.balance, 'all').map(row => row.token)
 }
 
 export function resolveShieldReceiveSelection(
