@@ -124,6 +124,7 @@ export function getActivityAction(
   const destinationAssetId = route?.destination?.assetId ?? item.snapshot?.counterAmount?.assetId
   if (isPublicSendToShield(item, perspective, route)) return { label: 'Send', side: 'source' }
   if (
+    direction === 'outgoing' &&
     shield?.operation === 'withdraw' &&
     shield.sourceDomain === 'shield' &&
     shield.destinationDomain === 'private' &&

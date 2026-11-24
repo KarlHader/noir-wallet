@@ -140,11 +140,11 @@ test.describe('Multichain Activity presentation', () => {
       destination: { assetId: 'eip155:8453/slip44:60' }
     }
     expect(getActivityAction(item, { viewedDomain: 'private' }, sameAssetRoute)).toEqual({
-      label: 'Unshield',
+      label: 'Deposit',
       side: 'destination'
     })
     expect(getActivityAction(item, { viewedDomain: 'shield' }, sameAssetRoute)).toEqual({
-      label: 'Unshield',
+      label: 'Send',
       side: 'source'
     })
     const projectedLegacyMovement = {
