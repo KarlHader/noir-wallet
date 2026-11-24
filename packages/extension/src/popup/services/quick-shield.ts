@@ -6,7 +6,6 @@ import { isNewWalletFamilyEnabled } from '@/core/chains/feature-runtime-policy'
 import type { AssetPriceReadModel } from '@/core/prices'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { Network } from '@/types'
-import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { getAssetDomainRaw, type ShieldProvider } from './asset-domains'
 import { resolveManagedIntentsCatalog } from './intents-asset-manager-client'
 import { getPrivateTransferChainIds } from './private-balance-transfer'
@@ -23,7 +22,6 @@ export interface QuickShieldAsset {
   readonly providers: readonly [ShieldProvider, ...ShieldProvider[]]
   readonly valueUsd: string | null
 }
-
 export function quickShieldSpendableRaw(
   asset: PortfolioAssetView,
   nativeZec = false
@@ -122,8 +120,4 @@ export function summarizeQuickShieldAssets(assets: readonly QuickShieldAsset[]) 
     pricedCount++
   }
   return { totalUsd: pricedCount ? total.toFixed() : null, partial: pricedCount < assets.length }
-}
-
-export function quickShieldAssetAmount({ asset, availableRaw }: QuickShieldAsset): string {
-  return formatBaseUnitDecimalAmount(availableRaw, asset.metadata.decimals)
 }

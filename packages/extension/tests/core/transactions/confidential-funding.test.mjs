@@ -281,7 +281,7 @@ test('Shield Receive defaults ZEC to Native, requires an explicit multichain cho
   const nativeOnly = listShieldReceiveTokens(network, account, [])
   expect(resolveShieldReceiveSelection(nativeOnly, null, generic, false).route).toBeNull()
   expect(resolveShieldReceiveSelection(nativeOnly, null, generic, true)).toEqual({
-    token: nativeOnly[0],
+    token: null,
     route: null
   })
   const oneNetwork = listShieldReceiveTokens(network, account, [catalog[1]])

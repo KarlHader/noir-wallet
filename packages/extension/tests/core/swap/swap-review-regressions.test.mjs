@@ -1197,10 +1197,10 @@ it('ranks Shield Swap destinations by wallet balance value and distinguishes EVM
   assert.deepEqual(
     sortShieldSwapPickerRows(rows).map(row => [row.key, row.chainName, row.badgeBlockchain]),
     [
-      [ethereum.managed.assetId, 'Ethereum', 'eth'],
       ['native-zec-destination:shielded', 'Zcash', 'zec'],
-      [base.managed.assetId, 'Base', 'base'],
-      ['native-zec-destination:transparent', 'Zcash', 'zec']
+      ['native-zec-destination:transparent', 'Zcash', 'zec'],
+      [ethereum.managed.assetId, 'Ethereum', 'eth'],
+      [base.managed.assetId, 'Base', 'base']
     ]
   )
 })

@@ -29,6 +29,7 @@ import {
 } from '@/popup/components/transaction/SendInputCards'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
+import { SHIELD_PROVIDERS } from '@/popup/components/portfolio/shield-providers'
 import type { ShieldTokenPickerItem } from '@/popup/services/shield-transfer'
 import { sortSendAssetsByBalanceValue, sortSendNetworks } from '@/popup/services/send-asset-order'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
@@ -373,6 +374,7 @@ export function ConfidentialSendForm({
       symbol: row.item.asset.metadata.symbol,
       iconUrl: row.item.asset.metadata.iconUrl,
       chainName: row.item.chain.chain.displayName,
+      subtitle: SHIELD_PROVIDERS['near-confidential'].name,
       chainId: row.item.chain.chain.id,
       badgeBlockchain: resolveChainIconAlias(
         row.item.chain.chain.family,
@@ -1000,7 +1002,7 @@ export function ConfidentialSendForm({
           summary={
             <TransactionReviewExchangeSummary
               presentation="single"
-              destinationLabel="Recipient receives"
+              destinationLabel="Recipient receive"
               destinationPrefix=""
               source={{
                 asset: {
@@ -1044,7 +1046,7 @@ export function ConfidentialSendForm({
               )
             },
             {
-              label: 'Recipient receives',
+              label: 'Recipient receive',
               content: (
                 <AmountDisplay
                   value={output}

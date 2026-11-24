@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/c
 import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { ShieldProviderSupport, ShieldProviderLogo, SHIELD_PROVIDERS } from './shield-providers'
 
-const providers = ['near-confidential', 'zcash-shield'] as const
+const providers = ['zcash-shield', 'near-confidential'] as const
 
 export function ShieldProviderDialog({
   open,
@@ -75,33 +75,5 @@ export function ShieldProviderDialog({
         </div>
       </DialogContent>
     </Dialog>
-  )
-}
-
-export function ShieldSendProviderTabs({
-  value,
-  onChange,
-  availableProviders
-}: {
-  readonly value: ShieldProvider
-  readonly onChange: (provider: ShieldProvider) => void
-  readonly availableProviders: readonly ShieldProvider[]
-}) {
-  return (
-    <div className="grid grid-cols-2 border-b border-white/10" aria-label="Shield provider">
-      {providers.map(provider => (
-        <button
-          key={provider}
-          type="button"
-          aria-pressed={value === provider}
-          disabled={!availableProviders.includes(provider)}
-          onClick={() => onChange(provider)}
-          className={`wallet-interactive relative flex h-12 min-w-0 items-center justify-center gap-2 px-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-45 ${value === provider ? 'text-foreground after:absolute after:inset-x-1/4 after:bottom-0 after:h-0.5 after:bg-foreground' : 'text-muted hover:text-foreground'}`}
-        >
-          <ShieldProviderLogo provider={provider} size={20} />
-          {provider === 'near-confidential' ? 'Confidential' : 'Zcash'}
-        </button>
-      ))}
-    </div>
   )
 }

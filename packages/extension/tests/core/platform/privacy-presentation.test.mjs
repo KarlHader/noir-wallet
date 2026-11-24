@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { summarizePortfolioFiat } from '../../../src/popup/services/portfolio-prices.ts'
+import {
+  getPortfolioAssetUsdValue,
+  summarizePortfolioFiat,
+  withConfidentialAssetPrices
+} from '../../../src/popup/services/portfolio-prices.ts'
 import { getActivityTransactionReferences } from '../../../src/popup/services/activity-transaction-references.ts'
 import { shouldWarnSmallTransfer } from '../../../src/popup/services/activity-small-transfer-warning.ts'
 import { getActivityAddressAlias } from '../../../src/popup/services/activity-address-alias.ts'
@@ -664,6 +668,51 @@ test('Home distinguishes an initial load, an unavailable valuation and a confirm
       { ...fiat, missingAssetCount: 1 }
     )
   ).toBe('unavailable')
+})
+
+test('home totals include the Public balance priced by a matching Confidential holding', () => {
+  const chainId = 'eip155:56'
+  const assetId = `${chainId}/erc20:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d`
+  const asset = {
+    asset: { id: assetId, chainId, kind: 'token' },
+    metadata: { decimals: 18, symbol: 'USDC' },
+    balance: {
+      totalRaw: '89000000000000000000',
+      mainRaw: '88000000000000000000',
+      privateRaw: '1000000000000000000',
+      privateOnchainRaw: '0',
+      confidentialRaw: '1000000000000000000'
+    }
+  }
+  const portfolio = {
+    assets: [asset],
+    chains: [{ chain: { id: chainId, family: 'evm' }, assets: [asset] }],
+    confidential: {
+      status: 'ready',
+      assets: [
+        {
+          assetId,
+          chainId,
+          decimals: 18,
+          tokenId: 'private-usdc',
+          protocolAssetId: 'usdc',
+          availableRaw: asset.balance.confidentialRaw,
+          priceUsd: '0.9996',
+          priceUpdatedAt: new Date().toISOString()
+        }
+      ]
+    }
+  }
+  const listPrices = withConfidentialAssetPrices(portfolio, null)
+  expect(getPortfolioAssetUsdValue(asset, listPrices, asset.balance.mainRaw)).toBe('87.9648')
+  expect(summarizePortfolioFiat(portfolio, null)).toMatchObject({
+    totalUsd: '88.9644',
+    missingAssetCount: 0
+  })
+  expect(getHomeAssetBreakdown({ livePortfolioTotal: true, portfolio })).toMatchObject({
+    publicUsd: '87.9648',
+    shieldUsd: '0.9996'
+  })
 })
 
 test('home asset domains count each EVM and Zcash balance once', () => {

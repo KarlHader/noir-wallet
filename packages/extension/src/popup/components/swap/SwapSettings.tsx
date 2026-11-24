@@ -10,21 +10,31 @@ import { openModal } from '@/popup/provider/ModalManager'
 
 export function SwapSettingsButton({
   onChange,
-  disabled = false
+  disabled = false,
+  shieldDraft
 }: {
   readonly onChange?: () => void
   readonly disabled?: boolean
+  readonly shieldDraft?: { slippageBps: number; onChange: (slippageBps: number) => void }
 }) {
+  const label = shieldDraft ? 'Shield settings' : 'Swap settings'
   const openSettings = () => {
     const { slippage, quoteMode, setQuoteSettings } = useSwapPreferences.getState()
     void openModal({
-      title: 'Swap Settings',
+      title: shieldDraft ? 'Shield Settings' : 'Swap Settings',
       showCloseButton: true,
       body: (_resolve, close) => (
         <SwapSettingsContent
-          currentSlippage={slippage}
+          currentSlippage={shieldDraft ? shieldDraft.slippageBps / 100 : slippage}
           currentQuoteMode={quoteMode}
+          slippageOnly={Boolean(shieldDraft)}
           onSave={settings => {
+            if (shieldDraft) {
+              const next = Math.round(settings.slippage * 100)
+              if (next !== shieldDraft.slippageBps) shieldDraft.onChange(next)
+              close()
+              return
+            }
             const current = useSwapPreferences.getState()
             if (
               settings.slippage !== current.slippage ||
@@ -44,8 +54,8 @@ export function SwapSettingsButton({
       type="button"
       onClick={openSettings}
       disabled={disabled}
-      aria-label="Swap settings"
-      title="Swap settings"
+      aria-label={label}
+      title={label}
       className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-muted hover:bg-accent hover:text-foreground disabled:opacity-40"
     >
       <Icon icon="lucide:settings-2" width={18} height={18} />
@@ -56,59 +66,64 @@ export function SwapSettingsButton({
 function SwapSettingsContent({
   currentSlippage,
   currentQuoteMode,
+  slippageOnly,
   onSave
 }: {
   currentSlippage: number
   currentQuoteMode: RheaSwapQuoteMode
+  slippageOnly: boolean
   onSave: (settings: SwapQuoteSettings) => void
 }) {
   const [slippage, setSlippage] = useState(currentSlippage.toString())
   const [quoteMode, setQuoteMode] = useState(currentQuoteMode)
   const parsedSlippage = Number(slippage)
+  const maxSlippage = slippageOnly ? 100 : 50
   const validSlippage =
     /^\d+(?:\.\d{1,2})?$/.test(slippage) &&
     Number.isFinite(parsedSlippage) &&
     parsedSlippage >= 0 &&
-    parsedSlippage <= 50
+    parsedSlippage <= maxSlippage
 
   return (
     <div className="py-4">
-      <div className="mb-5">
-        <div className="mb-2 text-sm font-medium">Request mode</div>
-        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Request mode">
-          {(
-            [
-              ['best-price', 'Best Price', 'Wait longer for a better quote'],
-              ['fast', 'Fast', 'Faster quote response']
-            ] as const
-          ).map(([mode, label, description]) => (
-            <button
-              key={mode}
-              type="button"
-              role="radio"
-              aria-checked={quoteMode === mode}
-              onClick={() => setQuoteMode(mode)}
-              className={`min-h-20 rounded-lg border p-3 text-left transition-colors ${
-                quoteMode === mode
-                  ? 'border-primary bg-primary/10'
-                  : 'border-border bg-card hover:bg-white/10'
-              }`}
-            >
-              <span className="flex items-center justify-between gap-1 text-sm font-medium">
-                {label}
-                <Icon
-                  icon="lucide:check"
-                  width={15}
-                  height={15}
-                  className={quoteMode === mode ? 'text-primary' : 'invisible'}
-                  aria-hidden="true"
-                />
-              </span>
-              <span className="mt-1 block text-xs leading-4 text-muted">{description}</span>
-            </button>
-          ))}
+      {!slippageOnly && (
+        <div className="mb-5">
+          <div className="mb-2 text-sm font-medium">Request mode</div>
+          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Request mode">
+            {(
+              [
+                ['best-price', 'Best Price', 'Wait longer for a better quote'],
+                ['fast', 'Fast', 'Faster quote response']
+              ] as const
+            ).map(([mode, label, description]) => (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={quoteMode === mode}
+                onClick={() => setQuoteMode(mode)}
+                className={`min-h-20 rounded-lg border p-3 text-left transition-colors ${
+                  quoteMode === mode
+                    ? 'border-primary bg-primary/10'
+                    : 'border-border bg-card hover:bg-white/10'
+                }`}
+              >
+                <span className="flex items-center justify-between gap-1 text-sm font-medium">
+                  {label}
+                  <Icon
+                    icon="lucide:check"
+                    width={15}
+                    height={15}
+                    className={quoteMode === mode ? 'text-primary' : 'invisible'}
+                    aria-hidden="true"
+                  />
+                </span>
+                <span className="mt-1 block text-xs leading-4 text-muted">{description}</span>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="mb-2 text-sm font-medium">Slippage tolerance</div>
 
@@ -142,7 +157,7 @@ function SwapSettingsContent({
         <TransactionNotice
           id="swap-settings-slippage-error"
           className="mb-3"
-          message="Enter 0 to 50 with up to 2 decimals."
+          message={`Enter 0 to ${maxSlippage} with up to 2 decimals.`}
         />
       )}
 

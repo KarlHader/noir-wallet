@@ -1,4 +1,5 @@
 import { EVM_DAPP_RUNTIME_METHODS, type EvmDAppRuntimeMethod } from '@/core/dapp/eip1193'
+import { parseDAppExecutionModeScope } from '@/core/dapp/dapp-execution-mode'
 import {
   BITCOIN_DAPP_RUNTIME_METHODS,
   type BitcoinDAppRuntimeMethod
@@ -342,6 +343,14 @@ const isAssetMarketHistoryRange: RuntimeFieldValidator = value =>
   value === 'all'
 const isNetworkMode: RuntimeFieldValidator = value => value === 'mainnet' || value === 'testnet'
 const isDAppExecutionMode: RuntimeFieldValidator = value => value === 'main' || value === 'private'
+const isDAppExecutionModeScope: RuntimeFieldValidator = value => {
+  try {
+    parseDAppExecutionModeScope(value)
+    return true
+  } catch {
+    return false
+  }
+}
 const isEvmPayloadFingerprint: RuntimeFieldValidator = value =>
   typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)
 const isCanonicalBitcoinPsbtBase64: RuntimeFieldValidator = value =>
@@ -492,6 +501,10 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     }
   },
   GET_DAPP_EXECUTION_MODE: {},
+  GET_ACCOUNT_INCOGNITO_SETUP: { required: { scope: isDAppExecutionModeScope } },
+  COMPLETE_ACCOUNT_INCOGNITO_SETUP: {
+    required: { scope: isDAppExecutionModeScope, confirmPrivateSetup: value => value === true }
+  },
   SET_DAPP_EXECUTION_MODE: {
     required: { mode: isDAppExecutionMode },
     optional: { confirmPrivateSetup: isBoolean, confirmAffectedOperations: isBoolean }
@@ -1157,6 +1170,8 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     GET_EXTENSION_DISPLAY_MODE: ['extension-page'],
     SET_EXTENSION_DISPLAY_MODE: ['extension-page'],
     GET_DAPP_EXECUTION_MODE: ['extension-page'],
+    GET_ACCOUNT_INCOGNITO_SETUP: ['extension-page'],
+    COMPLETE_ACCOUNT_INCOGNITO_SETUP: ['extension-page'],
     SET_DAPP_EXECUTION_MODE: ['extension-page'],
     SWITCH_NETWORK_MODE: ['extension-page'],
     GET_ACTIVITY: ['extension-page'],

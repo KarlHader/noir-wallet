@@ -80,10 +80,16 @@ export function filterTokenPickerRows<Row>(
   search: string,
   adapter: Readonly<{
     chainId: (row: Row) => string
+    matchesNetwork?: (row: Row, network: string) => boolean
     searchFields: (row: Row) => TokenSearchFields
   }>
 ): readonly Row[] {
-  const candidates = network === 'all' ? rows : rows.filter(row => adapter.chainId(row) === network)
+  const candidates =
+    network === 'all'
+      ? rows
+      : rows.filter(
+          row => adapter.matchesNetwork?.(row, network) ?? adapter.chainId(row) === network
+        )
   if (!search.trim()) return candidates
   return candidates
     .map(row => ({ row, rank: rankTokenSearchFields(adapter.searchFields(row), search) }))
@@ -96,7 +102,9 @@ export function rankTokenSearchFields(token: TokenSearchFields, search: string):
   const query = search.trim().toLowerCase()
   if (!query) return 0
   if (token.contractAddress?.toLowerCase() === query) return 0
-  if (query.startsWith('0x')) return 99
+  if (query.startsWith('0x')) {
+    return token.searchTerms?.some(term => term.toLowerCase() === query) ? 0 : 99
+  }
   if (token.symbol?.toLowerCase() === query) return 1
   if (token.name?.toLowerCase() === query) return 2
   const terms = [token.assetId, ...(token.searchTerms ?? [])]

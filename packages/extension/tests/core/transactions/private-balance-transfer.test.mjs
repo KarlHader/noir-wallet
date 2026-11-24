@@ -908,6 +908,50 @@ test('binds a Shield ETH Move to the selected EVM destination asset', () => {
       protocolAssetId: source.managed.protocolAssetId
     }
   })
+  const incognitoAddress = `0x${'2'.repeat(40)}`
+  const publicAddress = `0x${'3'.repeat(40)}`
+  const incognitoUnshield = buildFixedShieldFundsRequest({
+    ...input,
+    direction: 'unshield',
+    accountDomain: 'private'
+  })
+  expect(incognitoUnshield).toMatchObject({
+    sourceDomain: 'shield',
+    destinationDomain: 'private',
+    destination: fixedUnshield.destination
+  })
+  expect(
+    matchesFixedShieldFundsRecipient(
+      { destinationAddress: incognitoAddress },
+      incognitoUnshield,
+      incognitoAddress
+    )
+  ).toBe(true)
+  expect(
+    matchesFixedShieldFundsRecipient(
+      { destinationAddress: publicAddress },
+      incognitoUnshield,
+      incognitoAddress
+    )
+  ).toBe(false)
+  const incognitoShield = buildFixedShieldFundsRequest({
+    ...input,
+    direction: 'shield',
+    accountDomain: 'private',
+    slippageBps: 1
+  })
+  expect(incognitoShield).toMatchObject({
+    sourceDomain: 'private',
+    destinationDomain: 'shield',
+    slippageBps: 1
+  })
+  expect(
+    matchesFixedShieldFundsRecipient(
+      { sourceAddress: publicAddress },
+      incognitoShield,
+      incognitoAddress
+    )
+  ).toBe(false)
   const fake = options.find(item => item.asset.asset.id === fakeAssetId)
   expect(fake).toBeDefined()
   const sendInput = {

@@ -1,8 +1,11 @@
+import { useMemo } from 'react'
 import { Icon } from '@iconify/react'
+import { getZcashChainId } from '@/core/chains/registry'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import type { Network } from '@/types'
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
+import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { useNavigate } from '@/popup/provider/Router'
 import type { AccountNetworksView } from '@/popup/services/account-networks-client'
 import { buildShieldProviderGroups } from '@/popup/services/asset-domains'
@@ -10,14 +13,14 @@ import type { PortfolioSnapshot } from '@/popup/services/portfolio-snapshot-stor
 import type { selectShieldActions } from '@/popup/services/shield-action-selection'
 import { formatShieldProviderFiat } from '@/popup/services/shield-provider-presentation'
 import {
-  nearConfidentialVaultIcons,
-  zcashShieldVaultIcons
+  nearConfidentialVaultSupport,
+  shieldVaultChainIcons
 } from '@/popup/services/shield-vault-display-icons'
 import {
   resolveShieldZcashVaultEntry,
   shieldZcashEnablePath
 } from '@/popup/services/shield-zcash-entry'
-import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
+import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { BalanceSkeleton } from '@/popup/components/ui/skeleton'
 import { ShieldProviderLogo, SHIELD_PROVIDERS } from './shield-providers'
 
@@ -59,6 +62,11 @@ export function HomeShieldProviders({
     ? buildShieldProviderGroups(model, prices).find(group => group.id === 'zcash-shield')
     : undefined
   const { navigate } = useNavigate()
+  const directoryTokens = useSwapTokenCatalog(network === 'mainnet')
+  const nearSupport = useMemo(
+    () => nearConfidentialVaultSupport(directoryTokens),
+    [directoryTokens]
+  )
   const loading = status === 'loading'
   const zcashEntry = resolveShieldZcashVaultEntry({
     network,
@@ -75,13 +83,16 @@ export function HomeShieldProviders({
       provider: 'near-confidential',
       fiat: near.fiat,
       loading: near.status !== 'ready' && (loading || loadingShieldBalances),
-      icons: nearConfidentialVaultIcons(near.entries)
+      networks: network === 'mainnet' ? nearSupport.networks : []
     },
     {
       provider: 'zcash-shield',
       fiat: zcash?.fiat ?? null,
       loading: loading || pricesLoading,
-      icons: zcashShieldVaultIcons(zcash?.entries.map(entry => entry.asset) ?? [])
+      networks:
+        account?.networks
+          .map(entry => entry.chain)
+          .filter(chain => chain.id === getZcashChainId(network)) ?? []
     }
   ] as const
 
@@ -104,6 +115,7 @@ export function HomeShieldProviders({
           const enablePath = needsZcash ? enableZcashPath : null
           const label = needsZcash ? '—' : formatShieldProviderFiat(card.fiat, balancesHidden)
           const showSkeleton = !needsZcash && !balancesHidden && card.fiat == null && card.loading
+          const networks = shieldVaultChainIcons(card.networks)
 
           return (
             <button
@@ -131,17 +143,24 @@ export function HomeShieldProviders({
                   </span>
                 ) : (
                   <>
-                    <span className="flex min-w-0 shrink-0 items-center">
-                      {card.icons.map((entry, index) => (
-                        <TokenIcon
+                    <span
+                      className="flex min-w-0 shrink-0 items-center gap-0.5"
+                      title={networks.map(entry => entry.label).join(', ') || undefined}
+                    >
+                      {networks.slice(0, 4).map(entry => (
+                        <ChainIcon
                           key={entry.key}
-                          assetId={entry.assetId}
-                          symbol={entry.symbol}
-                          icon={entry.icon}
-                          size={16}
-                          className={index ? '-ml-1 shrink-0' : 'shrink-0'}
+                          chain={entry.iconChain}
+                          alt={entry.label}
+                          width={16}
+                          height={16}
+                          showTooltip={false}
+                          className="shrink-0"
                         />
                       ))}
+                      {networks.length > 4 && (
+                        <span className="ml-0.5 text-muted">+{networks.length - 4}</span>
+                      )}
                     </span>
                     {showSkeleton ? (
                       <BalanceSkeleton />

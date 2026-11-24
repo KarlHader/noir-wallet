@@ -4,6 +4,7 @@ import { Icon } from '@iconify/react'
 import type { ActivityItem } from '@/core/activity'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { useWalletStore } from '@/store/wallet-store'
+import { useAccountDataStore } from '@/store/account-data-store'
 import Big from '@/lib/big'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -17,9 +18,9 @@ import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-manager-client'
 import {
-  availableDepositTokens,
-  depositSourceNetworks
-} from '@/popup/services/shield-deposit-options'
+  isIronwoodActiveAtHeight,
+  nearConfidentialVaultSupport
+} from '@/popup/services/shield-vault-display-icons'
 import {
   getConfidentialWalletDetailAssetId,
   summarizeNearConfidentialHoldings
@@ -31,6 +32,7 @@ import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { PortfolioChainAssetRow } from '@/popup/components/portfolio/PortfolioAssetGroupCard'
 import {
+  IRONWOOD_SHIELD_DESCRIPTION,
   ShieldProviderSupport,
   ShieldProviderLogo,
   SHIELD_PROVIDERS
@@ -74,6 +76,10 @@ function ShieldProviderContent() {
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
   const { activeAccount, loading: accountLoading } = useActiveAccountNetworks()
+  const zcashHeight = useAccountDataStore(state => {
+    const { latestHeight, currentHeight } = state.getCurrentSyncState()
+    return Math.max(latestHeight, currentHeight)
+  })
   const account = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
@@ -187,10 +193,10 @@ function ShieldProviderContent() {
     near.entries.every(entry => Big(entry.asset.availableRaw).eq(0))
   const showNearEmptyState = nearBalanceEmpty && !connecting && !connectionError
   const networks = model?.chains.filter(chain => chain.chain.family === 'zcash') ?? []
-  const supportedNetworks = useMemo(() => depositSourceNetworks(), [])
-  const supportedTokens = directoryTokens
-    ? availableDepositTokens(directoryTokens, supportedNetworks)
-    : null
+  const nearSupport = useMemo(
+    () => nearConfidentialVaultSupport(directoryTokens),
+    [directoryTokens]
+  )
   const providerFiat = provider === 'near-confidential' ? near.fiat : group?.fiat
   const providerLoading =
     provider === 'near-confidential'
@@ -254,6 +260,10 @@ function ShieldProviderContent() {
   }
 
   const info = SHIELD_PROVIDERS[provider]
+  const description =
+    provider === 'zcash-shield' && isIronwoodActiveAtHeight(currentNetwork, zcashHeight)
+      ? IRONWOOD_SHIELD_DESCRIPTION
+      : info.description
   const openAction = (action: (typeof SHIELD_ACTIONS)[number]['action']) => {
     navigate(
       buildShieldActionPath(action, {
@@ -286,18 +296,12 @@ function ShieldProviderContent() {
             <ShieldProviderLogo provider={provider} size={49} />
           </div>
           <h1 className="mt-5 text-lg font-bold">{info.detailName}</h1>
-          {provider === 'near-confidential' && (
-            <p className="mx-auto mt-2 max-w-[343px] text-xs leading-4 text-wallet-secondary">
-              {info.description}
-            </p>
-          )}
+          <p className="mx-auto mt-2 max-w-[343px] text-xs leading-4 text-wallet-secondary">
+            {description}
+          </p>
           {provider === 'near-confidential' ? (
             <div className="mt-5">
-              <ShieldProviderSupport
-                provider={provider}
-                networks={supportedNetworks}
-                tokens={supportedTokens}
-              />
+              <ShieldProviderSupport provider={provider} {...nearSupport} />
             </div>
           ) : (
             <div className="mt-5 flex min-h-5 items-center justify-between gap-3 text-left">

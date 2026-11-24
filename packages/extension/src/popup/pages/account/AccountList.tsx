@@ -63,7 +63,7 @@ function AccountTotalValue({
   const value = hidden
     ? '••••'
     : canShowValue && snapshot
-      ? `${snapshot.complete ? '' : '≈'}${formatFiatAmount(snapshot.totalUsd, { showSign: true })}`
+      ? formatFiatAmount(snapshot.totalUsd, { showSign: true })
       : '—'
   const accessibleValue = hidden
     ? 'Account total hidden'

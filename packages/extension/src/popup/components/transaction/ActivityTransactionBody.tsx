@@ -356,9 +356,26 @@ export function buildActivityTransactionView(input: {
 
 function RouteIcon({ alias }: { readonly alias?: string }) {
   return alias ? (
-    <ChainIcon chain={alias} width={18} height={18} className="size-[18px]" showTooltip={false} />
+    <ChainIcon
+      chain={alias}
+      width={18}
+      height={18}
+      className="size-[18px] shrink-0"
+      showTooltip={false}
+    />
   ) : (
-    <Icon icon="lucide:network" width={18} height={18} />
+    <Icon icon="lucide:network" width={18} height={18} className="shrink-0" aria-hidden />
+  )
+}
+
+function ActivityNetworkLabel({ alias, name }: { readonly alias?: string; readonly name: string }) {
+  return (
+    <span className="inline-flex min-w-0 items-center justify-end gap-1.5">
+      <RouteIcon alias={alias} />
+      <span className="min-w-0 truncate" title={name}>
+        {name}
+      </span>
+    </span>
   )
 }
 
@@ -499,30 +516,24 @@ export function ActivityTransactionRoute({ view }: { readonly view: ActivityTran
   if (!swap)
     return (
       <DetailRow label="Network">
-        <span className="max-w-[220px] text-right text-sm">{view.primaryNetworkName}</span>
+        <ActivityNetworkLabel alias={view.primaryChainIconAlias} name={view.primaryNetworkName} />
       </DetailRow>
     )
   const sameNetworkAccountTransfer =
     isOwnedAccountTransfer(swap) && swap.sourceNetwork === swap.destinationNetwork
   return sameNetworkAccountTransfer ? (
     <DetailRow label="Network">
-      <span className="flex items-center justify-end gap-1.5 text-sm">
-        <RouteIcon alias={swap.sourceChainIconAlias} />
-        {swap.sourceNetwork}
-      </span>
+      <ActivityNetworkLabel alias={swap.sourceChainIconAlias} name={swap.sourceNetwork} />
     </DetailRow>
   ) : (
     <DetailRow label="Route">
       <span className="flex min-w-0 max-w-[calc(100vw-110px)] items-center justify-end gap-1 whitespace-nowrap text-right text-xs">
-        <RouteIcon alias={swap.sourceChainIconAlias} />
-        <span className="min-w-0 truncate" title={swap.sourceNetwork}>
-          {swap.sourceNetwork}
-        </span>
+        <ActivityNetworkLabel alias={swap.sourceChainIconAlias} name={swap.sourceNetwork} />
         <Icon icon="lucide:arrow-right" width={13} height={13} className="shrink-0 text-muted" />
-        <RouteIcon alias={swap.destinationChainIconAlias} />
-        <span className="min-w-0 truncate" title={swap.destinationNetwork}>
-          {swap.destinationNetwork}
-        </span>
+        <ActivityNetworkLabel
+          alias={swap.destinationChainIconAlias}
+          name={swap.destinationNetwork}
+        />
       </span>
     </DetailRow>
   )

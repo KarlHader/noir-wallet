@@ -4,7 +4,10 @@ import {
   shieldTokenSelectionItem
 } from '@/popup/components/tokens/ShieldTokenPicker'
 import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
-import { buildShieldDestinationPickerRows } from '@/popup/services/shield-swap-form'
+import {
+  buildShieldDestinationPickerRows,
+  sortShieldSwapPickerRows
+} from '@/popup/services/shield-swap-form'
 import {
   TokenSelectorContent,
   TokenSelectorDialog
@@ -1307,10 +1310,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   ])
   const nativeZecPickerRows = useMemo(
     () =>
-      shieldPickerRows.filter(
-        row =>
-          row.key === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID ||
-          row.key === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+      sortShieldSwapPickerRows(
+        shieldPickerRows.filter(
+          row =>
+            row.key === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID ||
+            row.key === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+        )
       ),
     [shieldPickerRows]
   )
@@ -8121,6 +8126,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         {shieldZecPickerOpen && (
           <ShieldTokenPicker
             rows={shieldPickerRows}
+            policy="all"
             balancesHidden={balancesHidden}
             initialNetwork={shieldPickerNetwork}
             loading={!shieldPickerReady}

@@ -1,12 +1,9 @@
-import { useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
-import incognitoWatermark from '@/images/figma-incognito-watermark.svg'
-import { formatAssetDomainFiat } from '@/popup/services/asset-domains'
+import { formatFiatAmount } from '@/lib/number-format'
 import type { HomeAssetDomainDisplay } from '@/popup/services/home-asset-breakdown'
 import type { HomeAssetDomain } from '@/popup/services/home-navigation'
 import { BalanceSkeleton } from '../ui/skeleton'
-import { Button } from '../ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
+import { IncognitoSetupButton } from '../account/IncognitoSetupButton'
 
 const balanceCards = [
   { domain: 'shield', label: 'Shield', icon: 'lucide:shield-check' },
@@ -19,6 +16,7 @@ export interface HomeBalanceOverviewProps {
   readonly display: HomeAssetDomainDisplay
   readonly showIncognito: boolean
   readonly incognitoEnabled: boolean
+  readonly onEnableIncognito?: () => Promise<boolean>
   readonly hidden: boolean
   readonly modeSelectionDisabled: boolean
   readonly quickShieldLabel?: string
@@ -32,6 +30,7 @@ export function HomeBalanceOverview({
   display,
   showIncognito,
   incognitoEnabled,
+  onEnableIncognito,
   hidden,
   modeSelectionDisabled,
   quickShieldLabel,
@@ -39,8 +38,6 @@ export function HomeBalanceOverview({
   onToggleHidden,
   onSelect
 }: HomeBalanceOverviewProps) {
-  const [setupOpen, setSetupOpen] = useState(false)
-  const setupTrigger = useRef<HTMLButtonElement>(null)
   const canSetUpIncognito = showIncognito && !incognitoEnabled
   const cards = balanceCards.filter(
     card => card.domain !== 'private' || (showIncognito && incognitoEnabled)
@@ -50,8 +47,15 @@ export function HomeBalanceOverview({
     if (hidden) return <span aria-label="Balance hidden">••••</span>
     if (display.loading[cardDomain]) return <BalanceSkeleton className={skeleton} />
     return (
-      <span className="tabular-nums wrap-anywhere">
-        {formatAssetDomainFiat(display.totals[cardDomain], display.partial[cardDomain])}
+      <span
+        className="tabular-nums wrap-anywhere"
+        title={
+          display.partial[cardDomain] && display.totals[cardDomain] !== null
+            ? 'Partial balance'
+            : undefined
+        }
+      >
+        {formatFiatAmount(display.totals[cardDomain], { showSign: true })}
       </span>
     )
   }
@@ -119,9 +123,7 @@ export function HomeBalanceOverview({
                       />
                       {cardDomain === 'shield' && (
                         <div className="min-w-0 flex-1 pt-2 text-[13px] leading-[17px]">
-                          <p className="home-balance-description">
-                            Combined balance across privacy providers.
-                          </p>
+                          <p className="home-balance-description">Total across privacy providers</p>
                           {quickShieldLabel && onQuickShield && (
                             <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2">
                               <span className="min-w-0 wrap-anywhere">
@@ -140,18 +142,13 @@ export function HomeBalanceOverview({
                           )}
                         </div>
                       )}
-                      {cardDomain === 'public' && canSetUpIncognito && (
-                        <button
-                          ref={setupTrigger}
-                          type="button"
-                          aria-label="Enable Incognito"
-                          aria-haspopup="dialog"
+                      {cardDomain === 'public' && canSetUpIncognito && onEnableIncognito && (
+                        <IncognitoSetupButton
                           disabled={modeSelectionDisabled}
-                          onClick={() => setSetupOpen(true)}
-                          className="wallet-interactive mt-auto ml-auto min-h-8 shrink-0 rounded-md border border-dashed border-current/35 px-3 text-sm hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
-                        >
-                          + Incognito
-                        </button>
+                          complete={onEnableIncognito}
+                          onCompleted={() => onSelect('private')}
+                          className="mt-auto ml-auto"
+                        />
                       )}
                     </div>
                   </div>
@@ -161,53 +158,6 @@ export function HomeBalanceOverview({
           )
         })}
       </div>
-      <Dialog
-        open={setupOpen && canSetUpIncognito && domain === 'public'}
-        onOpenChange={setSetupOpen}
-      >
-        <DialogContent
-          position="bottom"
-          overlayClassName="bg-black/55 backdrop-blur-none"
-          className="home-wallet-sheet h-[70dvh] gap-4 rounded-t-[20px] px-4 pt-4 pb-6"
-          onCloseAutoFocus={event => {
-            if (!setupTrigger.current) return
-            event.preventDefault()
-            setupTrigger.current.focus()
-          }}
-        >
-          <DialogTitle className="pr-10 text-lg font-medium">+ Incognito</DialogTitle>
-          <div className="mx-3 mt-3 space-y-4 text-center">
-            <div
-              data-balance-domain="private"
-              data-expanded="true"
-              aria-hidden="true"
-              className="home-balance-card home-balance-preview relative isolate h-[140px] overflow-hidden rounded-xl p-3.5 text-left"
-            >
-              <div className="flex justify-between gap-2 text-sm">
-                <span>Incognito</span>
-                <span className="text-lg font-semibold">$••••</span>
-              </div>
-              <img className="mt-4 size-[70px] opacity-35" src={incognitoWatermark} alt="" />
-            </div>
-            <h3 className="text-lg font-medium">Incognito Wallet</h3>
-            <DialogDescription className="px-3 pt-3 leading-[18px] text-wallet-secondary">
-              Use a separate address for DeFi. Your existing recovery phrase backs up this wallet
-              too.
-            </DialogDescription>
-            <Button
-              size="wallet"
-              className="mt-4 w-[94%]"
-              disabled={modeSelectionDisabled}
-              onClick={() => {
-                setSetupOpen(false)
-                onSelect('private')
-              }}
-            >
-              Create Now
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </section>
   )
 }

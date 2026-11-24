@@ -28,6 +28,7 @@ import type {
 } from '@/core/services/confidential-funding'
 import { getConfidentialAvailableForAsset } from '@/core/services/confidential-funding'
 import type { TransferDomain } from './private-balance-transfer'
+import type { TokenPickerBalance } from './token-selector-visibility'
 import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
 import { formatIntentsConfirmationTime } from './confirmation-time-format'
 
@@ -53,14 +54,18 @@ export interface ShieldTokenPickerItem {
   readonly iconUrl?: string
   readonly chainName: string
   readonly chainId: string
+  readonly chainIds?: readonly string[]
   readonly badgeBlockchain?: string
   readonly nativeIconChain?: string
   readonly zcashFundingSource?: FundingSource
   readonly sourceLabel?: string
   readonly availableRaw?: string
   readonly displayBalance?: string
+  readonly isNative?: boolean
+  readonly pinned?: boolean
   readonly decimals: number
   readonly priceUsd?: string | number | null
+  readonly valueUsd?: string | null
   readonly disabledReason?: string
   readonly subtitle?: string
   readonly title?: string
@@ -72,6 +77,20 @@ export function getZcashTokenPickerChain(network: Network) {
     chainId: getZcashChainId(network),
     chainName: network === 'testnet' ? 'Zcash Testnet' : 'Zcash',
     badgeBlockchain: 'zec'
+  }
+}
+
+export function shieldTokenPickerBalance(row: ShieldTokenPickerItem): TokenPickerBalance {
+  return {
+    ...row,
+    amount: row.displayBalance,
+    isNative: row.isNative ?? row.assetId.startsWith(`${row.chainId}/slip44:`),
+    pinOrder:
+      row.zcashFundingSource === 'shielded'
+        ? 0
+        : row.zcashFundingSource === 'transparent'
+          ? 1
+          : undefined
   }
 }
 

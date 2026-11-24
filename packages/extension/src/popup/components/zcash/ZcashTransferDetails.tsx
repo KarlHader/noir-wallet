@@ -78,30 +78,23 @@ export function ZcashTransferSyncStatus({
   return null
 }
 
-export function ZcashTransferReview({
-  transfer,
-  quickShield = false
-}: {
-  readonly transfer: ZcashTransferState
-  readonly quickShield?: boolean
-}) {
+export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTransferState }) {
   const { review, networkName, action } = transfer
   const { quote } = review
   const chain = { name: networkName, icon: 'zcash' }
-  const title = quickShield ? 'Quick Shield' : `Confirm ${action.label}`
+  const title = `Confirm ${action.label}`
   return (
     <TransactionReviewDialog
       open={review.open}
       title={title}
       description="Review the amount, destination, and fee."
       fullHeight={review.submitting}
-      quickShield={quickShield}
       onOpenChange={review.onOpenChange}
     >
       <TransactionReviewView
         title={title}
         showTitle
-        variant={quickShield ? 'quick-shield' : 'figma'}
+        variant="figma"
         asset={{ symbol: 'ZEC', nativeChain: 'zcash' }}
         amount={review.amount}
         amountPrefix={review.amountPrefix}
@@ -179,9 +172,7 @@ export function ZcashTransferReview({
           )
         }
         error={review.error && <TransactionNotice className="mt-3" {...review.error} />}
-        confirmLabel={
-          quickShield && review.confirmLabel === action.label ? 'Shield ZEC' : review.confirmLabel
-        }
+        confirmLabel={review.confirmLabel}
         confirmTone={review.confirmTone}
         preparing={review.preparing}
         confirming={review.confirming}

@@ -2,6 +2,7 @@ import { useCallback, useMemo, type ReactNode } from 'react'
 import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
 import {
   listShieldTokenPickerNetworks,
+  shieldTokenPickerBalance,
   type ShieldTokenPickerItem
 } from '@/popup/services/shield-transfer'
 import { TokenPicker, type TokenPickerAdapter, type TokenSelectionItem } from './TokenPicker'
@@ -10,6 +11,7 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from './TokenIcon'
 import { TokenBalanceDisplay } from './TokenBalanceDisplay'
+import type { TokenPickerPolicy } from '@/popup/services/token-selector-visibility'
 
 export function shieldTokenSelectionItem(
   item: ShieldTokenPickerItem,
@@ -48,7 +50,6 @@ export function shieldTokenSelectionItem(
           amount={displayBalance}
           symbol={symbol}
           priceUsd={item.priceUsd}
-          approximateFiat
           balancesHidden={balancesHidden}
         />
       ) : undefined,
@@ -61,6 +62,7 @@ export function shieldTokenSelectionItem(
 
 export const shieldTokenPickerAdapter: TokenPickerAdapter<ShieldTokenPickerItem> = {
   chainId: row => row.chainId,
+  matchesNetwork: (row, network) => row.chainIds?.includes(network) ?? row.chainId === network,
   searchFields: row => ({
     symbol: row.symbol,
     name: row.name,
@@ -69,7 +71,7 @@ export const shieldTokenPickerAdapter: TokenPickerAdapter<ShieldTokenPickerItem>
     searchTerms: [
       row.chainName,
       ...(row.searchTerms ?? []),
-      row.sourceLabel ?? row.zcashFundingSource ?? 'confidential'
+      row.sourceLabel ?? row.zcashFundingSource ?? row.subtitle ?? 'confidential'
     ]
   })
 }
@@ -83,6 +85,7 @@ export function ShieldTokenPicker<Row extends ShieldTokenPickerItem>({
   initialNetwork = 'all',
   networks: suppliedNetworks,
   toolbar,
+  policy,
   emptyMessage = 'No Shield tokens found'
 }: {
   readonly rows: readonly Row[]
@@ -93,6 +96,7 @@ export function ShieldTokenPicker<Row extends ShieldTokenPickerItem>({
   readonly initialNetwork?: string
   readonly networks?: ReturnType<typeof listShieldTokenPickerNetworks>
   readonly toolbar?: ReactNode
+  readonly policy?: TokenPickerPolicy
   readonly emptyMessage?: string
 }) {
   const ready = useTokenSelectorReady()
@@ -112,6 +116,7 @@ export function ShieldTokenPicker<Row extends ShieldTokenPickerItem>({
       initialNetwork={initialNetwork}
       toItem={toItem}
       isDisabled={row => Boolean(row.disabledReason)}
+      visibility={policy ? { policy, balance: shieldTokenPickerBalance } : undefined}
       selectedKey={selectedKey}
       onSelect={onSelect}
       loading={!ready || loading}

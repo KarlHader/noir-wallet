@@ -6,6 +6,8 @@ import { DAppConnectPrompt } from '../components/dapp/DAppConnectPrompt'
 import { ConnectedDAppBar } from '../components/dapp/ConnectedDAppBar'
 import { HomeDAppList } from '../components/dapp/HomeDAppList'
 import { AccountSwitcher } from '../components/account/AccountSwitcher'
+import { useIncognitoSetup } from '@/popup/hooks/useIncognitoSetup'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { HomeBalanceOverview } from '../components/portfolio/HomeBalanceOverview'
 import { openModal } from '../provider/ModalManager'
 import { useDAppConnection } from '../hooks/useDAppConnection'
@@ -286,7 +288,18 @@ export function Home() {
       ),
     [multichainPortfolio, effectiveWalletId, effectiveAccountId]
   )
-  const existingIncognito = hasIncognitoHoldings || dappExecutionMode.state?.privateSetupCompleted
+  const supportsIncognito = Boolean(
+    storageV2Account &&
+    supportsEvmPrivateExecution(storageV2Account.walletSource) &&
+    storageV2Account.networks.some(network => network.chain.family === 'evm')
+  )
+  const incognitoSetup = useIncognitoSetup(
+    currentNetwork,
+    effectiveWalletId,
+    effectiveAccountId,
+    supportsIncognito && !accountContextChanging
+  )
+  const existingIncognito = hasIncognitoHoldings || incognitoSetup.status === 'complete'
   useEffect(() => {
     if (existingIncognito && effectiveWalletId && effectiveAccountId && !accountContextChanging) {
       enableIncognitoCard(modeScopeKey)
@@ -866,9 +879,12 @@ export function Home() {
             key={modeScopeKey}
             domain={assetDomain}
             display={balanceDisplay}
-            showIncognito={!hardwareWallet}
+            showIncognito={supportsIncognito}
             hidden={balancesHidden}
             incognitoEnabled={Boolean(enabledIncognito || existingIncognito)}
+            onEnableIncognito={
+              incognitoSetup.status === 'available' ? incognitoSetup.complete : undefined
+            }
             modeSelectionDisabled={
               accountContextChanging || !effectiveAccountId || !effectiveWalletId
             }

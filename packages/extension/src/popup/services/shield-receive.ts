@@ -9,9 +9,7 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { Network } from '@/types/wallet'
 import type { AccountNetworksView } from './account-networks-client'
 import { getAssetDomainRaw, type ShieldProvider } from './asset-domains'
-import { comparePortfolioSymbolOrder, MAINNET_STARTER_ASSET_RANKS } from './portfolio-presentation'
 import { getPrivateTransferChainIds } from './private-balance-transfer'
-import { sortSendAssetsByBalanceValue } from './send-asset-order'
 import { listDepositTokenChoices } from './shield-deposit-options'
 import { listExternalShieldReceiveAssets } from './shield-deposit-route'
 import type { ShieldTokenPickerItem } from './shield-transfer'
@@ -114,11 +112,10 @@ export function buildShieldReceivePickerRows(
   )
   const confidential = model?.confidential?.status === 'ready' ? model.confidential.assets : null
   const nearAssets = new Map(confidential?.map(asset => [asset.protocolAssetId, asset]))
-  const rows = tokens.flatMap(token => {
+  return tokens.flatMap(token => {
     const firstRoute = token.routes[0]
     if (!firstRoute) return []
 
-    let starterRank = Infinity
     let amount: Big | null = null
     let fiat = new Big(0)
     let missingPrice = false
@@ -126,10 +123,6 @@ export function buildShieldReceivePickerRows(
     const searchTerms = new Set<string>()
     const seen = new Set<string>()
     for (const route of token.routes) {
-      starterRank = Math.min(
-        starterRank,
-        MAINNET_STARTER_ASSET_RANKS.get(route.assetId) ?? Infinity
-      )
       searchTerms.add(route.chain.displayName)
       const catalogAsset = route.provider === 'near-confidential' ? route.asset.token : null
       if (catalogAsset?.contractAddress) searchTerms.add(catalogAsset.contractAddress)
@@ -170,28 +163,24 @@ export function buildShieldReceivePickerRows(
         iconUrl:
           firstRoute.provider === 'zcash-shield' ? formatChainIconUrl('zcash') : token.iconUrl,
         chainId: firstRoute.chain.id,
+        chainIds: [...new Set(token.routes.map(route => route.chain.id))],
         chainName: firstRoute.chain.displayName,
+        isNative: token.routes.some(route => route.assetId.startsWith(`${route.chain.id}/slip44:`)),
+        pinned: firstRoute.provider === 'zcash-shield',
+        nativeIconChain: firstRoute.provider === 'zcash-shield' ? 'zcash' : undefined,
+        badgeBlockchain: firstRoute.provider === 'zcash-shield' ? 'zec' : undefined,
         searchTerms: [...searchTerms],
         decimals:
           firstRoute.provider === 'zcash-shield' ? ZEC_DECIMALS : firstRoute.asset.token.decimals,
         displayBalance,
-        amount: amount?.toFixed() ?? null,
         priceUsd: amount?.gt(0)
           ? missingPrice
             ? null
             : fiat.div(amount).toFixed()
-          : (firstPrice?.toFixed() ?? null),
-        starterRank
+          : (firstPrice?.toFixed() ?? null)
       }
     ]
   })
-
-  rows.sort(
-    (left, right) =>
-      (left.starterRank === right.starterRank ? 0 : left.starterRank - right.starterRank) ||
-      comparePortfolioSymbolOrder(left.symbol, right.symbol)
-  )
-  return sortSendAssetsByBalanceValue(rows)
 }
 
 export function resolveShieldReceiveSelection(
@@ -200,12 +189,7 @@ export function resolveShieldReceiveSelection(
   entry: Readonly<{ assetId: string | null; provider: ShieldProvider | null }>,
   autoSelect: boolean
 ) {
-  if (!selection && !entry.assetId && !entry.provider) {
-    const token =
-      tokens.find(item => item.id === 'native-zec') ??
-      (autoSelect && tokens.length === 1 ? tokens[0] : null)
-    return { token: token ?? null, route: null }
-  }
+  if (!selection && !entry.assetId && !entry.provider) return { token: null, route: null }
   const exact = entry.assetId
     ? tokens.find(token => token.routes.some(route => route.assetId === entry.assetId))
     : null

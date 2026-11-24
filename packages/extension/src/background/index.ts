@@ -281,7 +281,7 @@ import { CONFIDENTIAL_FUNDING_MONITOR_ALARM } from './confidential-funding'
 import type { ConfidentialFundingCoordinator } from './confidential-funding-coordinator'
 import type { NativeZecIntentsSwapReview } from '@/core/services/native-zec-intents-swap'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
-import { createEvmWalletRuntimeError } from '@/core/chains/evm'
+import { createEvmWalletRuntimeError, supportsEvmPrivateExecution } from '@/core/chains/evm'
 import {
   applyTokenDisplayPolicy,
   isPortfolioTokenVisible,
@@ -397,6 +397,7 @@ import { connectionHasEvmAuthorization, dappManager } from '@/core/dapp/dapp-man
 import {
   DAppExecutionModeConfirmationRequiredError,
   DAppExecutionModeTransitionCoordinator,
+  parseDAppExecutionModeScope,
   type DAppExecutionMode,
   type DAppExecutionModeScope,
   type DAppExecutionModeState
@@ -5280,6 +5281,51 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       .catch(error =>
         sendResponse({
           error: error instanceof Error ? error.message : 'Unable to read dApp execution mode'
+        })
+      )
+    return true
+  }
+
+  if (
+    message.type === 'GET_ACCOUNT_INCOGNITO_SETUP' ||
+    message.type === 'COMPLETE_ACCOUNT_INCOGNITO_SETUP'
+  ) {
+    const complete = message.type === 'COMPLETE_ACCOUNT_INCOGNITO_SETUP'
+    void accountContextTransition
+      .runActiveOperation(async () => {
+        const scope = parseDAppExecutionModeScope(message.scope)
+        if (scope.network !== DEFAULT_NETWORK) {
+          throw new Error('Wallet network changed. Open Addresses again.')
+        }
+        if (walletLockCleanupPending || !(await credentialSession.hasUnlockSession())) {
+          throw new Error('Unlock the wallet to manage Incognito addresses.')
+        }
+        if (!complete) return dappExecutionModeCoordinator.readPrivateSetup(scope)
+
+        const catalog = await accountNetworksCoordinator.readCatalog({
+          deriveMissingAddresses: false
+        })
+        const account = catalog?.accounts.find(
+          candidate =>
+            candidate.walletId === scope.keyDomainId && candidate.accountId === scope.accountId
+        )
+        if (
+          !account ||
+          !supportsEvmPrivateExecution(account.walletSource) ||
+          !account.networks.some(network => parseChainId(network.chainId).namespace === 'eip155')
+        ) {
+          throw new Error('Incognito is unavailable for this account.')
+        }
+        if (walletLockCleanupPending || !(await credentialSession.hasUnlockSession())) {
+          throw new Error('Unlock the wallet to manage Incognito addresses.')
+        }
+        await dappExecutionModeCoordinator.completePrivateSetup(scope)
+        return true
+      })
+      .then(setupCompleted => sendResponse({ success: true, setupCompleted }))
+      .catch(error =>
+        sendResponse({
+          error: error instanceof Error ? error.message : 'Unable to open the Incognito address.'
         })
       )
     return true
