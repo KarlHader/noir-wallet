@@ -38,7 +38,7 @@ import {
   depositSourceAssetId,
   depositStatusLabel,
   formatDepositAmount,
-  formatMinimumDepositPaymentAmount,
+  formatShieldReceiveNetworkMinimum,
   hasDepositSettlementShortfall
 } from '@/popup/services/shield-deposit-options'
 import {
@@ -368,15 +368,18 @@ export function ShieldReceiveAddress({
     account?.networks.find(item => item.chain.family === 'zcash')?.chain.displayName ??
     'Zcash'
   const receiveWarning = `Only send ${symbol} on ${displayNetwork}. Using a different asset or network can result in loss of funds.`
-  const paymentRequirement = currentRecord && canPay && !payment?.hasDeposit && (
-    <>
-      {currentRecord.amountMode === 'minimum' ? 'Send at least' : 'Send exactly'}{' '}
-      {(currentRecord.amountMode === 'minimum'
-        ? formatMinimumDepositPaymentAmount
-        : formatDepositAmount)(currentRecord.amountRaw, currentRecord.sourceDecimals)}{' '}
-      {symbol}
-    </>
-  )
+  const networkMinimum =
+    currentRecord?.amountMode === 'minimum'
+      ? formatShieldReceiveNetworkMinimum(currentRecord, asset?.token.price)
+      : null
+  const paymentRequirement =
+    currentRecord && canPay && !payment?.hasDeposit
+      ? currentRecord.amountMode === 'minimum'
+        ? networkMinimum
+          ? `Minimum deposit $1 (at least ${networkMinimum} ${symbol} on this network)`
+          : 'Minimum deposit $1'
+        : `Send exactly ${formatDepositAmount(currentRecord.amountRaw, currentRecord.sourceDecimals)} ${symbol}`
+      : null
   const inlineWarning = (
     <div className="mt-4 flex items-start gap-2 text-xs leading-4 text-muted">
       <Icon icon="lucide:circle-alert" width={24} className="shrink-0" aria-hidden="true" />

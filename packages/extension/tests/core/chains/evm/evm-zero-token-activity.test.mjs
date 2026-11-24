@@ -202,23 +202,33 @@ test('correlates ERC-20 credits without treating signer activity as a receipt', 
   assert.equal(conflicting.completeness, 'partial')
 })
 
-test('groups multiple token transfers into net asset changes alongside native value', () => {
+test('retains each receipt beside grouped changes for the originating EVM action', () => {
   const incomingContract = `0x${'4'.repeat(40)}`
   const incomingAssetId = `${chainId}/erc20:${incomingContract}`
+  const firstReceipt = tokenTransfer('9', '3', { from: recipient, to: address, logIndex: 1 })
   const items = map(
     [transaction('9', { valueRaw: '7' })],
     [
       tokenTransfer('9', '10'),
-      tokenTransfer('9', '3', { from: recipient, to: address }),
+      firstReceipt,
+      firstReceipt,
+      { ...firstReceipt, logIndex: 2 },
       tokenTransfer('9', '5', { assetId: incomingAssetId, from: recipient, to: address })
     ]
   )
-  assert.equal(items.length, 1)
-  assert.equal(items[0].kind, 'contract-call')
-  assert.equal(items[0].snapshot.recipient.address, tokenContract)
-  assert.deepEqual(items[0].snapshot.primaryAmount, { assetId: nativeAssetId, amountRaw: '7' })
-  assert.deepEqual(items[0].segments[0].evidence.assetEffects.changes, [
-    { assetId: tokenAssetId, amountRaw: '7', direction: 'outgoing' },
+  const action = items.find(item => item.kind === 'contract-call')
+  const receipts = items.filter(item => item.snapshot.direction === 'incoming')
+  assert.equal(items.length, 4)
+  assert.equal(new Set(receipts.map(item => item.id)).size, 3)
+  assert.deepEqual(receipts.map(item => item.snapshot.primaryAmount.amountRaw).sort(), [
+    '3',
+    '3',
+    '5'
+  ])
+  assert.equal(action.snapshot.recipient.address, tokenContract)
+  assert.deepEqual(action.snapshot.primaryAmount, { assetId: nativeAssetId, amountRaw: '7' })
+  assert.deepEqual(action.segments[0].evidence.assetEffects.changes, [
+    { assetId: tokenAssetId, amountRaw: '4', direction: 'outgoing' },
     { assetId: incomingAssetId, amountRaw: '5', direction: 'incoming' },
     { assetId: nativeAssetId, amountRaw: '7', direction: 'outgoing' }
   ])
@@ -240,10 +250,11 @@ test('token-only grouped effects do not invent a contract recipient', () => {
     [],
     [tokenTransfer('b', '10'), tokenTransfer('b', '5', { from: recipient, to: address })]
   )
-  assert.equal(items.length, 1)
-  assert.equal(items[0].snapshot.sender, undefined)
-  assert.equal(items[0].snapshot.recipient, undefined)
-  assert.deepEqual(items[0].segments[0].evidence.assetEffects.changes, [
+  const action = items.find(item => item.kind === 'contract-call')
+  assert.equal(items.length, 2)
+  assert.equal(action.snapshot.sender, undefined)
+  assert.equal(action.snapshot.recipient, undefined)
+  assert.deepEqual(action.segments[0].evidence.assetEffects.changes, [
     { assetId: tokenAssetId, amountRaw: '5', direction: 'outgoing' }
   ])
   const conflicting = map(

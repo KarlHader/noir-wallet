@@ -8,6 +8,7 @@ interface AmountDisplayProps {
   readonly prefix?: string
   readonly profile?: 'review' | 'fee'
   readonly className?: string
+  readonly symbolClassName?: string
 }
 
 export function AmountDisplay({
@@ -15,7 +16,8 @@ export function AmountDisplay({
   symbol: rawSymbol,
   prefix = '',
   profile = 'review',
-  className
+  className,
+  symbolClassName
 }: AmountDisplayProps) {
   const symbol = formatSymbol(rawSymbol)
   const review = formatReviewAmount(value)
@@ -25,7 +27,15 @@ export function AmountDisplay({
     <span className={cn('break-all font-sans tabular-nums', className)}>
       {review.exact !== null ? prefix : ''}
       {display}
-      {symbol ? ` ${symbol}` : ''}
+      {symbol &&
+        (symbolClassName ? (
+          <>
+            {' '}
+            <span className={symbolClassName}>{symbol}</span>
+          </>
+        ) : (
+          ` ${symbol}`
+        ))}
     </span>
   )
 }

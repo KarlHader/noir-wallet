@@ -1,8 +1,9 @@
-import type {
-  ConfidentialFundingPhase,
-  ConfidentialFundingPlan,
-  ConfidentialFundingPreview,
-  ConfidentialFundingReview
+import {
+  CONFIDENTIAL_FUNDING_PURPOSES,
+  type ConfidentialFundingPhase,
+  type ConfidentialFundingPlan,
+  type ConfidentialFundingPreview,
+  type ConfidentialFundingReview
 } from '@/core/services/confidential-funding'
 import type {
   CreateExternalShieldDepositInput,
@@ -26,13 +27,14 @@ export type ConfidentialBalanceErrorCode =
   | 'authorization_required'
   | 'account_unavailable'
   | 'balance_unavailable'
-export type ExternalShieldDeposit = Omit<StoredExternalShieldDeposit, 'quote'>
+export type ExternalShieldDeposit = Omit<StoredExternalShieldDeposit, 'quote'> &
+  Readonly<{ minimumInputRaw?: string }>
 export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
 
 export { CONFIDENTIAL_SESSION_REQUIRED_ERROR as CONFIDENTIAL_PREVIEW_CONNECTION_ERROR } from '@/core/services/confidential-funding'
 
 export interface PrepareConfidentialFundingRequest {
-  readonly purpose?: 'move' | 'native-zec-swap'
+  readonly purpose?: ConfidentialFundingPlan['purpose']
   readonly network: Network
   readonly keyDomainId: string
   readonly accountId: string
@@ -265,7 +267,7 @@ function parseReview(value: unknown): ConfidentialFundingReview {
           review.network
         ))) ||
     (review.purpose !== undefined &&
-      (!['move', 'native-zec-swap'].includes(review.purpose) ||
+      (!CONFIDENTIAL_FUNDING_PURPOSES.includes(review.purpose) ||
         review.operation !== 'withdraw' ||
         review.sourceDomain !== 'shield' ||
         review.destinationDomain !== 'public' ||
@@ -340,7 +342,7 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
           plan.network
         ))) ||
     (plan.purpose !== undefined &&
-      (!['move', 'native-zec-swap'].includes(plan.purpose) ||
+      (!CONFIDENTIAL_FUNDING_PURPOSES.includes(plan.purpose) ||
         plan.operation !== 'withdraw' ||
         plan.sourceDomain !== 'shield' ||
         plan.destinationDomain !== 'public' ||
@@ -422,8 +424,16 @@ function parseExternalDeposit(value: unknown): ExternalShieldDeposit {
   ) {
     throw new Error('External Shield deposit response is invalid')
   }
-  const { quote: _quote, ...view } = value
-  return Object.freeze(view) as ExternalShieldDeposit
+  const { quote, ...view } = value
+  const minimumInputRaw = isRecord(quote) && isRecord(quote.quote) ? quote.quote.minAmountIn : null
+  return Object.freeze({
+    ...view,
+    ...(value.amountMode === 'minimum' &&
+    typeof minimumInputRaw === 'string' &&
+    /^[1-9]\d{0,77}$/.test(minimumInputRaw)
+      ? { minimumInputRaw }
+      : {})
+  }) as ExternalShieldDeposit
 }
 
 export function createConfidentialFundingClient(

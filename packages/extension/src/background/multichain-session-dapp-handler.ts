@@ -62,6 +62,7 @@ interface PreparedScope {
   readonly supported: SupportedScope
   readonly request: Caip25ScopeRequest
   readonly proposal: DAppSessionAccountProposal
+  readonly fromCatalog: boolean
 }
 
 function evmApprovalProposal(
@@ -70,6 +71,23 @@ function evmApprovalProposal(
   const evm = prepared.filter(item => item.supported.family === 'evm')
   const first = evm[0]?.proposal
   if (!first) return null
+  if (
+    evm.some(item => item.fromCatalog) &&
+    evm.some(
+      ({ proposal }) =>
+        proposal.accounts.length !== first.accounts.length ||
+        proposal.accounts.some(
+          account =>
+            !first.accounts.some(
+              candidate =>
+                candidate.id === account.id &&
+                candidate.address === account.address &&
+                candidate.required === account.required
+            )
+        )
+    )
+  )
+    return null
   const accounts = first.accounts.filter(account =>
     evm.every(item =>
       item.proposal.accounts.some(
@@ -493,24 +511,38 @@ export class BackgroundMultichainSessionDAppHandler {
     origin: string,
     chainId: string,
     request: Caip25ScopeRequest,
-    otherAccounts?: FirstPartyDAppSessionSnapshot['accounts'][string]
+    catalogAccounts?: FirstPartyDAppSessionSnapshot['accounts'][string],
+    activeReference?: AccountRef | null
   ): Promise<PreparedScope> {
     const supported = this.getSupportedScope(chainId)
     assertScopeCapabilities(supported, request)
     let proposal: DAppSessionAccountProposal
-    if (otherAccounts) {
+    if (catalogAccounts) {
+      const active = catalogAccounts.find(
+        item => activeReference && sameAccount(item.reference, activeReference)
+      )
+      const existing = active
+        ? await this.options.manager.getChainAuthorization(origin, chainId)
+        : null
+      const accounts = catalogAccounts.map(({ reference, address, label }) => ({
+        id: JSON.stringify([reference.walletId, reference.accountId]),
+        reference,
+        address,
+        label,
+        required: active !== undefined && sameAccount(reference, active.reference)
+      }))
       proposal = {
         ...supported,
-        accounts: otherAccounts.map(({ reference, address, label }) => ({
-          id: JSON.stringify([reference.walletId, reference.accountId]),
-          reference,
-          address,
-          label,
-          required: false
-        })),
-        preselectedIds: [],
-        activeReference: null,
-        activeAddress: null
+        accounts,
+        preselectedIds: accounts
+          .filter(
+            account =>
+              account.required ||
+              existing?.accounts.some(ref => sameAccount(ref, account.reference))
+          )
+          .map(account => account.id),
+        activeReference: active?.reference ?? null,
+        activeAddress: active?.address ?? null
       }
     } else
       switch (supported.family) {
@@ -537,6 +569,7 @@ export class BackgroundMultichainSessionDAppHandler {
     return Object.freeze({
       supported,
       request,
+      fromCatalog: catalogAccounts !== undefined,
       proposal: filterRequestedAccounts({ ...proposal, chainId: supported.chainId }, request)
     })
   }
@@ -545,7 +578,7 @@ export class BackgroundMultichainSessionDAppHandler {
     prepared: PreparedScope,
     selectedIds: readonly string[]
   ): Promise<DAppSessionAccountSelection> {
-    if (!prepared.proposal.activeReference)
+    if (prepared.fromCatalog || !prepared.proposal.activeReference)
       return selectDAppSessionAccounts(prepared.proposal, selectedIds)
     switch (prepared.supported.family) {
       case 'zcash':
@@ -619,7 +652,9 @@ export class BackgroundMultichainSessionDAppHandler {
     const prepared = (
       await Promise.all(
         requested.map(([chainId, scope]) =>
-          this.prepareScope(origin, chainId, scope, otherAccounts(chainId))
+          chainId.startsWith('eip155:') && snapshot?.executionMode === 'main'
+            ? this.prepareScope(origin, chainId, scope, snapshot.accounts[chainId], active)
+            : this.prepareScope(origin, chainId, scope, otherAccounts(chainId))
         )
       )
     ).sort(
@@ -628,25 +663,29 @@ export class BackgroundMultichainSessionDAppHandler {
     )
     const evmProposal = evmApprovalProposal(prepared)
     const approvalScopes = prepared.flatMap((item, index) => {
-      if (item.supported.family !== 'evm') return [item.proposal]
+      if (!evmProposal || item.supported.family !== 'evm') return [item.proposal]
       return prepared.findIndex(scope => scope.supported.family === 'evm') === index && evmProposal
         ? [evmProposal]
         : []
     })
     const accountLabels = new Map(
-      prepared
-        .filter(item => item.supported.family !== 'zcash')
-        .flatMap(item => item.proposal.accounts)
-        .map(account => [
-          JSON.stringify([account.reference.walletId, account.reference.accountId]),
-          account.label
-        ])
+      (snapshot
+        ? Object.values(snapshot.accounts).flat()
+        : prepared
+            .filter(item => item.supported.family !== 'zcash')
+            .flatMap(item => item.proposal.accounts)
+      ).map(account => [
+        JSON.stringify([account.reference.walletId, account.reference.accountId]),
+        account.label
+      ])
     )
     const decision = await this.options.approval.requestExternalApproval(
       origin,
       'multichainConnect',
       {
-        ...(evmProposal && snapshot ? { executionMode: snapshot.executionMode } : {}),
+        ...(snapshot && prepared.some(item => item.supported.family === 'evm')
+          ? { executionMode: snapshot.executionMode }
+          : {}),
         scopes: approvalScopes.map(proposal => ({
           chainId: proposal.chainId,
           chainName: proposal.chainName,
@@ -701,16 +740,12 @@ export class BackgroundMultichainSessionDAppHandler {
     ) {
       throw new Caip25ProviderError(4100, 'The selected session accounts are not available.')
     }
-    const approvedScopes = prepared.filter(
-      item =>
-        selectedScopes[item.supported.family === 'evm' ? 'evm' : item.supported.chainId]?.length
-    )
+    const approvalKey = (item: PreparedScope) =>
+      evmProposal && item.supported.family === 'evm' ? 'evm' : item.supported.chainId
+    const approvedScopes = prepared.filter(item => selectedScopes[approvalKey(item)]?.length)
     const selections = await Promise.all(
       approvedScopes.map(item =>
-        this.resolveScopeSelection(
-          item,
-          selectedScopes[item.supported.family === 'evm' ? 'evm' : item.supported.chainId]!
-        )
+        this.resolveScopeSelection(item, selectedScopes[approvalKey(item)]!)
       )
     )
     const authorizations: DAppChainAuthorization[] = selections.map(
@@ -891,38 +926,36 @@ export class BackgroundMultichainSessionDAppHandler {
     const stored = await this.options.manager.getCaip25Session(origin)
     if (!stored) return null
     let snapshot: FirstPartyDAppSessionSnapshot | null | undefined
-    let usedInactiveAccounts = false
+    let usedCatalog = false
     const scopes: Record<string, Caip25Session['scopes'][string]> = Object.create(null)
     for (const scope of stored.scopes) {
       const supported = this.supportedScopes.get(scope.chainId)
       if (!supported) continue
-      let addresses = await this.getScopeAccounts(origin, supported)
-      if (addresses.length === 0 && supported.family === 'evm' && scope.accounts?.length) {
-        if (snapshot === undefined)
-          snapshot = (await this.options.readFirstPartySnapshot?.()) ?? null
-        const active = snapshot?.activeReference
-        if (snapshot?.executionMode === 'main' && active) {
+      let addresses: readonly string[] | undefined
+      if (
+        supported.family === 'evm' &&
+        scope.accounts?.length &&
+        this.options.readFirstPartySnapshot
+      ) {
+        if (snapshot === undefined) snapshot = await this.options.readFirstPartySnapshot()
+        if (snapshot?.executionMode === 'main') {
           const available = snapshot.accounts[scope.chainId] ?? []
-          if (!available.some(({ reference }) => sameAccount(reference, active))) {
-            const authorized = await this.options.manager.getChainAuthorization(
-              origin,
-              scope.chainId
+          const authorized = await this.options.manager.getChainAuthorization(origin, scope.chainId)
+          addresses = [
+            ...new Set(
+              available
+                .filter(
+                  ({ reference }) =>
+                    authorized?.accounts.some(account => sameAccount(account, reference)) &&
+                    scope.accounts?.some(account => sameAccount(account, reference))
+                )
+                .map(account => account.address)
             )
-            addresses = [
-              ...new Set(
-                available
-                  .filter(
-                    ({ reference }) =>
-                      authorized?.accounts.some(account => sameAccount(account, reference)) &&
-                      scope.accounts?.some(account => sameAccount(account, reference))
-                  )
-                  .map(account => account.address)
-              )
-            ]
-            usedInactiveAccounts ||= addresses.length > 0
-          }
+          ]
+          usedCatalog = true
         }
       }
+      addresses ??= await this.getScopeAccounts(origin, supported)
       scopes[scope.chainId] = Object.freeze({
         accounts: Object.freeze(
           addresses.map(address => formatCaip10Account(scope.chainId, address))
@@ -932,7 +965,7 @@ export class BackgroundMultichainSessionDAppHandler {
       })
     }
     if (
-      usedInactiveAccounts &&
+      usedCatalog &&
       ((await this.options.readFirstPartySnapshot?.())?.identity !== snapshot?.identity ||
         (await this.options.manager.getAuthorizationRevision(origin)) !== revision)
     )

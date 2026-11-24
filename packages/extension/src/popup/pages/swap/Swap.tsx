@@ -4,7 +4,10 @@ import {
   shieldTokenSelectionItem
 } from '@/popup/components/tokens/ShieldTokenPicker'
 import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
-import { buildShieldDestinationPickerRows } from '@/popup/services/shield-swap-form'
+import {
+  buildShieldDestinationPickerRows,
+  sortShieldSwapPickerRows
+} from '@/popup/services/shield-swap-form'
 import {
   TokenSelectorContent,
   TokenSelectorDialog
@@ -761,12 +764,15 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     crossChainSendRequested ||
     sourceModeSelection?.scope === walletSourcesScope ||
     routeSourceMode !== null
+  const swapAccountScope = createSwapTokenPreferenceScope(
+    effectiveWalletId,
+    effectiveAccountId,
+    currentNetwork
+  )
   const swapPreferenceScope =
-    !accountNetworksReady || (!shieldSwapSelected && !sourceModeReady)
-      ? null
-      : createSwapTokenPreferenceScope(effectiveWalletId, effectiveAccountId, currentNetwork)
+    accountNetworksReady && (shieldSwapSelected || sourceModeReady) ? swapAccountScope : null
   const savedTokenSelection = useSwapPreferences(state =>
-    swapPreferenceScope ? state.tokenSelections[swapPreferenceScope] : undefined
+    swapAccountScope ? state.tokenSelections[swapAccountScope] : undefined
   )
   const [swapPreferencesHydrated, setSwapPreferencesHydrated] = useState(
     useSwapPreferences.persist.hasHydrated()
@@ -775,8 +781,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     () => resolveSharedSwapPair(savedTokenSelection, enabledSwapChains),
     [savedTokenSelection, enabledSwapChains]
   )
-  const activeSharedPair = useMemo(() => {
-    if (!useSharedSwapPair || !swapPreferencesHydrated || !swapPreferenceScope) return undefined
+  const displaySharedPair = useMemo(() => {
+    if (!useSharedSwapPair || !swapPreferencesHydrated || !swapAccountScope) return undefined
     if (
       !shieldSwapSelected &&
       sharedSwapPair.tokenInId &&
@@ -787,10 +793,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   }, [
     useSharedSwapPair,
     swapPreferencesHydrated,
-    swapPreferenceScope,
+    swapAccountScope,
     shieldSwapSelected,
     sharedSwapPair
   ])
+  const activeSharedPair = swapPreferenceScope ? displaySharedPair : undefined
   const defaultShieldZecSource: ShieldSwapZecSourceKind =
     nativeZecShieldAvailable &&
     nativeZecConfidentialAvailable &&
@@ -1339,10 +1346,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   ])
   const nativeZecPickerRows = useMemo(
     () =>
-      shieldPickerRows.filter(
-        row =>
-          row.key === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID ||
-          row.key === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+      sortShieldSwapPickerRows(
+        shieldPickerRows.filter(
+          row =>
+            row.key === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID ||
+            row.key === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+        )
       ),
     [shieldPickerRows]
   )
@@ -4056,7 +4065,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               const approvalSummary = approvalReview.review.summary
               const combinedFeeLimit =
                 (ordinarySwapRequested || crossChainSendRequested) &&
-                executionSourceMode === 'main' &&
                 !isHardwareWallet &&
                 approvalSummary.schema === 'evm.transaction.v1'
                   ? getCombinedSwapFeeLimit(
@@ -5321,6 +5329,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             approvalId: graph.root.id,
             approvalFingerprint: review.payloadFingerprint.digestHex,
             binding: reviewedCombined.binding,
+            executionMode: executionSourceMode,
             feeBudgetWei: (
               reviewedCombined.limit.approvalFeeWei + reviewedCombined.limit.swapFeeWei
             ).toString(),
@@ -7509,9 +7518,16 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         tokenOut={
           sharedDestinationMatches && !awaitingNativeDestinationRestore ? swap.tokenOut : null
         }
+        tokenInAssetId={displaySharedPair?.tokenInId ?? undefined}
+        tokenOutAssetId={displaySharedPair?.tokenOutId ?? undefined}
         tokenInSymbol={
-          activeSharedPair?.tokenInSymbol ??
-          findSavedSwapToken(swap.sourceTokens, activeSharedPair?.tokenInId)?.symbol
+          displaySharedPair?.tokenInSymbol ??
+          findSavedSwapToken(swap.sourceTokens, displaySharedPair?.tokenInId)?.symbol
+        }
+        tokenOutSymbol={
+          displaySharedPair?.tokenOutSymbol ??
+          findSavedSwapToken(pairSameChainDestinations, displaySharedPair?.tokenOutId)?.symbol ??
+          findSavedSwapToken(pairCrossChainDestinations, displaySharedPair?.tokenOutId)?.symbol
         }
         isZecSource={swap.isZecSource}
         isZecDestination={isZecDestination && !shieldNativeZecSwap}
@@ -7973,7 +7989,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 portfolio={portfolio}
                 portfolioLoading={walletSourcesLoading}
                 tokens={shieldCatalogTokens}
-                sharedPair={useSharedSwapPair ? (activeSharedPair ?? sharedSwapPair) : undefined}
+                sharedPair={displaySharedPair}
                 preferenceScope={swapPreferencesHydrated ? swapPreferenceScope : null}
                 onRefreshPortfolio={refreshShieldPortfolio}
                 amountFocusToken={amountFocusToken}
@@ -8200,6 +8216,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         {shieldZecPickerOpen && (
           <ShieldTokenPicker
             rows={shieldPickerRows}
+            policy="all"
             balancesHidden={balancesHidden}
             initialNetwork={shieldPickerNetwork}
             loading={!shieldPickerReady}

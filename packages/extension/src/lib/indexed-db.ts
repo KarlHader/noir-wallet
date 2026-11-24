@@ -880,6 +880,7 @@ export async function mutateTransactions(
     const store = transaction.objectStore(TRANSACTIONS_STORE_NAME)
     let previousTransactions: Transaction[] = []
     let updatedTransactions: Transaction[] = []
+    let didWrite = false
     let updateError: unknown
     const abort = () => {
       try {
@@ -894,7 +895,9 @@ export async function mutateTransactions(
       cleanup()
       console.log(`[IndexedDB] Updated ${updatedTransactions.length} transactions for key: ${key}`)
       resolve(updatedTransactions)
-      observeLegacyTransactionCommit?.(key, previousTransactions, updatedTransactions)
+      if (didWrite) {
+        observeLegacyTransactionCommit?.(key, previousTransactions, updatedTransactions)
+      }
     }
     transaction.onerror = () => {
       cleanup()
@@ -926,7 +929,10 @@ export async function mutateTransactions(
           if (observeLegacyTransactionCommit) previousTransactions = current.slice()
           updatedTransactions = updater(current)
           signal?.throwIfAborted()
-          store.put(updatedTransactions, key)
+          if (updatedTransactions !== current) {
+            didWrite = true
+            store.put(updatedTransactions, key)
+          }
         } catch (error) {
           updateError = error
           abort()

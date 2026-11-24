@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   computeNetReceivedZatoshis,
   mapVerboseTransactionToReceive,
+  mergeTransactionsWithWasmHistory,
   mergeTransactionsWithTransparentReceives
 } from '../../../src/core/wallet/transparent-history.ts'
 
@@ -114,7 +115,7 @@ test('treats unknown prevouts as external funding', () => {
   assert.equal(transaction?.amount, '0.35')
 })
 
-test('merges transparent receives without duplicating existing hashes', () => {
+test('reconciles two observations of a transparent credit and keeps other credits on that hash', () => {
   const existing = [
     {
       id: 'tx_local',
@@ -130,7 +131,7 @@ test('merges transparent receives without duplicating existing hashes', () => {
       network: 'mainnet'
     },
     {
-      id: 'wasm_existing',
+      id: 'wasm_receive-tx',
       txHash: 'receive-tx',
       status: 'success',
       type: 'receive',
@@ -144,37 +145,51 @@ test('merges transparent receives without duplicating existing hashes', () => {
     }
   ]
 
-  const merged = mergeTransactionsWithTransparentReceives(existing, [
-    {
-      id: 'rpc_treceive_receive-tx',
-      txHash: 'receive-tx',
-      status: 'success',
-      type: 'receive',
-      amount: '0.25',
-      to: 't1wallet',
-      from: '',
-      fromType: 'transparent',
-      fee: '0',
-      timestamp: 3,
-      network: 'mainnet'
-    },
-    {
-      id: 'rpc_treceive_new-tx',
-      txHash: 'new-tx',
-      status: 'success',
-      type: 'receive',
-      amount: '0.5',
-      to: 't1wallet',
-      from: '',
-      fromType: 'transparent',
-      fee: '0',
-      timestamp: 4,
-      network: 'mainnet'
-    }
-  ])
+  const separateReceipt = { ...existing[1], id: 'wasm_receive-tx:output:1', amount: '0.01' }
+  const merged = mergeTransactionsWithTransparentReceives(
+    [...existing, separateReceipt],
+    [
+      {
+        id: 'rpc_treceive_receive-tx',
+        txHash: 'receive-tx',
+        status: 'success',
+        type: 'receive',
+        amount: '0.25',
+        to: 't1wallet',
+        from: '',
+        fromType: 'transparent',
+        fee: '0',
+        timestamp: 3,
+        network: 'mainnet'
+      },
+      {
+        id: 'rpc_treceive_new-tx',
+        txHash: 'new-tx',
+        status: 'success',
+        type: 'receive',
+        amount: '0.5',
+        to: 't1wallet',
+        from: '',
+        fromType: 'transparent',
+        fee: '0',
+        timestamp: 4,
+        network: 'mainnet'
+      }
+    ]
+  )
 
   assert.deepEqual(
     merged.map(tx => tx.id),
-    ['rpc_treceive_new-tx', 'rpc_treceive_receive-tx', 'tx_local']
+    ['rpc_treceive_new-tx', 'rpc_treceive_receive-tx', separateReceipt.id, 'tx_local']
   )
+  const shieldedReceipt = { ...separateReceipt, id: 'wasm_receive-tx:shield', fromType: 'shielded' }
+  const { transactions } = mergeTransactionsWithWasmHistory(
+    [...merged, shieldedReceipt],
+    [existing[1]],
+    []
+  )
+  assert.ok(transactions.some(tx => tx.id === separateReceipt.id))
+  assert.ok(transactions.some(tx => tx.id === shieldedReceipt.id))
+  const differentCredit = { ...existing[1], id: 'rpc_treceive_receive-tx', amount: '0.125' }
+  assert.equal(mergeTransactionsWithTransparentReceives([existing[1]], [differentCredit]).length, 2)
 })

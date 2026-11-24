@@ -35,6 +35,8 @@ import { cn } from '@/lib/utils'
 import type { ActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { AccountAvatar as AccountAvatarImage } from './AccountAvatar'
 import { PrivateAddressWarningDialog } from './PrivateAddressWarningDialog'
+import { IncognitoSetupButton } from './IncognitoSetupButton'
+import { useIncognitoSetup } from '@/popup/hooks/useIncognitoSetup'
 
 function SidebarIcon({ kind }: { readonly kind: 'back' | 'accounts' | 'settings' }) {
   if (kind === 'back')
@@ -207,6 +209,7 @@ function AccountAddressPopover({
   copyScope,
   onViewAll,
   onOpenZcashSettings,
+  onSetupOpen,
   className,
   addressesStatus
 }: {
@@ -218,6 +221,7 @@ function AccountAddressPopover({
   readonly copyScope: string
   readonly onViewAll: () => void
   readonly onOpenZcashSettings: () => void
+  readonly onSetupOpen?: () => void
   readonly className?: string
   readonly addressesStatus: 'loading' | 'ready' | 'error'
 }) {
@@ -230,12 +234,23 @@ function AccountAddressPopover({
   const canToggleAddressMode =
     Boolean(evmAddresses.privateAddress) || hasNearIncognitoAddress(account.networks, keySource)
   const addressMode = canToggleAddressMode ? (selectedAddressMode ?? defaultEvmMode) : 'public'
+  const network = useWalletStore(state => state.currentNetwork)
+  const incognitoSetup = useIncognitoSetup(
+    network,
+    account.walletId,
+    account.accountId,
+    addressMode === 'private' && Boolean(evmAddresses.privateAddress)
+  )
   const otherAddresses = otherChainPreviews(account.networks, addressMode, keySource)
   const zcashAddresses = [...(zcash?.addresses ?? [])].sort(
     (left, right) => Number(left.privacy === 'shielded') - Number(right.privacy === 'shielded')
   )
   const evmAddress =
-    addressMode === 'private' ? evmAddresses.privateAddress : evmAddresses.mainAddress
+    addressMode === 'public'
+      ? evmAddresses.mainAddress
+      : incognitoSetup.status === 'complete'
+        ? evmAddresses.privateAddress
+        : undefined
   const showEvmRow =
     evm.length > 0 && (addressMode === 'public' || Boolean(evmAddresses.privateAddress))
   const showOtherChainsHeader = evm.length > 0 || canToggleAddressMode
@@ -360,9 +375,34 @@ function AccountAddressPopover({
                 <br />
                 &amp; EVM
               </span>
-              <span className="whitespace-nowrap font-mono text-xs leading-[18px] text-muted @max-[240px]:col-start-2 @max-[240px]:row-start-2">
-                {evmAddress ? formatSortAddress(evmAddress) : '—'}
-              </span>
+              {(evmAddress || addressMode === 'public') && (
+                <span className="whitespace-nowrap font-mono text-xs leading-[18px] text-muted @max-[240px]:col-start-2 @max-[240px]:row-start-2">
+                  {evmAddress ? formatSortAddress(evmAddress) : '—'}
+                </span>
+              )}
+              {addressMode === 'private' && incognitoSetup.status !== 'complete' && (
+                <div className="col-span-2 col-start-3 row-start-1 justify-self-end @max-[240px]:col-start-2 @max-[240px]:row-start-2">
+                  {incognitoSetup.status === 'available' && (
+                    <IncognitoSetupButton
+                      complete={incognitoSetup.complete}
+                      onOpen={onSetupOpen}
+                      className="px-2 text-xs"
+                    />
+                  )}
+                  {incognitoSetup.status === 'loading' && (
+                    <Skeleton className="h-7 w-20" aria-label="Loading Incognito setup" />
+                  )}
+                  {incognitoSetup.status === 'error' && (
+                    <button
+                      type="button"
+                      className="text-xs text-primary"
+                      onClick={incognitoSetup.retry}
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
+              )}
               {evmAddress && (
                 <button
                   type="button"
@@ -485,7 +525,9 @@ export function AccountSwitcher({
   const { confirm, alert } = useDialog()
   const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
   const [privateCopy, setPrivateCopy] = useState<{ address: string; key: string } | null>(null)
-  const { wallets, accountDisplayNames, currentWalletId, currentAccountId } = useWalletStore()
+  const { wallets, accountDisplayNames, currentWalletId, currentAccountId, currentNetwork } =
+    useWalletStore()
+  useLayoutEffect(() => setPrivateCopy(null), [currentWalletId, currentAccountId, currentNetwork])
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [addressesOpen, setAddressesOpen] = useState(false)
   const catalogAccounts = useMemo(
@@ -874,7 +916,11 @@ export function AccountSwitcher({
               >
                 <div className="animate-in fade-in-0 slide-in-from-left-1 duration-140 motion-reduce:animate-none">
                   <AccountAddressPopover
-                    key={`${previewAccount.walletId}:${previewAccount.accountId}`}
+                    key={JSON.stringify([
+                      currentNetwork,
+                      previewAccount.walletId,
+                      previewAccount.accountId
+                    ])}
                     account={previewAccount}
                     defaultEvmMode={defaultEvmMode}
                     addressesStatus={addressesStatus}
@@ -949,7 +995,11 @@ export function AccountSwitcher({
         >
           {activeAccount && (
             <AccountAddressPopover
-              key={`${activeAccount.walletId}:${activeAccount.accountId}`}
+              key={JSON.stringify([
+                currentNetwork,
+                activeAccount.walletId,
+                activeAccount.accountId
+              ])}
               account={activeAccount}
               defaultEvmMode={defaultEvmMode}
               addressesStatus={addressesStatus}
@@ -962,6 +1012,10 @@ export function AccountSwitcher({
               copyScope="active"
               onViewAll={() => viewAddresses(activeAccount)}
               onOpenZcashSettings={() => openZcashSettings(activeAccount)}
+              onSetupOpen={() => {
+                addressesOpenedByHover.current = false
+                cancelAddressesClose()
+              }}
               className="!w-full"
             />
           )}

@@ -1,6 +1,7 @@
 import { BITCOIN_ADDRESS_POLICY } from '@/core/chains/bitcoin'
 import type { AccountRef } from '@/core/dapp/dapp-manager'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
+import { formatWalletNameAtIndex } from '@/lib/format'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { type AccountNetworkSummary, type AccountNetworksCoordinator } from './account-networks'
 import { getBitcoinAccountPreferences } from './bitcoin-account-preferences'
@@ -78,11 +79,26 @@ export async function readFirstPartyDAppSessionSnapshot(
       ).mode
     : 'main'
   const byChain = new Map<string, FirstPartySessionAccount[]>()
+  const walletIds = [
+    ...new Set(
+      [...catalog.accounts]
+        .sort(
+          (left, right) =>
+            left.walletCreatedAt - right.walletCreatedAt ||
+            left.walletId.localeCompare(right.walletId)
+        )
+        .map(account => account.walletId)
+    )
+  ]
   for (const account of catalog.accounts) {
     const reference = Object.freeze({
       walletId: String(account.walletId),
       accountId: String(account.accountId)
     })
+    const walletName = formatWalletNameAtIndex(
+      account.walletDisplayName,
+      walletIds.indexOf(account.walletId)
+    )
     for (const network of account.networks) {
       const address = await selectAddress(network, reference)
       if (!address) continue
@@ -91,7 +107,7 @@ export async function readFirstPartyDAppSessionSnapshot(
         Object.freeze({
           reference,
           address,
-          label: `${account.walletDisplayName} \u00b7 ${account.accountDisplayName}`
+          label: `${walletName} · ${account.accountDisplayName}`
         })
       )
       byChain.set(network.chainId, accounts)

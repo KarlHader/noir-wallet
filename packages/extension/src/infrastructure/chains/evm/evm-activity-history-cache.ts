@@ -1,6 +1,11 @@
-import { parseActivityReadModel, type ActivityItem, type ActivityScope } from '@/core/activity'
+import {
+  mergeActivityHistoryItems,
+  parseActivityReadModel,
+  type ActivityItem,
+  type ActivityScope
+} from '@/core/activity'
 import { parseChainId } from '@/core/chains/registry'
-import { isZeroValueEvmTokenActivity } from './evm-indexed-activity'
+import { isZeroValueEvmTokenActivity, removeSupersededEvmReceipts } from './evm-indexed-activity'
 
 const DB_NAME = 'noir-wallet-evm-history-cache'
 const DB_VERSION = 2
@@ -19,6 +24,7 @@ export interface EvmHistoryCacheRecord {
   readonly historyPageCount?: number
   readonly historySyncAt?: number | null
   readonly trackedAssetKey?: string
+  readonly baseAcrossCursor?: { readonly block: number; readonly logIndex: number }
   readonly items: readonly ActivityItem[]
 }
 
@@ -54,7 +60,7 @@ export async function listEvmHistoryCacheByScope(
           parsed?.scope.keyDomainId === scope.keyDomainId &&
           parsed.scope.accountId === scope.accountId
         ) {
-          if (cursor.key === scopedCacheKey(scope, parsed.chainId, parsed.address)) {
+          if (cursor.key === recordKey(parsed)) {
             records.push(parsed)
           }
         }
@@ -142,7 +148,14 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
         'retryAfter',
         'items'
       ],
-      ['hasMore', 'historyPageCount', 'historySyncAt', 'trackedAssetKey']
+      [
+        'hasMore',
+        'historyPageCount',
+        'historySyncAt',
+        'trackedAssetKey',
+        'internalHistory',
+        'baseAcrossCursor'
+      ]
     ) ||
     value.schemaVersion !== 1
   ) {
@@ -152,6 +165,23 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
   const chainId = parseChainId(value.chainId).id
   if (!chainId.startsWith('eip155:')) throw new Error('EVM history cache requires an EVM chain')
   const address = parseAddress(value.address)
+  const cursor = value.baseAcrossCursor
+  let baseAcrossCursor: EvmHistoryCacheRecord['baseAcrossCursor']
+  if (cursor !== undefined) {
+    if (
+      chainId !== 'eip155:8453' ||
+      !isRecord(cursor) ||
+      typeof cursor.block !== 'number' ||
+      !Number.isSafeInteger(cursor.block) ||
+      cursor.block < 1 ||
+      typeof cursor.logIndex !== 'number' ||
+      !Number.isSafeInteger(cursor.logIndex) ||
+      cursor.logIndex < -1
+    ) {
+      throw new Error('Invalid Base Across receipt cursor')
+    }
+    baseAcrossCursor = { block: cursor.block, logIndex: cursor.logIndex }
+  }
   const lastAttemptAt = parseTimestamp(value.lastAttemptAt, 'last attempt')
   const successfulSyncAt =
     value.successfulSyncAt === null
@@ -210,6 +240,7 @@ function parseCurrentRecord(value: Record<string, unknown>): EvmHistoryCacheReco
     ...(value.historyPageCount === undefined ? {} : { historyPageCount: value.historyPageCount }),
     ...(historySyncAt === undefined ? {} : { historySyncAt }),
     ...(value.trackedAssetKey === undefined ? {} : { trackedAssetKey: value.trackedAssetKey }),
+    ...(baseAcrossCursor === undefined ? {} : { baseAcrossCursor }),
     items: parseItems(value.items, parsed.scope, chainId)
   })
 }
@@ -243,6 +274,13 @@ function scopedCacheKey(scope: ActivityScope, chainId: string, address: string):
   return `${parsedScope.keyDomainId}:${parsedScope.accountId}:${cacheKey(chainId, address)}`
 }
 
+function recordKey(
+  record: Pick<EvmHistoryCacheRecord, 'scope' | 'chainId' | 'address' | 'baseAcrossCursor'>
+): string {
+  const key = scopedCacheKey(record.scope, record.chainId, record.address)
+  return record.baseAcrossCursor ? `${key}:across` : key
+}
+
 let legacyCleanup: Promise<void> | null = null
 
 async function removeLegacyRecords(database: IDBDatabase): Promise<void> {
@@ -258,7 +296,7 @@ async function removeLegacyRecords(database: IDBDatabase): Promise<void> {
       const cursor = request.result
       if (!cursor) return resolve()
       const parsed = parseCacheRecord(cursor.value)
-      if (!parsed || cursor.key !== scopedCacheKey(parsed.scope, parsed.chainId, parsed.address)) {
+      if (!parsed || cursor.key !== recordKey(parsed)) {
         cursor.delete()
       }
       cursor.continue()
@@ -324,9 +362,11 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
 async function readRecord(
   chainId: string,
   address: string,
-  scope: ActivityScope
+  scope: ActivityScope,
+  baseAcross = false
 ): Promise<EvmHistoryCacheRecord | null> {
-  const key = scopedCacheKey(scope, chainId, address)
+  const scopedKey = scopedCacheKey(scope, chainId, address)
+  const key = baseAcross ? `${scopedKey}:across` : scopedKey
   const database = await openDatabase()
   try {
     const transaction = database.transaction(STORE_NAME, 'readonly')
@@ -334,7 +374,9 @@ async function readRecord(
     const raw = await requestResult(transaction.objectStore(STORE_NAME).get(key))
     await completion
     const parsed = parseCacheRecord(raw)
-    return parsed?.chainId === parseChainId(chainId).id &&
+    return parsed &&
+      recordKey(parsed) === key &&
+      parsed.chainId === parseChainId(chainId).id &&
       parsed.address === address.toLowerCase() &&
       parsed.scope.keyDomainId === scope.keyDomainId &&
       parsed.scope.accountId === scope.accountId
@@ -352,7 +394,7 @@ async function writeRecord(record: EvmHistoryCacheRecord): Promise<void> {
     const transaction = database.transaction(STORE_NAME, 'readwrite')
     const completion = transactionDone(transaction)
     const store = transaction.objectStore(STORE_NAME)
-    const key = scopedCacheKey(parsed.scope, parsed.chainId, parsed.address)
+    const key = recordKey(parsed)
     const current = parseCacheRecord(await requestResult(store.get(key)))
     store.put(mergeEvmHistoryCacheRecords(current, parsed), key)
     await completion
@@ -373,11 +415,6 @@ export function mergeEvmHistoryCacheRecords(
     current.address !== incoming.address
   ) {
     throw new Error('EVM history cache key does not match its record')
-  }
-  const byId = new Map(current.items.map(item => [item.id, item] as const))
-  for (const item of incoming.items) {
-    const previous = byId.get(item.id)
-    if (!previous || item.updatedAt >= previous.updatedAt) byId.set(item.id, item)
   }
   const newest = current.lastAttemptAt > incoming.lastAttemptAt ? current : incoming
   const currentDepth = current.historyPageCount ?? 1
@@ -404,14 +441,20 @@ export function mergeEvmHistoryCacheRecords(
     hasMore: pagination.hasMore,
     historyPageCount: pagination.historyPageCount,
     historySyncAt: pagination.historySyncAt ?? pagination.successfulSyncAt,
-    items: [...byId.values()]
-      .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
-      .slice(0, MAX_ITEMS)
+    items: removeSupersededEvmReceipts(
+      mergeActivityHistoryItems(current.items, incoming.items)
+    ).slice(0, MAX_ITEMS)
   })
 }
 
 export const indexedDbEvmHistoryCache: EvmHistoryCacheRepository = Object.freeze({
   read: readRecord,
+  write: writeRecord
+})
+
+export const indexedDbBaseAcrossHistoryCache: EvmHistoryCacheRepository = Object.freeze({
+  read: (chainId: string, address: string, scope: ActivityScope) =>
+    readRecord(chainId, address, scope, true),
   write: writeRecord
 })
 

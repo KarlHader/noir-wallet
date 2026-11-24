@@ -60,10 +60,11 @@ function PortfolioAssetActions({
         aria-label={`Shield ${formatSymbol(symbol)}`}
         aria-haspopup="dialog"
         onClick={event => onShield(event.currentTarget)}
-        className="portfolio-shield-action wallet-interactive absolute top-1/2 right-4 z-10 inline-flex h-11 -translate-y-1/2 items-center rounded-full text-xs font-semibold text-primary focus-visible:outline-2 focus-visible:outline-primary"
+        className="portfolio-shield-action wallet-interactive absolute top-1/2 right-4 z-10 inline-flex h-10 -translate-y-1/2 items-center rounded-lg text-xs font-medium focus-visible:outline-2 focus-visible:outline-primary"
       >
-        <span className="flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1.5">
-          <Icon icon="lucide:shield" width={14} aria-hidden="true" /> Shield
+        <span className="flex items-center gap-1 rounded-lg border border-border/70 bg-popover px-2 py-1.5 text-primary shadow-xs">
+          <Icon icon="lucide:shield" width={14} aria-hidden="true" />
+          Shield
         </span>
       </button>
     </div>

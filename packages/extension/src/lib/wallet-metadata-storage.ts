@@ -815,6 +815,55 @@ export function commitWalletMetadataDeletion(
   })
 }
 
+export function detachIncompatibleRetainedHardwareWallet(
+  walletId: string,
+  keySource: 'ledger' | 'keystone',
+  expectedSnapshot: unknown,
+  expectedEnvelope: unknown
+): Promise<boolean> {
+  return withMetadataLock(async () => {
+    const credentialStorageKey = `hw_${walletId}`
+    const saved = await chrome.storage.local.get([
+      WALLET_STATE_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_ACCOUNTS_KEY,
+      credentialStorageKey
+    ])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+    const expectedWallet = parseSnapshot(expectedSnapshot)?.state.wallets.find(
+      item => item.id === walletId
+    )
+    const bindings = (item: WalletItem) =>
+      item.accounts.map(account => ({
+        id: account.id,
+        derivationIndex: account.derivationIndex,
+        addresses: account.addresses
+      }))
+    if (
+      !snapshot ||
+      !wallet ||
+      wallet.keySource !== keySource ||
+      !expectedWallet ||
+      JSON.stringify(bindings(wallet)) !== JSON.stringify(bindings(expectedWallet)) ||
+      JSON.stringify(saved[credentialStorageKey]) !== JSON.stringify(expectedEnvelope)
+    ) {
+      return false
+    }
+    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    deleted.add(walletId)
+    await chrome.storage.local.set({
+      [DELETED_WALLETS_KEY]: [...deleted],
+      [WALLET_STATE_KEY]: filterDeleted(
+        snapshot,
+        deleted,
+        parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
+      )
+    })
+    return true
+  })
+}
+
 export function commitAccountMetadataDeletion(
   walletId: string,
   accountId: string,

@@ -81,6 +81,19 @@ function scopeKey(scope: DAppExecutionModeScope): string {
   return JSON.stringify([scope.network, scope.keyDomainId, scope.accountId])
 }
 
+function includesScope(scopes: readonly DAppExecutionModeScope[], scope: DAppExecutionModeScope) {
+  return scopes.some(item => scopeKey(item) === scopeKey(scope))
+}
+
+function addPrivateSetupScope(
+  scopes: readonly DAppExecutionModeScope[],
+  scope: DAppExecutionModeScope
+): readonly DAppExecutionModeScope[] {
+  if (scopes.length >= MAX_PRIVATE_SCOPES)
+    throw new Error('Too many private execution setup scopes')
+  return Object.freeze([...scopes, scope])
+}
+
 export function parseDAppExecutionModeScope(value: unknown): DAppExecutionModeScope {
   return parseScope(value)
 }
@@ -262,6 +275,27 @@ export class DAppExecutionModeCoordinator {
     })
   }
 
+  async readPrivateSetup(scopeValue: DAppExecutionModeScope): Promise<boolean> {
+    const scope = parseScope(scopeValue)
+    await this.updateQueue
+    const persisted = decodePersistedDAppExecutionModes(await this.repository.read())
+    return includesScope(persisted.privateSetupScopes, scope)
+  }
+
+  completePrivateSetup(scopeValue: DAppExecutionModeScope): Promise<void> {
+    const scope = parseScope(scopeValue)
+    return this.enqueueUpdate(async () => {
+      const persisted = decodePersistedDAppExecutionModes(await this.repository.read())
+      if (includesScope(persisted.privateSetupScopes, scope)) return
+      await this.repository.write(
+        Object.freeze({
+          ...persisted,
+          privateSetupScopes: addPrivateSetupScope(persisted.privateSetupScopes, scope)
+        })
+      )
+    })
+  }
+
   set(
     scopeValue: DAppExecutionModeScope,
     mode: DAppExecutionMode,
@@ -281,16 +315,13 @@ export class DAppExecutionModeCoordinator {
       const persisted = decodePersistedDAppExecutionModes(await this.repository.read())
       const key = scopeKey(scope)
       const privateScopes = persisted.privateScopes.filter(item => scopeKey(item) !== key)
-      const privateSetupScopes = [...persisted.privateSetupScopes]
+      let privateSetupScopes = persisted.privateSetupScopes
       const currentMode =
         privateScopes.length === persisted.privateScopes.length ? 'main' : 'private'
       let privateSetupCompleted = privateSetupScopes.some(item => scopeKey(item) === key)
       if (mode === 'private' && !privateSetupCompleted) {
         if (options.confirmPrivateSetup !== true) throw new PrivateExecutionSetupRequiredError()
-        if (privateSetupScopes.length >= MAX_PRIVATE_SCOPES) {
-          throw new Error('Too many private execution setup scopes')
-        }
-        privateSetupScopes.push(scope)
+        privateSetupScopes = addPrivateSetupScope(privateSetupScopes, scope)
         privateSetupCompleted = true
       }
       if (currentMode === mode) {
@@ -307,7 +338,7 @@ export class DAppExecutionModeCoordinator {
         Object.freeze({
           schemaVersion: 1,
           privateScopes: Object.freeze(privateScopes),
-          privateSetupScopes: Object.freeze(privateSetupScopes)
+          privateSetupScopes
         })
       )
       return Object.freeze({ mode, privateAvailable, privateSetupCompleted })

@@ -29,8 +29,11 @@ function proposal(scope = { chainId: ethereum, chainName: 'Ethereum', iconChain:
 }
 
 function createHandler({
-  selectedIds = ['account-1'],
-  selectScopes = () => ({ evm: selectedIds }),
+  selectedIds,
+  selectScopes = choices =>
+    selectedIds
+      ? { evm: selectedIds }
+      : Object.fromEntries(choices.map(choice => [choice.chainId, choice.preselectedIds])),
   prepareProposal = proposal,
   manager,
   readFirstPartySnapshot,
@@ -128,7 +131,13 @@ function createHandler({
 }
 
 test('token metadata and manager require the current authorized account and reject context changes', async () => {
-  let snapshot = { identity: 'one', activeReference: reference }
+  const initialSnapshot = {
+    identity: 'one',
+    activeReference: reference,
+    executionMode: 'main',
+    accounts: { [ethereum]: [{ reference, address, label: 'Account 1' }] }
+  }
+  let snapshot = initialSnapshot
   let reads = 0
   let opens = 0
   let changeDuringRead = false
@@ -184,7 +193,7 @@ test('token metadata and manager require the current authorized account and reje
     handler.request({ method: 'wallet_getTokenList' }, origin, {})
   ).rejects.toMatchObject({ code: 4100 })
   expect(reads).toBe(1)
-  snapshot = { identity: 'one', activeReference: reference }
+  snapshot = initialSnapshot
   changeDuringRead = true
   await expect(
     handler.request({ method: 'wallet_getTokenList' }, origin, {})
@@ -279,6 +288,7 @@ test('multichain Connect omits networks unavailable across wallet accounts', asy
   const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
   const bitcoin = 'bip122:000000000019d6689c085ae165831e93'
   const { handler, approvals, getStored } = createHandler({
+    selectScopes: choices => ({ evm: choices[0].preselectedIds }),
     readFirstPartySnapshot: async () => ({
       identity: 'evm-only',
       executionMode: 'main',

@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import type { RheaSwapService } from '@/core/services/rhea-swap'
 import type { SwapStatus } from '@/core/services/intents-api'
 import {
@@ -888,7 +889,7 @@ export class RheaSwapTransactionMonitor {
         return false
       }
       const observedAt = Date.now()
-      const result = await this.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.repository, {
         scope,
         transactionId,
         segmentId: segment.id,

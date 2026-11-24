@@ -132,7 +132,8 @@ export class ActivityCoordinator {
             ?.some(
               observation =>
                 observation.network === transaction.network &&
-                observation.fromType === destinationPool
+                observation.fromType === destinationPool &&
+                observation.amount === (transaction.settledSelfTransferAmount ?? transaction.amount)
             )
           return observedReceipt ? [item] : [item, receipt]
         }),

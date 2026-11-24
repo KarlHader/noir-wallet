@@ -48,7 +48,7 @@ import type {
   KeystoneZcashVerificationPort,
   KeystoneZcashVerificationResult
 } from './keystone-hardware-verification'
-import { assertKeystoneZcashVerificationMatches } from './keystone-hardware-verification'
+import { verifyRetainedZcashHardwareWallet } from './keystone-hardware-verification'
 
 export interface KeystoneHardwareMigrationInput {
   readonly discovery: V1MetadataDiscovery
@@ -111,19 +111,6 @@ function assertHardwareDiscovery(discovery: V1MetadataDiscovery): readonly V1Dis
 function assertChainProfile(chains: RetainedV1MigrationChainProfile): void {
   const zcash = parseChainId(chains.zcashChainId)
   if (zcash.namespace !== 'bip122') throw new Error('Invalid Keystone Zcash chain profile')
-}
-
-function assertVerification(
-  prepared: Pick<PreparedHardwareWallet, 'wallet' | 'verification'>,
-  chains: RetainedV1MigrationChainProfile
-): void {
-  const account = prepared.wallet.accounts[0]
-  assertKeystoneZcashVerificationMatches(prepared.verification, {
-    accountIndex: account.accountIndex,
-    expected: account.addresses,
-    chainId: chains.zcashChainId,
-    network: chains.zcashNetwork
-  })
 }
 
 function nextJournal(
@@ -333,7 +320,7 @@ export class KeystoneHardwareMigrationCoordinator {
       const prepared: PreparedHardwareWallet[] = []
       for (const [index, wallet] of wallets.entries()) {
         const account = wallet.accounts[0]
-        const verification = await this.verifier.verifyZcash({
+        const verification = await verifyRetainedZcashHardwareWallet(this.verifier, wallet.id, {
           vendor: wallet.keySource as 'keystone' | 'ledger',
           envelope: envelopes[index].value,
           password: input.password,
@@ -345,7 +332,6 @@ export class KeystoneHardwareMigrationCoordinator {
             expected: account.addresses
           }
         })
-        assertVerification({ wallet, verification }, input.chains)
         const suffix = (await sha256(`${sourceFingerprint}:${wallet.id}`)).slice(0, 32)
         prepared.push({
           wallet,

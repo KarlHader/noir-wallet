@@ -1,4 +1,4 @@
-import { getActivityAssetEffects, type ActivityItem } from '@/core/activity'
+import { isActivityReceive, type ActivityItem } from '@/core/activity'
 import {
   getActivityBalanceDomains,
   type ActivityBalanceDomain
@@ -83,15 +83,16 @@ export function resolveOwnedActivitySettlement(
 function receiptIdentity(
   item: ActivityItem,
   domain: ActivityBalanceDomain,
-  assetId: string,
+  amount: TransactionAssetAmount,
   hash: string
 ): string {
-  const chainId = parseAssetId(assetId).chainId
+  const chainId = parseAssetId(amount.assetId).chainId
   return JSON.stringify([
     item.scope.keyDomainId,
     item.scope.accountId,
     domain,
-    assetId,
+    amount.assetId,
+    amount.amountRaw,
     chainId.startsWith('eip155:') ? hash.toLowerCase() : hash
   ])
 }
@@ -106,6 +107,7 @@ export function projectActivityReceipts(
     if (
       item.status !== 'final' ||
       item.reconfirming ||
+      !isActivityReceive(item) ||
       !getActivityBalanceDomains(item).includes(domain)
     )
       continue
@@ -114,13 +116,8 @@ export function projectActivityReceipts(
         segment.role === 'origin' && segment.target.kind === 'onchain' && segment.status === 'final'
     )?.evidence?.transactionHash
     if (!hash) continue
-    const primary =
-      item.snapshot?.direction === 'incoming' ? item.snapshot.primaryAmount : undefined
-    if (primary) receipts.add(receiptIdentity(item, domain, primary.assetId, hash))
-    for (const change of getActivityAssetEffects(item)?.changes ?? []) {
-      if (change.direction === 'incoming')
-        receipts.add(receiptIdentity(item, domain, change.assetId, hash))
-    }
+    const primary = item.snapshot?.primaryAmount
+    if (primary) receipts.add(receiptIdentity(item, domain, primary, hash))
   }
 
   const projected: ActivityItem[] = []
@@ -186,9 +183,8 @@ export function projectActivityReceipts(
       )
         continue
       if (onchainCredit) {
-        const key = receiptIdentity(item, domain, assetId, onchainCredit)
+        const key = receiptIdentity(item, domain, amount, onchainCredit)
         if (receipts.has(key)) continue
-        receipts.add(key)
       }
       const fundingAccount =
         shieldCredit && shield?.operation === 'deposit'

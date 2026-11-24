@@ -11,7 +11,7 @@ import {
   type VerboseTxOutput
 } from '../../lib/zcash-node-rpc.ts'
 import { loadTransparentTxCache, saveTransparentTxCache } from '../../lib/indexed-db.ts'
-import type { AccountData, Network, Transaction } from '../../types/wallet.ts'
+import type { AccountAddresses, AccountData, Network, Transaction } from '../../types/wallet.ts'
 import { partitionVerboseTransactions } from './transparent-history-cache.ts'
 import {
   getRequiredConfirmations,
@@ -449,7 +449,8 @@ export async function fetchMissingTransparentSendRecipients(
 export function mergeTransactionsWithWasmHistory(
   currentTransactions: Transaction[],
   wasmTransactions: Transaction[],
-  transparentReceives: Transaction[]
+  transparentReceives: Transaction[],
+  accountAddresses?: AccountAddresses
 ): { transactions: Transaction[]; newWasmTransactionCount: number } {
   const walletHistoryByHash = new Map<string, Transaction>()
   for (const transaction of wasmTransactions) {
@@ -493,7 +494,39 @@ export function mergeTransactionsWithWasmHistory(
     )
   })
   const currentById = new Map(refreshedCurrentTransactions.map(tx => [tx.id, tx]))
-  const reconciledWasmTransactions = wasmTransactions.map(transaction => {
+  const localShieldRecipients = new Map<string, string>()
+  for (const transaction of refreshedCurrentTransactions) {
+    if (
+      transaction.type === 'send' &&
+      transaction.fromType === 'transparent' &&
+      !transaction.id.startsWith('wasm_') &&
+      transaction.txHash &&
+      transaction.to &&
+      (transaction.to === accountAddresses?.shielded ||
+        transaction.to === accountAddresses?.fullUnified)
+    ) {
+      localShieldRecipients.set(
+        `${transaction.network}:${normalizeTxHash(transaction.txHash)}`,
+        transaction.to
+      )
+    }
+  }
+  const observedShieldReceiptKeys = new Set(
+    wasmTransactions
+      .filter(transaction => transaction.type === 'receive' && transaction.fromType === 'shielded')
+      .map(transaction => `${transaction.network}:${normalizeTxHash(transaction.txHash)}`)
+  )
+  const reconciledWasmTransactions = wasmTransactions.map(wasmTransaction => {
+    const key = `${wasmTransaction.network}:${normalizeTxHash(wasmTransaction.txHash)}`
+    const recipient = localShieldRecipients.get(key)
+    const transaction: Transaction =
+      wasmTransaction.type === 'shield' &&
+      wasmTransaction.status === 'success' &&
+      safeBig(wasmTransaction.amount).gt(0) &&
+      recipient &&
+      !observedShieldReceiptKeys.has(key)
+        ? { ...wasmTransaction, type: 'receive', fromType: 'shielded', to: recipient, fee: '0' }
+        : wasmTransaction
     const current = currentById.get(transaction.id)
     if (!current) {
       return {
@@ -519,11 +552,11 @@ export function mergeTransactionsWithWasmHistory(
   const newWasmTransactions = reconciledWasmTransactions.filter(
     tx => !isDuplicateWasmRow(tx, localHashes)
   )
-  const newWasmHashes = new Set(newWasmTransactions.map(tx => normalizeTxHash(tx.txHash)))
+  const newWasmIds = new Set(newWasmTransactions.map(tx => tx.id))
   const preservedTransactions = refreshedCurrentTransactions.filter(tx => {
     if (isDuplicateWasmRow(tx, localHashes)) return false
     if (!tx.id.startsWith('wasm_')) return true
-    return !newWasmHashes.has(normalizeTxHash(tx.txHash))
+    return !newWasmIds.has(tx.id)
   })
   const mergedWasmTransactions = [...preservedTransactions, ...newWasmTransactions].sort(
     (a, b) => b.timestamp - a.timestamp
@@ -544,32 +577,46 @@ export function mergeTransactionsWithTransparentReceives(
   existingTransactions: Transaction[],
   transparentReceives: Transaction[]
 ): Transaction[] {
-  const receiptsByHash = new Map<string, Transaction>()
+  const receiptsById = new Map<string, Transaction>()
   const preservedTransactions: Transaction[] = []
   for (const transaction of [...existingTransactions, ...transparentReceives]) {
-    const hash = normalizeTxHash(transaction.txHash)
-    if (!hash || !isTransparentReceive(transaction)) {
+    if (!normalizeTxHash(transaction.txHash) || !isTransparentReceive(transaction)) {
       preservedTransactions.push(transaction)
       continue
     }
-    const existing = receiptsByHash.get(hash)
+    const previous = receiptsById.get(transaction.id)
+    receiptsById.set(
+      transaction.id,
+      previous ? mergeZcashReceiveObservation(previous, transaction) : transaction
+    )
+  }
+  const transactionScopedReceipts = new Map<string, Transaction>()
+  for (const transaction of receiptsById.values()) {
+    const hash = normalizeTxHash(transaction.txHash)
+    const id = transaction.id.toLowerCase()
+    if (id !== `wasm_${hash}` && id !== `rpc_treceive_${hash}`) {
+      preservedTransactions.push(transaction)
+      continue
+    }
+    const key = JSON.stringify([transaction.network, hash, transaction.to, transaction.amount])
+    const existing = transactionScopedReceipts.get(key)
     if (!existing) {
-      receiptsByHash.set(hash, transaction)
+      transactionScopedReceipts.set(key, transaction)
       continue
     }
     const [previous, observed] =
       existing.id.startsWith('rpc_treceive_') && transaction.id.startsWith('wasm_')
         ? [transaction, existing]
         : [existing, transaction]
-    receiptsByHash.set(
-      hash,
+    transactionScopedReceipts.set(
+      key,
       mergeZcashReceiveObservation(
         previous,
         previous.status === 'failed' ? { ...observed, id: previous.id } : observed
       )
     )
   }
-  return [...preservedTransactions, ...receiptsByHash.values()].sort(
+  return [...preservedTransactions, ...transactionScopedReceipts.values()].sort(
     (left, right) => right.timestamp - left.timestamp
   )
 }

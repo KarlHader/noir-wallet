@@ -138,15 +138,21 @@ test('persists bounded RPC Activity across Popup and Service Worker reconstructi
   const memory = memoryStorage()
   const database = memoryRepository()
   const first = new ActivityHistoryCache('mainnet', memory.storage, database.repository)
-  const item = bitcoinActivityItem()
+  const item = { ...bitcoinActivityItem(), updatedAt: 1_500 }
+  const secondReceipt = nativeActivityItem(chainId, '0', `${item.id}:output:2`)
   const partition = 'active-address-p2wpkh-v2'
 
-  await first.write(scope, { [chainId]: 2_000 }, [item], partition)
+  await first.write(
+    scope,
+    { [chainId]: 2_000 },
+    [item, secondReceipt, bitcoinActivityItem()],
+    partition
+  )
 
   const rebuilt = new ActivityHistoryCache('mainnet', memory.storage, database.repository)
   await expect(rebuilt.read(scope, partition)).resolves.toEqual({
     refreshedAtByChainId: { [chainId]: 2_000 },
-    items: [item]
+    items: [item, secondReceipt]
   })
 })
 

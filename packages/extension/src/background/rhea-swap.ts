@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import {
   normalizeBuild,
   normalizeQuote,
@@ -493,7 +494,9 @@ export async function recoverRheaWithdrawActivity(
     return graph
   }
   return (
-    (await repository.backfillRheaWithdrawActivity(
+    (await writeLocalActivity(
+      'backfillRheaWithdrawActivity',
+      repository,
       scope,
       id,
       binding.quoteHandle,

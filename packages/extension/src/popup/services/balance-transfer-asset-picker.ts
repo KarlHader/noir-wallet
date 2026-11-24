@@ -78,7 +78,7 @@ export function listBalanceTransferAssetPickerRows(input: {
     const sourceRaw =
       input.from === 'shield'
         ? managed && input.shieldBalances
-          ? getConfidentialAvailableForAsset(input.shieldBalances, managed.protocolAssetId)
+          ? (getConfidentialAvailableForAsset(input.shieldBalances, managed.protocolAssetId) ?? '0')
           : null
         : getTransferDomainBalanceRaw(item.asset, input.from)
     if (sourceRaw === null || (!input.includeEmpty && BigInt(sourceRaw) === 0n)) return []

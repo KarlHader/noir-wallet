@@ -1,6 +1,7 @@
 import { Icon } from '@iconify/react'
 import { useState, type ReactNode } from 'react'
 import { getActivityAssetEffects, type ActivityItem } from '@/core/activity'
+import { isExternalShieldDepositActivity } from '@/core/activity/activity-balance-domains'
 import type { Network } from '@/types'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import { detectAddressType, formatSortAddress } from '@/lib/format'
@@ -356,9 +357,26 @@ export function buildActivityTransactionView(input: {
 
 function RouteIcon({ alias }: { readonly alias?: string }) {
   return alias ? (
-    <ChainIcon chain={alias} width={18} height={18} className="size-[18px]" showTooltip={false} />
+    <ChainIcon
+      chain={alias}
+      width={18}
+      height={18}
+      className="size-[18px] shrink-0"
+      showTooltip={false}
+    />
   ) : (
-    <Icon icon="lucide:network" width={18} height={18} />
+    <Icon icon="lucide:network" width={18} height={18} className="shrink-0" aria-hidden />
+  )
+}
+
+function ActivityNetworkLabel({ alias, name }: { readonly alias?: string; readonly name: string }) {
+  return (
+    <span className="inline-flex min-w-0 items-center justify-end gap-1.5">
+      <RouteIcon alias={alias} />
+      <span className="min-w-0 truncate" title={name}>
+        {name}
+      </span>
+    </span>
   )
 }
 
@@ -499,30 +517,24 @@ export function ActivityTransactionRoute({ view }: { readonly view: ActivityTran
   if (!swap)
     return (
       <DetailRow label="Network">
-        <span className="max-w-[220px] text-right text-sm">{view.primaryNetworkName}</span>
+        <ActivityNetworkLabel alias={view.primaryChainIconAlias} name={view.primaryNetworkName} />
       </DetailRow>
     )
   const sameNetworkAccountTransfer =
     isOwnedAccountTransfer(swap) && swap.sourceNetwork === swap.destinationNetwork
   return sameNetworkAccountTransfer ? (
     <DetailRow label="Network">
-      <span className="flex items-center justify-end gap-1.5 text-sm">
-        <RouteIcon alias={swap.sourceChainIconAlias} />
-        {swap.sourceNetwork}
-      </span>
+      <ActivityNetworkLabel alias={swap.sourceChainIconAlias} name={swap.sourceNetwork} />
     </DetailRow>
   ) : (
     <DetailRow label="Route">
       <span className="flex min-w-0 max-w-[calc(100vw-110px)] items-center justify-end gap-1 whitespace-nowrap text-right text-xs">
-        <RouteIcon alias={swap.sourceChainIconAlias} />
-        <span className="min-w-0 truncate" title={swap.sourceNetwork}>
-          {swap.sourceNetwork}
-        </span>
+        <ActivityNetworkLabel alias={swap.sourceChainIconAlias} name={swap.sourceNetwork} />
         <Icon icon="lucide:arrow-right" width={13} height={13} className="shrink-0 text-muted" />
-        <RouteIcon alias={swap.destinationChainIconAlias} />
-        <span className="min-w-0 truncate" title={swap.destinationNetwork}>
-          {swap.destinationNetwork}
-        </span>
+        <ActivityNetworkLabel
+          alias={swap.destinationChainIconAlias}
+          name={swap.destinationNetwork}
+        />
       </span>
     </DetailRow>
   )
@@ -537,7 +549,7 @@ function ActivityTransactionAccountRoute({ view }: { readonly view: ActivityTran
   )
     return null
   return (
-    <DetailRow label={view.actionSide === 'none' ? 'Account' : 'Direction'}>
+    <DetailRow label="Direction">
       {swap.destinationFundingSource ? (
         <span className="text-sm">{getActivityAccountRouteLabel(swap)}</span>
       ) : (
@@ -833,12 +845,17 @@ export function ActivityTransactionProgress({
   readonly view: ActivityTransactionView
   readonly precedingProgress?: PrecedingProgress
 }) {
+  const { copyToClipboard, showToast, copyFailed, isCopied } = useCopyToClipboard()
   if (!view.isCrossChain && !precedingProgress) return null
   const referenceByStepId = new Map<string, ReactNode>()
   if (precedingProgress?.reference) {
     referenceByStepId.set(precedingProgress.step.id, precedingProgress.reference)
   }
   for (const segment of view.item.segments) {
+    const depositAddress =
+      segment.role === 'origin' && isExternalShieldDepositActivity(view.item)
+        ? segment.evidence?.externalReference
+        : undefined
     const hash = segment.evidence?.transactionHash
     const reference =
       segment.target.kind === 'onchain' &&
@@ -847,10 +864,30 @@ export function ActivityTransactionProgress({
         ? { hash, chainId: segment.target.chainId }
         : view.references.find(candidate => candidate.id === segment.id)
     const replacement = view.replacementReferences.find(candidate => candidate.id === segment.id)
-    if (!reference && !replacement) continue
+    if (!reference && !replacement && !depositAddress) continue
     referenceByStepId.set(
       segment.id,
       <div className="space-y-1">
+        {depositAddress && (
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-muted">Deposit address</span>
+            <AddressValue
+              address={depositAddress}
+              url={
+                segment.target.kind === 'onchain'
+                  ? formatChainAddressExplorerUrl(
+                      segment.target.chainId,
+                      depositAddress,
+                      view.network
+                    )
+                  : ''
+              }
+              copyKey="deposit"
+              copied={isCopied('deposit')}
+              onCopy={() => void copyToClipboard(depositAddress, 'deposit')}
+            />
+          </div>
+        )}
         {reference && (
           <TransactionReferenceValue
             hash={reference.hash}
@@ -884,13 +921,16 @@ export function ActivityTransactionProgress({
     )
   }
   return (
-    <TransactionProgressSteps
-      steps={
-        precedingProgress ? [precedingProgress.step, ...view.progressSteps] : view.progressSteps
-      }
-      referenceByStepId={referenceByStepId}
-      className="mt-5"
-    />
+    <>
+      <TransactionProgressSteps
+        steps={
+          precedingProgress ? [precedingProgress.step, ...view.progressSteps] : view.progressSteps
+        }
+        referenceByStepId={referenceByStepId}
+        className="mt-5"
+      />
+      <CopyToast show={showToast} error={copyFailed} message="Address copied" />
+    </>
   )
 }
 

@@ -35,7 +35,6 @@ import {
   getJournalManifest,
   clearJournalEntries,
   loadTransactions,
-  mutateTransactions,
   deleteVotingState,
   deleteWalletPersistenceAndQuarantine,
   deleteWalletRecords,
@@ -102,10 +101,9 @@ import {
 } from '@/core/wallet/balance-summary'
 import {
   fetchTransparentReceiveTransactions,
-  fetchMissingTransparentSendRecipients,
-  mergeTransactionsWithWasmHistory,
-  associateIncomingIntentsTransactions
+  fetchMissingTransparentSendRecipients
 } from '@/core/wallet/transparent-history'
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { shouldMarkSyncJobInterrupted, syncJobStore } from '@/lib/sync-job-store'
 import {
   runSpendabilitySnapshotRefresh,
@@ -385,7 +383,8 @@ export class BackgroundZcashWalletRuntime {
         cacheKey: accountKey,
         signal
       }),
-    mutate: mutateTransactions,
+    write: (accountKey, write, options) =>
+      writeLocalActivity('legacy-zcash', accountKey, write, options),
     notify: async accountKey => {
       await chrome.runtime
         .sendMessage({
@@ -3004,16 +3003,13 @@ export class BackgroundZcashWalletRuntime {
         logger.warn('transparent receive history fetch failed', walletId, accountId)
       }
 
-      let newWasmTransactionCount = 0
-      const persistedTransactions = await mutateTransactions(accountKey, currentTransactions => {
-        const merged = mergeTransactionsWithWasmHistory(
-          currentTransactions,
-          wasmTransactions,
-          transparentReceiveTransactions
-        )
-        newWasmTransactionCount = merged.newWasmTransactionCount
-        return associateIncomingIntentsTransactions(merged.transactions)
-      })
+      const { transactions: persistedTransactions, newWasmTransactionCount } =
+        await writeLocalActivity('legacy-zcash', accountKey, {
+          kind: 'history',
+          wasm: wasmTransactions,
+          receipts: transparentReceiveTransactions,
+          addresses: account.addresses
+        })
       if (canApplyStatus()) {
         if (transparentHistoryFailed) this.historyRefreshFailures.add(historyScope)
         else this.historyRefreshFailures.delete(historyScope)
@@ -4311,6 +4307,9 @@ export class BackgroundZcashWalletRuntime {
 
     const currentSyncState = this.accountDataStore.getWalletSyncState(syncNetwork, syncWalletId)
     const lastSyncTime = currentSyncState.lastSyncTime || 0
+    const startedWithSyncedBalance =
+      currentSyncState.latestHeight > 0 &&
+      currentSyncState.currentHeight >= currentSyncState.latestHeight
 
     const setSyncState = (partial: Partial<import('@/store/account-data-store').SyncState>) => {
       this.accountDataStore.setWalletSyncStateFor(syncNetwork, syncWalletId!, partial)
@@ -5410,8 +5409,9 @@ export class BackgroundZcashWalletRuntime {
                 checkpointErr
               )
             }
-            // Surface scanned-so-far balances in the UI during long syncs
-            await this.refreshBalances(syncWalletId, true).catch(() => {})
+            if (startedWithSyncedBalance) {
+              await this.refreshBalances(syncWalletId, true).catch(() => {})
+            }
           }
         }
       }

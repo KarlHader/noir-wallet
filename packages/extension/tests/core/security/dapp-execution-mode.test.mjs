@@ -113,6 +113,36 @@ test.describe('dApp execution mode coordinator', () => {
     })
   })
 
+  test('completes setup only for the selected account and network without changing execution modes', async () => {
+    const otherAccount = { ...mainnetAccount, accountId: 'account-2' }
+    const testnetAccount = { ...mainnetAccount, network: 'testnet' }
+    const state = repository({
+      schemaVersion: 1,
+      privateScopes: [otherAccount],
+      privateSetupScopes: [otherAccount]
+    })
+    const capability = { isAvailable: async () => true }
+    const coordinator = new DAppExecutionModeCoordinator(state.port, capability)
+
+    await Promise.all([
+      coordinator.completePrivateSetup(mainnetAccount),
+      coordinator.completePrivateSetup(mainnetAccount)
+    ])
+
+    const restored = new DAppExecutionModeCoordinator(state.port, capability)
+    await expect(restored.read(mainnetAccount)).resolves.toMatchObject({
+      mode: 'main',
+      privateSetupCompleted: true
+    })
+    await expect(restored.read(otherAccount)).resolves.toMatchObject({ mode: 'private' })
+    await expect(restored.readPrivateSetup(testnetAccount)).resolves.toBe(false)
+    expect(state.writes()).toBe(1)
+
+    await restored.removeAccount(mainnetAccount.keyDomainId, mainnetAccount.accountId)
+    await expect(restored.readPrivateSetup(mainnetAccount)).resolves.toBe(false)
+    await expect(restored.readPrivateSetup(otherAccount)).resolves.toBe(true)
+  })
+
   test('refuses Private mode before the complete PEA capability is installed', async () => {
     const state = repository(undefined)
     const coordinator = new DAppExecutionModeCoordinator(state.port, {

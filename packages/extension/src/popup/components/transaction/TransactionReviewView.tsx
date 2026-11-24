@@ -183,7 +183,7 @@ export function TransactionReviewView({
   onCancel,
   onConfirm
 }: TransactionReviewViewProps) {
-  const figma = variant === 'figma'
+  const figma = variant !== 'default'
   if (submitting) {
     return (
       <TransactionResult
@@ -212,7 +212,7 @@ export function TransactionReviewView({
                 'Network',
                 'Recipient',
                 'Send To',
-                'Recipient receives',
+                'Recipient receive',
                 'Expected receive',
                 'Estimated receive'
               ].includes(row.label)
@@ -289,12 +289,7 @@ export function TransactionReviewView({
               }
             >
               {amount && asset ? (
-                <AmountDisplay
-                  value={amount}
-                  symbol={asset.symbol}
-                  prefix={amountPrefix}
-                  className={figma ? 'justify-start gap-x-1' : undefined}
-                />
+                <AmountDisplay value={amount} symbol={asset.symbol} prefix={amountPrefix} />
               ) : (
                 <Skeleton className="h-7 w-36" />
               )}

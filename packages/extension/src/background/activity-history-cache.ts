@@ -1,4 +1,9 @@
-import { parseActivityReadModel, type ActivityItem, type ActivityScope } from '@/core/activity'
+import {
+  mergeActivityHistoryItems,
+  parseActivityReadModel,
+  type ActivityItem,
+  type ActivityScope
+} from '@/core/activity'
 import { getBitcoinChainId } from '@/core/chains/registry/product-chain-definitions'
 import { getNearNetworkConfig, getSolanaNetworkConfig } from '@/config/networks'
 import type { Network } from '@/types'
@@ -322,15 +327,11 @@ export class ActivityHistoryCache {
         refreshedAtByChainId: Object.fromEntries(
           Object.entries(refreshedAtByChainId).filter(([chainId]) => !chainId.startsWith('eip155:'))
         ),
-        items: [...items]
-          .filter(item => !isEvmItem(item))
-          .sort(
-            (left, right) =>
-              right.updatedAt - left.updatedAt ||
-              right.createdAt - left.createdAt ||
-              left.id.localeCompare(right.id)
-          )
-          .slice(0, ACTIVITY_HISTORY_CACHE_ITEM_LIMIT)
+        items: mergeActivityHistoryItems(
+          [],
+          items.filter(item => !isEvmItem(item)),
+          ACTIVITY_HISTORY_CACHE_ITEM_LIMIT
+        )
       },
       scope,
       this.network

@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import {
   parseTransactionEventId,
   type TransactionAccountScope,
@@ -290,7 +291,7 @@ export class BitcoinTransactionRecovery {
     retried: boolean
   ): Promise<'applied' | 'unchanged'> {
     const observedAt = parseObservedAt(this.options.now())
-    const result = await this.options.repository.applySegmentEvent({
+    const result = await writeLocalActivity('applySegmentEvent', this.options.repository, {
       scope: graph.root.scope,
       transactionId: graph.root.id,
       segmentId: segment.id,

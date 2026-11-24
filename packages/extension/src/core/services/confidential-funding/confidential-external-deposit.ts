@@ -38,6 +38,7 @@ export interface ExternalShieldDeposit {
   readonly minimumOutputRaw: string
   readonly settledOutputRaw?: string
   readonly depositedAmountRaw?: string
+  readonly refundTransactionHash?: string
   readonly fundingObservedAt?: number
   readonly providerStatus?: string
   readonly balanceRefreshedAt?: number
@@ -282,21 +283,44 @@ export function projectExternalShieldDepositActivityGraph(
     record.accountId !== graph.root.scope.accountId ||
     graph.root.status !== 'failed' ||
     !graph.root.failure ||
-    graph.root.failure?.code === 'refunded' ||
     !graph.root.id.startsWith('tx:confidential-external:')
   ) {
     return graph
   }
+  const origin = graph.segments.find(segment => segment.role === 'origin')
+  const refund =
+    record.refundTransactionHash &&
+    origin?.target.kind === 'onchain' &&
+    !graph.segments.some(segment => segment.role === 'refund')
+      ? {
+          id: parseTransactionSegmentId(`segment:confidential-external:${record.depositId}:refund`),
+          transactionId: graph.root.id,
+          role: 'refund',
+          target: origin.target,
+          status: 'final',
+          requiredForFinality: false,
+          dependsOn: [origin.id],
+          evidence: { transactionHash: record.refundTransactionHash },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+          revision: 0
+        }
+      : null
+  if (!refund && graph.root.failure.code === 'refunded') return graph
   return parseTransactionGraph({
     root: {
       ...graph.root,
       failure: { ...graph.root.failure, code: 'refunded' },
+      segmentIds: refund ? [...graph.root.segmentIds, refund.id] : graph.root.segmentIds,
       updatedAt: Math.max(graph.root.updatedAt, record.updatedAt)
     },
-    segments: graph.segments.map(segment =>
-      segment.status === 'failed' && segment.failure
-        ? { ...segment, failure: { ...segment.failure, code: 'refunded' } }
-        : segment
-    )
+    segments: [
+      ...graph.segments.map(segment =>
+        segment.status === 'failed' && segment.failure
+          ? { ...segment, failure: { ...segment.failure, code: 'refunded' } }
+          : segment
+      ),
+      ...(refund ? [refund] : [])
+    ]
   })
 }

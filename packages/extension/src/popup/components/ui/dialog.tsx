@@ -37,6 +37,7 @@ function DialogOverlay({
 
 function DialogContent({
   className,
+  overlayClassName,
   children,
   showCloseButton = true,
   position = 'center',
@@ -44,6 +45,7 @@ function DialogContent({
   fixedHeight = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  overlayClassName?: string
   showCloseButton?: boolean
   position?: 'center' | 'bottom'
   scroll?: 'content' | 'body'
@@ -78,7 +80,7 @@ function DialogContent({
 
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(

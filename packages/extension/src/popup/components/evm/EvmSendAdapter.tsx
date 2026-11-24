@@ -17,6 +17,7 @@ import { SendTransferScreen } from '../transaction/SendTransferView'
 import type { SendReview } from '../transaction/TransactionReviewView'
 import nearLogo from '@/images/figma-near-confidential.svg'
 import { formatEvmWeiAsGwei } from '@/infrastructure/chains/evm'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { useEvmSendTransfer, type EvmSendTransferState } from '@/popup/hooks/useEvmSendTransfer'
 
 export type EvmSendAdapterProps = Parameters<typeof useEvmSendTransfer>[0] & {
@@ -69,7 +70,7 @@ export function EvmSendAdapter(props: EvmSendAdapterProps) {
 }
 
 function getEvmSendFields(state: EvmSendTransferState): SendFormAdapter {
-  const { asset, chain, maximum, route, sendPrivately, transferAvailability } = state
+  const { asset, chain, maximum, route, sendPrivately } = state
   const symbol = asset.metadata.symbol
   const network = chain.chain.displayName
   const networkIcon = resolveChainIconAlias(chain.chain.family, network, chain.chain.id)
@@ -91,7 +92,10 @@ function getEvmSendFields(state: EvmSendTransferState): SendFormAdapter {
       onSelectAsset: state.selectAsset
     },
     balance: {
-      value: state.domainAvailableRaw === null ? null : transferAvailability.display,
+      value:
+        state.domainAvailableRaw === null
+          ? null
+          : formatBaseUnitDecimalAmount(state.availableRaw, asset.metadata.decimals),
       testId: 'send-available-balance'
     },
     maximum: {

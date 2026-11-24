@@ -730,15 +730,15 @@ test('shared EVM authorization projects onto custom chains and revokes without r
   )
 })
 
-test('ordinary EVM reconnect clears old EVM session scopes', async () => {
-  const { manager } = managerFixture()
+test('CAIP-25 EVM account selections stay chain-scoped and an ordinary reconnect replaces them', async () => {
+  const { manager, storage } = managerFixture()
   const other = { walletId: 'wallet-2', accountId: 'account-2' }
   await manager.setCaip25Session(
     origin,
     {},
     [
       { chainId: 'eip155:1', accounts: [account], binding: account },
-      { chainId: 'eip155:56', accounts: [account], binding: account }
+      { chainId: 'eip155:56', accounts: [other], binding: other }
     ],
     {
       scopes: [
@@ -748,6 +748,10 @@ test('ordinary EVM reconnect clears old EVM session scopes', async () => {
     }
   )
   assert.deepEqual((await manager.getCaip25Session(origin))?.scopes[0].accounts, [account])
+  const restored = new DAppManager(storage)
+  assert.deepEqual((await restored.getChainAuthorization(origin, 'eip155:1'))?.accounts, [account])
+  assert.deepEqual((await restored.getChainAuthorization(origin, 'eip155:56'))?.accounts, [other])
+  assert.equal(await restored.getChainAuthorization(origin, 'eip155:137'), null)
   await manager.setEvmAuthorizedAccounts(origin, {}, [other], other)
   assert.deepEqual(await manager.getChainAuthorization(origin, 'eip155:1'), {
     chainId: 'eip155:1',
@@ -760,23 +764,6 @@ test('ordinary EVM reconnect clears old EVM session scopes', async () => {
     binding: other
   })
   assert.equal(await manager.getCaip25Session(origin), null)
-  await assert.rejects(
-    manager.setCaip25Session(
-      origin,
-      {},
-      [
-        { chainId: 'eip155:1', accounts: [account], binding: account },
-        { chainId: 'eip155:56', accounts: [other], binding: other }
-      ],
-      {
-        scopes: [
-          { chainId: 'eip155:1', methods: ['eth_accounts'], notifications: [] },
-          { chainId: 'eip155:56', methods: ['eth_accounts'], notifications: [] }
-        ]
-      }
-    ),
-    /shared Account selection/
-  )
 })
 
 test('ordinary EVM reconnect preserves explicitly granted legacy network consent', async () => {

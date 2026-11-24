@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { KeyringError } from '@/core/keyring/ports'
 import type { ChainAccount } from '@/core/accounts/domain'
 import { parseAccountId } from '@/core/accounts/domain'
@@ -2070,7 +2071,7 @@ export class EvmTransferOrchestrator {
       ) {
         return graph
       }
-      const result = await this.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.repository, {
         scope: pending.scope,
         transactionId: pending.transactionId,
         segmentId: pending.segmentId,

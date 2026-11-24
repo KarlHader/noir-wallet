@@ -29,17 +29,19 @@ interface BalanceRefreshAdapter<Request extends BalanceRefreshRequest> {
   refresh(
     scope: BalanceRefreshScope,
     cached: PortfolioReadModel | null,
-    request: Request
+    request: Request,
+    options: Readonly<{ waitForTokenDiscovery?: boolean }>
   ): Promise<void>
   isReady(model: PortfolioReadModel | null): boolean
 }
 
 const chainAdapter: BalanceRefreshAdapter<Extract<BalanceRefreshRequest, { source: 'chain' }>> = {
-  async refresh(scope, cached, request) {
+  async refresh(scope, cached, request, options) {
     await refreshPortfolioFromCache(scope, cached, {
       forceRefresh: request.force,
       allowStaleOnError: false,
       forceDiscovery: request.forceDiscovery,
+      waitForTokenDiscovery: options.waitForTokenDiscovery,
       refreshConfidential: request.refreshConfidential,
       refreshChainIds: request.chainIds,
       additionalChainIds: request.additionalChainIds
@@ -85,10 +87,11 @@ export function balanceRefreshRequestKey(request: BalanceRefreshRequest): string
 export async function runBalanceRefresh(
   scope: BalanceRefreshScope,
   cached: PortfolioReadModel | null,
-  request: BalanceRefreshRequest
+  request: BalanceRefreshRequest,
+  options: Readonly<{ waitForTokenDiscovery?: boolean }> = {}
 ): Promise<void> {
-  if (request.source === 'chain') return chainAdapter.refresh(scope, cached, request)
-  return nearConfidentialAdapter.refresh(scope, cached, request)
+  if (request.source === 'chain') return chainAdapter.refresh(scope, cached, request, options)
+  return nearConfidentialAdapter.refresh(scope, cached, request, options)
 }
 
 export function balanceRefreshIsReady(

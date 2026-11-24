@@ -185,7 +185,7 @@ export function isSwapAssetOnEnabledChain(
   assetId: string | null | undefined,
   enabledChains: readonly ChainDefinition[] | undefined
 ): boolean {
-  const chain = assetChain(assetId)
+  const chain = getSwapCatalogChainForAsset(assetId)
   return Boolean(
     chain &&
     enabledChains &&
@@ -269,7 +269,7 @@ export async function loadReversedSwapPair(input: {
   return { tokenIn, tokenOut }
 }
 
-function assetChain(assetId?: string | null) {
+export function getSwapCatalogChainForAsset(assetId?: string | null) {
   if (!assetId) return undefined
   if (
     assetId === ASSET_PRICE_SOURCE_ASSETS.bnb ||
@@ -310,7 +310,7 @@ function assetChain(assetId?: string | null) {
 export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) {
   const enabled = getEnabledSwapChains(options.enabledChains)
   const explicitDestination =
-    assetChain(options.destinationAssetId) ??
+    getSwapCatalogChainForAsset(options.destinationAssetId) ??
     RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === options.destinationApiChainId)
   const preferredAccountChain = options.enabledChains?.find(
     chain => chain.id === options.defaultSourceChainId
@@ -320,10 +320,11 @@ export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) 
     : undefined
   const source =
     (isSwapAssetOnEnabledChain(options.sourceAssetId, options.enabledChains)
-      ? assetChain(options.sourceAssetId)
+      ? getSwapCatalogChainForAsset(options.sourceAssetId)
       : undefined) ??
     enabled.find(
-      chain => chain.apiChainId === assetChain(options.savedSourceAssetId)?.apiChainId
+      chain =>
+        chain.apiChainId === getSwapCatalogChainForAsset(options.savedSourceAssetId)?.apiChainId
     ) ??
     preferredSource ??
     enabled.find(chain => chain.blockchain === 'zec') ??
@@ -332,8 +333,8 @@ export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) 
   if (!source) return { sourceChainIds: [], destinationChainIds: [] }
   const savedDestination =
     options.savedSourceAssetId &&
-    assetChain(options.savedSourceAssetId)?.apiChainId === source.apiChainId
-      ? assetChain(options.savedDestinationAssetId)
+    getSwapCatalogChainForAsset(options.savedSourceAssetId)?.apiChainId === source.apiChainId
+      ? getSwapCatalogChainForAsset(options.savedDestinationAssetId)
       : undefined
   const target =
     explicitDestination ??
