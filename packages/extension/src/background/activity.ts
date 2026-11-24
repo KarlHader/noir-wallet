@@ -2,6 +2,7 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   hasExternalShieldDepositFunding,
   isLegacyShieldWithdrawActivityGraph,
+  projectConfidentialAppFeeRejection,
   projectExternalShieldDepositActivityGraph,
   projectLegacyShieldWithdrawActivityGraph,
   projectShieldDepositSettlement
@@ -834,6 +835,7 @@ export function createBackgroundActivityCoordinator(
       .filter(
         graph =>
           (graph.root.status === 'final' && graph.root.intent?.shield?.operation === 'deposit') ||
+          (graph.root.status === 'failed' && graph.root.intent?.shield !== undefined) ||
           (privateExecutionAddresses.length > 0 && isLegacyShieldWithdrawActivityGraph(graph))
       )
       .map(graph => graph.root.id)
@@ -866,7 +868,7 @@ export function createBackgroundActivityCoordinator(
         continue
       }
       const plan = fundingPlans.get(graph.root.id)
-      projectedGraphs.push(
+      const routed =
         graph.root.intent?.shield?.operation === 'deposit'
           ? projectShieldDepositSettlement(graph, plan, DEFAULT_NETWORK)
           : projectLegacyShieldWithdrawActivityGraph(
@@ -875,7 +877,7 @@ export function createBackgroundActivityCoordinator(
               DEFAULT_NETWORK,
               privateExecutionAddresses
             )
-      )
+      projectedGraphs.push(projectConfidentialAppFeeRejection(routed, plan, DEFAULT_NETWORK))
     }
     if (!bitcoinDiscovery) return projectedGraphs
     const context = await loadActiveBitcoinDiscoveryContext(
@@ -936,21 +938,36 @@ export function createBackgroundActivityCoordinator(
     loadSupplementalItems,
     loadCachedSupplementalItems,
     loadSupplementalHasMore,
-    ...(evmHistorySources.length > 0
+    ...(evmHistorySources.length > 0 || readNearPrivateExecutionAddress
       ? {
           loadPrivateExecutionAddresses: async (
             scope: ActivityScope,
             localGraphs: readonly TransactionGraph[]
           ) => {
+            const nearPrivateAddress = readNearPrivateExecutionAddress
+              ? await readNearPrivateExecutionAddress(scope, nearNetwork.chainId)
+                  .then(value => (value && /^[0-9a-f]{64}$/.test(value) ? value : null))
+                  .catch(error => {
+                    logger.warn(
+                      `Activity NEAR private address lookup failed: ${formatLogError(error)}`,
+                      scope.keyDomainId,
+                      scope.accountId
+                    )
+                    return null
+                  })
+              : null
+            const withNearPrivateAddress = (addresses: readonly string[]) =>
+              Object.freeze([...addresses, ...(nearPrivateAddress ? [nearPrivateAddress] : [])])
+            if (evmHistorySources.length === 0) return withNearPrivateAddress([])
             const account = await resolveEvmMainAddress(storageRepository, scope)
-            if (!account?.privateAvailable) return Object.freeze([])
+            if (!account?.privateAvailable) return withNearPrivateAddress([])
             if (await credentialSession.hasUnlockSession()) {
               try {
                 const derived = await peaSigner.deriveGlobalPea(
                   scope.keyDomainId,
                   account.addressIndex
                 )
-                return Object.freeze([derived.address.toLowerCase()])
+                return withNearPrivateAddress([derived.address.toLowerCase()])
               } catch (error) {
                 logger.warn(
                   `Activity Private address derivation failed: ${formatLogError(error)}`,
@@ -964,7 +981,7 @@ export function createBackgroundActivityCoordinator(
               scope,
               account.main
             )
-            return Object.freeze(inferred ? [inferred] : [])
+            return withNearPrivateAddress(inferred ? [inferred] : [])
           }
         }
       : {}),

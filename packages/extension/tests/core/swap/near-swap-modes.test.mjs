@@ -781,6 +781,51 @@ test('lists Shield NEAR nep141 assets from confidential balances when the chain 
   expect(listShieldFundingAssets(model, [], tokens, 'mainnet')).toEqual([])
 })
 
+test('lists native NEAR when a confidential holding is stored as wNEAR', () => {
+  const nearChain = createInitialProductChainRegistry('mainnet').resolve('near:mainnet')
+  const model = {
+    chains: [{ chain: nearChain, status: 'ready', assets: [], errorCodes: [] }],
+    assets: [],
+    confidential: {
+      status: 'ready',
+      assets: [
+        {
+          tokenId: 'nep141:wrap.near',
+          protocolAssetId: 'nep141:wrap.near',
+          assetId: 'near:mainnet/nep141:wrap.near',
+          chainId: 'near:mainnet',
+          availableRaw: '9',
+          decimals: 24,
+          symbol: 'wNEAR'
+        }
+      ]
+    }
+  }
+  const tokens = [
+    {
+      assetId: 'nep141:wrap.near',
+      blockchain: 'near',
+      contractAddress: 'wrap.near',
+      decimals: 24,
+      symbol: 'wNEAR',
+      price: 1,
+      priceUpdatedAt: ''
+    }
+  ]
+  const previous = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.near']
+  try {
+    const listed = listShieldFundingAssets(model, [], tokens, 'mainnet')
+    expect(listed).toHaveLength(1)
+    expect(listed[0].asset.asset.id).toBe('near:mainnet/slip44:397')
+    expect(listed[0].asset.metadata.symbol).toBe('NEAR')
+    expect(listed[0].asset.balance.confidentialRaw).toBe('9')
+    expect(listed[0].managed.protocolAssetId).toBe('nep141:wrap.near')
+  } finally {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previous
+  }
+})
+
 test('lowercases confidential EVM addresses on NEAR-source quotes and keeps deposits memo-free', () => {
   const checksummed = '0x52908400098527886E0F7030069857D2E4169EE7'
   const normalized = normalizeNearConfidentialQuote({

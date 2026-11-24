@@ -9,7 +9,8 @@ import {
   createInitialProductChainRegistry,
   getBundledInitialProductAssetDefinitions
 } from '../../../src/core/chains/registry/index.ts'
-import { getEvmNetworkConfigs } from '../../../src/config/networks.ts'
+import { getEvmNetworkConfig, getEvmNetworkConfigs } from '../../../src/config/networks.ts'
+import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
 
 const apiConfig = {
@@ -226,7 +227,12 @@ test('NEAR Shield deposit preparation requires a 64-hex deposit address', async 
     amountRaw: '1',
     sourceDomain: 'public'
   }
-  for (const recipient of ['deposit.near', 'A'.repeat(64), `0x${'ab'.repeat(20)}`, 'a'.repeat(63)]) {
+  for (const recipient of [
+    'deposit.near',
+    'A'.repeat(64),
+    `0x${'ab'.repeat(20)}`,
+    'a'.repeat(63)
+  ]) {
     await expect(adapter.prepareDeposit({ ...base, recipient })).rejects.toThrow(
       'NEAR Shield deposit address is invalid'
     )
@@ -459,14 +465,19 @@ test('a failed NEAR Shield quote does not prepare a transfer', async () => {
   expect(JSON.stringify(state.quotes[0])).not.toContain(`"recipient":"${checksummedRecipient}"`)
 })
 
-test('NEAR Incognito cluster preview quotes a same-chain move without an EVM signer', async () => {
+test('NEAR Incognito cluster preview uses the Shield confidential principal', async () => {
   const peaAccount = 'b'.repeat(64)
   const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
   globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.near']
   const chains = createInitialProductChainRegistry('mainnet')
   const assets = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions('mainnet'))
   const now = 1_000_000
-  const state = { quotes: [], plans: 0, identityChains: [] }
+  const state = {
+    quotes: [],
+    plans: 0,
+    identityChains: [],
+    walletSource: { kind: 'software' }
+  }
   const coordinator = new ConfidentialFundingCoordinator({
     network: 'mainnet',
     api: {
@@ -514,9 +525,11 @@ test('NEAR Incognito cluster preview quotes a same-chain move without an EVM sig
     signer: {
       async resolveIdentity(chainId) {
         state.identityChains.push(chainId)
+        const evm = String(chainId).startsWith('eip155:')
         return {
-          address: nearAccount,
-          peaAddress: peaAccount,
+          kind: evm ? 'evm' : 'near',
+          address: evm ? lowercaseRecipient : nearAccount,
+          peaAddress: evm ? lowercaseRecipient : peaAccount,
           addressIndex: 0,
           context: { chainAccount: { scope: { ...scope, chainId } } }
         }
@@ -536,7 +549,7 @@ test('NEAR Incognito cluster preview quotes a same-chain move without an EVM sig
           mainAccountId: nearAccount,
           publicKey: 'ed25519:11111111111111111111111111111111',
           peaAccountId: peaAccount,
-          walletSource: { kind: 'software' }
+          walletSource: state.walletSource
         }
       },
       adapter: {
@@ -600,25 +613,46 @@ test('NEAR Incognito cluster preview quotes a same-chain move without an EVM sig
     expect(state.quotes).toHaveLength(4)
     expect(state.quotes.every(quote => quote.dry === true)).toBe(true)
     expect(state.quotes.slice(1)).toHaveLength(3)
-    expect(
-      state.quotes.slice(1).reduce((sum, quote) => sum + BigInt(quote.amountRaw), 0n)
-    ).toBe(1000n)
+    expect(state.quotes.slice(1).reduce((sum, quote) => sum + BigInt(quote.amountRaw), 0n)).toBe(
+      1000n
+    )
     expect(state.quotes[0]).toMatchObject({
       originAsset: 'nep141:wrap.near',
       destinationAsset: 'nep141:wrap.near',
       amountRaw: '1000',
+      signerId: lowercaseRecipient,
+      refundTo: nearAccount,
+      recipient: lowercaseRecipient,
+      depositType: 'ORIGIN_CHAIN',
+      refundType: 'ORIGIN_CHAIN',
+      recipientType: 'CONFIDENTIAL_INTENTS'
+    })
+    expect(state.quotes.slice(1).every(quote => quote.signerId === lowercaseRecipient)).toBe(true)
+    expect(state.quotes.slice(1).every(quote => quote.recipient === peaAccount)).toBe(true)
+    expect(state.quotes.slice(1).every(quote => quote.depositType === 'CONFIDENTIAL_INTENTS')).toBe(
+      true
+    )
+    expect(state.identityChains).toContain('near:mainnet')
+    expect(state.identityChains).toContain('eip155:1')
+    expect(state.plans).toBe(0)
+
+    state.walletSource = { kind: 'private-key', chainFamily: 'near', accountIndex: 0 }
+    state.quotes.length = 0
+    state.identityChains.length = 0
+    await coordinator.preview({
+      ...route,
+      source: { ...route.source, amountRaw: '1001' }
+    })
+    expect(state.identityChains.every(chainId => chainId === 'near:mainnet')).toBe(true)
+    expect(state.identityChains).not.toContain('eip155:1')
+    expect(state.quotes[0]).toMatchObject({
       signerId: nearAccount,
       refundTo: nearAccount,
       recipient: nearAccount,
-      depositType: 'ORIGIN_CHAIN',
       recipientType: 'CONFIDENTIAL_INTENTS'
     })
+    expect(state.quotes.slice(1).every(quote => quote.signerId === nearAccount)).toBe(true)
     expect(state.quotes.slice(1).every(quote => quote.recipient === peaAccount)).toBe(true)
-    expect(
-      state.quotes.slice(1).every(quote => quote.depositType === 'CONFIDENTIAL_INTENTS')
-    ).toBe(true)
-    expect(state.identityChains.every(chainId => chainId === 'near:mainnet')).toBe(true)
-    expect(state.plans).toBe(0)
   } finally {
     globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
   }
@@ -678,9 +712,11 @@ test('NEAR Incognito cluster preview accepts wNEAR and rejects a wNEAR shield de
     },
     signer: {
       async resolveIdentity(chainId) {
+        const evm = String(chainId).startsWith('eip155:')
         return {
-          address: nearAccount,
-          peaAddress: peaAccount,
+          kind: evm ? 'evm' : 'near',
+          address: evm ? lowercaseRecipient : nearAccount,
+          peaAddress: evm ? lowercaseRecipient : peaAccount,
           addressIndex: 0,
           context: { chainAccount: { scope: { ...scope, chainId } } }
         }
@@ -761,6 +797,452 @@ test('NEAR Incognito cluster preview accepts wNEAR and rejects a wNEAR shield de
     expect(state.quotes.length).toBeGreaterThan(0)
     expect(state.quotes.every(quote => quote.originAsset === protocolAssetId)).toBe(true)
     expect(state.quotes[0].originAsset).toBe('nep141:wrap.near')
+  } finally {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+  }
+})
+
+test('a direct NEAR Shield deposit uses the EVM confidential principal', async () => {
+  const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.near']
+  const chains = createInitialProductChainRegistry('mainnet')
+  const assets = createAssetRegistry(chains, [
+    ...getBundledInitialProductAssetDefinitions('mainnet'),
+    {
+      chainId: 'near:mainnet',
+      namespace: 'nep141',
+      reference: 'usdt.tether-token.near',
+      kind: 'token',
+      metadata: { name: 'USDT', symbol: 'USDT', decimals: 6 },
+      source: 'protocol',
+      verification: 'trusted'
+    }
+  ])
+  const now = 1_000_000
+  const evmSession = {
+    accessToken: 'evm-access',
+    refreshToken: 'evm-refresh',
+    expiresAt: now + 1_000_000,
+    refreshExpiresAt: now + 2_000_000,
+    signerId: lowercaseRecipient
+  }
+  const nearSession = {
+    accessToken: 'near-access',
+    refreshToken: 'near-refresh',
+    expiresAt: now + 1_000_000,
+    refreshExpiresAt: now + 2_000_000,
+    signerId: nearAccount
+  }
+  const createCoordinator = walletSource => {
+    const state = {
+      quotes: [],
+      sessionSigners: [],
+      depositIdentities: [],
+      confirmIdentities: [],
+      plans: new Map()
+    }
+    const coordinator = new ConfidentialFundingCoordinator({
+      network: 'mainnet',
+      api: {
+        async getBalances() {
+          return []
+        },
+        async quote(input) {
+          state.quotes.push(input)
+          const deadline = new Date(now + 60_000).toISOString()
+          return {
+            correlationId: 'near-direct',
+            quoteRequest: {
+              swapType: 'EXACT_INPUT',
+              confidentiality: 'basic',
+              originAsset: input.originAsset,
+              destinationAsset: input.destinationAsset,
+              amount: input.amountRaw,
+              refundTo: input.refundTo ?? input.signerId,
+              depositType: input.depositType,
+              refundType: input.refundType,
+              recipient: input.recipient,
+              recipientType: input.recipientType,
+              slippageTolerance: input.slippageBps,
+              deadline,
+              dry: input.dry
+            },
+            quote: {
+              amountIn: input.amountRaw,
+              amountOut: input.amountRaw,
+              minAmountOut: input.amountRaw,
+              depositAddress: nearAccount,
+              deadline
+            }
+          }
+        }
+      },
+      store: {
+        async getSession(_network, _keyDomainId, _accountId, signerId) {
+          state.sessionSigners.push(signerId ?? null)
+          if (walletSource.kind === 'software' && signerId === lowercaseRecipient) return evmSession
+          if (walletSource.kind === 'private-key' && signerId === nearAccount) return nearSession
+          return null
+        },
+        async putBalances() {},
+        async putPlan(plan) {
+          state.plans.set(plan.planId, plan)
+        },
+        async getPlan(planId) {
+          return state.plans.get(planId) ?? null
+        },
+        async listPlans() {
+          return [...state.plans.values()]
+        },
+        async deletePlan(planId) {
+          state.plans.delete(planId)
+        }
+      },
+      signer: {
+        async resolveIdentity(chainId) {
+          const evm = String(chainId).startsWith('eip155:')
+          return {
+            kind: evm ? 'evm' : 'near',
+            address: evm ? lowercaseRecipient : nearAccount,
+            peaAddress: evm ? lowercaseRecipient : 'b'.repeat(64),
+            addressIndex: 0,
+            context: { chainAccount: { scope: { ...scope, chainId } } }
+          }
+        }
+      },
+      repository: new InMemoryTransactionRepository(),
+      assets,
+      evmNetworks: [getEvmNetworkConfigs('mainnet')[0]],
+      assetMappings: Object.freeze([
+        { assetId: 'near:mainnet/slip44:397', protocolAssetId: 'nep141:wrap.near' },
+        {
+          assetId: 'near:mainnet/nep141:usdt.tether-token.near',
+          protocolAssetId: 'nep141:usdt.tether-token.near'
+        }
+      ]),
+      now: () => now,
+      nearDeposit: {
+        async resolveAccount() {
+          return {
+            accountIndex: 0,
+            mainAccountId: nearAccount,
+            publicKey: 'ed25519:11111111111111111111111111111111',
+            peaAccountId: 'b'.repeat(64),
+            walletSource
+          }
+        },
+        adapter: {
+          kind: 'near',
+          async prepareDeposit(input) {
+            state.depositIdentities.push(input.identity)
+            return {
+              commandId: 'command-one',
+              payloadFingerprint: 'c'.repeat(64),
+              expiresAt: now + 60_000,
+              preparedTransfer: { kind: 'intents-deposit' }
+            }
+          },
+          async confirmDeposit(input) {
+            state.confirmIdentities.push(input.identity)
+            throw new Error('confirm-reached')
+          },
+          async cancelDeposit() {}
+        },
+        async broadcastSignedTransaction() {
+          throw new Error('broadcast was not expected')
+        },
+        async getTransactionStatus() {
+          return { status: 'unknown' }
+        }
+      }
+    })
+    return { coordinator, state }
+  }
+  const deposit = (assetId, protocolAssetId) => ({
+    network: 'mainnet',
+    ...scope,
+    operation: 'deposit',
+    sourceDomain: 'public',
+    destinationDomain: 'shield',
+    source: {
+      chainId: 'near:mainnet',
+      chainName: 'near',
+      assetId,
+      protocolAssetId,
+      amountRaw: '1000'
+    },
+    destination: {
+      chainId: 'near:mainnet',
+      chainName: 'near',
+      assetId,
+      protocolAssetId
+    },
+    slippageBps: 50
+  })
+  try {
+    const evm = createCoordinator({ kind: 'software' })
+    for (const asset of [
+      ['near:mainnet/slip44:397', 'nep141:wrap.near'],
+      ['near:mainnet/nep141:usdt.tether-token.near', 'nep141:usdt.tether-token.near']
+    ]) {
+      const review = await evm.coordinator.prepare(deposit(asset[0], asset[1]))
+      expect(review.sourceAddress).toBe(nearAccount)
+      expect(review.requiresDeposit).toBe(true)
+    }
+    expect(evm.state.quotes).toHaveLength(2)
+    for (const quote of evm.state.quotes) {
+      expect(quote.recipient).toBe(lowercaseRecipient)
+      expect(quote.signerId).toBe(lowercaseRecipient)
+      expect(quote.refundTo).toBe(nearAccount)
+    }
+    expect(evm.state.quotes.map(quote => quote.originAsset)).toEqual([
+      'nep141:wrap.near',
+      'nep141:usdt.tether-token.near'
+    ])
+    expect(evm.state.sessionSigners.every(signer => signer === lowercaseRecipient)).toBe(true)
+    expect(evm.state.depositIdentities.every(identity => identity.kind === 'near')).toBe(true)
+    expect(evm.state.depositIdentities.every(identity => identity.address === nearAccount)).toBe(
+      true
+    )
+    const prepared = [...evm.state.plans.values()][0]
+    await expect(
+      evm.coordinator.confirm(prepared.planId, prepared.approvalFingerprint)
+    ).rejects.toThrow('confirm-reached')
+    expect(evm.state.confirmIdentities).toHaveLength(1)
+    expect(evm.state.confirmIdentities[0].kind).toBe('near')
+    expect(evm.state.confirmIdentities[0].address).toBe(nearAccount)
+
+    const nearOnly = createCoordinator({
+      kind: 'private-key',
+      chainFamily: 'near',
+      accountIndex: 0
+    })
+    const nearReview = await nearOnly.coordinator.prepare(
+      deposit('near:mainnet/slip44:397', 'nep141:wrap.near')
+    )
+    expect(nearReview.sourceAddress).toBe(nearAccount)
+    expect(nearOnly.state.quotes[0].recipient).toBe(nearAccount)
+    expect(nearOnly.state.quotes[0].signerId).toBe(nearAccount)
+    expect(nearOnly.state.quotes[0].refundTo).toBe(nearAccount)
+    expect(nearOnly.state.sessionSigners.every(signer => signer === nearAccount)).toBe(true)
+  } finally {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+  }
+})
+
+test('a direct NEAR Unshield spends the EVM confidential principal', async () => {
+  const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.near']
+  const chains = createInitialProductChainRegistry('mainnet')
+  const assets = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions('mainnet'))
+  const now = 1_000_000
+  const evmSession = {
+    accessToken: 'evm-access',
+    refreshToken: 'evm-refresh',
+    expiresAt: now + 1_000_000,
+    refreshExpiresAt: now + 2_000_000,
+    signerId: lowercaseRecipient
+  }
+  const nearSession = {
+    accessToken: 'near-access',
+    refreshToken: 'near-refresh',
+    expiresAt: now + 1_000_000,
+    refreshExpiresAt: now + 2_000_000,
+    signerId: nearAccount
+  }
+  const createCoordinator = walletSource => {
+    const state = {
+      quotes: [],
+      sessionSigners: [],
+      signatures: [],
+      intentStandards: [],
+      plans: new Map(),
+      lastQuote: null
+    }
+    const coordinator = new ConfidentialFundingCoordinator({
+      network: 'mainnet',
+      api: {
+        async getBalances() {
+          return [{ tokenId: 'nep141:wrap.near', available: '1000', source: 'confidential' }]
+        },
+        async quote(input) {
+          state.quotes.push(input)
+          const deadline = new Date(now + 60_000).toISOString()
+          const quote = {
+            correlationId: 'near-unshield',
+            quoteRequest: {
+              swapType: 'EXACT_INPUT',
+              confidentiality: 'basic',
+              originAsset: input.originAsset,
+              destinationAsset: input.destinationAsset,
+              amount: input.amountRaw,
+              refundTo: input.refundTo ?? input.signerId,
+              depositType: input.depositType,
+              refundType: input.refundType,
+              recipient: input.recipient,
+              recipientType: input.recipientType,
+              slippageTolerance: input.slippageBps,
+              deadline,
+              dry: input.dry
+            },
+            quote: {
+              amountIn: input.amountRaw,
+              amountOut: input.amountRaw,
+              minAmountOut: input.amountRaw,
+              depositAddress: nearAccount,
+              deadline
+            }
+          }
+          state.lastQuote = quote
+          return quote
+        },
+        async generateIntent(input) {
+          state.intentStandards.push(input.standard ?? 'erc191')
+          const quoted = state.quotes.at(-1)
+          const payload = {
+            verifying_contract: 'intents.far',
+            signer_id: input.signerId,
+            deadline: state.lastQuote.quote.deadline,
+            nonce: btoa(String.fromCharCode(...new Uint8Array(32))),
+            intents: [
+              {
+                intent: 'transfer',
+                receiver_id: state.lastQuote.quote.depositAddress,
+                tokens: {
+                  [confidentialPrivateTokenId(quoted.originAsset)]: quoted.amountRaw
+                }
+              }
+            ]
+          }
+          return {
+            correlationId: 'near-unshield-intent',
+            intent: { standard: 'erc191', payload: JSON.stringify(payload) }
+          }
+        }
+      },
+      store: {
+        async getSession(_network, _keyDomainId, _accountId, signerId) {
+          state.sessionSigners.push(signerId ?? null)
+          if (walletSource.kind === 'software' && signerId === lowercaseRecipient) return evmSession
+          if (walletSource.kind === 'private-key' && signerId === nearAccount) return nearSession
+          return null
+        },
+        async putBalances() {},
+        async putPlan(plan) {
+          state.plans.set(plan.planId, plan)
+        },
+        async getPlan(planId) {
+          return state.plans.get(planId) ?? null
+        },
+        async listPlans() {
+          return [...state.plans.values()]
+        },
+        async deletePlan(planId) {
+          state.plans.delete(planId)
+        }
+      },
+      signer: {
+        async resolveIdentity(chainId) {
+          const evm = String(chainId).startsWith('eip155:')
+          return {
+            kind: evm ? 'evm' : 'near',
+            address: evm ? lowercaseRecipient : nearAccount,
+            peaAddress: evm ? lowercaseRecipient : 'b'.repeat(64),
+            addressIndex: 0,
+            context: { chainAccount: { scope: { ...scope, chainId } } }
+          }
+        },
+        async signMessage(input) {
+          state.signatures.push({
+            kind: input.identity.kind,
+            address: input.identity.address,
+            chainId: String(input.chainId)
+          })
+          throw new Error('sign-reached')
+        }
+      },
+      repository: new InMemoryTransactionRepository(),
+      assets,
+      evmNetworks: [getEvmNetworkConfigs('mainnet')[0]],
+      assetMappings: Object.freeze([
+        { assetId: 'near:mainnet/slip44:397', protocolAssetId: 'nep141:wrap.near' }
+      ]),
+      now: () => now,
+      nearDeposit: {
+        async resolveAccount() {
+          return {
+            accountIndex: 0,
+            mainAccountId: nearAccount,
+            publicKey: 'ed25519:11111111111111111111111111111111',
+            peaAccountId: 'b'.repeat(64),
+            walletSource
+          }
+        }
+      }
+    })
+    return { coordinator, state }
+  }
+  const unshield = {
+    network: 'mainnet',
+    ...scope,
+    operation: 'withdraw',
+    sourceDomain: 'shield',
+    destinationDomain: 'public',
+    source: {
+      chainId: 'near:mainnet',
+      chainName: 'near',
+      assetId: 'near:mainnet/slip44:397',
+      protocolAssetId: 'nep141:wrap.near',
+      amountRaw: '1000'
+    },
+    destination: {
+      chainId: 'near:mainnet',
+      chainName: 'near',
+      assetId: 'near:mainnet/slip44:397',
+      protocolAssetId: 'nep141:wrap.near'
+    },
+    slippageBps: 50
+  }
+  try {
+    const evm = createCoordinator({ kind: 'software' })
+    await evm.coordinator.preview(unshield)
+    expect(evm.state.quotes[0].signerId).toBe(lowercaseRecipient)
+    expect(evm.state.quotes[0].recipient).toBe(nearAccount)
+    const review = await evm.coordinator.prepare(unshield)
+    const plan = evm.state.plans.get(review.planId)
+    expect(review.sourceAddress).toBe(nearAccount)
+    expect(review.destinationAddress).toBe(nearAccount)
+    expect(review.requiresDeposit).toBe(false)
+    expect(plan.signerId).toBe(lowercaseRecipient)
+    expect(plan.source.address).toBe(nearAccount)
+    expect(evm.state.quotes.every(quote => quote.signerId === lowercaseRecipient)).toBe(true)
+    expect(evm.state.quotes.every(quote => quote.recipient === nearAccount)).toBe(true)
+    expect(evm.state.sessionSigners.every(signer => signer === lowercaseRecipient)).toBe(true)
+    await expect(evm.coordinator.confirm(review.planId, review.payloadFingerprint)).rejects.toThrow(
+      'sign-reached'
+    )
+    expect(evm.state.intentStandards).toEqual(['erc191'])
+    expect(evm.state.signatures).toEqual([
+      {
+        kind: 'evm',
+        address: lowercaseRecipient,
+        chainId: getEvmNetworkConfig('mainnet').chainId
+      }
+    ])
+
+    const nearOnly = createCoordinator({
+      kind: 'private-key',
+      chainFamily: 'near',
+      accountIndex: 0
+    })
+    const nearReview = await nearOnly.coordinator.prepare(unshield)
+    const nearPlan = nearOnly.state.plans.get(nearReview.planId)
+    expect(nearReview.sourceAddress).toBe(nearAccount)
+    expect(nearReview.destinationAddress).toBe(nearAccount)
+    expect(nearPlan.signerId).toBe(nearAccount)
+    expect(nearOnly.state.quotes.every(quote => quote.signerId === nearAccount)).toBe(true)
+    expect(nearOnly.state.quotes.every(quote => quote.recipient === nearAccount)).toBe(true)
+    expect(nearOnly.state.sessionSigners.every(signer => signer === nearAccount)).toBe(true)
   } finally {
     globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
   }

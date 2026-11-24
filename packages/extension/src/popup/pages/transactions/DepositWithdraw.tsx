@@ -118,6 +118,7 @@ import {
   isClusterTransferRoute,
   isUnsignedShieldTerminal,
   isShieldTransferRoute,
+  listNearShieldPickerAssets,
   listShieldFundingAssets,
   listShieldMoveDestinations,
   listShieldTokenPickerNetworks,
@@ -1247,11 +1248,26 @@ function DepositWithdrawForm({
     () =>
       listBalanceTransferAssetPickerRows({
         assets: fixedDirection
-          ? assets.filter(
-              item =>
-                item.chain.chain.family === 'evm' &&
-                resolveShieldManagedAsset(item.asset, managedAssets, catalogTokens, currentNetwork)
-            )
+          ? [
+              ...assets.filter(
+                item =>
+                  item.chain.chain.family === 'evm' &&
+                  resolveShieldManagedAsset(
+                    item.asset,
+                    managedAssets,
+                    catalogTokens,
+                    currentNetwork
+                  )
+              ),
+              ...listNearShieldPickerAssets({
+                assets,
+                managedAssets,
+                catalogTokens,
+                network: currentNetwork,
+                from,
+                shieldBalances: currentShieldBalances
+              })
+            ]
           : assets,
         includeEmpty: receiveEntry,
         from,
@@ -1459,7 +1475,13 @@ function DepositWithdrawForm({
       fixedNearZecWithdraw ||
       (selected?.chain.chain.family === 'near' &&
         nearMoveChainIds.includes(selected.chain.chain.id) &&
-        selected.asset.asset.id === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID))
+        (selected.asset.asset.id === NEAR_CONFIDENTIAL_CHAIN_ASSET_ID ||
+          resolveShieldManagedAsset(
+            selected.asset,
+            managedAssets,
+            catalogTokens,
+            currentNetwork
+          ) !== null)))
   const privateTransferOptions = useMemo(
     () =>
       supportedPair && selected

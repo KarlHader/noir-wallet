@@ -410,6 +410,7 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     signingChains: [],
     formalQuotes: 0,
     formalQuoteAppFees: undefined,
+    quoteAppFeeBps: undefined,
     identityAccount: scope.accountId,
     quoteCalls: [],
     quoteOverride: undefined,
@@ -521,7 +522,9 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
           deadline: state.lastQuoteDeadline,
           dry: input.dry,
           ...(input.dry
-            ? { appFees: [{ recipient: 'platform.near', fee: 50 }] }
+            ? state.quoteAppFeeBps === 0
+              ? {}
+              : { appFees: [{ recipient: 'platform.near', fee: state.quoteAppFeeBps ?? 50 }] }
             : {
                 appFees: state.formalQuoteAppFees ?? [{ recipient: 'platform.near', fee: 50 }]
               })
@@ -616,6 +619,187 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     zcashAssetId,
     zcashProtocolId
   }
+}
+
+async function nearEvmClusterConfirmHarness(direction) {
+  const mainAccount = 'ab'.repeat(32)
+  const peaAccount = 'cd'.repeat(32)
+  const sourceDomain = direction === 'withdraw' ? 'private' : 'public'
+  const destinationDomain = direction === 'withdraw' ? 'public' : 'private'
+  const sourceAddress = sourceDomain === 'private' ? peaAccount : mainAccount
+  const destinationAddress = destinationDomain === 'private' ? peaAccount : mainAccount
+  const clock = 1_000
+  const plans = new Map()
+  const state = {
+    challenges: [],
+    signatures: [],
+    depositConfirms: 0,
+    cancelledDeposits: 0
+  }
+  const chain = {
+    chainId: 'near:mainnet',
+    chainName: 'near',
+    assetId: 'near:mainnet/slip44:397',
+    protocolAssetId: 'nep141:wrap.near'
+  }
+  const withdraws = [0, 1].map(sequence => ({
+    sequence,
+    sourceAmountRaw: '1000',
+    amountRaw: '990',
+    depositAddress: `deposit-${sequence}.near`,
+    destinationAddress,
+    destinationChain: chain.chainName,
+    token: chain.protocolAssetId,
+    deadline: 60_000,
+    status: 'PREVIEW'
+  }))
+  const prepared = {
+    schemaVersion: 1,
+    planId: `near-evm-${direction}`,
+    transactionId: `tx:confidential:near-evm-${direction}`,
+    network: 'mainnet',
+    ...scope,
+    operation: 'cluster',
+    sourceDomain,
+    destinationDomain,
+    phase: 'prepared',
+    source: { ...chain, amountRaw: '2000', address: sourceAddress },
+    destination: { ...chain, address: destinationAddress },
+    signerId,
+    addressIndex: 0,
+    slippageBps: 100,
+    requiresDeposit: true,
+    confidentialBaselineRaw: '0',
+    depositQuote: { quote: { amountOut: '2000' } },
+    preparedDeposit: { commandId: `prepared-${direction}` },
+    approvalExpiresAt: 50_000,
+    expectedOutputRaw: '1980',
+    minimumOutputRaw: '1960',
+    splitSourceAmounts: ['1000', '1000'],
+    withdraws,
+    createdAt: clock,
+    updatedAt: clock
+  }
+  prepared.approvalFingerprint = await fingerprintDirectConfidentialApproval({
+    network: prepared.network,
+    keyDomainId: prepared.keyDomainId,
+    accountId: prepared.accountId,
+    operation: prepared.operation,
+    sourceDomain: prepared.sourceDomain,
+    destinationDomain: prepared.destinationDomain,
+    source: prepared.source,
+    destination: prepared.destination,
+    signerId: prepared.signerId,
+    addressIndex: prepared.addressIndex,
+    slippageBps: prepared.slippageBps,
+    expectedOutputRaw: prepared.expectedOutputRaw,
+    minimumOutputRaw: prepared.minimumOutputRaw,
+    expiresAt: prepared.approvalExpiresAt,
+    depositQuote: prepared.depositQuote,
+    preparedDeposit: prepared.preparedDeposit,
+    withdraws: prepared.withdraws
+  })
+  plans.set(prepared.planId, serializeConfidentialFundingPlan(prepared))
+  const coordinator = new ConfidentialFundingCoordinator({
+    network: 'mainnet',
+    api: {
+      async getBalances() {
+        return []
+      },
+      async createOrderAuthChallenge(input) {
+        state.challenges.push(input)
+        return { message: 'history-challenge' }
+      },
+      async authenticateOrderChallenge() {
+        return {
+          token: 'near-history-token',
+          expiresAt: new Date(Date.now() + 120_000).toISOString(),
+          queryAddress: signerId,
+          principalType: 'wallet',
+          mcaAccountId: null
+        }
+      }
+    },
+    store: {
+      async getPlan(id) {
+        return structuredClone(plans.get(id) ?? null)
+      },
+      async putPlan(plan) {
+        plans.set(plan.planId, serializeConfidentialFundingPlan(plan))
+      },
+      async listPlans() {
+        return [...plans.values()].map(value => structuredClone(value))
+      },
+      async getSession() {
+        return {
+          accessToken: 'token',
+          refreshToken: 'refresh',
+          expiresAt: 1_000_000,
+          refreshExpiresAt: 2_000_000,
+          signerId
+        }
+      },
+      async putSession() {},
+      async getHistorySession() {
+        return null
+      },
+      async putHistorySession() {},
+      async deleteHistorySession() {},
+      async putBalances() {}
+    },
+    signer: {
+      async resolveIdentity(chainId) {
+        const near = String(chainId).startsWith('near:')
+        return {
+          kind: near ? 'near' : 'evm',
+          address: near ? mainAccount : signerId,
+          peaAddress: near ? peaAccount : peaAddress,
+          addressIndex: 0,
+          context: { chainAccount: { scope: { ...scope, chainId } } }
+        }
+      },
+      async signMessage(input) {
+        state.signatures.push({ chainId: input.chainId, payload: input.payload })
+        return { standard: 'erc191', payload: input.payload, signature: 'history-signature' }
+      }
+    },
+    repository: new InMemoryTransactionRepository(),
+    assets: { list: () => [] },
+    evmNetworks: [],
+    assetMappings: [],
+    now: () => clock,
+    nearDeposit: {
+      async resolveAccount() {
+        return {
+          accountIndex: 0,
+          mainAccountId: mainAccount,
+          publicKey: `ed25519:${'1'.repeat(32)}`,
+          peaAccountId: peaAccount,
+          walletSource: { kind: 'software' }
+        }
+      },
+      adapter: {
+        kind: 'near',
+        async prepareDeposit() {
+          throw new Error('history auth must not prepare another deposit')
+        },
+        async confirmDeposit() {
+          state.depositConfirms += 1
+          throw new Error('deposit signing reached')
+        },
+        async cancelDeposit() {
+          state.cancelledDeposits += 1
+        }
+      },
+      async broadcastSignedTransaction() {
+        throw new Error('history auth must not broadcast')
+      },
+      async getTransactionStatus() {
+        return { status: 'unknown' }
+      }
+    }
+  })
+  return { coordinator, prepared, state, plans }
 }
 
 test.describe('confidential funding persisted recovery', () => {
@@ -981,6 +1165,8 @@ test.describe('confidential funding persisted recovery', () => {
 
   test('previews Cluster from dry deposit and split quotes without preparing or reserving funds', async () => {
     const h = directPreparationHarness()
+    // These fixture legs are smaller than a 50 bps fee. The fee-rejection cases cover that rule.
+    h.state.quoteAppFeeBps = 0
     h.state.quoteOverride = input =>
       input.depositType === 'ORIGIN_CHAIN'
         ? {
@@ -3191,6 +3377,162 @@ test.describe('confidential funding persisted recovery', () => {
     }
   })
 
+  test('accepts a NEAR Shield Send recipient and cancels an invalid prepared review', async () => {
+    const sourceAddress = 'ab'.repeat(32)
+    const recipient = 'alice.near'
+    const implicitRecipient = 'cd'.repeat(32)
+    const planId = 'dd02dab8-9911-45b5-866c-cdaabb98e28a'
+    const reviewFor = (externalRecipient, destinationAddress = externalRecipient) => ({
+      planId,
+      operation: 'withdraw',
+      sourceDomain: 'shield',
+      destinationDomain: 'public',
+      network: 'mainnet',
+      keyDomainId: scope.keyDomainId,
+      accountId: scope.accountId,
+      transactionId: `tx:confidential:${planId}`,
+      phase: 'prepared',
+      payloadFingerprint: 'f1'.repeat(32),
+      expiresAt: 1_795_441_272_619,
+      requiresDeposit: false,
+      sourceAmountRaw: '1100000000000000000000',
+      expectedOutputRaw: '1094500000000000000000',
+      minimumOutputRaw: '1083555000000000000000',
+      sourceAddress,
+      destinationAddress,
+      externalRecipient,
+      withdrawCount: 1
+    })
+    const request = {
+      network: 'mainnet',
+      keyDomainId: scope.keyDomainId,
+      accountId: scope.accountId,
+      operation: 'withdraw',
+      sourceDomain: 'shield',
+      destinationDomain: 'public',
+      source: {
+        chainId: 'near:mainnet',
+        chainName: 'near',
+        assetId: 'near:mainnet/slip44:397',
+        protocolAssetId: 'nep141:wrap.near',
+        amountRaw: '1100000000000000000000'
+      },
+      destination: {
+        chainId: 'near:mainnet',
+        chainName: 'near',
+        assetId: 'near:mainnet/slip44:397',
+        protocolAssetId: 'nep141:wrap.near'
+      },
+      externalRecipient: recipient,
+      slippageBps: 50
+    }
+    const planFor = externalRecipient => ({
+      planId,
+      transactionId: `tx:confidential:${planId}`,
+      phase: 'prepared',
+      operation: 'withdraw',
+      sourceDomain: 'shield',
+      destinationDomain: 'public',
+      network: 'mainnet',
+      expectedOutputRaw: '1094500000000000000000',
+      externalRecipient,
+      destination: { address: externalRecipient },
+      withdraws: [{ sequence: 0, status: 'PREPARED', amountRaw: '1094500000000000000000' }]
+    })
+    const messages = []
+    const client = createConfidentialFundingClient(async message => {
+      messages.push(message)
+      if (message.type === 'GET_CONFIDENTIAL_FUNDING') {
+        return { success: true, result: planFor(recipient) }
+      }
+      return { success: true, result: reviewFor(recipient) }
+    })
+    await expect(client.prepare(request)).resolves.toMatchObject({
+      operation: 'withdraw',
+      externalRecipient: recipient,
+      destinationAddress: recipient
+    })
+    await expect(client.get(planId)).resolves.toMatchObject({
+      externalRecipient: recipient,
+      destination: { address: recipient }
+    })
+    expect(messages.map(message => message.type)).toEqual([
+      'PREPARE_CONFIDENTIAL_FUNDING',
+      'GET_CONFIDENTIAL_FUNDING'
+    ])
+
+    const implicitMessages = []
+    const implicitClient = createConfidentialFundingClient(async message => {
+      implicitMessages.push(message)
+      return {
+        success: true,
+        result:
+          message.type === 'GET_CONFIDENTIAL_FUNDING'
+            ? planFor(implicitRecipient)
+            : reviewFor(implicitRecipient)
+      }
+    })
+    await expect(implicitClient.prepare(request)).resolves.toMatchObject({
+      externalRecipient: implicitRecipient,
+      destinationAddress: implicitRecipient
+    })
+    await expect(implicitClient.get(planId)).resolves.toMatchObject({
+      externalRecipient: implicitRecipient
+    })
+    expect(implicitMessages.some(message => message.type === 'CANCEL_CONFIDENTIAL_FUNDING')).toBe(
+      false
+    )
+
+    for (const rejected of [
+      reviewFor('bob.near', recipient),
+      reviewFor('NOT-AN-ADDRESS'),
+      reviewFor('ALICE.NEAR')
+    ]) {
+      const rejectedMessages = []
+      const rejectedClient = createConfidentialFundingClient(async message => {
+        rejectedMessages.push(message)
+        if (message.type === 'CANCEL_CONFIDENTIAL_FUNDING') return { success: true, result: null }
+        return { success: true, result: rejected }
+      })
+      await expect(rejectedClient.prepare(request)).rejects.toThrow(
+        'Confidential funding review is invalid'
+      )
+      expect(rejectedMessages.map(message => message.type)).toEqual([
+        'PREPARE_CONFIDENTIAL_FUNDING',
+        'CANCEL_CONFIDENTIAL_FUNDING'
+      ])
+      expect(rejectedMessages[1].planId).toBe(planId)
+    }
+
+    const failingCancel = createConfidentialFundingClient(async message => {
+      if (message.type === 'CANCEL_CONFIDENTIAL_FUNDING') throw new Error('cancel failed')
+      return { success: true, result: reviewFor('NOT-AN-ADDRESS') }
+    })
+    await expect(failingCancel.prepare(request)).rejects.toThrow(
+      'Confidential funding review is invalid'
+    )
+
+    const authorizedMessages = []
+    const authorizedClient = createConfidentialFundingClient(async message => {
+      authorizedMessages.push(message)
+      return { success: true, result: { ...reviewFor('NOT-AN-ADDRESS'), phase: 'authorized' } }
+    })
+    await expect(authorizedClient.prepare(request)).rejects.toThrow(
+      'Confidential funding review is invalid'
+    )
+    expect(authorizedMessages.map(message => message.type)).toEqual([
+      'PREPARE_CONFIDENTIAL_FUNDING'
+    ])
+
+    const mismatchedPlan = createConfidentialFundingClient(async () => ({
+      success: true,
+      result: { ...planFor(recipient), destination: { address: 'bob.near' } }
+    }))
+    await expect(mismatchedPlan.get(planId)).rejects.toThrow(
+      'Confidential funding status is invalid'
+    )
+  })
+
   test('settles a NEAR cluster from order status without an EVM history challenge', async () => {
     const h = await harness('processing', false, true, false, true)
     h.state.statuses = ['SUCCESS', 'SUCCESS', 'SUCCESS']
@@ -3198,11 +3540,7 @@ test.describe('confidential funding persisted recovery', () => {
     const plan = await h.restart().continuePlan(h.initial.planId)
     expect(plan.phase).toBe('ready')
     expect(plan.withdraws.map(row => row.status)).toEqual(['SUCCESS', 'SUCCESS', 'SUCCESS'])
-    expect(h.state.statusRequests).toEqual([
-      'deposit-0.near',
-      'deposit-1.near',
-      'deposit-2.near'
-    ])
+    expect(h.state.statusRequests).toEqual(['deposit-0.near', 'deposit-1.near', 'deposit-2.near'])
     expect(h.state.historyChallenges).toBe(0)
     expect(h.state.orderDetailReads).toBe(0)
     expect(h.state.historySignatures).toBe(0)
@@ -3223,11 +3561,7 @@ test.describe('confidential funding persisted recovery', () => {
     expect(plan.phase).toBe('ready')
     expect(plan.orderId).toBeUndefined()
     expect(h.state.batchSubmissions).toBe(0)
-    expect(h.state.statusRequests).toEqual([
-      'deposit-0.near',
-      'deposit-1.near',
-      'deposit-2.near'
-    ])
+    expect(h.state.statusRequests).toEqual(['deposit-0.near', 'deposit-1.near', 'deposit-2.near'])
     expect(h.state.historyChallenges).toBe(0)
     expect(h.state.orderDetailReads).toBe(0)
     const graph = await h.repository.get(scope, h.initial.transactionId)
@@ -3235,4 +3569,21 @@ test.describe('confidential funding persisted recovery', () => {
       graph.segments.filter(row => row.role === 'destination').every(row => row.status === 'final')
     ).toBe(true)
   })
+
+  for (const direction of ['deposit', 'withdraw']) {
+    test(`authenticates a NEAR ${direction} cluster history challenge with the EVM principal chain`, async () => {
+      const h = await nearEvmClusterConfirmHarness(direction)
+      await expect(
+        h.coordinator.confirm(h.prepared.planId, h.prepared.approvalFingerprint)
+      ).rejects.toThrow('deposit signing reached')
+      expect(h.state.challenges).toEqual([{ walletAddress: signerId, chainId: '1' }])
+      expect(h.state.signatures).toEqual([{ chainId: 'eip155:1', payload: 'history-challenge' }])
+      expect(h.state.depositConfirms).toBe(1)
+      expect(h.state.cancelledDeposits).toBe(0)
+      expect(h.plans.get(h.prepared.planId)).toMatchObject({
+        phase: 'failed',
+        errorStatus: 'DEPOSIT_SIGNING_INTERRUPTED'
+      })
+    })
+  }
 })

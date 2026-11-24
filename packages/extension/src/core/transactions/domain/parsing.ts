@@ -278,13 +278,14 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
             const shield = value.shield
             if (
               !isRecord(shield) ||
-              !hasExactKeys(shield, [
-                'schemaVersion',
-                'operation',
-                'sourceDomain',
-                'destinationDomain'
-              ]) ||
+              !hasExactKeys(
+                shield,
+                ['schemaVersion', 'operation', 'sourceDomain', 'destinationDomain'],
+                ['errorStatus']
+              ) ||
               shield.schemaVersion !== 1 ||
+              (shield.errorStatus !== undefined &&
+                shield.errorStatus !== 'APP_FEE_REJECTED_2002') ||
               !(
                 (shield.operation === 'deposit' &&
                   (shield.sourceDomain === 'public' || shield.sourceDomain === 'private') &&
@@ -320,7 +321,10 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
                 | 'swap'
                 | 'confidential-transfer',
               sourceDomain: shield.sourceDomain as 'public' | 'private' | 'shield',
-              destinationDomain: shield.destinationDomain as 'public' | 'private' | 'shield'
+              destinationDomain: shield.destinationDomain as 'public' | 'private' | 'shield',
+              ...(shield.errorStatus === undefined
+                ? {}
+                : { errorStatus: 'APP_FEE_REJECTED_2002' as const })
             })
           })()
         }),

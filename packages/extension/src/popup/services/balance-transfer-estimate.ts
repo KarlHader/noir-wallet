@@ -15,6 +15,7 @@ import {
 import { evmWalletClient, type EvmFeeEstimate } from './evm-wallet-client'
 import { rheaSwapClient } from './rhea-swap-client'
 import { requiredRheaEvmApproval } from './rhea-evm-approval'
+import { CONFIDENTIAL_QUOTED_FEE_UNREPRESENTABLE_ERROR } from '@/background/confidential-funding-api'
 import { formatIntentsConfirmationTime } from './confirmation-time-format'
 import { readSwapErrorReason } from './swap-quote-error-message'
 
@@ -25,6 +26,9 @@ export function formatTransferQuoteMinimumError(
   decimals: number,
   symbol: string
 ): string | null {
+  if (error === CONFIDENTIAL_QUOTED_FEE_UNREPRESENTABLE_ERROR) {
+    return CONFIDENTIAL_QUOTED_FEE_UNREPRESENTABLE_ERROR
+  }
   const match = BRIDGE_MINIMUM_RAW.exec(readSwapErrorReason(error))
   if (!match) return null
   const amount = formatFeeAmount(formatBaseUnitDecimalAmount(match[1]!, decimals))
@@ -256,7 +260,7 @@ async function estimateNearDirectTransfer(
       slippageBps: 100,
       confidentiality: 'basic'
     },
-    input.executionMode === 'private' ? 'private-transfer' : 'confidential-funding'
+    input.executionMode === 'private' ? 'private-transfer' : 'public-private-move'
   )
   try {
     input.signal.throwIfAborted()

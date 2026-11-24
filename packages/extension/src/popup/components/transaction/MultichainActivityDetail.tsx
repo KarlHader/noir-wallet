@@ -653,7 +653,8 @@ export function MultichainActivityDetail({
               {getActivityFailureLabel(
                 visibleItem.failureCode,
                 primaryOnchainSegment?.evidence,
-                visibleItem.source
+                visibleItem.source,
+                visibleItem.snapshot
               )}
             </span>
           </DetailRow>

@@ -399,7 +399,11 @@ export function getActivitySwapPresentation(
         : shield
           ? shieldDomainLabel(shield.sourceDomain)
           : senderAddress
-            ? executionAddressModes.get(senderAddress.toLowerCase())
+            ? (getActivityAddressMode(
+                executionAddressModes,
+                item.snapshot?.sender?.chainId,
+                senderAddress
+              ) ?? executionAddressModes.get(senderAddress.toLowerCase()))
             : undefined
   const destinationAccountMode = privateWithdraw
     ? 'Public'
@@ -809,6 +813,7 @@ function hasSameIntentSnapshot(
       left.shield?.operation === right.shield?.operation &&
       left.shield?.sourceDomain === right.shield?.sourceDomain &&
       left.shield?.destinationDomain === right.shield?.destinationDomain &&
+      left.shield?.errorStatus === right.shield?.errorStatus &&
       hasSameAssetAmount(left.primaryAmount, right.primaryAmount) &&
       hasSameAssetAmount(left.counterAmount, right.counterAmount) &&
       hasSameAssetAmount(left.feeLimit, right.feeLimit) &&
@@ -1259,8 +1264,12 @@ export function getActivityRowTextPresentation(
 export function getActivityFailureLabel(
   failureCode: TransactionFailureCode,
   evidence?: TransactionSegmentEvidence,
-  source?: ActivityItem['source']
+  source?: ActivityItem['source'],
+  snapshot?: TransactionIntentSnapshot
 ): string {
+  if (failureCode === 'relay-failed' && snapshot?.shield?.errorStatus === 'APP_FEE_REJECTED_2002') {
+    return 'Fee does not match'
+  }
   if (failureCode === 'expired' && source === 'zcash-v1') {
     return 'Expired before it was mined'
   }

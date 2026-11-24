@@ -1,4 +1,5 @@
 import { NEAR_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import { resolveConfidentialIdentity } from '@/core/accounts/confidential-identity'
 import { isDeprecatedIntentsToken } from '@/core/services/intents-evm-assets'
 import type { Network } from '@/types'
 import {
@@ -21,8 +22,10 @@ export const NEAR_MOVE_CANNOT_SIGN = 'This account cannot sign an Incognito NEAR
 export const NEAR_MOVE_IMPORTED_INDEX = 'Imported NEAR keys can only sign from account index 0.'
 export const NEAR_MOVE_MEMO = 'The quote included a memo and cannot fund this transfer.'
 export const NEAR_MOVE_DEPOSIT_ADDRESS = 'The quote did not include a usable NEAR deposit address.'
+export const NEAR_MOVE_EVM_PRINCIPAL = 'Confidential NEAR Move requires the active EVM account.'
 
 const NEAR_IMPLICIT_ACCOUNT = /^[0-9a-f]{64}$/
+const CONFIDENTIAL_EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/
 const NO_FUNDING_TRANSFERS: readonly [] = []
 const NEAR_DIRECT_TOKEN_LIST_CHAIN_ID = 900001
 const NATIVE_QUOTE_PROTOCOL_ASSET_ID = NEAR_WRAPPED_PROTOCOL_ASSET_ID
@@ -347,8 +350,8 @@ export interface NearIncognitoClusterPlan {
   readonly ok: true
   readonly method: 'cluster'
   readonly fundingTransfers: readonly []
-  readonly signerChainFamily: 'near'
-  readonly intentStandard: 'nep413'
+  readonly signerChainFamily: 'near' | 'evm'
+  readonly intentStandard: 'nep413' | 'erc191'
   readonly signerId: string
   readonly refundTo: string
   readonly withdrawRecipient: string
@@ -376,9 +379,11 @@ export interface NearIncognitoClusterPlan {
 }
 
 /**
- * 1Click deposit plus withdraw intents. The intents signer is the NEAR account,
- * named or implicit. A missing on-chain implicit account does not add a public
- * transfer from Main to the PEA.
+ * 1Click deposit plus withdraw intents. The confidential principal matches
+ * Shield: an EVM-capable wallet uses its EVM address, and an imported NEAR key
+ * keeps the NEAR account. The NEAR sender, refund, and final destination stay
+ * on the public account or the PEA. A missing implicit account does not add a
+ * public transfer from Main to the PEA.
  */
 export function planNearIncognitoCluster(input: {
   readonly network: Network
@@ -389,6 +394,7 @@ export function planNearIncognitoCluster(input: {
   readonly peaAccountId: string | null
   readonly accountIndex: number
   readonly walletSource: NearPrivateExecutionWalletSource | null
+  readonly confidentialPrincipal?: string | null
   readonly originAsset: string
   readonly destinationAsset: string
   readonly amountRaw: string
@@ -399,7 +405,18 @@ export function planNearIncognitoCluster(input: {
   void input.implicitAccountOnChain
   const resolved = resolveNearIncognitoMove({ ...input, method: 'cluster' })
   if (!resolved.ok) return resolved
-  const signerId = resolved.mainAccountId
+  const principalKind = confidentialPrincipalKind(input.walletSource, input.accountIndex)
+  const evmPrincipal =
+    principalKind === 'evm' ? confidentialEvmPrincipal(input.confidentialPrincipal) : null
+  if (principalKind === 'evm' && !evmPrincipal) {
+    return Object.freeze({
+      ok: false,
+      method: 'cluster',
+      error: NEAR_MOVE_EVM_PRINCIPAL,
+      fundingTransfers: NO_FUNDING_TRANSFERS
+    })
+  }
+  const signerId = evmPrincipal ?? resolved.mainAccountId
   const deposit = Object.freeze({
     originAsset: input.originAsset,
     destinationAsset: input.originAsset,
@@ -416,8 +433,8 @@ export function planNearIncognitoCluster(input: {
     ok: true,
     method: 'cluster',
     fundingTransfers: NO_FUNDING_TRANSFERS,
-    signerChainFamily: 'near',
-    intentStandard: 'nep413',
+    signerChainFamily: evmPrincipal ? 'evm' : 'near',
+    intentStandard: evmPrincipal ? 'erc191' : 'nep413',
     signerId,
     refundTo: resolved.sender,
     withdrawRecipient: resolved.recipient,
@@ -432,6 +449,21 @@ export function planNearIncognitoCluster(input: {
       recipientType: 'DESTINATION_CHAIN' as const
     })
   })
+}
+
+function confidentialPrincipalKind(
+  walletSource: NearPrivateExecutionWalletSource | null,
+  accountIndex: number
+): 'evm' | 'near' | 'near-ledger' | 'unavailable' {
+  if (!walletSource) return 'unavailable'
+  return resolveConfidentialIdentity({ walletSource, accountIndex }).kind
+}
+
+function confidentialEvmPrincipal(value: string | null | undefined): string | null {
+  if (!value || !CONFIDENTIAL_EVM_ADDRESS.test(value)) return null
+  const address = value.toLowerCase()
+  if (/^0x0{40}$/.test(address)) return null
+  return address
 }
 
 export function selectBalanceTransferMethod(input: {
@@ -520,7 +552,7 @@ export function assertNearIncognitoDirectQuote(
     confidentiality?: 'basic'
   }>,
   account: NearDirectQuoteAccount | null,
-  purpose: 'confidential-funding' | 'private-transfer',
+  purpose: 'confidential-funding' | 'public-private-move' | 'private-transfer',
   scope?: Readonly<{ walletId: string; accountId: string }>
 ): void {
   const changed = 'Private quote account changed. Get a new quote.'
@@ -549,7 +581,7 @@ export function assertNearIncognitoDirectQuote(
   if (!pea || !NEAR_IMPLICIT_ACCOUNT.test(pea) || mains.length === 0 || mains.includes(pea)) {
     throw new Error(NEAR_MOVE_NO_PEA)
   }
-  if (purpose === 'confidential-funding') {
+  if (purpose === 'confidential-funding' || purpose === 'public-private-move') {
     if (!mains.includes(request.sender) || recipient !== pea) throw new Error(changed)
     return
   }

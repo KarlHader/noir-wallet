@@ -6,7 +6,10 @@ import type {
 } from '@/core/portfolio'
 import type { AssetRegistry, AssetRegistryEntry } from '@/core/chains/registry'
 import { getZcashChainId } from '@/core/chains/registry'
-import { nearConfidentialPortfolioAssetId } from '@/core/chains/near/near-portfolio-assets'
+import {
+  NEAR_WRAPPED_PROTOCOL_ASSET_ID,
+  nearConfidentialPortfolioAssetId
+} from '@/core/chains/near/near-portfolio-assets'
 import type { SwapToken } from '@/core/services/intents-api'
 import { isDeprecatedIntentsToken } from '@/core/services/intents-evm-assets'
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
@@ -85,6 +88,76 @@ export function getConfidentialAvailableForAsset(
   return row && /^(0|[1-9][0-9]*)$/.test(row.available) ? row.available : null
 }
 
+function confidentialBalanceChoice(
+  balances: readonly ConfidentialPortfolioBalance[]
+): ReadonlyMap<string, Readonly<{ amount: bigint; tokenId: string; priority: number }>> {
+  const byProtocol = new Map<string, { amount: bigint; tokenId: string; priority: number }>()
+  for (const balance of balances) {
+    if (!/^(0|[1-9][0-9]*)$/.test(balance.available)) {
+      throw new Error('Invalid Confidential balance')
+    }
+    const protocolAssetId = confidentialProtocolAssetId(balance.tokenId)
+    if (!protocolAssetId) throw new Error('Invalid Confidential token ID')
+    const priority = balance.tokenId.startsWith(`imt:${CONFIDENTIAL_PRIVATE_TREASURY_ACCOUNT_ID}:`)
+      ? 1
+      : 0
+    const current = byProtocol.get(protocolAssetId)
+    if (current && current.priority === priority) {
+      throw new Error('Duplicate Confidential balance')
+    }
+    if (!current || priority > current.priority) {
+      byProtocol.set(protocolAssetId, {
+        amount: BigInt(balance.available),
+        tokenId: balance.tokenId,
+        priority
+      })
+    }
+  }
+  return byProtocol
+}
+
+export function confidentialAvailableByProtocolAsset(
+  balances: readonly ConfidentialPortfolioBalance[]
+): ReadonlyMap<string, bigint> {
+  return new Map(
+    [...confidentialBalanceChoice(balances)].map(([protocolAssetId, row]) => [
+      protocolAssetId,
+      row.amount
+    ])
+  )
+}
+
+// Sum the same token across signer snapshots. Each signer contributes its own
+// amount once; an EVM record is never reused as another signer's balance.
+export function combineConfidentialSignerBalances(
+  groups: readonly Readonly<{ balances: readonly ConfidentialPortfolioBalance[] }>[]
+): readonly ConfidentialPortfolioBalance[] {
+  const totals = new Map<string, { amount: bigint; tokenId: string; priority: number }>()
+  for (const group of groups) {
+    for (const [protocolAssetId, row] of confidentialBalanceChoice(group.balances)) {
+      const current = totals.get(protocolAssetId)
+      if (!current) {
+        totals.set(protocolAssetId, {
+          amount: row.amount,
+          tokenId: row.tokenId,
+          priority: row.priority
+        })
+        continue
+      }
+      current.amount += row.amount
+      if (row.priority > current.priority) {
+        current.tokenId = row.tokenId
+        current.priority = row.priority
+      }
+    }
+  }
+  return Object.freeze(
+    [...totals].map(([, row]) =>
+      Object.freeze({ tokenId: row.tokenId, available: row.amount.toString() })
+    )
+  )
+}
+
 export function buildConfidentialPortfolioView(
   balances: readonly ConfidentialPortfolioBalance[],
   tokens: readonly SwapToken[],
@@ -132,8 +205,15 @@ export function buildConfidentialPortfolioView(
     const managed = managedById.get(protocolAssetId)
     const mappedAssetId = mappedById.get(protocolAssetId)
     const registered = mappedAssetId ? lookupConfidentialAsset(assets, mappedAssetId) : undefined
-    const assetId = managed?.assetId ?? registered?.asset.id
-    const chainId = managed?.chainId ?? registered?.asset.chainId
+    // Native NEAR and wNEAR share nep141:wrap.near. Keep the registered native asset.
+    const registeredNativeNear =
+      protocolAssetId === NEAR_WRAPPED_PROTOCOL_ASSET_ID &&
+      registered?.asset.id === nearConfidentialPortfolioAssetId(protocolAssetId)
+        ? registered
+        : undefined
+    const assetId = registeredNativeNear?.asset.id ?? managed?.assetId ?? registered?.asset.id
+    const chainId =
+      registeredNativeNear?.asset.chainId ?? managed?.chainId ?? registered?.asset.chainId
     const bundledMetadata =
       token &&
       registered?.source === 'bundled' &&

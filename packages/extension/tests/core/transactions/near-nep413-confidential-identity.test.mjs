@@ -5,7 +5,10 @@ import { ConfidentialFundingApi } from '../../../src/background/confidential-fun
 import { confidentialSigningChainId } from '../../../src/background/confidential-funding-coordinator.ts'
 import { ConfidentialFundingSigner } from '../../../src/background/confidential-funding-signer.ts'
 import { ChromeConfidentialFundingStore } from '../../../src/background/confidential-funding-store.ts'
-import { planNearIncognitoCluster } from '../../../src/core/chains/near/near-incognito-move.ts'
+import {
+  NEAR_MOVE_EVM_PRINCIPAL,
+  planNearIncognitoCluster
+} from '../../../src/core/chains/near/near-incognito-move.ts'
 
 const NAMED = 'alice.near'
 const IMPLICIT = 'ab'.repeat(32)
@@ -413,8 +416,8 @@ test('stores a NEAR session and balance without replacing the EVM cache', async 
   }
 })
 
-test('quotes a NEAR cluster with the NEAR account as the intents signer', () => {
-  const named = planNearIncognitoCluster({
+function clusterQuote(overrides) {
+  return {
     network: 'mainnet',
     enabledFlags: ['chain.near'],
     from: 'public',
@@ -427,40 +430,121 @@ test('quotes a NEAR cluster with the NEAR account as the intents signer', () => 
     destinationAsset: 'nep141:wrap.near',
     amountRaw: '1000',
     slippageBps: 50,
-    implicitAccountOnChain: false
-  })
+    implicitAccountOnChain: false,
+    ...overrides
+  }
+}
+
+test('uses the EVM confidential principal for an EVM-capable NEAR cluster', () => {
+  const named = planNearIncognitoCluster(
+    clusterQuote({ confidentialPrincipal: MIXED_EVM })
+  )
   expect(named.ok).toBe(true)
   if (!named.ok) return
-  expect(named.signerChainFamily).toBe('near')
-  expect(named.intentStandard).toBe('nep413')
-  expect(named.signerId).toBe(NAMED)
-  expect(named.deposit.signerId).toBe(NAMED)
-  expect(named.deposit.recipient).toBe(NAMED)
+  const evm = MIXED_EVM.toLowerCase()
+  expect(named.signerChainFamily).toBe('evm')
+  expect(named.intentStandard).toBe('erc191')
+  expect(named.signerId).toBe(evm)
+  expect(named.deposit.signerId).toBe(evm)
+  expect(named.deposit.recipient).toBe(evm)
+  expect(named.deposit.recipientType).toBe('CONFIDENTIAL_INTENTS')
   expect(named.deposit.refundTo).toBe(NAMED)
-  expect(named.withdraw.signerId).toBe(NAMED)
+  expect(named.deposit.refundType).toBe('ORIGIN_CHAIN')
+  expect(named.withdraw.signerId).toBe(evm)
   expect(named.withdraw.recipient).toBe(PEA)
+  expect(named.withdraw.recipientType).toBe('DESTINATION_CHAIN')
+  expect(named.sourceAddress).toBe(NAMED)
+  expect(named.destinationAddress).toBe(PEA)
   expect(named.fundingTransfers).toEqual([])
   expect(JSON.stringify(named)).not.toMatch(/receiverId|storage_deposit|signer_chain_family/)
 
-  const implicit = planNearIncognitoCluster({
-    network: 'mainnet',
-    enabledFlags: ['chain.near'],
-    from: 'private',
-    to: 'public',
-    mainAccountId: IMPLICIT,
-    peaAccountId: PEA,
-    accountIndex: 0,
-    walletSource: { kind: 'software' },
-    originAsset: 'nep141:wrap.near',
-    destinationAsset: 'nep141:wrap.near',
-    amountRaw: '1000',
-    slippageBps: 50
-  })
-  expect(implicit.ok).toBe(true)
-  if (!implicit.ok) return
-  expect(implicit.signerId).toBe(IMPLICIT)
-  expect(implicit.deposit.recipient).toBe(IMPLICIT)
-  expect(implicit.deposit.refundTo).toBe(PEA)
-  expect(implicit.withdraw.recipient).toBe(IMPLICIT)
-  expect(implicit.fundingTransfers).toEqual([])
+  const fromPrivate = planNearIncognitoCluster(
+    clusterQuote({
+      from: 'private',
+      to: 'public',
+      mainAccountId: IMPLICIT,
+      confidentialPrincipal: EVM
+    })
+  )
+  expect(fromPrivate.ok).toBe(true)
+  if (!fromPrivate.ok) return
+  expect(fromPrivate.signerChainFamily).toBe('evm')
+  expect(fromPrivate.intentStandard).toBe('erc191')
+  expect(fromPrivate.signerId).toBe(EVM)
+  expect(fromPrivate.deposit.recipient).toBe(EVM)
+  expect(fromPrivate.deposit.refundTo).toBe(PEA)
+  expect(fromPrivate.withdraw.recipient).toBe(IMPLICIT)
+  expect(fromPrivate.destinationAddress).toBe(IMPLICIT)
+  expect(fromPrivate.sourceAddress).toBe(PEA)
+
+  const importedEvm = planNearIncognitoCluster(
+    clusterQuote({
+      mainAccountId: IMPLICIT,
+      walletSource: { kind: 'private-key', chainFamily: 'eip155', accountIndex: 0 },
+      confidentialPrincipal: EVM
+    })
+  )
+  expect(importedEvm.ok).toBe(true)
+  if (!importedEvm.ok) return
+  expect(importedEvm.intentStandard).toBe('erc191')
+  expect(importedEvm.signerId).toBe(EVM)
+  expect(importedEvm.deposit.recipient).toBe(EVM)
+  expect(importedEvm.deposit.refundTo).toBe(IMPLICIT)
+  expect(importedEvm.withdraw.recipient).toBe(PEA)
+
+  const missing = planNearIncognitoCluster(clusterQuote())
+  expect(missing.ok).toBe(false)
+  if (missing.ok) return
+  expect(missing.error).toBe(NEAR_MOVE_EVM_PRINCIPAL)
+  expect(
+    planNearIncognitoCluster(clusterQuote({ confidentialPrincipal: `0x${'0'.repeat(40)}` })).ok
+  ).toBe(false)
+})
+
+test('keeps the NEAR account for an imported NEAR-only cluster signer', () => {
+  const imported = planNearIncognitoCluster(
+    clusterQuote({
+      walletSource: { kind: 'private-key', chainFamily: 'near', accountIndex: 0 },
+      confidentialPrincipal: EVM
+    })
+  )
+  expect(imported.ok).toBe(true)
+  if (!imported.ok) return
+  expect(imported.signerChainFamily).toBe('near')
+  expect(imported.intentStandard).toBe('nep413')
+  expect(imported.signerId).toBe(NAMED)
+  expect(imported.deposit.signerId).toBe(NAMED)
+  expect(imported.deposit.recipient).toBe(NAMED)
+  expect(imported.deposit.refundTo).toBe(NAMED)
+  expect(imported.withdraw.signerId).toBe(NAMED)
+  expect(imported.withdraw.recipient).toBe(PEA)
+  expect(imported.destinationAddress).toBe(PEA)
+
+  const fromPrivate = planNearIncognitoCluster(
+    clusterQuote({
+      from: 'private',
+      to: 'public',
+      walletSource: { kind: 'private-key', chainFamily: 'near', accountIndex: 0 }
+    })
+  )
+  expect(fromPrivate.ok).toBe(true)
+  if (!fromPrivate.ok) return
+  expect(fromPrivate.intentStandard).toBe('nep413')
+  expect(fromPrivate.signerId).toBe(NAMED)
+  expect(fromPrivate.deposit.refundTo).toBe(PEA)
+  expect(fromPrivate.withdraw.recipient).toBe(NAMED)
+
+  const hardware = planNearIncognitoCluster(
+    clusterQuote({
+      walletSource: { kind: 'hardware' },
+      confidentialPrincipal: EVM
+    })
+  )
+  expect(hardware.ok).toBe(true)
+  if (!hardware.ok) return
+  expect(hardware.intentStandard).toBe('nep413')
+  expect(hardware.signerChainFamily).toBe('near')
+  expect(hardware.signerId).toBe(NAMED)
+  expect(hardware.deposit.refundTo).toBe(NAMED)
+  expect(hardware.withdraw.recipient).toBe(PEA)
 })

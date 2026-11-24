@@ -1045,6 +1045,30 @@ export class ChromeConfidentialFundingStore {
     )
   }
 
+  async listSignerBalanceSnapshots(
+    network: Network,
+    keyDomainId: string,
+    accountId: string
+  ): Promise<readonly Readonly<{ signerId: string; snapshot: ConfidentialBalanceSnapshot }>[]> {
+    const prefix = `${this.balanceKey(network, keyDomainId, accountId)}:`
+    const stored = await chrome.storage.local.get(null)
+    const rows: { signerId: string; snapshot: ConfidentialBalanceSnapshot }[] = []
+    for (const key of Object.keys(stored)) {
+      if (!key.startsWith(prefix)) continue
+      let signerId: string
+      try {
+        signerId = decodeURIComponent(key.slice(prefix.length))
+      } catch {
+        continue
+      }
+      if (!signerId || isConfidentialEvmSigner(signerId)) continue
+      const snapshot = await this.readBalanceSnapshot(key)
+      if (!snapshot?.known) continue
+      rows.push(Object.freeze({ signerId, snapshot }))
+    }
+    return Object.freeze(rows)
+  }
+
   async putBalances(
     network: Network,
     keyDomainId: string,

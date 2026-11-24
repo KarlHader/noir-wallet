@@ -19,11 +19,13 @@ import {
   buildExternalShieldWithdrawRequest,
   buildShieldTransferRequest,
   createShieldSendRoutes,
+  listNearShieldPickerAssets,
   listShieldFundingAssets,
   listShieldMoveDestinations,
   listShieldSendDestinations,
   selectDefaultShieldWithdrawSource,
   selectShieldWithdrawDestinationForNetwork,
+  shieldFundingAvailableRaw,
   shieldFundingSources,
   shieldPortfolioBalances
 } from '../../../src/popup/services/shield-transfer.ts'
@@ -44,6 +46,28 @@ import {
   selectShieldTransferAssetId,
   shieldTransferPreferenceKey
 } from '../../../src/popup/services/shield-transfer-preference.ts'
+
+test('caps a NEAR Shield Send amount at the unreserved confidential balance', () => {
+  const asset = {
+    chain: { chain: { family: 'near' } },
+    asset: { balance: { confidentialRaw: '153000000000000000000000' } },
+    managed: { protocolAssetId: 'nep141:wrap.near' }
+  }
+  const portfolioRaw = '153000000000000000000000'
+  const reservedRaw = '110000000000000000000000'
+  expect(shieldFundingAvailableRaw(asset, null)).toBe(portfolioRaw)
+  expect(shieldFundingAvailableRaw(asset, [{ tokenId: 'nep141:other.near', available: '1' }])).toBe(
+    portfolioRaw
+  )
+  expect(
+    shieldFundingAvailableRaw(asset, [{ tokenId: 'nep141:wrap.near', available: reservedRaw }])
+  ).toBe(reservedRaw)
+  expect(
+    shieldFundingAvailableRaw(asset, [
+      { tokenId: 'nep141:wrap.near', available: '200000000000000000000000' }
+    ])
+  ).toBe(portfolioRaw)
+})
 
 test('restores a balance transfer draft only for its wallet account and network', () => {
   const scope = 'mainnet:wallet-1:account-1:rpc-1'
@@ -1282,4 +1306,281 @@ test('lists official cross-network USDC destinations from the managed catalog', 
     source: { protocolAssetId: sourceProtocolId, amountRaw: '10000' },
     destination: { chainId: 'eip155:8453', protocolAssetId: destinationProtocolId }
   })
+})
+
+test('includes funded public NEAR in the Shield picker without changing EVM selection', () => {
+  const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.near']
+  try {
+    const nearAssetId = 'near:mainnet/slip44:397'
+    const chains = createInitialProductChainRegistry('mainnet')
+    const nearChain = {
+      chain: chains.resolve('near:mainnet'),
+      status: 'ready',
+      assets: [],
+      errorCodes: []
+    }
+    const tokens = [
+      {
+        assetId: 'nep141:wrap.near',
+        blockchain: 'near',
+        symbol: 'NEAR',
+        decimals: 24
+      }
+    ]
+    const nearAsset = mainRaw => ({
+      asset: {
+        asset: {
+          id: nearAssetId,
+          chainId: 'near:mainnet',
+          namespace: 'slip44',
+          reference: '397',
+          kind: 'native'
+        },
+        metadata: { name: 'NEAR', symbol: 'NEAR', decimals: 24 },
+        balance: { mainRaw, availableRaw: mainRaw, totalRaw: mainRaw }
+      },
+      chain: nearChain
+    })
+    const funded = nearAsset('1000000000000000000000000')
+    const pickerInput = {
+      managedAssets: [],
+      catalogTokens: tokens,
+      network: 'mainnet',
+      from: 'public'
+    }
+    expect(
+      listNearShieldPickerAssets({ ...pickerInput, assets: [funded] }).map(
+        item => item.asset.asset.id
+      )
+    ).toEqual([nearAssetId])
+    expect(listNearShieldPickerAssets({ ...pickerInput, assets: [nearAsset('0')] })).toEqual([])
+    expect(
+      listNearShieldPickerAssets({
+        ...pickerInput,
+        assets: [funded],
+        catalogTokens: []
+      })
+    ).toEqual([])
+    expect(
+      listNearShieldPickerAssets({
+        assets: [nearAsset('0')],
+        managedAssets: [],
+        catalogTokens: tokens,
+        network: 'mainnet',
+        from: 'shield',
+        shieldBalances: [{ tokenId: 'nep141:wrap.near', available: '5' }]
+      }).map(item => item.asset.asset.id)
+    ).toEqual([nearAssetId])
+    expect(
+      selectShieldTransferAssetId({
+        assets: [funded],
+        eligibleChainIds: [],
+        managedAssets: [],
+        catalogTokens: tokens,
+        network: 'mainnet',
+        from: 'public'
+      })
+    ).toBe(nearAssetId)
+
+    const ethereumId = 'eip155:1'
+    const usdc = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
+    const usdcAssetId = `${ethereumId}/erc20:${usdc}`
+    const usdcProtocolId = `nep141:eth-${usdc}.omft.near`
+    const evmTokens = [
+      {
+        assetId: usdcProtocolId,
+        blockchain: 'eth',
+        contractAddress: usdc,
+        symbol: 'USDC',
+        decimals: 6
+      }
+    ]
+    const managed = resolveManagedIntentsAssets(
+      evmTokens,
+      'mainnet',
+      getEvmNetworkConfigs('mainnet')
+    )
+    const evmChain = {
+      chain: chains.resolve(ethereumId),
+      status: 'ready',
+      assets: [],
+      errorCodes: []
+    }
+    const model = {
+      chains: [evmChain],
+      assets: [],
+      confidential: { status: 'ready', assets: [] }
+    }
+    const [usdcOption] = listShieldFundingAssets(model, managed, evmTokens, 'mainnet')
+    expect(
+      selectShieldTransferAssetId({
+        assets: [{ ...usdcOption, chain: evmChain }, funded],
+        eligibleChainIds: [ethereumId],
+        managedAssets: managed,
+        catalogTokens: [...evmTokens, ...tokens],
+        network: 'mainnet',
+        from: 'public'
+      })
+    ).toBe(usdcAssetId)
+  } finally {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+  }
+})
+
+test('builds a direct NEAR USDT Shield request and keeps wNEAR on cluster', () => {
+  const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.near']
+  try {
+    const chains = createInitialProductChainRegistry('mainnet')
+    const chain = {
+      chain: chains.resolve('near:mainnet'),
+      status: 'ready',
+      assets: [],
+      errorCodes: []
+    }
+    const holding = (assetId, reference, kind, protocolAssetId, symbol, decimals) => ({
+      asset: {
+        asset: {
+          id: assetId,
+          chainId: 'near:mainnet',
+          namespace: kind === 'native' ? 'slip44' : 'nep141',
+          reference,
+          kind
+        },
+        metadata: { name: symbol, symbol, decimals }
+      },
+      chain,
+      managed: {
+        assetId,
+        chainId: 'near:mainnet',
+        protocolAssetId,
+        blockchain: 'near'
+      }
+    })
+    const usdt = holding(
+      'near:mainnet/nep141:usdt.tether-token.near',
+      'usdt.tether-token.near',
+      'token',
+      'nep141:usdt.tether-token.near',
+      'USDT',
+      6
+    )
+    const near = holding('near:mainnet/slip44:397', '397', 'native', 'nep141:wrap.near', 'NEAR', 24)
+    const wrapped = holding(
+      'near:mainnet/nep141:wrap.near',
+      'wrap.near',
+      'token',
+      'nep141:wrap.near',
+      'wNEAR',
+      24
+    )
+    const bridged = holding(
+      'near:mainnet/nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
+      'eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
+      'token',
+      'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
+      'USDC',
+      6
+    )
+    const request = {
+      network: 'mainnet',
+      keyDomainId: 'wallet',
+      accountId: 'account',
+      amountRaw: '10000',
+      slippageBps: 100
+    }
+    expect(
+      buildFixedShieldFundsRequest({
+        ...request,
+        direction: 'shield',
+        asset: usdt.asset,
+        chain: usdt.chain,
+        managed: usdt.managed
+      })
+    ).toMatchObject({
+      operation: 'deposit',
+      sourceDomain: 'public',
+      destinationDomain: 'shield',
+      source: {
+        assetId: usdt.managed.assetId,
+        protocolAssetId: 'nep141:usdt.tether-token.near',
+        amountRaw: '10000'
+      },
+      destination: { protocolAssetId: 'nep141:usdt.tether-token.near' }
+    })
+    expect(
+      buildShieldTransferRequest({
+        ...request,
+        from: 'shield',
+        to: 'public',
+        method: 'directly',
+        asset: usdt.asset,
+        chain: usdt.chain,
+        managed: usdt.managed,
+        destination: usdt
+      }).operation
+    ).toBe('withdraw')
+    expect(listShieldMoveDestinations(usdt, [usdt, near], 'mainnet')).toEqual([usdt])
+    expect(
+      buildShieldTransferRequest({
+        ...request,
+        from: 'public',
+        to: 'shield',
+        method: 'directly',
+        asset: near.asset,
+        chain: near.chain,
+        managed: near.managed
+      }).source.protocolAssetId
+    ).toBe('nep141:wrap.near')
+    for (const rejected of [wrapped, bridged]) {
+      expect(() =>
+        buildShieldTransferRequest({
+          ...request,
+          from: 'public',
+          to: 'shield',
+          method: 'directly',
+          asset: rejected.asset,
+          chain: rejected.chain,
+          managed: rejected.managed
+        })
+      ).toThrow('Shield transfer is unavailable')
+    }
+    const sendRoutes = createShieldSendRoutes([usdt, near, wrapped, bridged], 'mainnet')
+    expect(sendRoutes.networks.map(chain => chain.id)).toEqual(['near:mainnet'])
+    expect(sendRoutes.getDestination(usdt, 'near:mainnet')).toBe(usdt)
+    expect(sendRoutes.getDestination(near, 'near:mainnet')).toBe(near)
+    expect(sendRoutes.getDestination(wrapped, 'near:mainnet')).toBeNull()
+    expect(sendRoutes.getDestination(bridged, 'near:mainnet')).toBeNull()
+    expect(sendRoutes.getDestination(usdt, 'eip155:1')).toBeNull()
+    expect(
+      buildExternalShieldWithdrawRequest({
+        ...request,
+        recipient: 'alice.near',
+        source: usdt,
+        destination: usdt
+      })
+    ).toMatchObject({
+      operation: 'withdraw',
+      externalRecipient: 'alice.near',
+      source: {
+        chainId: 'near:mainnet',
+        protocolAssetId: 'nep141:usdt.tether-token.near'
+      },
+      destination: {
+        chainId: 'near:mainnet',
+        protocolAssetId: 'nep141:usdt.tether-token.near'
+      }
+    })
+    expect(() =>
+      buildExternalShieldWithdrawRequest({
+        ...request,
+        recipient: 'alice.near',
+        source: wrapped,
+        destination: wrapped
+      })
+    ).toThrow('Shield withdrawal is unavailable')
+  } finally {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+  }
 })

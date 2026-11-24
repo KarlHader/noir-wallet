@@ -131,6 +131,7 @@ export interface TransactionIntentSnapshot {
     readonly operation: 'deposit' | 'withdraw' | 'cluster' | 'swap' | 'confidential-transfer'
     readonly sourceDomain: 'public' | 'private' | 'shield'
     readonly destinationDomain: 'public' | 'private' | 'shield'
+    readonly errorStatus?: 'APP_FEE_REJECTED_2002'
   }>
   readonly evm?: Readonly<{
     readonly schemaVersion: 1
