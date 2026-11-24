@@ -783,7 +783,6 @@ export function useEvmSendTransfer({
       validAmount &&
       validRecipient &&
       tokenFeeBalanceError === null &&
-      !preparing &&
       !maximum.loading &&
       review === null,
     requestKey: `${intentKey}:${JSON.stringify(feeSelection)}`,

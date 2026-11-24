@@ -120,7 +120,7 @@ import { SwapInputView } from '../../components/swap/SwapInputView'
 import { CrossChainSendFormView } from '../../components/transaction/CrossChainSendFormView'
 import { useSharedSendForm } from '../../components/transaction/SendFormLayout'
 import { CrossChainSendReviewView } from '../../components/transaction/CrossChainSendReviewView'
-import { calculateSwapPriceImpact } from '@/popup/services/swap-estimate'
+import { calculateSwapPriceImpact, formatSwapReviewFiat } from '@/popup/services/swap-estimate'
 import { useSwapState } from '../../hooks/useSwapState'
 import {
   buildCrossChainSendNetworkOptions,
@@ -5244,7 +5244,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       try {
         const requestSequence = quoteRequestSequence.current
         const reviewedCombined = pendingRheaEvmAfterApproval?.combined
-        if (ordinarySwapRequested && reviewedCombined && preparedQuoteTransfer.family === 'evm') {
+        if (
+          (ordinarySwapRequested || crossChainSendRequested) &&
+          reviewedCombined &&
+          preparedQuoteTransfer.family === 'evm'
+        ) {
           const { graph, review } = preparedQuoteTransfer.review
           const input = {
             approvalId: graph.root.id,
@@ -5488,6 +5492,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     liveQuoteKey,
     liveQuoteRequest,
     ordinarySwapRequested,
+    crossChainSendRequested,
     publicPrivacySendRequested,
     transferPreparationError,
     viewStep,
@@ -6572,6 +6577,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         <SwapStatusDisplay
           network={currentNetwork}
           status={null}
+          actionName={crossChainSendRequested ? 'Send' : 'Swap'}
           tokenInSymbol={swap.tokenIn.symbol}
           tokenOutSymbol={swap.tokenOut.symbol}
           amountIn={swap.amountIn}
@@ -6799,6 +6805,21 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     }
     const reviewedQuote = quoteResult
     if (viewStep === 'review' && reviewedQuote && rheaReview && swap.tokenIn && swap.tokenOut) {
+      const reviewedAmountIn = formatBaseUnitDecimalAmount(
+        rheaReview.amountIn,
+        swap.tokenIn.decimals
+      )
+      const reviewedAmountOut = formatBaseUnitDecimalAmount(
+        rheaReview.estimatedOut,
+        swap.tokenOut.decimals
+      )
+      const reviewPrice = (token: RheaSwapToken) => {
+        if (token.price > 0) return token.price
+        const assetId = resolveRheaSwapCanonicalAssetId(token.assetId, currentNetwork)
+        return assetId ? findAssetPrice(cachedAssetPrices, assetId)?.priceUsd : undefined
+      }
+      const fromFiat = formatSwapReviewFiat(reviewedAmountIn, reviewPrice(swap.tokenIn))
+      const toFiat = formatSwapReviewFiat(reviewedAmountOut, reviewPrice(swap.tokenOut))
       const combinedLimit = pendingRheaEvmAfterApproval?.combined?.limit
       const combinedNetworkFee =
         combinedLimit && preparedQuoteTransfer?.family === 'evm'
@@ -7117,12 +7138,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           recipient={reviewedQuote.recipient}
           tokenIn={swap.tokenIn}
           tokenOut={swap.tokenOut}
-          amountIn={formatBaseUnitDecimalAmount(rheaReview.amountIn, swap.tokenIn.decimals)}
-          amountOut={formatBaseUnitDecimalAmount(rheaReview.estimatedOut, swap.tokenOut.decimals)}
+          amountIn={reviewedAmountIn}
+          amountOut={reviewedAmountOut}
           minAmountOut={minAmountOut}
           priceImpact={priceImpact}
-          fromFiat={swap.fromFiat}
-          toFiat={swap.toFiat}
+          fromFiat={fromFiat}
+          toFiat={toFiat}
           slippage={swap.slippage}
           onConfirm={handleConfirmSwap}
           isLoading={isSending || isPreparingReview || refreshingMaximumReview}
@@ -7806,7 +7827,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         sharedSendLayout && crossChainSendMode === 'public' ? 'contents' : 'page-container'
       }
     >
-      {showCombinedSwapProgress && <PageHeader title="Swap" />}
+      {showCombinedSwapProgress && (
+        <PageHeader title={crossChainSendRequested ? 'Cross-chain Send' : 'Swap'} />
+      )}
       {!showCombinedSwapProgress &&
         !shieldReviewing &&
         (viewStep === 'review' || (resumingApprovalReview && viewStep === 'input')) && (

@@ -549,7 +549,7 @@ function QuoteAssetRow({
     <section className="flex min-w-0 items-start gap-4">
       <TokenIcon token={token} size={42} />
       <div className="min-w-0 flex-1">
-        {loading ? (
+        {loading && !amount ? (
           <div className="space-y-2 py-1" role="status" aria-label="Refreshing quote">
             <div className="h-6 w-44 animate-pulse rounded bg-card" />
             <div className="h-3 w-16 animate-pulse rounded bg-card" />

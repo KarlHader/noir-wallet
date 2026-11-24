@@ -7,6 +7,11 @@ interface SwapAmountValuesInput {
   readonly tokenOutPrice: number | null | undefined
 }
 
+export function formatSwapReviewFiat(amount: string, price: number | string | undefined): string {
+  const marketPrice = safeBig(price ?? 0)
+  return amount && marketPrice.gt(0) ? safeBig(amount).times(marketPrice).toFixed() : ''
+}
+
 export function getSwapAmountValues(input: SwapAmountValuesInput) {
   return {
     rate:

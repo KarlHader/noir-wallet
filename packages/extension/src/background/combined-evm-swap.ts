@@ -11,7 +11,11 @@ import {
   canContinueCombinedSwap,
   getCombinedSwapFeeLimit
 } from '@/core/services/rhea-swap/combined-swap-review'
-import { parseEvmFeeSelection, type EvmFeeSelection } from '@/infrastructure/chains/evm'
+import {
+  EvmTransactionError,
+  parseEvmFeeSelection,
+  type EvmFeeSelection
+} from '@/infrastructure/chains/evm'
 import type { BackgroundEvmTransferRouter } from './evm-transfer-router'
 import type { EvmTransferExecutionMode } from './evm-transfer-controller'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
@@ -398,17 +402,30 @@ export class CombinedEvmSwap {
       }
       return record
     }
-    const prepared = await router.prepareContractCall(
-      {
-        chainId: input.binding.origin.chainId,
-        contractAddress: plan.transaction.to,
-        valueRaw: plan.transaction.value,
-        calldata: plan.transaction.data
-      },
-      input.feeSelection,
-      input.binding,
-      input.executionMode ?? 'main'
-    )
+    let prepared: Awaited<ReturnType<BackgroundEvmTransferRouter['prepareContractCall']>>
+    try {
+      prepared = await router.prepareContractCall(
+        {
+          chainId: input.binding.origin.chainId,
+          contractAddress: plan.transaction.to,
+          valueRaw: plan.transaction.value,
+          calldata: plan.transaction.data
+        },
+        input.feeSelection,
+        input.binding,
+        input.executionMode ?? 'main'
+      )
+    } catch (error) {
+      if (error instanceof EvmTransactionError) {
+        if (error.code === 'insufficient-funds') {
+          return review('Token approved. Add funds for the network fee, then review again.')
+        }
+        if (error.code === 'simulation-failed') {
+          return review('Token approved. The transaction failed simulation. Review a new quote.')
+        }
+      }
+      throw error
+    }
     const { feeLimit } = record
     const summary = prepared.review.summary
     if (
