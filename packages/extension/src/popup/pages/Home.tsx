@@ -1129,11 +1129,12 @@ export function Home() {
         </div>
       </div>
 
-      {!isShieldView && connectedDApp && currentAccountAuthorized && (
+      {connectedDApp && currentAccountAuthorized && (
         <ConnectedDAppBar
           dapp={connectedDApp}
           account={effectiveAccount}
           executionMode={hardwareWallet ? 'main' : (dappExecutionMode.state?.mode ?? null)}
+          darkPalette={isShieldView}
           modeControl={
             !hardwareWallet && supportsEvmDAppExecutionMode
               ? {

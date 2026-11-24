@@ -26,6 +26,7 @@ export function ConnectedDAppBar({
   dapp,
   account,
   executionMode,
+  darkPalette = false,
   modeControl,
   onManage,
   onDisconnect
@@ -33,6 +34,7 @@ export function ConnectedDAppBar({
   readonly dapp: ConnectedDApp
   readonly account: AccountRef | null
   readonly executionMode: DAppExecutionMode | null
+  readonly darkPalette?: boolean
   readonly modeControl?: {
     readonly busy: boolean
     readonly incognitoAvailable: boolean
@@ -50,7 +52,7 @@ export function ConnectedDAppBar({
   )
   const incognito = hasEvm && executionMode === 'private'
   const modeLabel = incognito ? 'Incognito' : 'Public'
-  const walletPalette = incognito ? undefined : 'public'
+  const walletPalette = incognito || darkPalette ? undefined : 'public'
   return (
     <footer
       aria-label="Current dApp connection"
