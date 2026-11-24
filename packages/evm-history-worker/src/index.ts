@@ -1,12 +1,16 @@
 /** Cloudflare Worker for bounded Ankr history JSON-RPC and wallet asset discovery. */
 
 import { getAnkrClient, UpstreamError, type AnkrClient } from './ankr-client'
+import { BaseAcrossReceiptIndex } from './base-across-receipts'
 import { readBoundedBody } from './read-bounded-body'
+
+export { BaseAcrossReceiptIndex }
 
 interface Env {
   ANKR_API_KEYS: string
   ALLOWED_ORIGIN: string
   HISTORY_RATE_LIMITER: RateLimit
+  BASE_ACROSS_RECEIPTS: DurableObjectNamespace
 }
 
 export const CHAIN_ID_TO_ANKR: Readonly<Record<string, string>> = Object.freeze({
@@ -400,6 +404,11 @@ async function handleAccountBalances(
 }
 
 export const evmHistoryWorker = {
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    const index = env.BASE_ACROSS_RECEIPTS.get(env.BASE_ACROSS_RECEIPTS.idFromName('base-mainnet'))
+    const response = await index.fetch('https://base-across.internal/advance', { method: 'POST' })
+    if (!response.ok) throw new Error('Base Across receipt scan failed')
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     const cors = corsHeaders(env.ALLOWED_ORIGIN)
 
@@ -418,6 +427,32 @@ export const evmHistoryWorker = {
       return isHistoryRpc
         ? rpcErrorResponse(null, -32000, 'Service unavailable', 503, cors)
         : jsonResponse({ error: 'Service unavailable' }, 503, cors)
+    }
+
+    if (url.pathname === '/base-across-receipts') {
+      if (request.method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405, cors)
+      const address = url.searchParams.get('address')
+      if (!isEvmAddress(address)) return jsonResponse({ error: 'Invalid address' }, 400, cors)
+      try {
+        const { success } = await env.HISTORY_RATE_LIMITER.limit({
+          key: await rateLimitKey(request)
+        })
+        if (!success) {
+          return jsonResponse({ error: 'Rate limit exceeded' }, 429, {
+            ...cors,
+            'Retry-After': '60'
+          })
+        }
+        const index = env.BASE_ACROSS_RECEIPTS.get(
+          env.BASE_ACROSS_RECEIPTS.idFromName('base-mainnet')
+        )
+        const query = new URLSearchParams({ address: address.toLowerCase(), limit: '200' })
+        const result = await index.fetch(`https://base-across.internal/receipts?${query}`)
+        if (!result.ok) throw new Error('Base receipt index unavailable')
+        return jsonResponse(await result.json(), 200, cors)
+      } catch {
+        return jsonResponse({ error: 'Base receipt index unavailable' }, 503, cors)
+      }
     }
 
     let client: AnkrClient

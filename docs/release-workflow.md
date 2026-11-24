@@ -252,4 +252,6 @@ Missing or invalid keys return service-unavailable errors. When using a Cloudfla
 
 Before enabling a new deployment, verify supported chains, native and token history, bounded or partial responses, account isolation, rate limiting, and failure fallback. A remote failure must retain existing cache and locally initiated transactions. Deployment and live-service verification are separate from local unit tests and extension builds.
 
+The Worker also exposes a standalone Base Across receipt index backed by a SQLite Durable Object migration and cron trigger. Its first scan starts at Base block `61274000` and advances through finalized blocks using public Base RPC endpoints.
+
 The website Beta guide pins an existing published ZIP in `packages/web/src/lib/v2-beta-release.ts`. Advance that link only after verifying the new Release download; a source merge alone does not make a Beta available.
