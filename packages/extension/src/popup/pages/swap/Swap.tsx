@@ -7740,7 +7740,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           isPrivateFunding
             ? privateFundingRequestId
               ? 'Add Gas'
-              : 'Transfer to Confidential'
+              : 'Transfer to Incognito'
             : privateTransferRequested
               ? 'Send Privately'
               : crossChainSendRequested
