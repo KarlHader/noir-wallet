@@ -1,0 +1,1055 @@
+.shield-win {
+  --sub: #bcbcc8;
+  --mute: #8b8e93;
+  --mute-2: #a7a9ad;
+  --green: #00d18a;
+  --mint: #3dffbe;
+  --gold: #ffcc00;
+  --gutter: clamp(16px, 4vw, 64px);
+  box-sizing: border-box;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  color: #fff;
+  color-scheme: dark;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+.shield-win *,
+.shield-win *::before,
+.shield-win *::after {
+  box-sizing: border-box;
+}
+
+.shield-win button,
+.shield-win a {
+  font-family: inherit;
+  letter-spacing: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.shield-win button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0 solid transparent;
+  border-radius: 0;
+  background: none;
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: center;
+}
+
+.shield-win a {
+  color: inherit;
+}
+
+.shield-win :focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 3px;
+}
+
+.shield-win h1,
+.shield-win h2,
+.shield-win p {
+  margin: 0;
+}
+
+.shield-win h1 {
+  font-size: clamp(48px, min(6vw, 10vh), 96px);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  margin-top: clamp(18px, 3vh, 28px);
+}
+
+.shield-win img {
+  display: block;
+  max-width: 100%;
+}
+
+.shield-win .doto {
+  font-family: 'Doto', ui-monospace, monospace;
+  font-weight: 400;
+}
+
+.shield-win .sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.shield-win .top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 72px;
+  padding: 0 var(--gutter);
+}
+
+.shield-win .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.shield-win .brand img {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+
+.shield-win .brand span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shield-win .top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.shield-win .wallet-addr {
+  color: var(--sub);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.shield-win button.disconnect {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 4px;
+  border: 1px solid #3a3a3a;
+  background: #000;
+  background-color: #000;
+  color: #fff;
+}
+
+.shield-win button.disconnect:hover {
+  border-color: #666;
+}
+
+.shield-win button.disconnect svg {
+  width: 18px;
+  height: 18px;
+}
+
+.shield-win button.rules-btn {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 4px;
+  border: 1px solid #3a3a3a;
+  background: #000;
+  background-color: #000;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.shield-win button.rules-btn:hover {
+  border-color: #666;
+}
+
+.shield-win main {
+  flex: 1;
+  padding: 0 var(--gutter);
+}
+
+.shield-win .stage {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(380px, 0.95fr);
+  gap: clamp(32px, 5vw, 80px);
+  align-items: center;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: clamp(36px, 5vw, 80px);
+  border-radius: 30px;
+  background: linear-gradient(155deg, #1c1c1c 0%, #141414 55%, #0e0e10 100%);
+  border: 1px solid #262626;
+  overflow: hidden;
+}
+
+.shield-win .stage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(circle, rgba(61, 255, 190, 0.32) 1.4px, transparent 2px) 0 0 / 18px
+    18px;
+  -webkit-mask-image: radial-gradient(
+    60% 75% at 85% 100%,
+    #000 0%,
+    rgba(0, 0, 0, 0.4) 45%,
+    transparent 75%
+  );
+  mask-image: radial-gradient(
+    60% 75% at 85% 100%,
+    #000 0%,
+    rgba(0, 0, 0, 0.4) 45%,
+    transparent 75%
+  );
+}
+
+.shield-win .eyebrow {
+  font-size: 18px;
+  line-height: 1;
+  color: var(--mint);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.shield-win h1 .hl {
+  color: var(--mint);
+}
+
+.shield-win .sub {
+  font-size: clamp(17px, 1.4vw, 21px);
+  line-height: 1.55;
+  color: var(--sub);
+  max-width: 31em;
+  margin-top: clamp(18px, 3vh, 28px);
+}
+
+.shield-win .actions {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: clamp(24px, 4vh, 40px);
+  min-height: 56px;
+}
+
+.shield-win button.btn,
+.shield-win a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 28px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background-color: transparent;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.shield-win .btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  flex: none;
+}
+
+.shield-win button.btn.primary,
+.shield-win a.btn.primary {
+  background: var(--green);
+  background-color: var(--green);
+  color: #000;
+  border-color: transparent;
+}
+
+.shield-win button.btn.primary:hover,
+.shield-win a.btn.primary:hover {
+  background: #1ee3a0;
+  background-color: #1ee3a0;
+  color: #000;
+}
+
+.shield-win button.btn.ghost,
+.shield-win a.btn.ghost {
+  background: #0b0b0b;
+  background-color: #0b0b0b;
+  color: #fff;
+  border-color: #3a3a3a;
+}
+
+.shield-win button.btn.ghost:hover,
+.shield-win a.btn.ghost:hover {
+  border-color: #6a6a6a;
+  color: #fff;
+}
+
+.shield-win button.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.shield-win .hint {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--mute);
+  margin-top: 12px;
+  max-width: 36em;
+}
+
+.shield-win .hint:empty {
+  display: none;
+}
+
+.shield-win .hint.warn {
+  color: #ffc04d;
+}
+
+.shield-win .entry {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px 12px;
+  max-width: 520px;
+  margin-top: 22px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #2c2c2c;
+}
+
+.shield-win .entry.swap {
+  animation: shield-win-in 0.3s ease-out;
+}
+
+.shield-win .entry-k {
+  font-size: 13px;
+  color: var(--mute);
+}
+
+.shield-win .chip {
+  justify-self: start;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--mute-2);
+}
+
+.shield-win .chip.live {
+  color: var(--mint);
+  background: rgba(0, 209, 138, 0.12);
+}
+
+.shield-win .chip.warn {
+  color: #ffc04d;
+  background: rgba(255, 161, 0, 0.12);
+}
+
+.shield-win .chip.gold {
+  color: var(--gold);
+  background: rgba(255, 204, 0, 0.12);
+}
+
+.shield-win .entry p {
+  grid-column: 1 / -1;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--sub);
+}
+
+.shield-win .entry p b {
+  color: #fff;
+  font-weight: 500;
+}
+
+.shield-win .entry.is-won,
+.shield-win .entry.is-claiming,
+.shield-win .entry.is-sending,
+.shield-win .entry.is-claimed {
+  border-color: rgba(255, 204, 0, 0.4);
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(255, 161, 0, 0.14), transparent 60%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.shield-win .entry.is-failed {
+  border-color: rgba(255, 192, 77, 0.45);
+}
+
+.shield-win .entry .dots {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+}
+
+.shield-win .entry .dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  animation: shield-win-run 1.4s infinite;
+  animation-delay: calc(var(--k) * 120ms);
+}
+
+.shield-win .wins {
+  max-width: 520px;
+  margin-top: 16px;
+}
+
+.shield-win .wins h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mute);
+}
+
+.shield-win .wins ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.shield-win .win {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #2c2c2c;
+}
+
+.shield-win .win b {
+  color: #fff;
+  font-weight: 600;
+}
+
+.shield-win .win .status {
+  margin-right: auto;
+  color: var(--mute-2);
+  font-size: 13px;
+}
+
+.shield-win .win .btn {
+  height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+  flex: none;
+}
+
+.shield-win .assure {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: clamp(22px, 3.5vh, 34px);
+  font-size: 15px;
+  color: var(--mute-2);
+}
+
+.shield-win .assure svg {
+  width: 20px;
+  height: 20px;
+  color: var(--mint);
+  flex: none;
+}
+
+.shield-win .board {
+  position: relative;
+  padding: clamp(22px, 2.4vw, 32px);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(20, 22, 30, 0.94), rgba(13, 14, 20, 0.97));
+  border: 1px solid rgba(61, 255, 190, 0.3);
+  box-shadow:
+    0 0 0 4px rgba(61, 255, 190, 0.04),
+    0 30px 80px rgba(0, 0, 0, 0.5);
+}
+
+.shield-win .board-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+  color: var(--mute-2);
+}
+
+.shield-win .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--mint);
+  background: rgba(0, 209, 138, 0.1);
+  border: 1px solid rgba(61, 255, 190, 0.35);
+  white-space: nowrap;
+}
+
+.shield-win .pill i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 8px var(--mint);
+}
+
+.shield-win .pill.ended {
+  color: var(--mute-2);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: #3a3a3a;
+}
+
+.shield-win .pill.ended i {
+  background: #666;
+  box-shadow: none;
+}
+
+.shield-win .prize {
+  display: flex;
+  align-items: center;
+  gap: clamp(14px, 1.6vw, 22px);
+  margin-top: clamp(20px, 3vh, 30px);
+  padding-bottom: clamp(20px, 3vh, 28px);
+  border-bottom: 1px solid #262630;
+}
+
+.shield-win .prize img {
+  width: clamp(64px, 6.5vw, 96px);
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.shield-win .prize b {
+  display: block;
+  font-size: clamp(44px, 5vw, 72px);
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+
+.shield-win .prize span {
+  display: block;
+  font-size: clamp(15px, 1.2vw, 18px);
+  color: var(--sub);
+  margin-top: 10px;
+}
+
+.shield-win .draws {
+  margin-top: clamp(18px, 2.6vh, 26px);
+}
+
+.shield-win .draws .k {
+  font-size: 15px;
+  color: var(--mute-2);
+}
+
+.shield-win .draws .big {
+  display: block;
+  font-size: clamp(56px, min(6.4vw, 11vh), 104px);
+  line-height: 1;
+  margin-top: 10px;
+  font-weight: 700;
+  color: var(--mint);
+  text-shadow: 0 0 26px rgba(61, 255, 190, 0.35);
+}
+
+.shield-win .tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: clamp(16px, 2.6vh, 24px);
+}
+
+.shield-win .tile {
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid #2a2a33;
+}
+
+.shield-win .tile span {
+  display: block;
+  font-size: 14px;
+  color: var(--mute-2);
+}
+
+.shield-win .tile b {
+  display: block;
+  font-size: clamp(24px, 2.3vw, 36px);
+  line-height: 1.1;
+  margin-top: 8px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.shield-win .indep {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mute);
+  margin-top: 14px;
+}
+
+.shield-win .sk {
+  display: block;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  animation: shield-win-sk 1.4s ease-in-out infinite;
+}
+
+.shield-win .sk-eyebrow {
+  width: 148px;
+  height: 18px;
+}
+
+.shield-win .sk-title {
+  width: min(100%, 520px);
+  height: calc(clamp(48px, min(6vw, 10vh), 96px) * 1.02);
+  margin-top: clamp(18px, 3vh, 28px);
+  border-radius: 12px;
+}
+
+.shield-win .sk-title.short {
+  width: min(78%, 380px);
+  margin-top: 0;
+}
+
+.shield-win .sk-sub {
+  width: min(100%, 31em);
+  height: calc(clamp(17px, 1.4vw, 21px) * 1.55);
+  margin-top: clamp(18px, 3vh, 28px);
+}
+
+.shield-win .sk-pill {
+  width: 196px;
+  height: 34px;
+  border-radius: 17px;
+}
+
+.shield-win .sk-note {
+  width: 112px;
+  height: 15px;
+}
+
+.shield-win .sk-coin {
+  width: clamp(64px, 6.5vw, 96px);
+  height: clamp(64px, 6.5vw, 96px);
+  border-radius: 50%;
+  flex: none;
+}
+
+.shield-win .sk-prize-amt {
+  width: min(100%, 180px);
+  height: clamp(44px, 5vw, 72px);
+  border-radius: 12px;
+}
+
+.shield-win .sk-prize-sub {
+  width: min(100%, 240px);
+  height: calc(clamp(15px, 1.2vw, 18px) * 1.55);
+  margin-top: 10px;
+}
+
+.shield-win .sk-draws-k {
+  width: 110px;
+  height: calc(15px * 1.55);
+}
+
+.shield-win .sk-draws-n {
+  width: min(100%, 280px);
+  height: clamp(56px, min(6.4vw, 11vh), 104px);
+  margin-top: 10px;
+  border-radius: 12px;
+}
+
+.shield-win .sk-tile-k {
+  width: 88px;
+  height: calc(14px * 1.55);
+}
+
+.shield-win .sk-tile-v {
+  width: min(100%, 120px);
+  height: clamp(24px, 2.3vw, 36px);
+  margin-top: 8px;
+}
+
+.shield-win .sk-indep {
+  width: 92%;
+  height: calc(13px * 1.5);
+  margin-top: 14px;
+}
+
+.shield-win .foot {
+  text-align: center;
+  padding: 22px 16px 26px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--mute);
+}
+
+.shield-win .foot p + p {
+  margin-top: 4px;
+  color: #5d5d66;
+}
+
+.shield-win button.textlink,
+.shield-win a.textlink {
+  background: none;
+  background-color: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--sub);
+  font: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+}
+
+.shield-win button.textlink:hover,
+.shield-win a.textlink:hover {
+  color: #fff;
+}
+
+.shield-win dialog.rules {
+  width: min(560px, calc(100% - 32px));
+  max-height: min(82vh, 760px);
+  max-height: min(82dvh, 760px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid #333;
+  border-radius: 20px;
+  background: #141414;
+  background-color: #141414;
+  color: #fff;
+  overflow: hidden;
+}
+
+.shield-win dialog.rules[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.shield-win dialog.rules::backdrop {
+  background: rgba(0, 0, 0, 0.74);
+}
+
+.shield-win .rules-head {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 22px 12px;
+  background: #141414;
+}
+
+.shield-win .rules-scroll {
+  min-height: 0;
+  overflow: auto;
+}
+
+.shield-win .rules-head h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.shield-win button.x {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: none;
+  background-color: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+
+.shield-win button.x svg {
+  width: 18px;
+  height: 18px;
+}
+
+.shield-win .rules ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 22px;
+}
+
+.shield-win .rules li {
+  position: relative;
+  padding: 12px 0 12px 20px;
+  border-top: 1px solid #232323;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--sub);
+  overflow-wrap: anywhere;
+}
+
+.shield-win .rules li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 21px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mint);
+}
+
+.shield-win .rules li b {
+  color: #fff;
+  font-weight: 500;
+}
+
+.shield-win .tbc {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gold);
+  border: 1px solid rgba(255, 204, 0, 0.4);
+  border-radius: 4px;
+  padding: 0 5px;
+  line-height: 18px;
+  vertical-align: 1px;
+}
+
+.shield-win .rules-foot {
+  padding: 12px 22px 22px;
+  font-size: 13px;
+  color: var(--mute);
+  border-top: 1px solid #232323;
+}
+
+.shield-win .claim-body {
+  padding: 0 22px 22px;
+}
+
+.shield-win .claim-body p {
+  color: var(--sub);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.shield-win .claim-body label {
+  display: block;
+  margin-top: 16px;
+  font-size: 14px;
+  color: var(--mute-2);
+}
+
+.shield-win input {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin-top: 8px;
+  padding: 0 14px;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  background: #0b0b0b;
+  background-color: #0b0b0b;
+  color: #fff;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.shield-win input:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 3px;
+}
+
+.shield-win .addr {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #2c2c2c;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.shield-win .form-error {
+  margin-top: 10px;
+  color: #ffc04d;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.shield-win .dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+@media (max-width: 1040px) {
+  .shield-win .stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .shield-win .board {
+    max-width: 560px;
+  }
+}
+
+@media (max-width: 760px) {
+  .shield-win .top {
+    height: 64px;
+  }
+
+  .shield-win main {
+    padding: 0 12px;
+  }
+
+  .shield-win .stage {
+    padding: 28px 18px 22px;
+    border-radius: 24px;
+    gap: 28px;
+  }
+
+  .shield-win .eyebrow {
+    font-size: 15px;
+  }
+
+  .shield-win .sk-eyebrow {
+    height: 15px;
+  }
+
+  .shield-win .sk-pill {
+    height: 32px;
+  }
+
+  .shield-win h1 {
+    font-size: clamp(44px, 13vw, 60px);
+  }
+
+  .shield-win .actions,
+  .shield-win .dialog-actions {
+    flex-direction: column;
+  }
+
+  .shield-win .actions .btn,
+  .shield-win .dialog-actions .btn,
+  .shield-win .win .btn {
+    width: 100%;
+  }
+
+  .shield-win .board {
+    padding: 20px 18px;
+  }
+
+  .shield-win .pill {
+    font-size: 14px;
+    height: 32px;
+    padding: 0 12px;
+  }
+
+  .shield-win .board-top .muted {
+    display: none;
+  }
+
+  .shield-win .tile {
+    padding: 14px;
+  }
+
+  .shield-win .win {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 440px) {
+  .shield-win .tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .shield-win .tile {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  .shield-win .tile b {
+    margin-top: 0;
+    font-size: 26px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shield-win .entry .dots i,
+  .shield-win .entry.swap,
+  .shield-win .sk {
+    animation: none;
+  }
+}
+
+@keyframes shield-win-in {
+  from {
+    opacity: 0.4;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes shield-win-run {
+  40% {
+    background: #3dffbe;
+    box-shadow: 0 0 6px #3dffbe;
+  }
+}
+
+@keyframes shield-win-sk {
+  50% {
+    background: rgba(255, 255, 255, 0.2);
+  }
+}
