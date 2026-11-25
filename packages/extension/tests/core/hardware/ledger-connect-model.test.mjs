@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { parseLedgerAccountIndex } from '../../../src/popup/pages/hardware/ledger-connect-model.ts'
+import { parseLedgerAccountIndex } from '../../../src/popup/services/ledger-connect-model.ts'
 import { nextHardwareWalletName } from '../../../src/lib/hardware-connect-options.ts'
 
 test('accepts only canonical nonnegative ZIP-32 account indexes', () => {

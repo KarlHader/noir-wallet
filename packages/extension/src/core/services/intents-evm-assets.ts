@@ -1,4 +1,4 @@
-import type { EvmNetworkConfig } from '@/config/networks'
+import type { EvmNetworkIdentity } from '@/config/networks'
 import { resolveSwapTokenIconUrl, type SwapToken } from './intents-api'
 
 const BLOCKCHAIN_ALIASES = new Map<string, readonly string[]>([
@@ -16,7 +16,7 @@ const BLOCKCHAIN_ALIASES = new Map<string, readonly string[]>([
   ['eip155:80094', ['bera', 'berachain']]
 ])
 
-function getNetworkAliases(network: EvmNetworkConfig): readonly string[] {
+function getNetworkAliases(network: EvmNetworkIdentity): readonly string[] {
   return Object.freeze(
     [
       ...(BLOCKCHAIN_ALIASES.get(network.chainId) ?? []),
@@ -30,14 +30,14 @@ function getNetworkAliases(network: EvmNetworkConfig): readonly string[] {
 // Network configurations are immutable. Reuse their alias index when resolving
 // a catalog instead of rebuilding every network's aliases for every token.
 const networkAliasIndexes = new WeakMap<
-  readonly EvmNetworkConfig[],
-  ReadonlyMap<string, EvmNetworkConfig>
+  readonly EvmNetworkIdentity[],
+  ReadonlyMap<string, EvmNetworkIdentity>
 >()
 
-function getNetworkAliasIndex(networks: readonly EvmNetworkConfig[]) {
+function getNetworkAliasIndex(networks: readonly EvmNetworkIdentity[]) {
   const cached = networkAliasIndexes.get(networks)
   if (cached) return cached
-  const index = new Map<string, EvmNetworkConfig>()
+  const index = new Map<string, EvmNetworkIdentity>()
   for (const network of networks) {
     for (const alias of getNetworkAliases(network)) index.set(alias, network)
   }
@@ -90,7 +90,7 @@ export function isDeprecatedIntentsToken(
 
 export function resolveIntentsEvmChainId(
   blockchain: string,
-  networks: readonly EvmNetworkConfig[]
+  networks: readonly EvmNetworkIdentity[]
 ): string | null {
   const normalized = blockchain.trim().toLowerCase()
   return getNetworkAliasIndex(networks).get(normalized)?.chainId ?? null
@@ -98,7 +98,7 @@ export function resolveIntentsEvmChainId(
 
 export function resolveIntentsEvmAssets(
   tokens: readonly SwapToken[],
-  networks: readonly EvmNetworkConfig[]
+  networks: readonly EvmNetworkIdentity[]
 ): readonly IntentsEvmAsset[] {
   const networkByAlias = getNetworkAliasIndex(networks)
 

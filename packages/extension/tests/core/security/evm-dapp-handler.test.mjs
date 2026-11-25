@@ -358,9 +358,21 @@ test.describe('Background EVM dApp handler', () => {
     ])
   })
 
-  test('wallet-side Connect adds the active account to an existing EVM grant and broadcasts it', async () => {
+  test('suspends EVM account exposure until the newly active account connects', async () => {
     let activeContext = account
-    const state = harness({ loadActiveContext: async () => activeContext })
+    const previousAddress = account.chainAccount.identity.value
+    const activeAddress = '0x2222222222222222222222222222222222222222'
+    const state = harness({
+      loadActiveContext: async () => activeContext,
+      listAccounts: async () => [
+        {
+          id: JSON.stringify(['wallet-1', 'account-1']),
+          label: 'Account 1',
+          reference: { walletId: 'wallet-1', accountId: 'account-1' },
+          address: previousAddress
+        }
+      ]
+    })
     const origin = 'https://dapp.example'
     await state.handler.request({ method: 'eth_requestAccounts' }, origin, {})
     activeContext = {
@@ -370,10 +382,32 @@ test.describe('Background EVM dApp handler', () => {
         scope: { ...account.chainAccount.scope, accountId: 'account-2' },
         identity: {
           kind: 'account-identifier',
-          value: '0x2222222222222222222222222222222222222222'
+          value: activeAddress
         }
       }
     }
+    await state.handler.notifyAccountsChanged()
+    expect(state.events.at(-1)).toEqual({
+      origin,
+      chainId: 'evm',
+      eventName: 'accountsChanged',
+      data: []
+    })
+    await expect(state.handler.request({ method: 'eth_accounts' }, origin, {})).resolves.toEqual([])
+    await expect(
+      state.handler.request({ method: 'wallet_getPermissions' }, origin, {})
+    ).resolves.toEqual([])
+    const sendFromPreviousAccount = () =>
+      state.handler.request(
+        {
+          method: 'eth_sendTransaction',
+          params: [{ from: previousAddress, to: activeAddress, value: '0x1' }]
+        },
+        origin,
+        {}
+      )
+    await expect(sendFromPreviousAccount()).rejects.toMatchObject({ code: 4100 })
+
     await state.handler.connectCurrentAccountToDApp(origin)
     expect(state.getAuthorization()).toEqual({
       accounts: [
@@ -386,8 +420,9 @@ test.describe('Background EVM dApp handler', () => {
       origin,
       chainId: 'evm',
       eventName: 'accountsChanged',
-      data: ['0x2222222222222222222222222222222222222222']
+      data: [activeAddress, previousAddress]
     })
+    await expect(sendFromPreviousAccount()).rejects.toMatchObject({ code: 4100 })
 
     const locked = harness({ hasUnlockSession: async () => false })
     await expect(locked.handler.connectCurrentAccountToDApp(origin)).rejects.toMatchObject({
@@ -399,6 +434,45 @@ test.describe('Background EVM dApp handler', () => {
     await expect(unconnected.handler.connectCurrentAccountToDApp(origin)).rejects.toThrow(
       'Reconnect from the site to update this network permission'
     )
+  })
+
+  test('enables a disabled EVM network only after a valid connection approval', async () => {
+    const origin = 'https://dapp.example'
+    const reference = { walletId: 'wallet-1', accountId: 'account-1' }
+    let enabled = false
+    let approved = false
+    let revokeBeforeCommit = false
+    let state
+    state = harness({
+      loadActiveContext: async () => (enabled ? account : null),
+      readDisabledNetworkAccount: async () => account,
+      enableAccountNetwork: async selected => {
+        expect(selected).toEqual(reference)
+        enabled = true
+      },
+      approval: {
+        requestExternalApproval: async (_origin, action, data) => {
+          expect(action).toBe('evmConnect')
+          expect(data.enableNetwork).toMatchObject({ label: EVM_NETWORKS.mainnet.displayName })
+          expect(enabled).toBe(false)
+          expect(state.getAuthorization()).toBeNull()
+          if (revokeBeforeCommit) await state.manager.removeEvmAuthorization(origin)
+          return { approved, requestId: 'connect-disabled-evm' }
+        }
+      }
+    })
+    const connect = () => state.handler.request({ method: 'eth_requestAccounts' }, origin, {})
+
+    await expect(connect()).rejects.toMatchObject({ code: 4001 })
+    expect(enabled).toBe(false)
+    approved = true
+    revokeBeforeCommit = true
+    await expect(connect()).rejects.toMatchObject({ code: 4100 })
+    expect(enabled).toBe(false)
+    revokeBeforeCommit = false
+    await expect(connect()).resolves.toEqual([account.chainAccount.identity.value])
+    expect(enabled).toBe(true)
+    expect(state.getAuthorization()).toEqual({ accounts: [reference], binding: reference })
   })
 
   test('grants one shared EVM account after explicit approval', async () => {
@@ -424,7 +498,7 @@ test.describe('Background EVM dApp handler', () => {
       binding: { walletId: 'wallet-1', accountId: 'account-1' }
     })
     const bsc = harness({
-      network: BUILTIN_EVM_NETWORKS.mainnet[1],
+      network: BUILTIN_EVM_NETWORKS.mainnet.find(network => network.chainId === 'eip155:56'),
       manager,
       loadActiveContext: async () => ({
         ...account,
@@ -1463,6 +1537,7 @@ test.describe('Background EVM dApp handler', () => {
 
   test('re-prepares the immutable EVM review when the user changes the fee tier', async () => {
     const prepareCalls = []
+    const estimateCalls = []
     const rejected = []
     let approvedTransactionId = null
     const makeReview = index => ({
@@ -1479,6 +1554,13 @@ test.describe('Background EVM dApp handler', () => {
       approval: {
         async requestExternalApproval(_origin, action, data, options) {
           if (action === 'evmTransaction') {
+            const previews = await options.onEvmFeeTierPreviews()
+            expect(previews).toEqual({
+              low: '1000',
+              standard: '2000',
+              fast: '3000'
+            })
+            expect(prepareCalls).toHaveLength(1)
             const updated = await options.onNetworkFeeTierChange('fast')
             expect(updated.feeTier).toBe('fast')
             expect(updated.review).not.toBe(data.review)
@@ -1491,6 +1573,12 @@ test.describe('Background EVM dApp handler', () => {
         }
       },
       transferController: {
+        async estimateTransferFee(_intent, selection) {
+          estimateCalls.push(selection)
+          return {
+            maximumFeeWei: String((['low', 'standard', 'fast'].indexOf(selection.tier) + 1) * 1000)
+          }
+        },
         async prepare(...args) {
           prepareCalls.push(args)
           return makeReview(prepareCalls.length)
@@ -1528,6 +1616,11 @@ test.describe('Background EVM dApp handler', () => {
     )
 
     expect(prepareCalls).toHaveLength(2)
+    expect(estimateCalls).toEqual([
+      { kind: 'tier', tier: 'low' },
+      { kind: 'tier', tier: 'standard' },
+      { kind: 'tier', tier: 'fast' }
+    ])
     expect(prepareCalls[1][2]).toEqual({ kind: 'tier', tier: 'fast' })
     expect(rejected).toEqual(['transaction:evm:fee-1'])
     expect(approvedTransactionId).toBe('transaction:evm:fee-2')

@@ -12,9 +12,13 @@ import {
   getActivityTransactionReferences,
   isActivityTransactionHash
 } from '../../../../src/popup/services/activity-transaction-references.ts'
-import { buildMyAccountRecipientGroups } from '../../../../src/popup/components/transaction/recipient-selector-model.ts'
+import {
+  buildMyAccountRecipientGroups,
+  buildMyWalletRecipientGroups
+} from '../../../../src/popup/services/recipient-selector-model.ts'
+import { formatWalletNameAtIndex } from '../../../../src/lib/format.ts'
 import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastructure/activity/zcash-v1-activity-source.ts'
-import { getActivityFailureLabel } from '../../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+import { getActivityFailureLabel } from '../../../../src/popup/services/multichain-activity-presentation.ts'
 import { isActivityModelForScope } from '../../../../src/popup/services/activity-list-model.ts'
 
 const expiredSend = {
@@ -225,7 +229,7 @@ test('method selectors cannot become EVM transaction links', () => {
   )
 })
 
-test('recipient groups normalize only timestamp-generated wallet labels', () => {
+test('recipient groups use the sidebar wallet labels with the matching eligible addresses', () => {
   const catalog = {
     accounts: [
       {
@@ -270,9 +274,22 @@ test('recipient groups normalize only timestamp-generated wallet labels', () => 
       }
     ]
   }
-  const groups = buildMyAccountRecipientGroups(catalog, 'zcash:mainnet')
-  assert.equal(groups[0].walletDisplayName, '')
-  assert.equal(groups[1].walletDisplayName, 'My long-term wallet')
+  const groups = buildMyWalletRecipientGroups(
+    buildMyAccountRecipientGroups(catalog, 'zcash:mainnet'),
+    catalog.accounts.map((account, index) => ({
+      id: `wallet:${account.walletId}`,
+      name: formatWalletNameAtIndex(account.walletDisplayName, index),
+      accounts: [{ ...account, name: account.accountDisplayName }]
+    }))
+  )
+  assert.deepEqual(
+    groups.map(group => group.name),
+    ['Wallet 1', 'My long-term wallet']
+  )
+  assert.deepEqual(
+    groups.map(group => group.accounts[0].addresses[0].value),
+    ['u1one', 'u1two']
+  )
 })
 
 test('transparent derivation path is shown only when a stored index is known', () => {

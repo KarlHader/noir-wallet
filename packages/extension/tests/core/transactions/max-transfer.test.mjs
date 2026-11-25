@@ -349,7 +349,7 @@ describe('dynamic maximum transfer regressions', () => {
     const swap = readSource('src/popup/pages/swap/Swap.tsx')
     const background = readSource('src/background/index.ts')
     const popupContextSync = readSource('src/popup/hooks/usePersistedExtensionContextSync.ts')
-    const resultPage = readSource('src/popup/pages/transactions/TransactionResultPage.tsx')
+    const resultPage = readSource('src/popup/pages/transactions/TransactionOutcome.tsx')
 
     assert.match(swap, /const activeScopeRef = useRef<string \| null \| undefined>\(undefined\)/)
     assert.match(swap, /getChainEndpointRuntimeKey\(state\.chainEndpointSettings\)/)
@@ -393,7 +393,7 @@ describe('dynamic maximum transfer regressions', () => {
     const contentScript = readSource('src/content-script/index.ts')
     const handler = readSource('src/background/dapp-handler.ts')
     const worker = readSource('src/core/worker/zcash.worker.ts')
-    const approval = readSource('src/popup/pages/dapp/ApprovalPage.tsx')
+    const approval = readSource('src/popup/pages/dapp/Approval.tsx')
     const sdkApi = readSource('../sdk/src/chains/zcash/api.ts')
     const sdkTypes = readSource('../sdk/src/chains/zcash/types.ts')
 

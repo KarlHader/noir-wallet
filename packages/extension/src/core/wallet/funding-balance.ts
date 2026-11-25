@@ -1,4 +1,5 @@
 import { safeBig } from '../../lib/big'
+import { formatInsufficientBalance } from '../../lib/format'
 import type { FundingSource, ZcashBalance } from '../../types/wallet'
 
 export interface FundingBalance {
@@ -40,9 +41,8 @@ export function getFundingAmountErrorCopy(error: FundingAmountError | null): str
     case 'pending':
       return 'Wait for pending funds or lower the amount.'
     case 'insufficient':
-      return 'Amount exceeds available balance.'
     case 'fee':
-      return 'Lower the amount or select Max to include the network fee.'
+      return formatInsufficientBalance('ZEC')
     default:
       return undefined
   }

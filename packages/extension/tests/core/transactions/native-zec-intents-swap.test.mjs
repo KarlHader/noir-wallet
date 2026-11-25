@@ -1,10 +1,28 @@
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { expect } from '@playwright/test'
 import { zatsToZec, zecToZats } from '../../../src/core/services/native-zec-intents-swap.ts'
-import {
+
+globalThis.location = {
+  href: 'chrome-extension://test/src/background/index.js',
+  pathname: '/src/background/index.js'
+}
+const emptyStorage = { get: async () => ({}) }
+globalThis.chrome = {
+  runtime: { id: 'test', getURL: path => `chrome-extension://test${path}` },
+  storage: { local: emptyStorage, session: emptyStorage, onChanged: { addListener() {} } }
+}
+const {
   markNativeZecIntentsSwapTerminal,
-  NativeZecIntentsSwapCoordinator
-} from '../../../src/background/native-zec-intents-swap.ts'
+  NativeZecIntentsSwapCoordinator,
+  readNativeZecIntentsStatusViewer,
+  readNativeZecIntentsSwapStatus
+} = await import('../../../src/background/native-zec-intents-swap.ts')
+const { ConfidentialFundingApi } =
+  await import('../../../src/background/confidential-funding-api.ts')
+after(() => {
+  delete globalThis.chrome
+  delete globalThis.location
+})
 
 test('native ZEC Intents spend binds the approved quote and survives coordinator recreation', async () => {
   const walletId = 'wallet-one'
@@ -12,6 +30,13 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
   const quoteId = 'quote-one'
   const refundAddress = `t1${'A'.repeat(33)}`
   const depositAddress = `t1${'B'.repeat(33)}`
+  const oldShieldedAddress = `u1${'q'.repeat(55)}`
+  const currentShieldedAddress = `u1${'p'.repeat(55)}`
+  const shieldedOrder = {
+    depositAddress,
+    depositMemo: ' reference + & ',
+    viewer: { chainFamily: 'zcash', walletAddress: refundAddress, signingMode: 'derived' }
+  }
   const expiresAt = Date.now() + 600_000
   const destination = {
     chainId: 'eip155:1',
@@ -54,6 +79,20 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
     slippageBps: 50,
     createdAt: Date.now()
   }
+  expect(readNativeZecIntentsStatusViewer(quoteBinding, 'mainnet')).toEqual({
+    chainFamily: 'zcash',
+    walletAddress: refundAddress,
+    signingMode: 'transparent'
+  })
+  expect(
+    readNativeZecIntentsStatusViewer({ ...quoteBinding, refundTo: oldShieldedAddress }, 'mainnet')
+  ).toBeUndefined()
+  expect(
+    readNativeZecIntentsStatusViewer(
+      { ...quoteBinding, refundTo: oldShieldedAddress, oneClickOrder: shieldedOrder },
+      'mainnet'
+    )
+  ).toEqual(shieldedOrder.viewer)
   const values = new Map([
     [`native_zec_intents_swap:${quoteId}`, structuredClone(record)],
     [
@@ -77,6 +116,20 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
           quoteHandle: 'quote-three',
           recipientType: 'CONFIDENTIAL_INTENTS',
           fundingSource: 'transparent'
+        }
+      }
+    ],
+    [
+      'native_zec_intents_swap:quote-rotated',
+      {
+        ...structuredClone(record),
+        quoteId: 'quote-rotated',
+        refundAddress: oldShieldedAddress,
+        quoteBinding: {
+          ...quoteBinding,
+          quoteHandle: 'quote-rotated',
+          refundTo: oldShieldedAddress,
+          oneClickOrder: shieldedOrder
         }
       }
     ],
@@ -122,7 +175,8 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
         network: 'mainnet',
         walletId,
         accountId,
-        refundAddresses: [refundAddress, `u1${'q'.repeat(55)}`]
+        refundAddresses: [refundAddress, currentShieldedAddress],
+        shieldedRefundAddressHistory: [oldShieldedAddress, currentShieldedAddress]
       })
     }
     const coordinator = new NativeZecIntentsSwapCoordinator(options)
@@ -139,6 +193,42 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
       amount: '1.25',
       fundingSource: 'shielded'
     }
+    const rotatedQuote = await coordinator.get('quote-rotated')
+    await expect(
+      readNativeZecIntentsSwapStatus(rotatedQuote.quoteBinding, {
+        network: 'mainnet',
+        walletId,
+        accountId: 'other-account'
+      })
+    ).rejects.toThrow('status quote binding changed')
+    const rotatedSpend = {
+      ...spend,
+      transactionId: 'transaction-rotated',
+      binding: structuredClone(rotatedQuote.quoteBinding)
+    }
+    const unrelatedCoordinator = new NativeZecIntentsSwapCoordinator({
+      ...options,
+      getActiveAccount: () => ({
+        ...options.getActiveAccount(),
+        shieldedRefundAddressHistory: []
+      })
+    })
+    await expect(unrelatedCoordinator.claimSpend(rotatedSpend)).rejects.toThrow('not owned')
+    for (const changedOrder of [
+      { ...shieldedOrder, depositMemo: shieldedOrder.depositMemo.trim() },
+      {
+        ...shieldedOrder,
+        viewer: { ...shieldedOrder.viewer, walletAddress: depositAddress }
+      }
+    ]) {
+      await expect(
+        coordinator.claimSpend({
+          ...rotatedSpend,
+          binding: { ...rotatedSpend.binding, oneClickOrder: changedOrder }
+        })
+      ).rejects.toThrow('quote changed')
+    }
+    await expect(coordinator.claimSpend(rotatedSpend)).resolves.toBe(expiresAt)
     await expect(coordinator.claimSpend({ ...spend, to: refundAddress })).rejects.toThrow()
     await expect(lockedCoordinator.get(quoteId)).rejects.toThrow('Wallet is locked')
     await expect(lockedCoordinator.claimSpend(spend)).rejects.toThrow('Wallet is locked')
@@ -239,9 +329,17 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
   const protocolAssetId = 'nep141:zec.omft.near'
   const refundAddress = `t1${'A'.repeat(33)}`
   const depositAddress = `t1${'B'.repeat(33)}`
+  const shieldedRefundAddress = `u1${'q'.repeat(55)}`
+  const shieldedDepositAddress = `t1${'C'.repeat(33)}`
+  const shieldedViewer = {
+    chainFamily: 'zcash',
+    walletAddress: `t1${'D'.repeat(33)}`,
+    signingMode: 'derived'
+  }
   const recipient = '0x1111111111111111111111111111111111111111'
   const destination = { chainId, assetId, protocolAssetId }
   const values = new Map()
+  const quoteRequests = []
   let activeAccountId = 'account-one'
   let switchDuringAuthorization = false
   let switchDuringIdentityResolution = false
@@ -259,7 +357,8 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
               .map(key => [key, structuredClone(values.get(key))])
           ),
         set: async entries => {
-          for (const [key, value] of Object.entries(entries)) values.set(key, structuredClone(value))
+          for (const [key, value] of Object.entries(entries))
+            values.set(key, structuredClone(value))
         },
         remove: async keys => {
           for (const key of Array.isArray(keys) ? keys : [keys]) values.delete(key)
@@ -271,8 +370,34 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
     configurable: true,
     value: { request: async (_name, operation) => operation() }
   })
-  globalThis.fetch = async () =>
-    Response.json([
+  const oneClickApiUrl = 'https://example.test/proxy/1click/v0'
+  const api = new ConfidentialFundingApi({ oneClickApiUrl }, '', '')
+  globalThis.fetch = async (url, init) => {
+    if (url === `${oneClickApiUrl}/quote`) {
+      const quoteRequest = JSON.parse(init.body)
+      quoteRequests.push(quoteRequest)
+      return Response.json({
+        code: 0,
+        data: {
+          correlationId: 'quote-one',
+          quoteRequest,
+          quote: {
+            amountIn: quoteRequest.amount,
+            amountOut: quoteRequest.amount,
+            minAmountOut: quoteRequest.amount,
+            ...(!quoteRequest.dry && {
+              depositAddress:
+                quoteRequest.refundTo === shieldedRefundAddress
+                  ? shieldedDepositAddress
+                  : depositAddress,
+              depositMemo: ' ref+id '
+            }),
+            deadline: quoteRequest.deadline
+          }
+        }
+      })
+    }
+    return Response.json([
       {
         assetId: protocolAssetId,
         blockchain: 'zec',
@@ -282,6 +407,7 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
         symbol: 'ZEC'
       }
     ])
+  }
   try {
     const coordinator = new NativeZecIntentsSwapCoordinator({
       network: 'mainnet',
@@ -291,11 +417,16 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
       evmNetworks: [],
       assetMappings: [{ assetId, protocolAssetId }],
       isUnlocked: async () => true,
+      resolveOneClickViewer: async (_scope, address, refundSource) =>
+        refundSource === 'shielded'
+          ? shieldedViewer
+          : { chainFamily: 'zcash', walletAddress: address, signingMode: 'transparent' },
       getActiveAccount: () => ({
         network: 'mainnet',
         walletId: 'wallet-one',
         accountId: activeAccountId,
-        refundAddresses: [refundAddress]
+        refundAddresses: [refundAddress],
+        shieldedRefundAddressHistory: [shieldedRefundAddress]
       }),
       resolveConfidentialIdentity: async () => {
         identityResolutionCount += 1
@@ -306,29 +437,15 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
       authorizeConfidentialIdentity: async () => {
         if (switchDuringAuthorization) activeAccountId = 'account-two'
       },
-      quoteConfidential: async input => ({
-        correlationId: 'quote-one',
-        quoteRequest: {
-          swapType: 'EXACT_INPUT',
-          confidentiality: 'basic',
-          originAsset: protocolAssetId,
-          destinationAsset: input.destinationAsset,
-          amount: input.amountRaw,
-          refundTo: input.refundTo,
-          recipient,
+      quoteConfidential: input =>
+        api.quote({
+          ...input,
+          recipient: input.signerId,
           depositType: 'ORIGIN_CHAIN',
           refundType: 'ORIGIN_CHAIN',
           recipientType: 'CONFIDENTIAL_INTENTS',
-          slippageTolerance: input.slippageBps
-        },
-        quote: {
-          amountIn: input.amountRaw,
-          amountOut: input.amountRaw,
-          minAmountOut: input.amountRaw,
-          depositAddress,
-          deadline: new Date(Date.now() + 600_000).toISOString()
-        }
-      })
+          dry: false
+        })
     })
     const request = {
       network: 'mainnet',
@@ -339,16 +456,22 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
       refundAddress,
       fundingSource: 'transparent',
       recipientType: 'CONFIDENTIAL_INTENTS',
+      requestId: 'explicit-zec-confidential-swap',
+      userAction: 'swap',
       slippageBps: 50
     }
     switchDuringAuthorization = true
-    await expect(coordinator.prepare(request)).rejects.toThrow('Native ZEC Intents Swap account changed')
+    await expect(coordinator.prepare(request)).rejects.toThrow(
+      'Native ZEC Intents Swap account changed'
+    )
     expect(values.size).toBe(0)
     activeAccountId = 'account-one'
     switchDuringAuthorization = false
     switchDuringIdentityResolution = true
     identityResolutionCount = 0
-    await expect(coordinator.prepare(request)).rejects.toThrow('Native ZEC Intents Swap account changed')
+    await expect(coordinator.prepare(request)).rejects.toThrow(
+      'Native ZEC Intents Swap account changed'
+    )
     expect(values.size).toBe(0)
     activeAccountId = 'account-one'
     switchDuringIdentityResolution = false
@@ -358,17 +481,71 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
       destinationChain: destination.chainId,
       destinationAsset: protocolAssetId,
       recipient,
-      recipientType: 'CONFIDENTIAL_INTENTS'
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      userAction: 'swap',
+      oneClickOrder: {
+        depositAddress,
+        depositMemo: ' ref+id ',
+        viewer: { chainFamily: 'zcash', walletAddress: refundAddress, signingMode: 'transparent' }
+      }
     })
     expect(values.get(`native_zec_intents_swap:${review.quoteId}`).schemaVersion).toBe(2)
+    expect(await coordinator.get(review.quoteId)).toMatchObject({
+      quoteBinding: review.quoteBinding,
+      appFeeBps: 2
+    })
+    await expect(coordinator.prepare({ ...request, userAction: undefined })).rejects.toThrow(
+      'request ID was reused with different details'
+    )
     await expect(
       coordinator.prepare({
         ...request,
         recipientType: 'DESTINATION_CHAIN',
         fundingSource: undefined,
+        userAction: undefined,
         destination: { ...destination, recipient: refundAddress }
       })
     ).rejects.toThrow('Native ZEC Intents destination is invalid')
+    const shieldedReview = await coordinator.prepare({
+      ...request,
+      refundAddress: shieldedRefundAddress,
+      fundingSource: 'shielded',
+      requestId: 'shielded-zec-confidential-swap'
+    })
+    const transparentQuote = quoteRequests.find(
+      quote => !quote.dry && quote.refundTo === refundAddress
+    )
+    expect(transparentQuote).toMatchObject({
+      referral: 'noir_swap',
+      appFees: [{ recipient: 'noir_swap.near', fee: 2 }]
+    })
+    expect(transparentQuote).not.toHaveProperty('user')
+    expect(transparentQuote).not.toHaveProperty('userChainFamily')
+    expect(
+      quoteRequests.find(quote => !quote.dry && quote.refundTo === shieldedRefundAddress)
+    ).toMatchObject({
+      referral: 'noir_swap',
+      appFees: [{ recipient: 'noir_swap.near', fee: 2 }],
+      refundType: 'ORIGIN_CHAIN',
+      refundTo: shieldedRefundAddress,
+      user: shieldedViewer.walletAddress,
+      userChainFamily: 'zcash'
+    })
+    expect((await coordinator.get(shieldedReview.quoteId)).quoteBinding).toMatchObject({
+      refundTo: shieldedRefundAddress,
+      oneClickOrder: {
+        depositAddress: shieldedDepositAddress,
+        depositMemo: ' ref+id ',
+        viewer: shieldedViewer
+      }
+    })
+    expect(await coordinator.cancel(review.quoteId)).toBe(true)
+    await coordinator.prepare({ ...request, userAction: undefined })
+    expect(quoteRequests.at(-1)).toMatchObject({
+      dry: false,
+      referral: 'noir_receive',
+      appFees: [{ recipient: 'noir_swap.near', fee: 2 }]
+    })
   } finally {
     globalThis.chrome = originalChrome
     globalThis.fetch = originalFetch

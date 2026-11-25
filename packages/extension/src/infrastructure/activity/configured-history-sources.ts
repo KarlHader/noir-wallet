@@ -18,8 +18,13 @@ import {
 import {
   buildTrackedErc20Assets,
   createEvmActivityHistoryBatchReader,
-  createEvmActivityHistoryReader
+  createEvmActivityHistoryReader,
+  createConfiguredEvmRpcClient
 } from '../chains/evm'
+import {
+  BASE_ACROSS_CHAIN_ID,
+  createBaseAcrossReceiptHistory
+} from '../chains/evm/evm-base-across-receipts'
 import { createNearActivityHistorySource } from '../chains/near'
 import {
   createConfiguredSolanaRpcClient,
@@ -35,6 +40,7 @@ export function createConfiguredActivityHistorySources(input: {
   const enabled = new Set(input.enabledChainFeatureFlags)
   const bitcoinNetwork = getBitcoinNetworkConfig(input.network)
   const evmNetworks = enabled.has(EVM_CHAIN_FEATURE_FLAG) ? getEvmNetworkConfigs(input.network) : []
+  const base = evmNetworks.find(network => network.chainId === BASE_ACROSS_CHAIN_ID)
   const solanaNetwork = resolveSolanaRuntimeNetworkConfig(input.network, input.endpointSettings)
   const nearNetwork = resolveNearRuntimeNetworkConfig(input.network, input.endpointSettings)
 
@@ -58,6 +64,12 @@ export function createConfiguredActivityHistorySources(input: {
       )
     ),
     evmBatchHistory: createEvmActivityHistoryBatchReader(evmNetworks),
+    baseAcrossHistory: base
+      ? createBaseAcrossReceiptHistory({
+          nativeAssetId: `${base.chainId}/slip44:${base.nativeCurrency.slip44Reference}`,
+          rpc: createConfiguredEvmRpcClient(input.network, base)
+        })
+      : undefined,
     solanaNetwork,
     solanaHistory: enabled.has(SOLANA_CHAIN_FEATURE_FLAG)
       ? createSolanaActivityHistorySource({

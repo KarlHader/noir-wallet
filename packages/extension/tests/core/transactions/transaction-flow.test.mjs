@@ -12,16 +12,15 @@ const monitorSource = readFileSync(
   new URL('../../../src/background/transaction-monitor.ts', import.meta.url),
   'utf-8'
 )
-const transactionListSource = readFileSync(
-  new URL('../../../src/popup/components/transaction/TransactionList.tsx', import.meta.url),
-  'utf-8'
-)
 const resultPageSource = readFileSync(
-  new URL('../../../src/popup/pages/transactions/TransactionResultPage.tsx', import.meta.url),
+  new URL('../../../src/popup/pages/transactions/TransactionOutcome.tsx', import.meta.url),
   'utf-8'
 )
 const transactionDetailSource = readFileSync(
-  new URL('../../../src/popup/components/transaction/TransactionDetail.tsx', import.meta.url),
+  new URL(
+    '../../../src/popup/components/transaction/MultichainActivityDetail.tsx',
+    import.meta.url
+  ),
   'utf-8'
 )
 const zcashMonitorSource = readFileSync(
@@ -30,10 +29,6 @@ const zcashMonitorSource = readFileSync(
 )
 const txSyncSource = readFileSync(
   new URL('../../../src/background/tx-sync.ts', import.meta.url),
-  'utf-8'
-)
-const resultStoreSource = readFileSync(
-  new URL('../../../src/store/transaction-result-store.ts', import.meta.url),
   'utf-8'
 )
 const swapSource = readFileSync(
@@ -146,7 +141,7 @@ describe('Cross-chain transaction lifecycle regressions', () => {
     )
     assert.match(
       transactionDetailSource,
-      /getTransactionRecoveryAction\(localTx\) === 'speed_up'/,
+      /getTransactionRecoveryAction\(scopedZcashRecord \?\? undefined\) === 'speed_up'/,
       'Activity detail must use the same recovery action selector'
     )
   })
@@ -156,36 +151,9 @@ describe('Cross-chain transaction lifecycle regressions', () => {
       monitorSource.includes('getCrossChainCompletionStatus(tx.type, {'),
       'background monitor must resolve finality from the transaction type and route'
     )
-    assert.ok(
-      transactionListSource.includes('getCrossChainCompletionStatus(tx.type, {'),
-      'foreground recovery must use the same transaction route status rule'
-    )
   })
 
-  it('recovers outbound records already persisted as relay-confirmed', () => {
-    assert.ok(
-      transactionListSource.includes("tx.status === 'relay_confirmed'"),
-      'Activity reload must normalize previously stuck supply and swap records'
-    )
-  })
-
-  it('keeps account-scoped history after a receiving address is rotated', () => {
-    assert.match(
-      transactionListSource,
-      /getCurrentTransactions\(\)/,
-      'Activity must read the transaction list already scoped to the active account key'
-    )
-    assert.doesNotMatch(
-      transactionListSource,
-      /accountAddresses|includes\(tx\.from\)|includes\(tx\.to\)/,
-      'Activity must not re-filter account-scoped history using mutable current addresses'
-    )
-  })
-
-  it('polls an open cross-chain result every five seconds with cancellation', () => {
-    assert.match(resultStoreSource, /depositAddress:\s*string/)
-    assert.match(swapSource, /type:\s*'swap',[\s\S]*?depositAddress:\s*swap\.depositAddress/)
-    assert.match(resultPageSource, /pollingSwapStatus\([\s\S]*?interval:\s*5_000/)
+  it('tracks Zcash destination confirmations to spendability and cancels on cleanup', () => {
     assert.match(
       resultPageSource,
       /pollingTransactionConfirmations\([\s\S]*?SPENDABILITY_CONFIRMATIONS/

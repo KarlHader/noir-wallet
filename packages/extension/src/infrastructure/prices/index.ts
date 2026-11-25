@@ -69,7 +69,6 @@ export {
   type MarketChangeReadModel
 } from './dex-screener-market-change-service'
 export {
-  ONE_CLICK_ASSET_PRICE_URL,
   OneClickAssetPriceService,
   parseAssetPriceCacheSnapshot,
   type AssetPriceCacheQuote,

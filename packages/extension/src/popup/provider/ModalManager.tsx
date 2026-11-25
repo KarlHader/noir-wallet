@@ -11,18 +11,16 @@ import {
 export interface OpenModalOptions<T = any> {
   title?: string
   body: (resolve: (value: T) => void, close: () => void) => React.ReactNode
-  position?: 'center' | 'bottom'
+  position?: React.ComponentProps<typeof DialogContent>['position']
   showCloseButton?: boolean
   className?: string
+  scroll?: React.ComponentProps<typeof DialogContent>['scroll']
+  fixedHeight?: boolean
 }
 
-interface ModalConfig {
+interface ModalConfig extends Omit<OpenModalOptions, 'body'> {
   id: string
-  title?: string
   body: React.ReactNode
-  position?: 'center' | 'bottom'
-  showCloseButton?: boolean
-  className?: string
   resolve: (value: any) => void
 }
 
@@ -57,6 +55,8 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
           position: options.position || 'bottom',
           showCloseButton: options.showCloseButton !== false,
           className: options.className,
+          scroll: options.scroll,
+          fixedHeight: options.fixedHeight,
           body: options.body(handleResolve, close),
           resolve: handleResolve
         }
@@ -105,6 +105,8 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
             position={modal.position}
             showCloseButton={modal.showCloseButton}
             className={modal.className}
+            scroll={modal.scroll}
+            fixedHeight={modal.fixedHeight}
           >
             {modal.title && (
               <DialogHeader>

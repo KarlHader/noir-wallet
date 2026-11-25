@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getActivityApprovalDetails } from '../../../src/popup/components/transaction/activity-interaction-adapters.ts'
-import { getSwapTransactionReference } from '../../../src/popup/components/swap/swap-status-model.ts'
+import { getActivityApprovalDetails } from '../../../src/popup/services/activity-interaction-adapters.ts'
+import { getSwapTransactionReference } from '../../../src/popup/services/swap-status-model.ts'
 
 test('approval details match the token contract and network and preserve unknown methods', () => {
   const address = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
@@ -66,7 +66,7 @@ test('RHEA protocol references use a known mainnet chain hint without overriding
     getSwapTransactionReference('nep141:hype.base.near', 'base', '0x123', 'mainnet'),
     {
       label: 'Base',
-      url: 'https://base.blockscout.com/tx/0x123'
+      url: 'https://basescan.org/tx/0x123'
     }
   )
   assert.deepEqual(getSwapTransactionReference('eip155:777/slip44:60', 'bsc', '0x123', 'mainnet'), {

@@ -2,7 +2,7 @@ import { Icon } from '@iconify/react'
 import { useId, type ReactNode } from 'react'
 import type { IconifyIcon } from '@iconify/react'
 import { cn } from '@/lib/utils'
-import { WALLET_OPTION_ICONS } from './wallet-option-icons'
+import { WALLET_OPTION_ICONS } from '@/popup/lib/wallet-option-icons'
 
 export function WalletOptionButton({
   label,

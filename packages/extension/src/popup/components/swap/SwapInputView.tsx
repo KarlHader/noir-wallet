@@ -3,7 +3,12 @@ import { Icon } from '@iconify/react'
 import type { AddressType, FundingSource } from '@/types'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { RheaSwapRouteView } from '@/core/services/rhea-swap'
-import { formatChainName, formatSortAddress, formatSymbol } from '@/lib/format'
+import {
+  formatChainName,
+  formatInsufficientBalance,
+  formatSortAddress,
+  formatSymbol
+} from '@/lib/format'
 import {
   formatBaseUnitDecimalAmount,
   formatFeeAmount,
@@ -12,91 +17,19 @@ import {
 } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
-import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
+import { ZcashFundingBadge } from '../zcash/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { Button } from '../ui/button'
-import { Skeleton } from '../ui/skeleton'
+import { BalanceSkeleton, Skeleton } from '../ui/skeleton'
 import { BalanceHelp } from '../transaction/BalanceHelp'
+import { RouteProviderLabel } from '../transaction/RouteProviderLabel'
 import { SendRecipientInputCard } from '../transaction/SendInputCards'
 import { safeBig } from '@/lib/big'
 import { shouldDeferSwapAmountFocus } from '@/popup/services/swap-page-model'
-import { InlineError } from '../common/InlineError'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
-import nearIntentsIcon from '@/images/figma-near-confidential.svg'
-
-const PROVIDER_NAMES: Readonly<Record<string, string>> = {
-  bitget: 'Bitget',
-  okx: 'OKX',
-  binance: 'Binance',
-  '1inch': '1inch',
-  paraswap: 'ParaSwap',
-  kodiak: 'Kodiak',
-  openocean: 'OpenOcean',
-  cow: 'CoW',
-  zerox: 'Robinhood',
-  jupiter: 'Jupiter',
-  titan: 'Titan',
-  dflow: 'DFlow',
-  hyperion: 'Hyperion',
-  'near-smart': 'SmartV1',
-  'near-smartx': 'SmartV2',
-  nearintents: 'NEAR Intents',
-  'preswap-nearintents': 'NEAR Intents',
-  rango: 'Rango',
-  lifi: 'LI.FI',
-  jumper: 'Jumper',
-  bungee: 'Bungee',
-  swapkit: 'SwapKit',
-  omnibridge: 'OmniBridge',
-  stableflow: 'StableFlow',
-  'near-mca-withdraw': 'NEAR Intents',
-  'near-confidential': 'NEAR Confidential Intents'
-}
-const PROVIDER_MARKS: Readonly<Record<string, { readonly slug: string; readonly color: string }>> =
-  {
-    binance: { slug: 'binance', color: '#F0B90B' },
-    okx: { slug: 'okx', color: '#FFFFFF' }
-  }
-
-function providerDisplayName(router: string): string {
-  return PROVIDER_NAMES[router.trim().toLowerCase()] ?? router
-}
-
-function ProviderMark({ router, size }: { readonly router: string; readonly size: 24 | 28 }) {
-  const normalized = router.trim().toLowerCase()
-  const mark = PROVIDER_MARKS[normalized]
-  const [failedRouter, setFailedRouter] = useState<string | null>(null)
-  if (normalized === 'near-confidential' || providerDisplayName(router) === 'NEAR Intents') {
-    return (
-      <img src={nearIntentsIcon} alt="" width={size} height={size} className="shrink-0 rounded" />
-    )
-  }
-  if (mark && failedRouter !== normalized) {
-    return (
-      <img
-        src={`https://cdn.jsdelivr.net/npm/simple-icons@v15/icons/${mark.slug}.svg`}
-        crossOrigin="anonymous"
-        alt=""
-        width={size}
-        height={size}
-        className={cn('shrink-0 rounded p-1', size === 24 ? 'size-6' : 'size-7')}
-        style={{ backgroundColor: mark.color }}
-        onError={() => setFailedRouter(normalized)}
-      />
-    )
-  }
-  return (
-    <span
-      className={cn(
-        'flex shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-bold',
-        size === 24 ? 'size-6' : 'size-7'
-      )}
-      aria-hidden="true"
-    >
-      {providerDisplayName(router).slice(0, 1).toUpperCase()}
-    </span>
-  )
-}
+import { getSwapCatalogChainForAsset } from '@/popup/services/swap-catalog-loading'
+import { TransactionNotice } from '../transaction/TransactionNotice'
+import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
 
 export function SwapProviderCard({
   slippage,
@@ -127,10 +60,7 @@ export function SwapProviderCard({
       </div>
       <div className="mt-1.5 rounded-md bg-white/5 px-2.5 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <ProviderMark router={providerName} size={24} />
-          <span className="min-w-0 truncate font-medium" title={providerDisplayName(providerName)}>
-            {providerDisplayName(providerName)}
-          </span>
+          <RouteProviderLabel router={providerName} size={24} className="font-medium" />
           {isBestPrice && (
             <span className="shrink-0 rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
               Best price
@@ -152,6 +82,10 @@ export function SwapProviderCard({
 interface SwapInputViewProps {
   tokenIn: SwapToken | null
   tokenOut: SwapToken | null
+  tokenInAssetId?: string
+  tokenOutAssetId?: string
+  tokenInSymbol?: string
+  tokenOutSymbol?: string
   isZecSource: boolean
   isZecDestination: boolean
   requiresRecipientAddress: boolean
@@ -174,6 +108,7 @@ interface SwapInputViewProps {
   topContent?: ReactNode
   hideAccountDetails?: boolean
   addressType: AddressType
+  destinationIsConfidential?: boolean
   destinationAddress?: string
   spendableBalance: string
   availableBalance?: string
@@ -181,6 +116,7 @@ interface SwapInputViewProps {
   recipientError?: string | null
   slippage: number
   networkFee?: string
+  quoteFee?: ReactNode
   isQuoting: boolean
   quoteError?: string | null
   onEnableReceiveNetwork?: () => void
@@ -218,14 +154,14 @@ interface SwapInputViewProps {
   onSwitchTokens: () => void
   onRetryTokenCatalog: () => void
   onRetryQuote?: () => void
-  onOpenSlippageSetting: () => void
-  showSlippageSetting?: boolean
   onGetQuote: () => void
 }
 
 interface SwapAssetCardProps {
   direction: 'From' | 'To'
   token: SwapToken | null
+  fallbackAssetId?: string
+  fallbackSymbol?: string
   tokenBadgeBlockchain?: string
   tokenNetworkLabel?: string
   zcashFundingSource?: FundingSource
@@ -236,6 +172,7 @@ interface SwapAssetCardProps {
   accountAction?: ReactNode
   accountFallbackLabel?: string
   balance?: string
+  balanceLoading?: boolean
   onTokenSelect: () => void
   tokenSelectDisabled?: boolean
   tokenSelectLocked?: boolean
@@ -249,9 +186,17 @@ interface SwapAssetCardProps {
   isReadOnly?: boolean
   isAmountLoading?: boolean
   isEstimatedAmount?: boolean
-  validationMessage?: string
+  amountErrorId?: string
   balanceHelp?: boolean
   pendingBalance?: string
+}
+
+interface SwapDestinationPanelProps extends Omit<SwapAssetCardProps, 'direction' | 'isReadOnly'> {
+  canSwitchAssets: boolean
+  reverseUnavailableReason?: string | null
+  switchingTokens?: boolean
+  hideSwitchAssets?: boolean
+  onSwitchAssets: () => void
 }
 
 function SwapAssetCardSkeleton({ direction }: { readonly direction: 'From' | 'To' }) {
@@ -298,6 +243,8 @@ function ReceiveAddressSkeleton() {
 export function SwapAssetCard({
   direction,
   token,
+  fallbackAssetId,
+  fallbackSymbol,
   tokenBadgeBlockchain,
   tokenNetworkLabel,
   zcashFundingSource,
@@ -308,6 +255,7 @@ export function SwapAssetCard({
   accountAction,
   accountFallbackLabel,
   balance,
+  balanceLoading = false,
   onTokenSelect,
   tokenSelectDisabled = false,
   tokenSelectLocked = false,
@@ -321,7 +269,7 @@ export function SwapAssetCard({
   isReadOnly = false,
   isAmountLoading = false,
   isEstimatedAmount = false,
-  validationMessage,
+  amountErrorId,
   balanceHelp = false,
   pendingBalance
 }: SwapAssetCardProps) {
@@ -359,7 +307,9 @@ export function SwapAssetCard({
     resize()
     return () => observer.disconnect()
   }, [amount, isReadOnly])
-  if (tokenSelectDisabled) return <SwapAssetCardSkeleton direction={direction} />
+  if (tokenSelectDisabled && !fallbackSymbol) return <SwapAssetCardSkeleton direction={direction} />
+  const blockchain = token?.blockchain ?? getSwapCatalogChainForAsset(fallbackAssetId)?.blockchain
+  const symbol = formatSymbol(token?.symbol ?? fallbackSymbol)
 
   return (
     <section className="min-h-[126px] py-3">
@@ -381,7 +331,7 @@ export function SwapAssetCard({
               {!accountAction &&
                 accountBadge &&
                 (accountBadge === 'Confidential' ||
-                accountBadge === 'Private' ||
+                accountBadge === 'Incognito' ||
                 accountBadge === 'Public' ? (
                   <ExecutionAccountBadge
                     mode={accountBadge === 'Public' ? 'main' : 'private'}
@@ -406,9 +356,16 @@ export function SwapAssetCard({
           <div className="ml-auto flex min-w-0 max-w-[48%] shrink items-center gap-1">
             <span className="flex min-w-0 shrink items-center gap-1 text-xs font-medium text-muted">
               <span className="shrink-0">Bal.</span>
-              <span className="min-w-0 truncate text-right font-sans tabular-nums" title={balance}>
-                {formatTokenQuantity(balance)}
-              </span>
+              {balanceLoading ? (
+                <BalanceSkeleton />
+              ) : (
+                <span
+                  className="min-w-0 truncate text-right font-sans tabular-nums"
+                  title={balance}
+                >
+                  {formatTokenQuantity(balance)}
+                </span>
+              )}
             </span>
             {onMaxClick && (
               <button
@@ -436,22 +393,7 @@ export function SwapAssetCard({
         )}
       </div>
 
-      {validationMessage && (
-        <p
-          id="swap-source-amount-error"
-          className="mt-1 text-right text-xs text-warning"
-          role="alert"
-        >
-          {validationMessage}
-        </p>
-      )}
-
-      <div
-        className={cn(
-          'flex items-center justify-between gap-3',
-          validationMessage ? 'mt-2' : 'mt-4'
-        )}
-      >
+      <div className="mt-4 flex items-center justify-between gap-3">
         <button
           type="button"
           onClick={onTokenSelect}
@@ -462,13 +404,15 @@ export function SwapAssetCard({
           <span className="size-[30px] shrink-0">
             <TokenIcon
               token={token || undefined}
-              blockchain={tokenBadgeBlockchain ?? token?.blockchain}
+              assetId={fallbackAssetId}
+              symbol={symbol}
+              blockchain={tokenBadgeBlockchain ?? blockchain}
               size={30}
             />
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1 text-xl font-semibold leading-[26px]">
-              <span className="min-w-0 truncate">{formatSymbol(token?.symbol) || 'Select'}</span>
+              <span className="min-w-0 truncate">{symbol || 'Select'}</span>
               {!tokenSelectLocked && (
                 <Icon
                   icon="lucide:chevron-down"
@@ -480,9 +424,7 @@ export function SwapAssetCard({
             </span>
             <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-4 text-muted">
               <span className="truncate">
-                {token
-                  ? (tokenNetworkLabel ?? formatChainName(token.blockchain))
-                  : 'Choose network'}
+                {blockchain ? (tokenNetworkLabel ?? formatChainName(blockchain)) : 'Choose network'}
               </span>
               {zcashFundingSource && <ZcashFundingBadge source={zcashFundingSource} />}
             </span>
@@ -498,7 +440,8 @@ export function SwapAssetCard({
               className={cn(
                 'flex h-[26px] items-center justify-end whitespace-nowrap font-sans text-xl font-semibold leading-[26px]',
                 amount ? 'overflow-x-auto' : 'overflow-hidden',
-                isEstimatedAmount && 'text-muted'
+                isEstimatedAmount && 'text-muted',
+                isAmountLoading && amount && 'swap-quote-shimmer'
               )}
             >
               {isAmountLoading && !amount ? (
@@ -546,8 +489,8 @@ export function SwapAssetCard({
               onChange={event => onAmountChange?.(event.target.value.replace(/[^0-9.]/g, ''))}
               placeholder="0"
               aria-label={`${direction} amount`}
-              aria-invalid={Boolean(validationMessage) || undefined}
-              aria-describedby={validationMessage ? 'swap-source-amount-error' : undefined}
+              aria-invalid={amountErrorId ? true : undefined}
+              aria-describedby={amountErrorId}
               style={{ fontSize: amountFontSize }}
               className="w-full min-w-0 bg-transparent text-right font-sans font-semibold leading-[26px] outline-none placeholder:text-muted/60"
             />
@@ -569,9 +512,69 @@ export function SwapAssetCard({
   )
 }
 
+export function SwapDestinationPanel({
+  canSwitchAssets,
+  reverseUnavailableReason,
+  switchingTokens = false,
+  hideSwitchAssets = false,
+  onSwitchAssets,
+  ...cardProps
+}: SwapDestinationPanelProps) {
+  const reverseReasonId = useId()
+  return (
+    <div className="relative border-t border-white/10 pt-2">
+      {!hideSwitchAssets && (
+        <span
+          tabIndex={reverseUnavailableReason ? 0 : undefined}
+          aria-label={reverseUnavailableReason ?? undefined}
+          aria-describedby={reverseUnavailableReason ? reverseReasonId : undefined}
+          title={
+            reverseUnavailableReason ?? (switchingTokens ? 'Switching assets' : 'Switch assets')
+          }
+          className="group absolute -top-3.5 left-1/2 z-10 -translate-x-1/2"
+        >
+          <Button
+            type="button"
+            onClick={onSwitchAssets}
+            disabled={!canSwitchAssets}
+            aria-label="Switch assets"
+            aria-busy={switchingTokens}
+            title={
+              reverseUnavailableReason ?? (switchingTokens ? 'Switching assets' : 'Switch assets')
+            }
+            className="size-7 rounded-md bg-[#373741] p-0 text-foreground hover:bg-popover disabled:opacity-40"
+            variant="secondary"
+          >
+            <Icon
+              icon={switchingTokens ? 'lucide:loader-circle' : 'lucide:arrow-down-up'}
+              className={switchingTokens ? 'animate-spin' : undefined}
+              width={16}
+              height={16}
+            />
+          </Button>
+          {reverseUnavailableReason && (
+            <span
+              id={reverseReasonId}
+              role="tooltip"
+              className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-48 -translate-x-1/2 rounded bg-popover p-2 text-center text-xs text-foreground opacity-0 shadow-md group-hover:opacity-100 group-focus:opacity-100"
+            >
+              {reverseUnavailableReason}
+            </span>
+          )}
+        </span>
+      )}
+      <SwapAssetCard {...cardProps} direction="To" isReadOnly />
+    </div>
+  )
+}
+
 export function SwapInputView({
   tokenIn,
   tokenOut,
+  tokenInAssetId,
+  tokenOutAssetId,
+  tokenInSymbol,
+  tokenOutSymbol,
   isZecSource,
   isZecDestination,
   requiresRecipientAddress,
@@ -594,6 +597,7 @@ export function SwapInputView({
   topContent,
   hideAccountDetails = false,
   addressType,
+  destinationIsConfidential = false,
   destinationAddress,
   spendableBalance,
   availableBalance,
@@ -601,6 +605,7 @@ export function SwapInputView({
   recipientError,
   slippage,
   networkFee,
+  quoteFee,
   isQuoting,
   quoteError,
   onEnableReceiveNetwork,
@@ -638,10 +643,10 @@ export function SwapInputView({
   onSwitchTokens,
   onRetryTokenCatalog,
   onRetryQuote,
-  onOpenSlippageSetting,
-  showSlippageSetting = true,
   onGetQuote
 }: SwapInputViewProps) {
+  const amountErrorId = useId()
+  const recipientErrorId = useId()
   const [showRefundAddress, setShowRefundAddress] = useState(false)
   const [recipientSelectorOpen, setRecipientSelectorOpen] = useState(false)
   const [routesOpen, setRoutesOpen] = useState(false)
@@ -652,13 +657,31 @@ export function SwapInputView({
         ? 'Shield'
         : 'Transparent'
       : undefined)
-  const balanceValidationMessage = hasInsufficientFunds
-    ? insufficientMessage ||
-      (feeIsApproximate ? 'Insufficient balance' : `Insufficient balance (Fee: ${networkFee} ZEC)`)
-    : undefined
+  const balanceValidationMessage =
+    hasInsufficientFunds && !recipientError
+      ? (insufficientMessage ?? formatInsufficientBalance(tokenIn?.symbol ?? tokenInSymbol))
+      : undefined
   const hasQuoteDetails = Boolean(estimatedOut) && rate !== '...' && rate !== '0'
+  const quoteNotice = getSwapQuoteNotice(quoteError)
   const providerNetworkFeeLabel =
     isZecSource && networkFee !== undefined ? `${formatFeeAmount(networkFee)} ZEC` : null
+  const providerFees =
+    quoteFee || providerNetworkFeeLabel ? (
+      <div className="mt-1.5 space-y-1.5 text-muted">
+        {quoteFee && (
+          <div className="flex justify-between gap-2">
+            <span>Fee</span>
+            <span className="text-right text-foreground">{quoteFee}</span>
+          </div>
+        )}
+        {providerNetworkFeeLabel && (
+          <div className="flex justify-between gap-2">
+            <span>Network fee</span>
+            <span className="text-right text-foreground">{providerNetworkFeeLabel}</span>
+          </div>
+        )}
+      </div>
+    ) : undefined
 
   return (
     <>
@@ -668,6 +691,8 @@ export function SwapInputView({
           <SwapAssetCard
             direction="From"
             token={tokenIn}
+            fallbackAssetId={tokenInAssetId}
+            fallbackSymbol={tokenInSymbol}
             zcashFundingSource={isZecSource ? sourceZcashFundingSource : undefined}
             amount={amountIn}
             fiatValue={fromFiat}
@@ -689,121 +714,84 @@ export function SwapInputView({
             maxLoading={maxLoading}
             maxDisabled={maxDisabled}
             maxDisabledReason={maxDisabledReason}
-            validationMessage={balanceValidationMessage}
+            amountErrorId={balanceValidationMessage ? amountErrorId : undefined}
           />
 
-          <div className="relative border-t border-white/10 pt-2">
-            {!hideSwitchAssets && (
-              <span
-                tabIndex={reverseUnavailableReason ? 0 : undefined}
-                aria-label={reverseUnavailableReason ?? undefined}
-                aria-describedby={reverseUnavailableReason ? 'swap-reverse-reason' : undefined}
-                title={
-                  reverseUnavailableReason ??
-                  (switchingTokens ? 'Switching assets' : 'Switch assets')
-                }
-                className="group absolute -top-3.5 left-1/2 z-10 -translate-x-1/2"
-              >
-                <Button
+          <SwapDestinationPanel
+            canSwitchAssets={canSwitchTokens}
+            reverseUnavailableReason={reverseUnavailableReason}
+            switchingTokens={switchingTokens}
+            hideSwitchAssets={hideSwitchAssets}
+            onSwitchAssets={onSwitchTokens}
+            token={tokenOut}
+            fallbackAssetId={tokenOutAssetId}
+            fallbackSymbol={tokenOutSymbol}
+            tokenNetworkLabel={destinationIsConfidential ? 'NEAR Confidential' : undefined}
+            zcashFundingSource={
+              isZecDestination && !destinationIsConfidential ? addressType : undefined
+            }
+            amount={estimatedOut}
+            fiatValue={toFiat}
+            accountAddress={hideAccountDetails ? undefined : destinationAddress}
+            accountBadge={hideAccountDetails ? undefined : destinationBadge}
+            accountFallbackLabel={
+              hideAccountDetails
+                ? undefined
+                : requiresRecipientAddress
+                  ? 'Custom address'
+                  : 'Wallet'
+            }
+            accountAction={
+              !hideAccountDetails &&
+              !hideReceiveAddress &&
+              tokenOut &&
+              !destinationAssetsLoading ? (
+                <button
                   type="button"
-                  onClick={onSwitchTokens}
-                  disabled={!canSwitchTokens}
-                  aria-label="Switch assets"
-                  aria-busy={switchingTokens}
-                  title={
-                    reverseUnavailableReason ??
-                    (switchingTokens ? 'Switching assets' : 'Switch assets')
+                  onClick={() =>
+                    onSelectDestinationAccount
+                      ? onSelectDestinationAccount()
+                      : setRecipientSelectorOpen(true)
                   }
-                  className="size-7 rounded-md bg-[#373741] p-0 text-foreground hover:bg-popover disabled:opacity-40"
-                  variant="secondary"
+                  aria-label="Choose receive account"
+                  title={destinationAddress || 'Choose receive account'}
+                  className="flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:text-primary"
                 >
-                  <Icon
-                    icon={switchingTokens ? 'lucide:loader-circle' : 'lucide:arrow-down-up'}
-                    className={switchingTokens ? 'animate-spin' : undefined}
-                    width={16}
-                    height={16}
-                  />
-                </Button>
-                {reverseUnavailableReason && (
-                  <span
-                    id="swap-reverse-reason"
-                    role="tooltip"
-                    className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-48 -translate-x-1/2 rounded bg-popover p-2 text-center text-xs text-foreground opacity-0 shadow-md group-hover:opacity-100 group-focus:opacity-100"
-                  >
-                    {reverseUnavailableReason}
+                  <span className="min-w-0 truncate font-mono text-xs text-muted">
+                    {destinationAddress
+                      ? formatSortAddress(destinationAddress)
+                      : requiresRecipientAddress
+                        ? 'Custom address'
+                        : 'Wallet'}
                   </span>
-                )}
-              </span>
-            )}
-
-            <SwapAssetCard
-              direction="To"
-              token={tokenOut}
-              zcashFundingSource={isZecDestination ? addressType : undefined}
-              amount={estimatedOut}
-              fiatValue={toFiat}
-              accountAddress={hideAccountDetails ? undefined : destinationAddress}
-              accountBadge={hideAccountDetails ? undefined : destinationBadge}
-              accountFallbackLabel={
-                hideAccountDetails
-                  ? undefined
-                  : requiresRecipientAddress
-                    ? 'Custom address'
-                    : 'Wallet'
-              }
-              accountAction={
-                !hideAccountDetails &&
-                !hideReceiveAddress &&
-                tokenOut &&
-                !destinationAssetsLoading ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onSelectDestinationAccount
-                        ? onSelectDestinationAccount()
-                        : setRecipientSelectorOpen(true)
-                    }
-                    aria-label="Choose receive account"
-                    title={destinationAddress || 'Choose receive account'}
-                    className="flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:text-primary"
-                  >
-                    <span className="min-w-0 truncate font-mono text-xs text-muted">
-                      {destinationAddress
-                        ? formatSortAddress(destinationAddress)
-                        : requiresRecipientAddress
-                          ? 'Custom address'
-                          : 'Wallet'}
-                    </span>
-                    {destinationBadge &&
-                      (destinationBadge === 'Public' || destinationBadge === 'Private' ? (
-                        <ExecutionAccountBadge
-                          mode={destinationBadge === 'Public' ? 'main' : 'private'}
-                          className="h-[17px] px-1.5"
-                        />
-                      ) : (
-                        <span
-                          className={cn(
-                            'shrink-0 rounded px-1.5 text-[10px] font-medium leading-[17px]',
-                            destinationBadge === 'Shield'
-                              ? 'bg-success/10 text-success'
-                              : 'bg-white/7 text-muted'
-                          )}
-                        >
-                          {destinationBadge}
-                        </span>
-                      ))}
-                    <Icon icon="lucide:chevron-down" width={12} height={12} className="shrink-0" />
-                  </button>
-                ) : undefined
-              }
-              onTokenSelect={() => onSelectToken('out')}
-              tokenSelectDisabled={destinationAssetsLoading}
-              tokenSelectLocked={destinationAssetLocked}
-              isReadOnly
-              isAmountLoading={isQuoting}
-              isEstimatedAmount={isEstimatedOut}
-            />
-          </div>
+                  {destinationBadge &&
+                    (destinationBadge === 'Public' || destinationBadge === 'Incognito' ? (
+                      <ExecutionAccountBadge
+                        mode={destinationBadge === 'Public' ? 'main' : 'private'}
+                        className="h-[17px] px-1.5"
+                      />
+                    ) : (
+                      <span
+                        className={cn(
+                          'shrink-0 rounded px-1.5 text-[10px] font-medium leading-[17px]',
+                          destinationBadge === 'Shield'
+                            ? 'bg-success/10 text-success'
+                            : 'bg-white/7 text-muted'
+                        )}
+                      >
+                        {destinationBadge}
+                      </span>
+                    ))}
+                  <Icon icon="lucide:chevron-down" width={12} height={12} className="shrink-0" />
+                </button>
+              ) : undefined
+            }
+            onTokenSelect={() => onSelectToken('out')}
+            tokenSelectDisabled={destinationAssetsLoading}
+            tokenSelectLocked={destinationAssetLocked}
+            isAmountLoading={isQuoting}
+            isEstimatedAmount={isEstimatedOut}
+          />
         </div>
 
         {showProviderCard && providerName && tokenOut && (
@@ -837,34 +825,10 @@ export function SwapInputView({
                 </button>
               )
             }
-            details={
-              providerNetworkFeeLabel ? (
-                <div className="mt-1.5 flex items-center justify-end gap-2 text-muted">
-                  <span>
-                    Network fee <span className="text-foreground">{providerNetworkFeeLabel}</span>
-                  </span>
-                </div>
-              ) : undefined
-            }
+            details={providerFees}
           />
         )}
 
-        {catalogError && (
-          <InlineError
-            message="Unable to load assets"
-            onRetry={onRetryTokenCatalog}
-            className="mt-2 px-1 leading-5"
-          />
-        )}
-
-        {quoteError && (
-          <InlineError
-            message={quoteError}
-            onRetry={onRetryQuote}
-            retrying={isQuoting}
-            className="mt-2 px-1 leading-5"
-          />
-        )}
         {onEnableReceiveNetwork && (
           <Button
             type="button"
@@ -891,46 +855,21 @@ export function SwapInputView({
                   onChange={onRecipientAddressChange}
                   onSelectRecipient={onSelectRecipientFromWallet}
                   invalid={Boolean(recipientError)}
+                  describedBy={
+                    recipientError && !recipientSelectorOpen ? recipientErrorId : undefined
+                  }
                 />
-                {recipientError && <InlineError message={recipientError} className="mt-2" />}
               </div>
             )}
           </div>
         )}
 
-        {!hasQuoteDetails && showSlippageSetting !== false && (
-          <button
-            type="button"
-            onClick={onOpenSlippageSetting}
-            className="mt-2 flex w-full items-center justify-end gap-1 text-xs font-medium leading-4 text-muted hover:text-foreground"
-            aria-label={`Set slippage, currently ${slippage}%`}
-          >
-            Slippage {slippage}%
-            <Icon icon="lucide:chevron-down" width={12} height={12} />
-          </button>
-        )}
-
         {hasQuoteDetails && !showProviderCard && (
           <div className="mt-3 space-y-2 rounded-lg border border-white/15 px-2.5 py-2.5 text-xs font-medium leading-4">
-            {showSlippageSetting && (
-              <div className="flex min-w-0 items-center justify-between gap-2">
-                <span className="text-muted">Slippage</span>
-                <button
-                  type="button"
-                  onClick={onOpenSlippageSetting}
-                  className="flex shrink-0 items-center gap-1 hover:text-primary"
-                  aria-label={`Set slippage, currently ${slippage}%`}
-                >
-                  {slippage}% <Icon icon="lucide:chevron-down" width={12} height={12} />
-                </button>
-              </div>
-            )}
             {providerName && !showProviderCard && (
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <span className="text-muted">Provider</span>
-                <span className="truncate" title={providerName}>
-                  {providerName}
-                </span>
+                <RouteProviderLabel router={providerName} />
               </div>
             )}
             <div className="flex min-w-0 items-center justify-between gap-2">
@@ -980,6 +919,32 @@ export function SwapInputView({
             )}
           </div>
         )}
+        {balanceValidationMessage ? (
+          <TransactionNotice
+            id={amountErrorId}
+            message={balanceValidationMessage}
+            tone="warning"
+            role="alert"
+            className="mt-2"
+          />
+        ) : recipientError ? (
+          !recipientSelectorOpen && (
+            <TransactionNotice id={recipientErrorId} message={recipientError} className="mt-2" />
+          )
+        ) : catalogError ? (
+          <TransactionNotice
+            message="Unable to load assets"
+            onRetry={onRetryTokenCatalog}
+            className="mt-2"
+          />
+        ) : !isQuoting && quoteError ? (
+          <TransactionNotice
+            message={quoteNotice ?? quoteError}
+            tone={quoteNotice ? 'muted' : onRetryQuote ? 'warning' : 'error'}
+            onRetry={onRetryQuote}
+            className="mt-2"
+          />
+        ) : null}
       </div>
 
       <div className="page-footer">
@@ -998,11 +963,7 @@ export function SwapInputView({
         open={recipientSelectorOpen && !hideReceiveAddress && !onSelectDestinationAccount}
         onOpenChange={setRecipientSelectorOpen}
       >
-        <DialogContent
-          position="bottom"
-          className="flex max-h-[calc(100dvh-56px)] flex-col gap-0 p-0"
-          showCloseButton
-        >
+        <DialogContent position="bottom" scroll="body" className="gap-0 p-0" showCloseButton>
           <DialogHeader className="shrink-0 px-5 pb-4 pt-5 text-left">
             <DialogTitle className="text-sm">Receive at</DialogTitle>
           </DialogHeader>
@@ -1025,19 +986,22 @@ export function SwapInputView({
                     : undefined
                 }
                 invalid={Boolean(recipientError)}
+                describedBy={recipientError ? recipientErrorId : undefined}
               />
-              {recipientError && <InlineError message={recipientError} className="mt-2" />}
+              {recipientError && (
+                <TransactionNotice
+                  id={recipientErrorId}
+                  message={recipientError}
+                  className="mt-2"
+                />
+              )}
             </div>
           )}
-          <div className="shrink-0 p-5">
-            <Button
-              type="button"
-              onClick={() => setRecipientSelectorOpen(false)}
-              className="h-10 w-full"
-            >
+          <DialogFooter className="p-5">
+            <Button type="button" onClick={() => setRecipientSelectorOpen(false)}>
               Done
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1047,7 +1011,8 @@ export function SwapInputView({
       >
         <DialogContent
           position="bottom"
-          className="flex max-h-[80dvh] flex-col gap-0 bg-popover p-0"
+          scroll="body"
+          className="gap-0 bg-popover p-0"
           showCloseButton
         >
           <DialogHeader className="shrink-0 px-5 pb-4 pt-5 text-left">
@@ -1070,13 +1035,11 @@ export function SwapInputView({
             {providerName && (
               <div className="min-h-[98px] rounded-lg border border-primary bg-white/5 px-3 py-3">
                 <div className="flex min-w-0 items-center gap-2">
-                  <ProviderMark router={providerName} size={28} />
-                  <span
-                    className="min-w-0 truncate text-sm font-medium"
-                    title={providerDisplayName(providerName)}
-                  >
-                    {providerDisplayName(providerName)}
-                  </span>
+                  <RouteProviderLabel
+                    router={providerName}
+                    size={28}
+                    className="text-sm font-medium"
+                  />
                   {providerIsBestPrice && (
                     <span className="shrink-0 rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
                       Best price
@@ -1089,13 +1052,7 @@ export function SwapInputView({
                     {formatTokenQuantity(estimatedOut)} {formatSymbol(tokenOut?.symbol)}
                   </span>
                 </div>
-                {providerNetworkFeeLabel && (
-                  <div className="mt-4 flex items-center justify-end gap-2 text-xs text-muted">
-                    <span>
-                      Network fee <span className="text-foreground">{providerNetworkFeeLabel}</span>
-                    </span>
-                  </div>
-                )}
+                {providerFees}
               </div>
             )}
             {providerAlternatives.map(route => (
@@ -1109,13 +1066,11 @@ export function SwapInputView({
                 className="wallet-interactive min-h-[98px] w-full rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-left hover:border-white/30"
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  <ProviderMark router={route.router} size={28} />
-                  <span
-                    className="min-w-0 truncate text-sm font-medium"
-                    title={providerDisplayName(route.router)}
-                  >
-                    {providerDisplayName(route.router)}
-                  </span>
+                  <RouteProviderLabel
+                    router={route.router}
+                    size={28}
+                    className="text-sm font-medium"
+                  />
                   {providerSelectedAmountRaw &&
                     BigInt(route.estimatedOut) >= BigInt(providerSelectedAmountRaw) &&
                     providerAlternatives.every(

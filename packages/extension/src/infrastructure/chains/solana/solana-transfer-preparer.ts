@@ -9,7 +9,7 @@ import type { PreparedSigningCommand } from '@/core/keyring/ports'
 
 const MAXIMUM_U64 = 18_446_744_073_709_551_615n
 
-export type SolanaTransferErrorCode = 'insufficient-funds'
+export type SolanaTransferErrorCode = 'insufficient-funds' | 'insufficient-fee-funds'
 
 export class SolanaTransferError extends Error {
   readonly code: SolanaTransferErrorCode
@@ -361,7 +361,7 @@ export async function prepareSolanaTokenTransfer(
   const feeLamports = parseU64(fee.feeLamports, 'Solana token transfer fee')
   if (feeLamports > parseU64(nativeBalance.amountRaw, 'Solana account balance')) {
     throw new SolanaTransferError(
-      'insufficient-funds',
+      'insufficient-fee-funds',
       'Solana balance cannot cover the token transfer fee'
     )
   }

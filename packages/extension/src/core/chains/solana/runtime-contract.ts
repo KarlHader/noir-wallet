@@ -5,6 +5,7 @@ export const SOLANA_WALLET_RUNTIME_ERROR_CODES = Object.freeze([
   'invalid-request',
   'network-unavailable',
   'insufficient-funds',
+  'insufficient-fee-funds',
   'request-failed'
 ] as const)
 
@@ -22,6 +23,7 @@ const ERROR_MESSAGES: Readonly<Record<SolanaWalletRuntimeErrorCode, string>> = O
   'invalid-request': 'The Solana wallet request is invalid',
   'network-unavailable': 'The Solana network is unavailable',
   'insufficient-funds': 'The Solana balance is insufficient',
+  'insufficient-fee-funds': 'The SOL fee balance is insufficient',
   'request-failed': 'The Solana wallet request failed'
 })
 

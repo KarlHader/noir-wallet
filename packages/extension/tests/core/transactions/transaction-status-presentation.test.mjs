@@ -4,7 +4,7 @@ import { getLifecycleStatusPresentation } from '../../../src/lib/transaction-sta
 import {
   getActivityProgressSteps,
   getActivityStatusPresentation
-} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
 import { getOnchainTransactionStatusPresentation } from '../../../src/popup/services/onchain-transaction-result.ts'
 import {
   getIntentsStatusCopy,
@@ -125,7 +125,7 @@ test('Intents Activity identifies the observed cross-chain stage', () => {
     label: 'Cross-chain processing'
   })
   expect(getActivityProgressSteps(otherRouter, chainId => chainId).map(step => step.label)).toEqual(
-    ['Origin transaction', 'Cross-chain relay', 'Destination transaction']
+    ['Origin transaction', 'Crosschain', 'Destination transaction']
   )
 })
 

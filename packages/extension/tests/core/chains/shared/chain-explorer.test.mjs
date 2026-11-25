@@ -6,6 +6,7 @@ import {
 } from '../../../../src/core/chains/chain-endpoint-settings.ts'
 import { setActiveBlockExplorerPreferences } from '../../../../src/lib/block-explorer-preferences.ts'
 import { getBitcoinChainId, getZcashChainId } from '../../../../src/core/chains/registry/index.ts'
+import { getSwapTransactionReference } from '../../../../src/popup/services/swap-status-model.ts'
 import {
   formatChainAddressExplorerUrl,
   formatChainAssetExplorerUrl,
@@ -78,9 +79,22 @@ test.describe('chain explorer resolution', () => {
       formatChainTransactionExplorerUrl(getZcashChainId('mainnet'), 'zec-hash', 'mainnet')
     ).toBe('https://zcash-explorer.example/transactions/zec-hash')
     expect(
+      getSwapTransactionReference('nep141:zec.omft.near', 'Zcash', 'zec-hash', 'mainnet')
+    ).toEqual({
+      label: 'Zcash',
+      url: 'https://zcash-explorer.example/transactions/zec-hash'
+    })
+    expect(getSwapTransactionReference(undefined, 'Zcash', 'zec-hash', 'mainnet')).toEqual({
+      label: 'Zcash',
+      url: 'https://zcash-explorer.example/transactions/zec-hash'
+    })
+    expect(
       formatChainTransactionExplorerUrl(getBitcoinChainId('mainnet'), 'btc-hash', 'mainnet')
     ).toBe('https://bitcoin-explorer.example/tx/btc-hash')
     expect(formatChainTransactionExplorerUrl('eip155:56', '0xhash', 'mainnet')).toBe(
+      'https://bsc-explorer.example/transaction/0xhash'
+    )
+    expect(getSwapTransactionReference('rhea:56', 'bsc', '0xhash', 'mainnet').url).toBe(
       'https://bsc-explorer.example/transaction/0xhash'
     )
     expect(formatChainAddressExplorerUrl('eip155:56', '0x1234/5678', 'mainnet')).toBe(

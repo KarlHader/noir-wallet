@@ -6,6 +6,7 @@
  */
 import { isWalletSnapshotIntegrityError } from './wallet-snapshot-errors'
 import { sanitizeDiagnosticMessage } from './diagnostic-log'
+import { formatInsufficientBalance } from './format'
 
 export const WALLET_SNAPSHOT_RECOVERY_MESSAGE =
   'Wallet data needs to be resynced before sending again.'
@@ -33,6 +34,19 @@ interface ErrorMapping {
   pattern: RegExp
   message: string
   retryable: boolean
+  balanceAsset?: 'source' | 'fee'
+}
+
+export interface ErrorBalanceSymbols {
+  readonly source?: string
+  readonly fee?: string
+}
+
+export class InsufficientBalanceError extends Error {
+  constructor(symbol?: string) {
+    super(formatInsufficientBalance(symbol))
+    this.name = 'InsufficientBalanceError'
+  }
 }
 
 const RPC_ENDPOINT_ERROR_PATTERN =
@@ -247,11 +261,13 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
     pattern:
       /The EVM balance (?:is insufficient|does not cover the transfer and network fee)|(?:EVM account|Private Execution Address) needs \d+ more wei for transaction value and maximum Gas/i,
     message: 'Insufficient native balance for the amount and network fee.',
+    balanceAsset: 'fee',
     retryable: false
   },
   {
     pattern: /InsufficientFunds|insufficient.*(?:balance|fund)|not enough.*fund/i,
     message: 'Insufficient balance for this transaction.',
+    balanceAsset: 'source',
     retryable: false
   },
   {
@@ -408,14 +424,22 @@ function safeUnmappedErrorMessage(raw: string): string {
     /\b(?:payload|requestBody|responseBody)\s*[:=]|\b(?:body|data)\s*[:=]\s*(?=[{\["']|0x[0-9a-fA-F]{20,}|[A-Za-z0-9+/_-]{80,})/i
   )
   if (payloadStart >= 0) reason = reason.slice(0, payloadStart).replace(/[:\s]+$/, '')
+  if (/\brhea(?:\b|_|swap|lending|finance)/i.test(reason)) return 'Request failed.'
   const safe = sanitizeDiagnosticMessage(reason)
     .replace(/\b[A-Za-z0-9+/_=-]{80,}\b/g, '[Encoded data redacted]')
     .trim()
   return safe || 'Request failed. Error details unavailable.'
 }
 
-export function classifyError(error: unknown): ClassifiedError {
+export function classifyError(
+  error: unknown,
+  balanceSymbols?: ErrorBalanceSymbols
+): ClassifiedError {
   const raw = rawErrorMessage(error)
+
+  if (error instanceof InsufficientBalanceError) {
+    return { userMessage: raw, technicalMessage: raw, retryable: false }
+  }
 
   if (isWalletSnapshotRecoveryError(error)) {
     return {
@@ -427,8 +451,9 @@ export function classifyError(error: unknown): ClassifiedError {
 
   for (const mapping of ERROR_MAPPINGS) {
     if (mapping.pattern.test(raw)) {
+      const symbol = mapping.balanceAsset && balanceSymbols?.[mapping.balanceAsset]
       return {
-        userMessage: mapping.message,
+        userMessage: symbol ? formatInsufficientBalance(symbol) : mapping.message,
         technicalMessage: raw,
         retryable: mapping.retryable
       }

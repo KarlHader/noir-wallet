@@ -10,7 +10,7 @@ import {
 } from '../ui/dialog'
 
 export const PRIVATE_ADDRESS_WARNING =
-  'Do not send funds directly to this Private address. Direct transfers can expose the link to the sender. Use Move instead.'
+  'Use Deposit to fund this Incognito address. A direct transfer can expose the link to the sender.'
 
 export function PrivateAddressWarningDialog({
   address,
@@ -30,7 +30,7 @@ export function PrivateAddressWarningDialog({
           <div className="mb-1 flex size-10 items-center justify-center rounded-full bg-warning-surface text-warning">
             <Icon icon="lucide:shield-alert" width={21} height={21} />
           </div>
-          <DialogTitle>{showQr ? 'Show' : 'Copy'} Private address?</DialogTitle>
+          <DialogTitle>{showQr ? 'Show' : 'Copy'} Incognito address?</DialogTitle>
           <DialogDescription className="leading-relaxed text-warning">
             {PRIVATE_ADDRESS_WARNING}
           </DialogDescription>
@@ -40,7 +40,7 @@ export function PrivateAddressWarningDialog({
             {address}
           </p>
         )}
-        <DialogFooter className="grid grid-cols-2">
+        <DialogFooter>
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>

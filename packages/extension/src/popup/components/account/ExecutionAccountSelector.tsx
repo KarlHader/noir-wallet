@@ -10,6 +10,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle
 } from '@/popup/components/ui/dialog'
@@ -53,7 +54,7 @@ export function AccountAddressSelectorButton({
 }) {
   return (
     <Tooltip
-      content={mode === 'private' ? 'Private' : mode === 'custom' ? 'Custom address' : 'Public'}
+      content={mode === 'private' ? 'Incognito' : mode === 'custom' ? 'Custom address' : 'Public'}
     >
       <button
         type="button"
@@ -105,7 +106,7 @@ export function ExecutionAccountBadge({
   readonly iconOnly?: boolean
   readonly className?: string
 }) {
-  const label = mode === 'private' ? 'Private' : 'Public'
+  const label = mode === 'private' ? 'Incognito' : 'Public'
   const badge = (
     <span
       aria-label={iconOnly ? label : undefined}
@@ -263,7 +264,7 @@ export function ExecutionAccountSelectorDialog({
                 mode={option.mode}
                 selected={selected}
                 disabled={disabled}
-                label={option.mode === 'private' ? 'Private account' : 'Public account'}
+                label={option.mode === 'private' ? 'Incognito account' : 'Public account'}
                 address={option.address}
                 unavailableLabel={disabled ? 'Not available' : 'Address unavailable'}
                 onClick={() => {
@@ -302,20 +303,22 @@ export function ExecutionAccountSelectorDialog({
               Custom address
             </button>
           )}
-          {privateAvailable && onFundPrivate && (
+        </div>
+        {privateAvailable && onFundPrivate && (
+          <DialogFooter className="px-4 pb-5">
             <button
               type="button"
               onClick={() => {
                 onOpenChange(false)
                 onFundPrivate()
               }}
-              className="flex h-10 w-full items-center justify-center gap-2 rounded-xl text-sm font-medium text-private transition-colors hover:bg-private/10"
+              className="flex items-center justify-center gap-2 rounded-xl text-sm font-medium text-private transition-colors hover:bg-private/10"
             >
               <Icon icon="lucide:plus" width={15} height={15} />
-              Transfer to Private
+              Transfer to Incognito
             </button>
-          )}
-        </div>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   )

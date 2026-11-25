@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 import {
   EndpointLatencyBadge,
   EndpointSelectionIndicator
-} from '../../components/common/EndpointStatus'
+} from '../../components/settings/EndpointStatus'
 import { PageHeader } from '../../components/common/PageHeader'
 import { InlineError } from '../../components/common/InlineError'
 import { Button } from '../../components/ui/button'
@@ -19,6 +19,7 @@ import { ListSkeleton } from '../../components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogDescription,
   DialogHeader,
   DialogTitle
@@ -352,14 +353,15 @@ export function ZeroIndexerNodes() {
               {addError}
             </p>
           )}
-          <Button
-            className="h-11 w-full"
-            isLoading={applyingKey === 'add'}
-            disabled={applyingKey !== null || !url.trim()}
-            onClick={() => void addNode()}
-          >
-            Verify & Add
-          </Button>
+          <DialogFooter>
+            <Button
+              isLoading={applyingKey === 'add'}
+              disabled={applyingKey !== null || !url.trim()}
+              onClick={() => void addNode()}
+            >
+              Verify & Add
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -381,10 +383,9 @@ export function ZeroIndexerNodes() {
               {error}
             </p>
           )}
-          <div className="flex gap-3">
+          <DialogFooter className="gap-3">
             <Button
               variant="outline"
-              className="h-11 flex-1"
               disabled={!!applyingKey}
               onClick={() => setDeleteTarget(null)}
             >
@@ -392,14 +393,13 @@ export function ZeroIndexerNodes() {
             </Button>
             <Button
               variant="destructive"
-              className="h-11 flex-1"
               isLoading={applyingKey === 'remove'}
               disabled={applyingKey !== null}
               onClick={() => void removeNode()}
             >
               Remove
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -16,7 +16,9 @@ export interface PortfolioCacheScope {
 
 interface PortfolioRefreshOptions {
   readonly forceDiscovery?: boolean
+  readonly waitForTokenDiscovery?: boolean
   readonly forceRefresh?: boolean
+  readonly refreshConfidential?: boolean
   readonly allowStaleOnError?: boolean
   readonly refreshChainIds?: readonly string[]
   readonly additionalChainIds?: readonly string[]
@@ -31,11 +33,12 @@ export function isPortfolioModelForScope(
 }
 
 export async function readCachedPortfolio(
-  scope: Pick<PortfolioCacheScope, 'walletId' | 'accountId'>
+  scope: Pick<PortfolioCacheScope, 'walletId' | 'accountId'> & { readonly detailAssetId?: string }
 ): Promise<PortfolioReadModel | null> {
   const cached = await evmWalletClient.getPortfolio('read', {
     expectedWalletId: scope.walletId,
-    expectedAccountId: scope.accountId
+    expectedAccountId: scope.accountId,
+    detailAssetId: scope.detailAssetId
   })
   return isPortfolioModelForScope(cached, scope.walletId, scope.accountId) ? cached : null
 }
@@ -51,6 +54,8 @@ export async function refreshPortfolioFromCache(
   try {
     const refreshed = await evmWalletClient.getPortfolio('refresh', {
       forceDiscovery: options.forceDiscovery,
+      waitForTokenDiscovery: options.waitForTokenDiscovery,
+      refreshConfidential: options.refreshConfidential,
       chainIds:
         options.refreshChainIds?.length || options.additionalChainIds?.length
           ? Object.freeze([

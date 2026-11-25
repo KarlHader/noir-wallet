@@ -2,7 +2,7 @@ import type { ActivityItem, ActivityScope } from '@/core/activity'
 import { parseAssetId, parseChainId } from '@/core/chains/registry'
 import type { TransactionAssetEffects } from '@/core/transactions/domain'
 import { EvmRpcError } from './evm-rpc-client'
-import { isErc20ApproveCalldata } from './evm-contract-call-classification'
+import { decodeErc20CalldataRequest } from './evm-contract-call-classification'
 
 export const EVM_HISTORY_LIMIT = 200
 export const EVM_ACTIVITY_ITEM_LIMIT = 2_000
@@ -72,8 +72,21 @@ export interface IndexedTokenTransfer {
   readonly to: string
   readonly amountRaw: string
   readonly nonce?: string
+  readonly logIndex?: number
   readonly timestamp: number
   readonly assetId: ReturnType<typeof parseAssetId>['id']
+}
+
+export function indexedTransferLogIndex(value: unknown): number | undefined {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) {
+    return undefined
+  }
+  const index = Number(value)
+  return Number.isSafeInteger(index) && index >= 0 ? index : undefined
+}
+
+export function isIndexedBaseAcrossReceipt(item: ActivityItem): boolean {
+  return item.id.startsWith('rpc:evm:eip155:8453:') && item.id.includes(':native-receive:across:')
 }
 
 export function isZeroValueEvmTokenActivity(item: ActivityItem): boolean {
@@ -92,13 +105,19 @@ export function isUntrackedEvmTokenActivity(
   item: ActivityItem,
   trackedAssetIds: ReadonlySet<string>
 ): boolean {
-  if (item.source !== 'rpc' || !item.id.startsWith('rpc:evm:') || !item.id.endsWith(':token')) {
+  if (item.source !== 'rpc' || !item.id.startsWith('rpc:evm:')) {
     return false
   }
   const amount = item.snapshot?.primaryAmount
+  const tokenOnly = item.id.endsWith(':token')
   if (amount) {
-    return amount.assetId.includes('/erc20:') && !trackedAssetIds.has(amount.assetId)
+    return (
+      (tokenOnly || item.kind === 'transfer' || item.kind === 'receive') &&
+      amount.assetId.includes('/erc20:') &&
+      !trackedAssetIds.has(amount.assetId)
+    )
   }
+  if (!tokenOnly) return false
   return !item.segments.some(segment =>
     segment.evidence?.assetEffects?.changes.some(change => trackedAssetIds.has(change.assetId))
   )
@@ -134,7 +153,7 @@ function directionFor(address: string, from: string, to: string | undefined) {
   if (from === address && to === address) return 'self' as const
   if (from === address) return 'outgoing' as const
   if (to === address) return 'incoming' as const
-  throw new EvmRpcError('invalid-response', 'EVM history item does not involve the address')
+  return undefined
 }
 
 function transactionEvidence(
@@ -223,25 +242,54 @@ function mapNormalActivityItem(
   transfers: readonly IndexedTokenTransfer[]
 ): ActivityItem {
   const address = input.address.toLowerCase()
-  const direction = directionFor(address, transaction.from, transaction.to)
-  const isApproval = transaction.valueRaw === '0' && isErc20ApproveCalldata(transaction.input)
-  const calldata = transaction.input?.toLowerCase() ?? ''
+  const sender = transaction.from.toLowerCase()
+  const recipient = transaction.to?.toLowerCase()
+  const direction = directionFor(address, sender, recipient)
+  if (
+    !direction &&
+    !transfers.some(
+      transfer => transfer.from.toLowerCase() === address || transfer.to.toLowerCase() === address
+    )
+  ) {
+    throw new EvmRpcError('invalid-response', 'EVM history item does not involve the address')
+  }
+
+  const calldata = decodeErc20CalldataRequest(transaction.input)
+  const isApproval = transaction.valueRaw === '0' && calldata?.kind === 'approve'
   const incompatible = hasConflictingInclusion(transaction, transfers)
+  const singleTransfer = transfers.length === 1 ? transfers[0] : undefined
+  const tokenDirection = singleTransfer
+    ? directionFor(address, singleTransfer.from.toLowerCase(), singleTransfer.to.toLowerCase())
+    : undefined
   const directTokenTransfer =
+    singleTransfer &&
+    calldata?.kind === 'transfer' &&
+    recipient === parseAssetId(singleTransfer.assetId).reference.toLowerCase() &&
+    sender === singleTransfer.from.toLowerCase() &&
+    calldata.recipient === singleTransfer.to.toLowerCase() &&
+    calldata.amountRaw === singleTransfer.amountRaw
+  const tokenTransfer =
     !incompatible &&
     transaction.valueRaw === '0' &&
-    transfers.length === 1 &&
-    transaction.to?.toLowerCase() === parseAssetId(transfers[0].assetId).reference.toLowerCase() &&
-    /^0xa9059cbb[0-9a-f]{128}$/.test(calldata) &&
-    calldata.slice(10, 34) === '0'.repeat(24) &&
-    `0x${calldata.slice(34, 74)}` === transfers[0].to.toLowerCase() &&
-    BigInt(`0x${calldata.slice(74)}`) === BigInt(transfers[0].amountRaw) &&
-    transfers[0].from.toLowerCase() === address
-  const isTransfer =
-    (transaction.valueRaw !== '0' &&
-      (!transaction.input || transaction.input === '0x') &&
-      transfers.length === 0) ||
+    tokenDirection &&
+    tokenDirection !== 'incoming' &&
     directTokenTransfer
+      ? singleTransfer
+      : undefined
+  const nativeTransfer =
+    direction &&
+    recipient !== undefined &&
+    transaction.valueRaw !== '0' &&
+    (!transaction.input || transaction.input === '0x') &&
+    transfers.length === 0 &&
+    (direction !== 'incoming' || !transaction.failed)
+  const transferDirection = tokenTransfer ? tokenDirection : nativeTransfer ? direction : undefined
+  const primaryAmount = tokenTransfer
+    ? { assetId: tokenTransfer.assetId, amountRaw: tokenTransfer.amountRaw }
+    : direction && transaction.valueRaw !== '0' && (direction !== 'incoming' || !transaction.failed)
+      ? { assetId: nativeAssetId, amountRaw: transaction.valueRaw }
+      : undefined
+  const snapshotRecipient = tokenTransfer?.to ?? transaction.to
   const effects =
     transaction.failed || incompatible
       ? undefined
@@ -250,8 +298,7 @@ function mapNormalActivityItem(
           nativeAssetId,
           normal: transaction,
           transfers,
-          partial:
-            partial || !isTransfer || transfers.some(transfer => transfer.blockHash === undefined)
+          partial: partial || transferDirection === undefined
         })
   const incomplete = partial || incompatible || (!transaction.failed && effects === undefined)
   const status = transaction.failed ? ('failed' as const) : ('final' as const)
@@ -260,7 +307,7 @@ function mapNormalActivityItem(
     id,
     source: 'rpc' as const,
     scope: input.scope,
-    kind: isTransfer
+    kind: transferDirection
       ? ('transfer' as const)
       : isApproval
         ? ('approve' as const)
@@ -268,24 +315,12 @@ function mapNormalActivityItem(
     status,
     snapshot: Object.freeze({
       schemaVersion: 1 as const,
-      direction: isTransfer ? direction : ('contract' as const),
-      ...(transaction.valueRaw !== '0' || directTokenTransfer
-        ? {
-            primaryAmount: Object.freeze({
-              assetId: directTokenTransfer ? transfers[0].assetId : nativeAssetId,
-              amountRaw: directTokenTransfer ? transfers[0].amountRaw : transaction.valueRaw
-            })
-          }
-        : {}),
-      sender: Object.freeze({ chainId, address: transaction.from }),
-      ...(transaction.to === undefined
+      direction: transferDirection ?? ('contract' as const),
+      ...(primaryAmount === undefined ? {} : { primaryAmount: Object.freeze(primaryAmount) }),
+      sender: Object.freeze({ chainId, address: tokenTransfer?.from ?? transaction.from }),
+      ...(snapshotRecipient === undefined
         ? {}
-        : {
-            recipient: Object.freeze({
-              chainId,
-              address: directTokenTransfer ? transfers[0].to : transaction.to
-            })
-          })
+        : { recipient: Object.freeze({ chainId, address: snapshotRecipient }) })
     }),
     segments: Object.freeze([
       Object.freeze({
@@ -309,22 +344,39 @@ function mapTokenActivityItem(
   input: ReadEvmAddressActivityInput,
   chainId: ReturnType<typeof parseChainId>['id'],
   nativeAssetId: ReturnType<typeof parseAssetId>['id'],
-  partial: boolean
+  partial: boolean,
+  receiveSuffix?: string
 ): ActivityItem {
   const transfer = transfers[0]
   const address = input.address.toLowerCase()
   const single = transfers.length === 1
-  const direction = single ? directionFor(address, transfer.from, transfer.to) : 'contract'
-  const id = `rpc:evm:${chainId}:${transfer.transactionHash}:token`
+  const direction = single
+    ? directionFor(address, transfer.from.toLowerCase(), transfer.to.toLowerCase())
+    : 'contract'
+  if (direction === undefined) {
+    throw new EvmRpcError('invalid-response', 'EVM history item does not involve the address')
+  }
+  const suffix = receiveSuffix ?? 'token'
+  const id = `rpc:evm:${chainId}:${transfer.transactionHash}:${suffix}`
   const status = 'final' as const
   const effects = hasConflictingInclusion(undefined, transfers)
     ? undefined
-    : observedEffects({ address, nativeAssetId, transfers, partial: true })
+    : observedEffects({
+        address,
+        nativeAssetId,
+        transfers,
+        partial: partial || direction !== 'incoming'
+      })
   return Object.freeze({
     id,
     source: 'rpc' as const,
     scope: input.scope,
-    kind: single ? ('transfer' as const) : ('contract-call' as const),
+    kind:
+      receiveSuffix !== undefined && !receiveSuffix.startsWith('token-receive:')
+        ? ('receive' as const)
+        : single
+          ? ('transfer' as const)
+          : ('contract-call' as const),
     status,
     snapshot: Object.freeze({
       schemaVersion: 1 as const,
@@ -359,20 +411,64 @@ function mapTokenActivityItem(
   })
 }
 
+export function removeSupersededEvmReceipts(items: readonly ActivityItem[]): ActivityItem[] {
+  const receiptKey = (item: ActivityItem) => {
+    if (item.source !== 'rpc' || item.snapshot?.direction !== 'incoming') return undefined
+    const { primaryAmount, sender, recipient } = item.snapshot
+    const origin = item.segments.find(segment => segment.role === 'origin')
+    if (
+      !primaryAmount ||
+      !sender ||
+      !recipient ||
+      origin?.target.kind !== 'onchain' ||
+      !origin.evidence?.transactionHash
+    )
+      return undefined
+    return JSON.stringify([
+      origin.target.chainId,
+      origin.evidence.transactionHash.toLowerCase(),
+      primaryAmount.assetId,
+      primaryAmount.amountRaw,
+      sender.address.toLowerCase(),
+      recipient.address.toLowerCase()
+    ])
+  }
+  const receipts = new Set(
+    items.flatMap(item => {
+      if (!item.id.includes(':token-receive:') && !item.id.endsWith(':native-receive')) return []
+      const key = receiptKey(item)
+      return key ? [key] : []
+    })
+  )
+  return items.filter(item => {
+    if (!item.id.startsWith('rpc:evm:') || !/:(native|token)$/.test(item.id)) return true
+    const key = receiptKey(item)
+    return !key || !receipts.has(key)
+  })
+}
+
 export function mapEvmIndexedActivity(input: {
   readonly request: ReadEvmAddressActivityInput
   readonly chainId: string
   readonly nativeAssetId: string
   readonly normalTransactions: readonly IndexedTransaction[]
   readonly tokenTransfers: readonly IndexedTokenTransfer[]
+  readonly indexedNativeReceipts?: readonly (IndexedTokenTransfer & { readonly logIndex: number })[]
   readonly sourcePartial: boolean
   readonly itemLimit?: number
 }): readonly ActivityItem[] {
   const chain = parseChainId(input.chainId)
   const nativeAssetId = parseAssetId(input.nativeAssetId)
+  const wallet = input.request.address.toLowerCase()
   const tokenTransfersByHash = new Map<string, IndexedTokenTransfer[]>()
+  const seenLogs = new Set<string>()
   for (const transfer of input.tokenTransfers) {
     if (transfer.amountRaw === '0') continue
+    if (transfer.logIndex !== undefined) {
+      const key = `${transfer.transactionHash}:${transfer.logIndex}`
+      if (seenLogs.has(key)) continue
+      seenLogs.add(key)
+    }
     const group = tokenTransfersByHash.get(transfer.transactionHash) ?? []
     group.push(transfer)
     tokenTransfersByHash.set(transfer.transactionHash, group)
@@ -380,35 +476,117 @@ export function mapEvmIndexedActivity(input: {
   const normalByHash = new Map(
     input.normalTransactions.map(transaction => [transaction.transactionHash, transaction])
   )
+  const receipts: ActivityItem[] = []
+  for (const transfer of input.indexedNativeReceipts ?? []) {
+    const key = `native:${transfer.transactionHash}:${transfer.logIndex}`
+    if (seenLogs.has(key)) continue
+    seenLogs.add(key)
+    receipts.push(
+      mapTokenActivityItem(
+        [transfer],
+        input.request,
+        chain.id,
+        nativeAssetId.id,
+        false,
+        `native-receive:across:${transfer.logIndex}`
+      )
+    )
+  }
+  const receiptHashes = new Set<string>()
+  const tokenReceiptOccurrences = new Map<string, number>()
+  for (const [hash, transfers] of tokenTransfersByHash) {
+    const normal = normalByHash.get(hash)
+    if (normal?.failed) continue
+    for (const transfer of transfers) {
+      if (
+        directionFor(wallet, transfer.from.toLowerCase(), transfer.to.toLowerCase()) !==
+          'incoming' ||
+        hasConflictingInclusion(normal, [transfer])
+      )
+        continue
+      let eventId: string
+      if (transfer.logIndex !== undefined) {
+        eventId = `log:${transfer.logIndex}`
+      } else {
+        const fingerprint = `${parseAssetId(transfer.assetId).reference}:${transfer.from}:${transfer.amountRaw}`
+        const key = `${hash}:${fingerprint}`
+        const occurrence = tokenReceiptOccurrences.get(key) ?? 0
+        tokenReceiptOccurrences.set(key, occurrence + 1)
+        eventId = `${fingerprint}:${occurrence}`
+      }
+      receiptHashes.add(hash)
+      receipts.push(
+        mapTokenActivityItem(
+          [transfer],
+          input.request,
+          chain.id,
+          nativeAssetId.id,
+          input.sourcePartial,
+          `token-receive:${eventId}`
+        )
+      )
+    }
+  }
   const tokenItems: ActivityItem[] = []
   for (const [hash, transfers] of tokenTransfersByHash) {
     const normal = normalByHash.get(hash)
     if (normal) continue
+    if (!transfers.some(transfer => transfer.from.toLowerCase() === wallet)) continue
     tokenItems.push(
       mapTokenActivityItem(
         transfers,
         input.request,
         chain.id,
         nativeAssetId.id,
-        input.sourcePartial ||
-          transfers.some(
-            transfer => transfer.blockHash === undefined || transfer.nonce === undefined
-          )
+        input.sourcePartial
       )
     )
   }
-  const normalItems = input.normalTransactions.map(transaction =>
-    mapNormalActivityItem(
+  const normalItems = input.normalTransactions.flatMap(transaction => {
+    const transfers = tokenTransfersByHash.get(transaction.transactionHash) ?? []
+    const item = mapNormalActivityItem(
       transaction,
       input.request,
       chain.id,
       nativeAssetId.id,
       input.sourcePartial,
-      tokenTransfersByHash.get(transaction.transactionHash) ?? []
+      transfers
     )
-  )
+    const walletSent =
+      transaction.from.toLowerCase() === wallet ||
+      transfers.some(transfer => transfer.from.toLowerCase() === wallet)
+    const nativeCredit =
+      !transaction.failed &&
+      transaction.valueRaw !== '0' &&
+      directionFor(wallet, transaction.from.toLowerCase(), transaction.to?.toLowerCase()) ===
+        'incoming'
+    if (nativeCredit && item.snapshot?.direction !== 'incoming' && transaction.to) {
+      receipts.push(
+        mapTokenActivityItem(
+          [
+            {
+              ...transaction,
+              to: transaction.to,
+              amountRaw: transaction.valueRaw,
+              assetId: nativeAssetId.id
+            }
+          ],
+          input.request,
+          chain.id,
+          nativeAssetId.id,
+          input.sourcePartial,
+          'native-receive'
+        )
+      )
+    }
+    return walletSent ||
+      item.snapshot?.direction === 'incoming' ||
+      (!nativeCredit && !receiptHashes.has(transaction.transactionHash))
+      ? [item]
+      : []
+  })
   return Object.freeze(
-    [...normalItems, ...tokenItems]
+    [...normalItems, ...tokenItems, ...receipts]
       .sort(
         (left, right) =>
           right.updatedAt - left.updatedAt ||

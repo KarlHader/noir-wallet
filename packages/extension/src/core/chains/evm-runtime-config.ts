@@ -1,5 +1,9 @@
 import type { Network } from '@/types'
-import { getEvmNetworkConfigs, type EvmNetworkConfig } from '@/config/networks'
+import {
+  getEvmNetworkConfigs,
+  getRetiredEvmNetworkIdentities,
+  type EvmNetworkConfig
+} from '@/config/networks'
 import { resolveEvmChainIconAlias } from '@/config/icons'
 import {
   findChainEndpointOverride,
@@ -40,7 +44,10 @@ function customNetworkConfig(
     iconChain: resolveEvmChainIconAlias(network.chainId),
     nativeCurrency: Object.freeze({
       ...network.nativeCurrency,
-      slip44Reference: '60'
+      slip44Reference:
+        getRetiredEvmNetworkIdentities(networkMode).find(
+          identity => identity.chainId === network.chainId
+        )?.slip44Reference ?? '60'
     }),
     rpcUrl: network.rpc.url,
     explorerUrl: network.explorer?.baseUrl ?? '',

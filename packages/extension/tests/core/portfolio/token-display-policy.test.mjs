@@ -4,7 +4,7 @@ import { expect } from '@playwright/test'
 import {
   findBundledWalletMarketAssetId,
   isBundledWalletAsset
-} from '../../../src/popup/components/tokens/token-display-policy.ts'
+} from '../../../src/popup/services/token-display-policy.ts'
 
 test('groups only explicitly mapped bundled assets across networks', () => {
   const ethereum = 'eip155:1/slip44:60'

@@ -65,11 +65,14 @@ const handlers = {
     { coordinator }: FundingContext,
     message: Readonly<{ quoteId: string }>
   ) => {
+    const { currentNetwork, currentWalletId, currentAccountId } = useWalletStore.getState()
+    if (!currentWalletId || !currentAccountId) return null
     const review = await coordinator.getNativeZecIntentsSwap(message.quoteId)
-    if (review.quoteBinding.recipientType !== 'CONFIDENTIAL_INTENTS') {
-      throw new Error('Native ZEC Confidential status is unavailable')
-    }
-    return readNativeZecIntentsSwapStatus(review.quoteBinding)
+    return readNativeZecIntentsSwapStatus(review.quoteBinding, {
+      network: currentNetwork,
+      walletId: currentWalletId,
+      accountId: currentAccountId
+    })
   },
   CANCEL_NATIVE_ZEC_INTENTS_SWAP: (
     { coordinator }: FundingContext,

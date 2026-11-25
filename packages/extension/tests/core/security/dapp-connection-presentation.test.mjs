@@ -7,6 +7,7 @@ import {
   toggleMultichainConnectionAccount
 } from '../../../src/popup/services/dapp-connection-presentation.ts'
 import { parseChainEndpointSettings } from '../../../src/core/chains/chain-endpoint-settings.ts'
+import { mergeShieldSiteGrants } from '../../../src/core/dapp/shield-site-connections.ts'
 
 const context = {
   network: 'mainnet',
@@ -191,6 +192,27 @@ test.describe('connected dApp permission presentation', () => {
     ).toEqual([
       { chainId: 'eip155:4663', label: 'Robinhood', iconChain: 'eip155:4663', accountCount: 1 },
       { chainId: 'eip155:999', label: 'EVM 999', iconChain: 'eip155:999', accountCount: 1 }
+    ])
+  })
+
+  test('lists Shield-only sites so the wallet can revoke them', () => {
+    const grant = { keyDomainId: 'wallet-1', accountId: 'account-1' }
+    const merged = mergeShieldSiteGrants(
+      [connection()],
+      [
+        { origin: 'https://dapp.example', ...grant },
+        { origin: 'https://shield.example', ...grant },
+        { origin: 'https://shield.example', ...grant }
+      ]
+    )
+    expect(merged.map(dapp => dapp.origin)).toEqual([
+      'https://dapp.example',
+      'https://shield.example'
+    ])
+    expect(merged[1].host).toBe('shield.example')
+    expect(merged[1].chainAuthorizations).toBeUndefined()
+    expect(presentDAppPermissions(merged[1], context)).toEqual([
+      { chainId: 'shield', label: 'NEAR Confidential', iconChain: 'near', accountCount: 1 }
     ])
   })
 })

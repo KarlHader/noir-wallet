@@ -1,4 +1,4 @@
-export { supportsEvmPrivateExecution } from './execution-capability'
+export { supportsEvmConfidentialShield, supportsEvmPrivateExecution } from './execution-capability'
 export {
   EVM_WALLET_RUNTIME_ERROR_CODES,
   createEvmWalletRuntimeError,

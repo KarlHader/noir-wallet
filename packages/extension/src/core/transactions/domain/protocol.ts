@@ -1,5 +1,10 @@
 import { parseAssetDisplayMetadata, parseAssetId, parseChainId } from '@/core/chains/registry'
 import type { AssetDisplayMetadata, AssetId, ChainId } from '@/core/chains/domain'
+import {
+  parseOneClickDepositMemo,
+  parseOneClickViewer,
+  type OneClickOrder
+} from '@/core/services/near-intents/one-click-order'
 
 const RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/
@@ -17,12 +22,11 @@ export interface NearIntentsDestinationBinding extends NearIntentsAssetBinding {
   readonly minimumAmountRaw: string
 }
 
-export interface NearIntentsTransactionBinding {
+export interface NearIntentsTransactionBinding extends OneClickOrder {
   readonly schemaVersion: 1
   readonly provider: 'near-intents'
   readonly kind: 'swap' | 'supply'
   readonly userAction?: 'transfer'
-  readonly depositAddress: string
   readonly refundAddress: string
   readonly expiresAt: number
   readonly origin: NearIntentsAssetBinding
@@ -48,6 +52,7 @@ export interface RheaSwapTransactionBinding {
   readonly provider: 'rhea-cross-chain-dex'
   readonly kind: 'swap'
   readonly userAction?: 'transfer'
+  readonly balanceTransfer?: 'withdraw'
   readonly quoteHandle: string
   readonly executionId: string
   readonly router: string
@@ -61,6 +66,10 @@ export interface RheaSwapTransactionBinding {
 }
 
 export type TransactionProtocolBinding = NearIntentsTransactionBinding | RheaSwapTransactionBinding
+
+export function isRheaIntentsRoute(router: string): boolean {
+  return /near[-_ ]?intents/i.test(router)
+}
 
 export function getTransactionProtocolIntentKind(
   binding: TransactionProtocolBinding
@@ -162,11 +171,10 @@ export function parseNearIntentsTransactionBinding(value: unknown): NearIntentsT
     'origin',
     'destination'
   ]
-  assertExactKeys(
-    value,
-    value.userAction === undefined ? requiredKeys : [...requiredKeys, 'userAction'],
-    'Near Intents binding'
+  const optionalKeys = ['userAction', 'depositMemo', 'viewer'].filter(
+    key => value[key] !== undefined
   )
+  assertExactKeys(value, [...requiredKeys, ...optionalKeys], 'Near Intents binding')
   if (
     value.schemaVersion !== 1 ||
     value.provider !== 'near-intents' ||
@@ -184,6 +192,10 @@ export function parseNearIntentsTransactionBinding(value: unknown): NearIntentsT
     kind: value.kind,
     ...(value.userAction === undefined ? {} : { userAction: 'transfer' as const }),
     depositAddress: parseString(value.depositAddress, 'Near Intents deposit address'),
+    ...(value.depositMemo === undefined
+      ? {}
+      : { depositMemo: parseOneClickDepositMemo(value.depositMemo) }),
+    ...(value.viewer === undefined ? {} : { viewer: parseOneClickViewer(value.viewer) }),
     refundAddress: parseString(value.refundAddress, 'Near Intents refund address'),
     expiresAt: value.expiresAt as number,
     origin: parseAssetBinding(value.origin, 'Near Intents origin'),
@@ -263,7 +275,8 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
       'isCrossChain',
       'origin',
       'destination',
-      ...(value.userAction === undefined ? [] : ['userAction'])
+      ...(value.userAction === undefined ? [] : ['userAction']),
+      ...(value.balanceTransfer === undefined ? [] : ['balanceTransfer'])
     ],
     'RHEA Swap binding'
   )
@@ -272,17 +285,32 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
     value.provider !== 'rhea-cross-chain-dex' ||
     value.kind !== 'swap' ||
     (value.userAction !== undefined && value.userAction !== 'transfer') ||
+    (value.balanceTransfer !== undefined &&
+      (value.balanceTransfer !== 'withdraw' || value.userAction !== 'transfer')) ||
     !Number.isSafeInteger(value.expiresAt) ||
     (value.expiresAt as number) <= 0 ||
     typeof value.isCrossChain !== 'boolean'
   ) {
     throw new Error('Invalid RHEA Swap binding')
   }
+  const origin = parseRheaAssetBinding(value.origin, 'RHEA Swap origin')
+  const destination = parseRheaDestinationBinding(value.destination)
+  if (
+    value.balanceTransfer === 'withdraw' &&
+    (!origin.chainId.startsWith('eip155:') ||
+      !destination.chainId.startsWith('eip155:') ||
+      (origin.chainId === destination.chainId
+        ? origin.assetId !== destination.assetId
+        : !value.isCrossChain))
+  ) {
+    throw new Error('Invalid RHEA Swap Withdraw binding')
+  }
   return Object.freeze({
     schemaVersion: 1,
     provider: 'rhea-cross-chain-dex',
     kind: 'swap',
     ...(value.userAction === undefined ? {} : { userAction: 'transfer' as const }),
+    ...(value.balanceTransfer === 'withdraw' ? { balanceTransfer: 'withdraw' as const } : {}),
     quoteHandle: parseString(value.quoteHandle, 'RHEA Swap quote handle'),
     executionId: parseString(value.executionId, 'RHEA Swap execution ID'),
     router: parseString(value.router, 'RHEA Swap router'),
@@ -291,8 +319,8 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
     originAmountRaw: parseRawAmount(value.originAmountRaw, 'RHEA Swap input amount'),
     expiresAt: value.expiresAt as number,
     isCrossChain: value.isCrossChain,
-    origin: parseRheaAssetBinding(value.origin, 'RHEA Swap origin'),
-    destination: parseRheaDestinationBinding(value.destination)
+    origin,
+    destination
   })
 }
 

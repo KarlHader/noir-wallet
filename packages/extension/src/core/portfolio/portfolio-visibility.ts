@@ -17,7 +17,8 @@ export function isPortfolioTokenVisible(
 
 export function applyTokenDisplayPolicy(
   model: PortfolioReadModel,
-  policy: TokenDisplayPolicy
+  policy: TokenDisplayPolicy,
+  detailAssetId?: string
 ): PortfolioReadModel {
   const chains = Object.freeze(
     model.chains.map(chain =>
@@ -27,7 +28,11 @@ export function applyTokenDisplayPolicy(
           chain.assets.filter(row =>
             row.asset.kind === 'native'
               ? !policy.hiddenAssetIds.has(row.asset.id)
-              : isPortfolioTokenVisible(row.asset.id, BigInt(row.balance.totalRaw) > 0n, policy)
+              : isPortfolioTokenVisible(
+                  row.asset.id,
+                  row.asset.id === detailAssetId || BigInt(row.balance.totalRaw) > 0n,
+                  policy
+                )
           )
         )
       })
@@ -47,7 +52,11 @@ export function applyTokenDisplayPolicy(
                 if (row.assetId.includes('/slip44:')) {
                   return !policy.hiddenAssetIds.has(row.assetId)
                 }
-                return isPortfolioTokenVisible(row.assetId, BigInt(row.availableRaw) > 0n, policy)
+                return isPortfolioTokenVisible(
+                  row.assetId,
+                  row.assetId === detailAssetId || BigInt(row.availableRaw) > 0n,
+                  policy
+                )
               })
             )
           })

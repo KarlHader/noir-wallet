@@ -1,6 +1,9 @@
 import { cn } from '@/lib/utils'
 import { Icon } from '@iconify/react'
 
+export const fullHeightTransactionDialogClassName =
+  'h-dvh max-h-dvh! rounded-none border-0 shadow-none [html:not([data-surface=side-panel])_&]:min-[600px]:inset-y-0 [html:not([data-surface=side-panel])_&]:min-[600px]:m-auto [html:not([data-surface=side-panel])_&]:min-[600px]:h-[min(100dvh,760px)] [html:not([data-surface=side-panel])_&]:min-[600px]:max-w-[420px]'
+
 export type TransactionStatus =
   | 'loading'
   | 'submitted'
@@ -12,6 +15,7 @@ export type TransactionStatus =
 interface TransactionResultProps {
   status: TransactionStatus
   title: string
+  titleId?: string
   description?: string
   layout?: 'default' | 'single-asset'
   onClose?: () => void
@@ -84,6 +88,7 @@ function ResultStatusIcon({ status, className }: { status: TransactionStatus; cl
 export function TransactionResult({
   status,
   title,
+  titleId,
   description,
   layout = 'default',
   onClose,
@@ -133,7 +138,9 @@ export function TransactionResult({
               <ResultStatusIcon status={status} className={config.iconClass} />
             </div>
 
-            <h2 className="mb-2 text-center text-xl font-semibold">{title}</h2>
+            <h2 id={titleId} className="mb-2 text-center text-xl font-semibold">
+              {title}
+            </h2>
             {description && <p className="text-sm text-muted mb-5 text-center">{description}</p>}
           </>
         )}

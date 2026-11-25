@@ -7,12 +7,14 @@ import { useSettingsStore } from '@/store/settings-store'
 import { ChainIcon } from '../common/ChainIcon'
 import { InlineError } from '../common/InlineError'
 import { useDAppConnection } from '@/popup/hooks/useDAppConnection'
+import { useDialog } from '@/popup/hooks/useDialog'
 import { presentDAppPermissions } from '@/popup/services/dapp-connection-presentation'
 import { toast } from '@/store/toast-store'
 
 export function DAppConnectionModal() {
   const { connectedDApps, loading, connectionError, refreshConnectedDApps, disconnectDApp } =
     useDAppConnection()
+  const { confirm } = useDialog()
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const networkMode = useWalletStore(state => state.currentNetwork)
@@ -20,9 +22,21 @@ export function DAppConnectionModal() {
 
   const handleDisconnect = async (origin?: string) => {
     if (disconnecting) return
+    const origins = origin ? [origin] : connectedDApps.map(dapp => dapp.origin)
+    if (origins.length === 0) return
     setDisconnecting(origin ?? 'all')
     try {
-      const origins = origin ? [origin] : connectedDApps.map(dapp => dapp.origin)
+      if (
+        !origin &&
+        !(await confirm({
+          title: 'Disconnect all dApps?',
+          message: 'You’ll need to reconnect these sites to use them with Noir Wallet again.',
+          confirmText: 'Disconnect all',
+          variant: 'danger'
+        }))
+      ) {
+        return
+      }
       for (const currentOrigin of origins) await disconnectDApp(currentOrigin)
     } catch {
       toast.error('Unable to disconnect dApp')
@@ -47,10 +61,11 @@ export function DAppConnectionModal() {
           <div className="py-16 text-center text-sm text-muted">No connected dApps</div>
         ) : (
           <>
-            {connectionError && (
+            {connectionError && !loading && (
               <div className="px-4 py-3">
                 <InlineError
-                  message="Unable to refresh connected dApps"
+                  message="Connection list may be out of date"
+                  tone="muted"
                   onRetry={() => void refreshConnectedDApps()}
                 />
               </div>

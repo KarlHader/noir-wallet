@@ -3,12 +3,29 @@ import { expect } from '@playwright/test'
 import {
   estimateRheaRouteMaximum,
   fallbackTransferMaximum,
-  resolveNativeRouteMaximum,
+  resolveTransferMaximum,
   resolveTransferSpendableRaw,
   isTransferAmountSpendable
 } from '../../../src/popup/services/transfer-maximum.ts'
 import { EvmWalletClientError } from '../../../src/popup/services/evm-wallet-client.ts'
 import { TransferMaximumEstimateCache } from '../../../src/popup/services/transfer-maximum-cache.ts'
+import { quickShieldSpendableRaw } from '../../../src/popup/services/quick-shield.ts'
+test('quick Shield uses spendable public funds and rejects incomplete domain balances', () => {
+  const asset = {
+    asset: { chainId: 'eip155:1' },
+    balance: { totalRaw: '1000', mainRaw: '800', privateRaw: '200', availableRaw: '600' }
+  }
+  expect(quickShieldSpendableRaw(asset)).toBe('600')
+  expect(
+    quickShieldSpendableRaw({ ...asset, balance: { ...asset.balance, availableRaw: '900' } })
+  ).toBe('800')
+  expect(
+    quickShieldSpendableRaw({ ...asset, balance: { ...asset.balance, mainRaw: undefined } })
+  ).toBeNull()
+  expect(
+    quickShieldSpendableRaw({ ...asset, balance: { ...asset.balance, availableRaw: null } })
+  ).toBeNull()
+})
 
 const maximum = amountRaw => ({
   amountRaw,
@@ -99,20 +116,61 @@ test('uses one fee-adjusted amount for display, Max and validation without deduc
   expect(() => resolveTransferSpendableRaw('1000', '1001', true)).toThrow('Invalid')
 })
 
-test('routed Max holds a fixed native reserve and never spends a balance below it', () => {
+test('routed Max retains its chain-specific fallback without a usable USD price', () => {
   const cases = [
-    { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 3_000_000_000_000_000n },
+    { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 300_000_000_000_000n },
+    { family: 'evm', chainId: 'eip155:11155111', decimals: 18, reserve: 300_000_000_000_000n },
     { family: 'evm', chainId: 'eip155:8453', decimals: 18, reserve: 300_000_000_000_000n },
+    { family: 'bitcoin', decimals: 8, reserve: 10_000n },
     { family: 'zcash', decimals: 8, reserve: 50_000n }
   ]
   for (const { reserve, ...source } of cases) {
-    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve - 1n) })).toBe('0')
-    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve) })).toBe('0')
-    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve + 1n) })).toBe('1')
-    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve * 100n) })).toBe(
-      String(reserve * 99n)
-    )
+    const resolve = available =>
+      resolveTransferMaximum({ mode: 'reserve', ...source, availableRaw: String(available) })
+    expect(resolve(reserve - 1n)).toBe('0')
+    expect(resolve(reserve)).toBe('0')
+    expect(resolve(reserve + 1n)).toBe('1')
+    expect(resolve(reserve * 100n)).toBe(String(reserve * 99n))
   }
+  expect(
+    resolveTransferMaximum({
+      mode: 'reserve',
+      family: 'zcash',
+      decimals: 8,
+      availableRaw: '60000',
+      priceUsd: '0'
+    })
+  ).toBe('10000')
+})
+
+test('routed Max reserves about one dollar at the native asset price, rounded up in base units', () => {
+  const evm = {
+    family: 'evm',
+    chainId: 'eip155:1',
+    decimals: 18,
+    availableRaw: '10000000000000000'
+  }
+  expect(resolveTransferMaximum({ mode: 'reserve', ...evm, priceUsd: '2500' })).toBe(
+    '9600000000000000'
+  )
+  expect(resolveTransferMaximum({ mode: 'reserve', ...evm, priceUsd: '1250' })).toBe(
+    '9200000000000000'
+  )
+  const zcash = { family: 'zcash', decimals: 8, availableRaw: '250000', priceUsd: '900' }
+  expect(resolveTransferMaximum({ mode: 'reserve', ...zcash })).toBe('138888')
+  expect(resolveTransferMaximum({ mode: 'reserve', ...zcash, availableRaw: '111111' })).toBe('0')
+})
+
+test('routed Max returns the full asset balance when fees are paid separately', () => {
+  expect(
+    resolveTransferMaximum({
+      mode: 'reserve',
+      family: 'evm',
+      decimals: 6,
+      availableRaw: '10000',
+      payFeeFromAsset: false
+    })
+  ).toBe('10000')
 })
 
 test('fee-estimate failure leaves a positive native proposal with a fee reserve on each family', () => {

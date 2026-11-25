@@ -21,7 +21,8 @@ function createHarness({
   store,
   exactOutputApi,
   exactOutputStore,
-  pendingSourceStore
+  pendingSourceStore,
+  queryStatus
 } = {}) {
   const calls = {
     approvals: [],
@@ -259,6 +260,7 @@ function createHarness({
       }
     },
     ...(exactOutputApi ? { exactOutputApi } : {}),
+    ...(queryStatus ? { queryStatus } : {}),
     exactOutputStore: exactOutputStore ?? {
       async get(fingerprint) {
         return structuredClone(exactValues.get(fingerprint) ?? null)
@@ -316,7 +318,7 @@ function createExactHarness({
   storeValues = new Map(),
   pendingSourceStore
 } = {}) {
-  const calls = { quotes: [], statusReads: 0 }
+  const calls = { quotes: [], statusReads: [] }
   const exactOutputApi = {
     async quoteExactOutput(input) {
       calls.quotes.push(input)
@@ -327,21 +329,26 @@ function createExactHarness({
           amountOut: output,
           minAmountOut: output,
           depositAddress: '0x4444444444444444444444444444444444444444',
+          depositMemo: ' original memo ',
           deadline: new Date(Date.now() + 60_000).toISOString()
         },
         minimumInputRaw: '1010'
       }
     },
-    async getOneClickStatus() {
-      calls.statusReads += 1
-      return {
-        status: calls.status ?? status,
-        settledAmountOutRaw: calls.settledAmountOutRaw ?? '1000',
-        transactionHash: DESTINATION_HASH
-      }
-    },
     async getStatus() {
       return { transactionHash: DESTINATION_HASH }
+    }
+  }
+  const queryStatus = async input => {
+    calls.statusReads.push(input)
+    if (status === null) return null
+    return {
+      status: calls.status ?? status,
+      quoteResponse: {
+        quote: { depositAddress: input.order.depositAddress, depositMemo: ' original memo ' }
+      },
+      swapDetails: { amountOut: calls.settledAmountOutRaw ?? '1000' },
+      toHash: DESTINATION_HASH
     }
   }
   const exactOutputStore = {
@@ -356,7 +363,7 @@ function createExactHarness({
     }
   }
   return {
-    ...createHarness({ exactOutputApi, exactOutputStore, pendingSourceStore }),
+    ...createHarness({ exactOutputApi, exactOutputStore, pendingSourceStore, queryStatus }),
     exactCalls: calls,
     exactStoreValues: storeValues
   }
@@ -381,6 +388,8 @@ test.describe('EVM dApp Private transfer coordinator', () => {
     expect(h.calls.exactBinding).toMatchObject({
       userAction: 'transfer',
       refundAddress: PEA,
+      depositMemo: ' original memo ',
+      viewer: { chainFamily: 'evm', walletAddress: PEA, signingMode: 'private' },
       destination: { recipient: RECIPIENT, minimumAmountRaw: '1000' }
     })
     expect(h.calls.exactAccount).toMatchObject({ kind: 'pea', address: PEA })
@@ -458,15 +467,32 @@ test.describe('EVM dApp Private transfer coordinator', () => {
   })
 
   test('an ambiguous source submission resumes status without another debit', async () => {
-    const h = createExactHarness({ status: 'PENDING_DEPOSIT' })
+    const h = createExactHarness({ status: null })
     const prepared = await h.coordinator.prepareExactOutput(h.input)
     await expect(prepared.execute()).rejects.toMatchObject({ code: -32000 })
     expect(h.calls.exactSubmitted).toBe(1)
     expect(h.exactStoreValues.size).toBe(1)
-    h.exactCalls.status = 'SUCCESS'
-    await expect(h.coordinator.resumePending(h.input)).resolves.toBe(DESTINATION_HASH)
-    expect(h.calls.exactSubmitted).toBe(1)
-    expect(h.exactCalls.quotes).toHaveLength(1)
+    expect(h.exactCalls.quotes[0].viewer).toEqual({
+      chainFamily: 'evm',
+      walletAddress: PEA,
+      signingMode: 'private'
+    })
+    const resumed = createExactHarness({ storeValues: h.exactStoreValues })
+    await expect(resumed.coordinator.resumePending(resumed.input)).resolves.toBe(DESTINATION_HASH)
+    expect(resumed.calls.exactSubmitted).toBe(0)
+    expect(resumed.exactCalls.quotes).toHaveLength(0)
+    expect(resumed.exactCalls.statusReads).toEqual([
+      {
+        network: 'mainnet',
+        walletId: 'wallet:one',
+        accountId: 'account:one',
+        order: {
+          depositAddress: '0x4444444444444444444444444444444444444444',
+          depositMemo: ' original memo ',
+          viewer: { chainFamily: 'evm', walletAddress: PEA, signingMode: 'private' }
+        }
+      }
+    ])
   })
 
   test('releases an exact-output marker only when the source is proven unsigned', async () => {

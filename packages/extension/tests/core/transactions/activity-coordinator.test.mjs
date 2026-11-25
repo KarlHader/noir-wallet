@@ -128,7 +128,7 @@ function rpcActivity(transactionHash, overrides = {}) {
     status: 'final',
     snapshot: {
       schemaVersion: 1,
-      direction: 'incoming',
+      direction: 'outgoing',
       primaryAmount: { assetId: 'eip155:1/slip44:60', amountRaw: '42' },
       sender: { chainId: 'eip155:1', address: `0x${'3'.repeat(40)}` },
       recipient: { chainId: 'eip155:1', address: `0x${'1'.repeat(40)}` }
@@ -247,6 +247,38 @@ test.describe('Activity coordinator', () => {
         .find(activity => activity.id === transfer.id)
         ?.segments.find(segment => segment.role === 'destination')?.evidence?.settledAmount
     ).toEqual({ assetId: destinationAsset, amountRaw: '144660' })
+  })
+
+  test('uses the observed transparent credit for Unshield when present and the settled fallback otherwise', async () => {
+    const unshield = zcashTransaction({
+      id: 'tx_unshield',
+      type: 'unshield',
+      settledSelfTransferAmount: '0.49',
+      confirmations: 4
+    })
+    const receipt = zcashTransaction({
+      id: `rpc_treceive_${unshield.txHash}`,
+      type: 'receive',
+      fromType: 'transparent',
+      amount: '0.49',
+      confirmations: 5,
+      timestamp: unshield.timestamp - 1
+    })
+    const read = async transactions =>
+      new ActivityCoordinator({
+        storageRepository: storage(),
+        transactionRepository: new InMemoryTransactionRepository(),
+        loadZcashTransactions: async () => transactions
+      }).readActive()
+    const readCredits = async transactions =>
+      (await read(transactions)).items.filter(item => item.kind === 'receive')
+
+    expect(await readCredits([unshield, receipt])).toMatchObject([
+      { id: receipt.id, assetDomains: ['public'] }
+    ])
+    expect(await readCredits([unshield])).toMatchObject([
+      { id: `receive:${unshield.id}`, assetDomains: ['public'] }
+    ])
   })
 
   test('returns null without an active generation or Account', async () => {

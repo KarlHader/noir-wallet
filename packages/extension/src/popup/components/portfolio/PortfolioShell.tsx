@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { SwapToken } from '@/core/services/intents-api'
-import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
+import { useMemo, useState, type ReactNode } from 'react'
+import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { Icon } from '@iconify/react'
 import { formatFiatAmount } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
@@ -20,10 +19,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@/popup/components/ui/dropdown-menu'
-import { NetworkFilter } from '@/popup/components/common/NetworkFilter'
-import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
+import { NetworkFilter, NetworkFilterToolbar } from '@/popup/components/common/NetworkFilter'
 import type { AssetDomain } from '@/popup/services/asset-domains'
-import { LOW_VALUE_USD_THRESHOLD, withConfidentialAssetPrices } from './portfolio-prices'
 import {
   PortfolioAssetGroupCard,
   PortfolioChainAssetRow,
@@ -32,62 +29,57 @@ import {
 } from './PortfolioAssetGroupCard'
 import { NearConfidentialHoldingRow } from './NearConfidentialHoldingRow'
 import {
-  listStandaloneNearConfidentialHoldings,
-  resolveNearConfidentialZecRow,
-  sumNearConfidentialChainFiat
-} from '@/popup/services/near-confidential-holdings'
-import {
-  buildPortfolioAssetGroups,
-  getPortfolioChainUsdValue,
+  buildPortfolioDisplay,
   getPortfolioChainBalanceStatus,
-  partitionPortfolioAssetGroups,
-  partitionPortfolioAssets,
-  sortPortfolioAssets,
-  sortPortfolioChains,
+  getPortfolioChainSection,
   type PortfolioAssetGroup
 } from '@/popup/services/portfolio-presentation'
 
-export type PortfolioViewMode = 'assets' | 'chains'
+type PortfolioViewMode = 'assets' | 'chains'
 
 interface PortfolioShellProps {
-  readonly domain?: AssetDomain
-  readonly hideToolbar?: boolean
+  readonly listHeader?: ReactNode
+  readonly domain: AssetDomain
   readonly model: PortfolioReadModel
-  readonly sourceModel?: PortfolioReadModel
+  readonly sourceModel: PortfolioReadModel
   readonly network: Network
   readonly prices: AssetPriceReadModel | null
   readonly priceStatus?: 'loading' | 'ready' | 'error'
   readonly balancesHidden?: boolean
-  readonly initialView?: PortfolioViewMode
-  readonly view?: PortfolioViewMode
-  readonly onViewChange?: (view: PortfolioViewMode) => void
+  readonly view: PortfolioViewMode
+  readonly onViewChange: (view: PortfolioViewMode) => void
   readonly chainListExpanded: boolean
   readonly onChainListExpandedChange: (expanded: boolean) => void
-  readonly refreshing?: boolean
-  readonly refreshDisabled?: boolean
-  readonly selectedChainIds?: readonly string[]
-  readonly onSelectedChainIdsChange?: (chainIds: readonly string[]) => void
+  readonly refreshing: boolean
+  readonly refreshDisabled: boolean
+  readonly selectedChainIds: readonly string[]
+  readonly onSelectedChainIdsChange: (chainIds: readonly string[]) => void
   readonly onSelectAsset?: (assetId: string) => void
   readonly onSelectConfidentialAsset?: (tokenId: string) => void
   readonly onRefresh?: () => void
   readonly onManageTokens?: () => void
+  readonly onShieldForAsset?: (
+    assetId: string
+  ) => ((trigger: HTMLButtonElement) => void) | undefined
 }
 
 function StatePanel({
   icon,
   title,
-  description
+  description,
+  tone = 'empty'
 }: {
   readonly icon: string
   readonly title: string
   readonly description?: string
+  readonly tone?: 'empty' | 'error'
 }) {
   return (
     <div className="flex min-h-40 flex-1 flex-col items-center justify-center px-6 py-8 text-center">
       <div className="mb-3 flex size-12 items-center justify-center rounded-full bg-foreground/5">
         <Icon icon={icon} width={24} height={24} className="text-muted" />
       </div>
-      <p className="text-sm font-medium">{title}</p>
+      <p className={cn('text-sm font-medium', tone === 'empty' && 'text-muted')}>{title}</p>
       {description && (
         <p className="mt-1 max-w-[260px] text-xs leading-5 text-muted">{description}</p>
       )}
@@ -103,12 +95,12 @@ function LoadingPanel() {
           key={index}
           className="flex min-h-[68px] animate-pulse items-center gap-3 rounded-xl bg-card px-3 py-2.5"
         >
-          <div className="size-9 shrink-0 rounded-full bg-white/10" />
+          <div className="size-9 shrink-0 rounded-full bg-foreground/10" />
           <div className="flex-1 space-y-2">
-            <div className="h-3 w-20 rounded bg-white/10" />
-            <div className="h-2.5 w-24 rounded bg-white/5" />
+            <div className="h-3 w-20 rounded bg-foreground/10" />
+            <div className="h-2.5 w-24 rounded bg-foreground/5" />
           </div>
-          <div className="h-3 w-16 rounded bg-white/10" />
+          <div className="h-3 w-16 rounded bg-foreground/10" />
         </div>
       ))}
       <span className="sr-only">Loading balances from enabled networks.</span>
@@ -226,7 +218,7 @@ function PortfolioViewIcon({
       aria-hidden="true"
       className={cn(
         'flex size-5 items-center justify-center text-[var(--color-wallet-secondary)] opacity-50 transition-colors',
-        active && 'text-white opacity-100'
+        active && 'text-foreground opacity-100'
       )}
     >
       <span
@@ -241,152 +233,68 @@ function PortfolioViewIcon({
 }
 
 export function PortfolioShell({
+  listHeader,
   model,
   sourceModel,
   network,
-  domain = 'all',
-  hideToolbar = false,
+  domain,
   prices: sourcePrices,
   priceStatus = 'ready',
   balancesHidden = false,
-  initialView = 'assets',
-  view: controlledView,
+  view,
   onViewChange,
   chainListExpanded,
   onChainListExpandedChange,
-  refreshing = false,
-  refreshDisabled = refreshing,
-  selectedChainIds: controlledSelectedChainIds,
+  refreshing,
+  refreshDisabled,
+  selectedChainIds: requestedChainIds,
   onSelectedChainIdsChange,
   onSelectAsset,
   onSelectConfidentialAsset,
   onRefresh,
-  onManageTokens
+  onManageTokens,
+  onShieldForAsset
 }: PortfolioShellProps) {
-  const [localView, setLocalView] = useState<PortfolioViewMode>(initialView)
-  const view = controlledView ?? localView
-  const setView = onViewChange ?? setLocalView
-  const displayModel = model
-  const prices = useMemo(
-    () => withConfidentialAssetPrices(sourceModel ?? model, sourcePrices),
-    [model, sourceModel, sourcePrices]
-  )
-  const standaloneConfidential = useMemo(
+  const {
+    prices,
+    confidentialZec,
+    selectedChainIds,
+    visibleConfidential,
+    separateConfidential,
+    primaryAssetGroups,
+    lowValueAssetGroups,
+    sortedChains,
+    networkOptions,
+    pendingStarterZcash,
+    unavailableChains,
+    hasPendingBalances
+  } = useMemo(
     () =>
-      domain === 'all' || domain === 'shield'
-        ? listStandaloneNearConfidentialHoldings(model, sourceModel ?? model, prices)
-        : [],
-    [domain, model, sourceModel, prices]
-  )
-  const confidentialZec = useMemo(
-    () =>
-      domain === 'all'
-        ? resolveNearConfidentialZecRow(
-            model,
-            sourceModel ?? model,
-            network,
-            standaloneConfidential
-          )
-        : null,
-    [domain, model, sourceModel, network, standaloneConfidential]
-  )
-  const [localSelectedChainIds, setLocalSelectedChainIds] = useState<readonly string[]>(() =>
-    displayModel.chains
-      .filter(chain => isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__))
-      .map(chain => chain.chain.id)
-  )
-  const selectableChains = useMemo(
-    () =>
-      displayModel.chains.filter(chain =>
-        isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__)
-      ),
-    [displayModel.chains]
-  )
-  const availableChainIds = useMemo(
-    () => selectableChains.map(chain => chain.chain.id),
-    [selectableChains]
-  )
-  const availableChainIdSet = useMemo(() => new Set<string>(availableChainIds), [availableChainIds])
-  const selectedChainIds = (controlledSelectedChainIds ?? localSelectedChainIds).filter(chainId =>
-    availableChainIdSet.has(chainId)
-  )
-  const setSelectedChainIds = onSelectedChainIdsChange ?? setLocalSelectedChainIds
-  const visibleConfidential = standaloneConfidential.filter(
-    item =>
-      (item.chain && selectedChainIds.includes(item.chain.chain.id)) ||
-      (!item.chain && selectedChainIds.length === availableChainIds.length)
-  )
-  const separateConfidential = visibleConfidential.filter(
-    item => item !== confidentialZec?.mergedHolding
-  )
-  const standaloneChainIds = new Set(
-    visibleConfidential.flatMap(item => (item.chain ? [item.chain.chain.id] : []))
-  )
-  const [expandedChainIds, setExpandedChainIds] = useState<ReadonlySet<string>>(() => new Set())
-  const [swapCatalog, setSwapCatalog] = useState<readonly SwapToken[]>([])
-  useEffect(() => {
-    let cancelled = false
-    void swapTokenCatalogClient
-      .readCached()
-      .then(tokens => {
-        if (!cancelled) setSwapCatalog(tokens)
-      })
-      .catch(() => {})
-    void swapTokenCatalogClient
-      .refresh()
-      .then(tokens => {
-        if (!cancelled) setSwapCatalog(tokens)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  const [lowValueExpanded, setLowValueExpanded] = useState(false)
-  const [expandedLowValueChainIds, setExpandedLowValueChainIds] = useState<ReadonlySet<string>>(
-    () => new Set()
-  )
-
-  const filteredChains = useMemo(
-    () => selectableChains.filter(chain => selectedChainIds.includes(chain.chain.id)),
-    [selectableChains, selectedChainIds]
-  )
-  const visibleChains =
-    domain === 'all'
-      ? filteredChains
-      : filteredChains.filter(
-          chain =>
-            chain.assets.length > 0 ||
-            standaloneChainIds.has(chain.chain.id) ||
-            getPortfolioChainBalanceStatus(chain) !== 'ready'
-        )
-  const assetGroups = useMemo(
-    () =>
-      buildPortfolioAssetGroups(visibleChains, prices, {
-        includeZeroBalanceNativeAssets: visibleChains.length === 1
+      buildPortfolioDisplay({
+        model,
+        sourceModel,
+        network,
+        domain,
+        sourcePrices,
+        selectedChainIds: requestedChainIds,
+        enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
       }),
-    [prices, visibleChains]
+    [domain, model, network, requestedChainIds, sourceModel, sourcePrices]
   )
-  const { primaryAssetGroups, lowValueAssetGroups } = useMemo(
-    () => partitionPortfolioAssetGroups(assetGroups, prices, LOW_VALUE_USD_THRESHOLD),
-    [assetGroups, prices]
-  )
-  const sortedChains = useMemo(
-    () => sortPortfolioChains(visibleChains, prices),
-    [prices, visibleChains]
-  )
+  const selectAsset = (assetId: string) => {
+    if (confidentialZec?.displayAsset && assetId === confidentialZec.assetId) {
+      const tokenId = confidentialZec.mergedHolding?.entry.asset.tokenId
+      if (tokenId) onSelectConfidentialAsset?.(tokenId)
+    } else {
+      onSelectAsset?.(assetId)
+    }
+  }
+  const [expandedChainIds, setExpandedChainIds] = useState<ReadonlySet<string>>(() => new Set())
+  const swapCatalog = useSwapTokenCatalog() ?? undefined
+  const [lowValueExpanded, setLowValueExpanded] = useState(false)
+
   const displayedChains = chainListExpanded ? sortedChains : sortedChains.slice(0, 3)
-  const sortedNetworkOptions = useMemo(
-    () => sortPortfolioChains(selectableChains, prices),
-    [selectableChains, prices]
-  )
   const showContent = model.status === 'ready' || model.status === 'partial'
-  const unavailableChains = visibleChains.filter(
-    chain => chain.assets.length === 0 && getPortfolioChainBalanceStatus(chain) === 'unavailable'
-  )
-  const hasPendingBalances = visibleChains.some(
-    chain => getPortfolioChainBalanceStatus(chain) === 'loading'
-  )
   // Balances arrive from cache before prices resolve; show price/fiat skeletons
   // instead of a bare em dash until the first price model lands.
   const pricesLoading = priceStatus === 'loading'
@@ -407,7 +315,8 @@ export function PortfolioShell({
           balancesHidden={balancesHidden}
           expanded={false}
           pricesLoading={pricesLoading}
-          onSelectAsset={onSelectAsset}
+          onSelectAsset={selectAsset}
+          onShield={onShieldForAsset?.(group.entries[0].asset.asset.id)}
           directAsset
           swapCatalog={swapCatalog}
         />
@@ -415,7 +324,7 @@ export function PortfolioShell({
           <div className="px-4 pb-2 pl-16">
             <BalanceReadError
               chain={unavailableZcash}
-              hasBalance
+              hasBalance={!confidentialZec?.displayAsset}
               onRetry={onRefresh}
               disabled={refreshDisabled}
             />
@@ -431,86 +340,88 @@ export function PortfolioShell({
       className="flex min-h-0 flex-1 flex-col"
     >
       <h2 className="sr-only">Portfolio</h2>
-      {!hideToolbar && (
-        <div className="flex h-[46px] shrink-0 items-center justify-between px-4 pb-1 pt-2.5">
-          <NetworkFilter
-            ariaLabelPrefix="Filter portfolio by network"
-            options={sortedNetworkOptions.map(chain => chain.chain)}
-            selectedIds={selectedChainIds}
-            onSelectionChange={setSelectedChainIds}
-          />
+      <NetworkFilterToolbar>
+        <NetworkFilter
+          ariaLabelPrefix="Filter portfolio by network"
+          options={networkOptions}
+          selectedIds={selectedChainIds}
+          onSelectionChange={onSelectedChainIdsChange}
+        />
 
-          <div className="flex shrink-0 items-center gap-2">
-            {refreshing && (
-              <span role="status" aria-label="Portfolio data is syncing" className="sr-only">
-                Syncing portfolio
-              </span>
-            )}
-            <div
-              role="group"
-              aria-label="Portfolio view"
-              className="flex h-8 items-center rounded-xl bg-[var(--color-wallet-surface)] p-1"
-            >
-              <Tooltip content="View by token" side="bottom">
-                <button
-                  type="button"
-                  aria-label="Show token view"
-                  aria-pressed={view === 'assets'}
-                  onClick={() => setView('assets')}
-                  className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
-                >
-                  <PortfolioViewIcon view="assets" active={view === 'assets'} />
-                </button>
-              </Tooltip>
-              <Tooltip content="View by network" side="bottom">
-                <button
-                  type="button"
-                  aria-label="Show chain view"
-                  aria-pressed={view === 'chains'}
-                  onClick={() => setView('chains')}
-                  className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
-                >
-                  <PortfolioViewIcon view="chains" active={view === 'chains'} />
-                </button>
-              </Tooltip>
-            </div>
-            {(onRefresh || onManageTokens) && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Portfolio options"
-                    className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-[var(--color-wallet-secondary)] hover:bg-white/5 hover:text-foreground active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-                  >
-                    <Icon icon="lucide:ellipsis" width={21} height={21} />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="bg-[var(--color-wallet-surface)]">
-                  {onManageTokens && (
-                    <DropdownMenuItem onSelect={onManageTokens}>Manage tokens</DropdownMenuItem>
-                  )}
-                  {onRefresh && (
-                    <DropdownMenuItem disabled={refreshDisabled} onSelect={onRefresh}>
-                      Refresh list
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+        <div className="flex shrink-0 items-center gap-1">
+          {refreshing && (
+            <span role="status" aria-label="Portfolio data is syncing" className="sr-only">
+              Syncing portfolio
+            </span>
+          )}
+          <div
+            role="group"
+            aria-label="Portfolio view"
+            className="flex h-8 items-center gap-0.5 rounded-lg bg-[var(--home-toolbar-surface,var(--color-wallet-surface))] p-1"
+          >
+            <Tooltip content="View by token" side="bottom">
+              <button
+                type="button"
+                aria-label="Show token view"
+                aria-pressed={view === 'assets'}
+                onClick={() => onViewChange('assets')}
+                className="wallet-interactive flex size-6 items-center justify-center rounded-md hover:bg-wallet-selected active:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-wallet-selected"
+              >
+                <PortfolioViewIcon view="assets" active={view === 'assets'} />
+              </button>
+            </Tooltip>
+            <Tooltip content="View by network" side="bottom">
+              <button
+                type="button"
+                aria-label="Show chain view"
+                aria-pressed={view === 'chains'}
+                onClick={() => onViewChange('chains')}
+                className="wallet-interactive flex size-6 items-center justify-center rounded-md hover:bg-wallet-selected active:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-wallet-selected"
+              >
+                <PortfolioViewIcon view="chains" active={view === 'chains'} />
+              </button>
+            </Tooltip>
           </div>
+          {(onRefresh || onManageTokens) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Portfolio options"
+                  className="wallet-interactive flex h-8 w-6 items-center justify-center rounded-lg text-wallet-secondary hover:bg-foreground/5 hover:text-foreground active:bg-foreground/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                >
+                  <Icon icon="lucide:ellipsis" width={16} height={16} className="rotate-90" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-[var(--color-wallet-surface)]">
+                {onManageTokens && (
+                  <DropdownMenuItem onSelect={onManageTokens}>Manage tokens</DropdownMenuItem>
+                )}
+                {onRefresh && (
+                  <DropdownMenuItem disabled={refreshDisabled} onSelect={onRefresh}>
+                    Refresh list
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
-      )}
+      </NetworkFilterToolbar>
 
       <div className="min-h-0 flex-1 pb-4">
+        {listHeader}
         {model.status === 'loading' && visibleConfidential.length === 0 ? (
           <LoadingPanel />
-        ) : model.status === 'error' && unavailableChains.length === 0 ? (
+        ) : model.status === 'error' &&
+          unavailableChains.length === 0 &&
+          visibleConfidential.length === 0 ? (
           <StatePanel
             icon="lucide:wifi-off"
             title="Unable to load portfolio"
             description="Noir Wallet is reconnecting automatically."
+            tone="error"
           />
-        ) : model.status === 'empty' ? (
+        ) : model.status === 'empty' && visibleConfidential.length === 0 ? (
           <StatePanel
             icon="lucide:layers"
             title={domain === 'all' ? 'No networks available' : 'No assets found'}
@@ -519,7 +430,8 @@ export function PortfolioShell({
           <StatePanel icon="lucide:network" title="No network selected" />
         ) : showContent &&
           view === 'assets' &&
-          assetGroups.length === 0 &&
+          primaryAssetGroups.length === 0 &&
+          lowValueAssetGroups.length === 0 &&
           visibleConfidential.length === 0 &&
           unavailableChains.length === 0 &&
           !hasPendingBalances ? (
@@ -529,13 +441,35 @@ export function PortfolioShell({
           />
         ) : view === 'assets' ? (
           <div className="pb-2">
+            {pendingStarterZcash && (
+              <button
+                type="button"
+                aria-label={`View ZEC details on ${pendingStarterZcash.chain.displayName}`}
+                className={cn(
+                  portfolioAssetRowClassName,
+                  'wallet-interactive hover:bg-foreground/[0.03] active:bg-foreground/[0.06] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary'
+                )}
+                onClick={() => selectAsset(`${pendingStarterZcash.chain.id}/slip44:133`)}
+              >
+                <PortfolioAssetRowContent
+                  icon={<TokenIcon symbol="ZEC" nativeChain="zcash" size={36} />}
+                  title={<p className="truncate text-base font-medium">ZEC</p>}
+                  subtitle={null}
+                  balance={
+                    <span className="text-xs text-muted" role="status">
+                      {balancesHidden ? '••••' : 'Syncing'}
+                    </span>
+                  }
+                />
+              </button>
+            )}
             {primaryAssetGroups.map(group => renderAssetGroup(group, 'assets:all'))}
             {separateConfidential.map(({ entry, chain }) => (
               <NearConfidentialHoldingRow
                 key={entry.asset.tokenId}
                 entry={entry}
                 chain={chain?.chain}
-                showProvider
+                showProvider={domain !== 'all'}
                 balancesHidden={balancesHidden}
                 pricesLoading={pricesLoading}
                 onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
@@ -583,24 +517,11 @@ export function PortfolioShell({
             )}
           </div>
         ) : (
-          <div className="divide-y divide-white/[0.08] pb-2">
+          <div className="divide-y divide-border pb-2">
             {displayedChains.map(chain => {
               const expanded = expandedChainIds.has(chain.chain.id)
-              const balanceStatus = getPortfolioChainBalanceStatus(chain)
-              const confidentialEntries = visibleConfidential.filter(
-                item => item.chain?.chain.id === chain.chain.id
-              )
-              const chainFiat = sumNearConfidentialChainFiat(
-                getPortfolioChainUsdValue(chain, prices),
-                confidentialEntries
-              )
-              const sortedAssets = sortPortfolioAssets(chain.assets, prices)
-              const { primaryAssets, lowValueAssets } = partitionPortfolioAssets(
-                sortedAssets,
-                prices,
-                LOW_VALUE_USD_THRESHOLD
-              )
-              const chainLowValueExpanded = expandedLowValueChainIds.has(chain.chain.id)
+              const { balanceStatus, chainFiat, hasNativeBalance, separateHoldings, assets } =
+                getPortfolioChainSection(chain, prices, visibleConfidential, confidentialZec)
               return (
                 <section
                   key={chain.chain.id}
@@ -619,7 +540,7 @@ export function PortfolioShell({
                         return next
                       })
                     }
-                    className="wallet-interactive flex min-h-[66px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                    className="wallet-interactive flex min-h-[66px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-foreground/5 active:bg-foreground/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                   >
                     <ChainIcon
                       chain={resolveChainIconAlias(
@@ -662,7 +583,7 @@ export function PortfolioShell({
                     <div className="px-4 pb-2 pl-16">
                       <BalanceReadError
                         chain={chain}
-                        hasBalance={chain.assets.length > 0}
+                        hasBalance={hasNativeBalance}
                         onRetry={onRefresh}
                         disabled={refreshDisabled}
                       />
@@ -679,13 +600,13 @@ export function PortfolioShell({
                         disabled={refreshDisabled}
                       />
                     )}
-                  {expanded && (chain.assets.length > 0 || confidentialEntries.length > 0) && (
+                  {expanded && (chain.assets.length > 0 || separateHoldings.length > 0) && (
                     <div
                       role="region"
                       aria-label={`${chain.chain.displayName} token balances`}
                       className="divide-y divide-border/70 border-t border-border/70"
                     >
-                      {primaryAssets.map(asset => (
+                      {assets.map(asset => (
                         <PortfolioChainAssetRow
                           key={asset.asset.id}
                           entry={{ asset, chain }}
@@ -694,66 +615,22 @@ export function PortfolioShell({
                           confidentialZec={confidentialZec}
                           balancesHidden={balancesHidden}
                           pricesLoading={pricesLoading}
-                          onSelectAsset={onSelectAsset}
+                          onSelectAsset={selectAsset}
+                          onShield={onShieldForAsset?.(asset.asset.id)}
                           swapCatalog={swapCatalog}
                         />
                       ))}
-                      {confidentialEntries
-                        .filter(item => item !== confidentialZec?.mergedHolding)
-                        .map(({ entry }) => (
-                          <NearConfidentialHoldingRow
-                            key={entry.asset.tokenId}
-                            entry={entry}
-                            chain={chain.chain}
-                            showProvider
-                            balancesHidden={balancesHidden}
-                            pricesLoading={pricesLoading}
-                            onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
-                          />
-                        ))}
-                      {lowValueAssets.length > 0 && (
-                        <>
-                          <button
-                            type="button"
-                            aria-expanded={chainLowValueExpanded}
-                            onClick={() =>
-                              setExpandedLowValueChainIds(current => {
-                                const next = new Set(current)
-                                if (next.has(chain.chain.id)) next.delete(chain.chain.id)
-                                else next.add(chain.chain.id)
-                                return next
-                              })
-                            }
-                            className="wallet-interactive flex min-h-10 w-full items-center gap-2 px-3 text-left text-xs text-muted hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-                          >
-                            <Icon icon="lucide:archive" width={14} height={14} />
-                            <span className="flex-1">Low value ({lowValueAssets.length})</span>
-                            <Icon
-                              icon="lucide:chevron-down"
-                              width={12}
-                              height={12}
-                              className={cn(
-                                'transition-transform',
-                                chainLowValueExpanded && 'rotate-180'
-                              )}
-                            />
-                          </button>
-                          {chainLowValueExpanded &&
-                            lowValueAssets.map(asset => (
-                              <PortfolioChainAssetRow
-                                key={asset.asset.id}
-                                entry={{ asset, chain }}
-                                domain={domain}
-                                prices={prices}
-                                confidentialZec={confidentialZec}
-                                balancesHidden={balancesHidden}
-                                pricesLoading={pricesLoading}
-                                onSelectAsset={onSelectAsset}
-                                swapCatalog={swapCatalog}
-                              />
-                            ))}
-                        </>
-                      )}
+                      {separateHoldings.map(({ entry }) => (
+                        <NearConfidentialHoldingRow
+                          key={entry.asset.tokenId}
+                          entry={entry}
+                          chain={chain.chain}
+                          showProvider={domain !== 'all'}
+                          balancesHidden={balancesHidden}
+                          pricesLoading={pricesLoading}
+                          onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
+                        />
+                      ))}
                     </div>
                   )}
                 </section>
@@ -765,7 +642,7 @@ export function PortfolioShell({
                 <NearConfidentialHoldingRow
                   key={entry.asset.tokenId}
                   entry={entry}
-                  showProvider
+                  showProvider={domain !== 'all'}
                   balancesHidden={balancesHidden}
                   pricesLoading={pricesLoading}
                   onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}

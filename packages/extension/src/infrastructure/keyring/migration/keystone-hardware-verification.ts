@@ -35,6 +35,42 @@ export interface KeystoneZcashVerificationPort {
   verifyZcash(input: KeystoneZcashVerificationInput): Promise<KeystoneZcashVerificationResult>
 }
 
+export const incompatibleHardwareCredentialError =
+  'Keystone Zcash verification failed (credential-validation)'
+
+export class IncompatibleRetainedHardwareWalletError extends Error {
+  constructor(
+    readonly walletId: string,
+    cause: unknown
+  ) {
+    super(cause instanceof Error ? cause.message : 'Incompatible retained Zcash hardware wallet')
+  }
+}
+
+export async function verifyRetainedZcashHardwareWallet(
+  verifier: KeystoneZcashVerificationPort,
+  walletId: string,
+  input: KeystoneZcashVerificationInput
+): Promise<KeystoneZcashVerificationResult> {
+  const result = await verifier.verifyZcash(input).catch(error => {
+    if (error instanceof Error && error.message === incompatibleHardwareCredentialError) {
+      throw new IncompatibleRetainedHardwareWalletError(walletId, error)
+    }
+    throw error
+  })
+  try {
+    assertKeystoneZcashVerificationMatches(result, {
+      accountIndex: input.account.accountIndex,
+      expected: input.account.expected,
+      chainId: input.chainId,
+      network: input.network
+    })
+  } catch (error) {
+    throw new IncompatibleRetainedHardwareWalletError(walletId, error)
+  }
+  return result
+}
+
 export function assertKeystoneZcashVerificationMatches(
   result: KeystoneZcashVerificationResult,
   input: Readonly<{
@@ -103,7 +139,7 @@ export function parseKeystoneZcashVerificationInput(
     (value.account.accountIndex as number) < 0 ||
     (value.account.accountIndex as number) > 0x7fffffff ||
     !Number.isSafeInteger(value.account.birthdayHeight) ||
-    (value.account.birthdayHeight as number) <= 0 ||
+    (value.account.birthdayHeight as number) < 0 ||
     (value.account.birthdayHeight as number) > 0xffffffff ||
     !isRecord(value.account.expected)
   ) {

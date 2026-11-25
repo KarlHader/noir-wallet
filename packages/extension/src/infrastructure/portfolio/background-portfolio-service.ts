@@ -192,14 +192,14 @@ export class BackgroundPortfolioService {
 
   async refreshActive(
     chainIds?: readonly string[],
-    options: Readonly<{ automatic?: boolean }> = {}
+    options: Readonly<{ automatic?: boolean; refreshConfidential?: boolean }> = {}
   ): Promise<PortfolioReadModel | null> {
     return this.refreshActiveWithFollowup(chainIds, options, true, false)
   }
 
   private async refreshActiveWithFollowup(
     chainIds: readonly string[] | undefined,
-    options: Readonly<{ automatic?: boolean }>,
+    options: Readonly<{ automatic?: boolean; refreshConfidential?: boolean }>,
     allowFollowup: boolean,
     bypassBackoff: boolean
   ): Promise<PortfolioReadModel | null> {
@@ -300,15 +300,18 @@ export class BackgroundPortfolioService {
     if (!(await this.isCurrent(scope))) return null
     const current = await this.options.coordinator.readCachedActive()
     if (!matchesModel(current, scope) || !(await this.isCurrent(scope))) return null
-    const confidentialMarkers = invalidated.filter(
-      marker =>
-        marker.domain === 'confidential' &&
-        (chainIds === undefined || chainIds.includes(marker.chainId))
-    )
-    const refreshed = await this.options.enrich(
-      current,
-      confidentialMarkers.length > 0 ? true : chainIds === undefined ? 'if-stale' : false
-    )
+    const refreshConfidential = options.refreshConfidential !== false
+    const confidentialMarkers = refreshConfidential
+      ? invalidated.filter(
+          marker =>
+            marker.domain === 'confidential' &&
+            (chainIds === undefined || chainIds.includes(marker.chainId))
+        )
+      : []
+    const confidentialRefresh =
+      refreshConfidential &&
+      (confidentialMarkers.length > 0 || (chainIds === undefined && ('if-stale' as const)))
+    const refreshed = await this.options.enrich(current, confidentialRefresh)
     if (!matchesModel(refreshed, scope) || !(await this.isCurrent(scope))) return null
     const latestInvalidations = await this.options.readInvalidations(scope)
     if (!(await this.isCurrent(scope))) return null
@@ -321,7 +324,11 @@ export class BackgroundPortfolioService {
       )
     )
     const newerConfidential = latestInvalidations.flatMap(marker => {
-      if (marker.domain !== 'confidential' || (chainIds && !chainIds.includes(marker.chainId))) {
+      if (
+        !refreshConfidential ||
+        marker.domain !== 'confidential' ||
+        (chainIds && !chainIds.includes(marker.chainId))
+      ) {
         return []
       }
       const previousMarker = invalidated.find(
@@ -332,7 +339,7 @@ export class BackgroundPortfolioService {
     if (allowFollowup && (newerChains.length > 0 || newerConfidential.length > 0)) {
       return this.refreshActiveWithFollowup(
         [...new Set([...newerChains, ...newerConfidential])],
-        { automatic: true },
+        { automatic: true, refreshConfidential },
         false,
         true
       )

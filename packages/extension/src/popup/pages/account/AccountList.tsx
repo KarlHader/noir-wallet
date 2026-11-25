@@ -63,7 +63,7 @@ function AccountTotalValue({
   const value = hidden
     ? '••••'
     : canShowValue && snapshot
-      ? `${snapshot.complete ? '' : '≈'}${formatFiatAmount(snapshot.totalUsd, { showSign: true })}`
+      ? formatFiatAmount(snapshot.totalUsd, { showSign: true })
       : '—'
   const accessibleValue = hidden
     ? 'Account total hidden'
@@ -783,6 +783,20 @@ function AccountRow({
   )
 }
 
+function LedgerNetworksMenuItem({ walletId, accountId }: { walletId: string; accountId: string }) {
+  return (
+    <DropdownMenuItem
+      onClick={event => {
+        event.stopPropagation()
+        openHardwareConnectTab('ledger', { walletId, accountId })
+      }}
+    >
+      <Icon icon="lucide:network" className="mr-2 h-4 w-4" />
+      Add networks
+    </DropdownMenuItem>
+  )
+}
+
 function NativeAccountItem({
   account,
   switching,
@@ -806,6 +820,8 @@ function NativeAccountItem({
 }) {
   const { navigate } = useNavigate()
   const isPrivateKey = account.walletSource.kind === 'private-key'
+  const isLedger =
+    account.walletSource.kind === 'hardware' && account.walletSource.hardware.vendor === 'ledger'
   return (
     <AccountRow
       name={account.accountDisplayName}
@@ -832,6 +848,9 @@ function NativeAccountItem({
         <Icon icon="lucide:qr-code" className="mr-2 h-4 w-4" />
         Addresses
       </DropdownMenuItem>
+      {isLedger && (
+        <LedgerNetworksMenuItem walletId={account.walletId} accountId={account.accountId} />
+      )}
       {isPrivateKey && (
         <DropdownMenuItem
           onClick={event => {
@@ -922,9 +941,15 @@ function AccountItem({
           navigate(`/addresses-list?accountId=${account.id}&walletId=${wallet.id}`)
         }}
       >
-        <Icon icon="lucide:scan-qr-code" className="mr-2 h-4 w-4" />
+        <Icon
+          icon={wallet.keySource === 'ledger' ? 'lucide:qr-code' : 'lucide:scan-qr-code'}
+          className="mr-2 h-4 w-4"
+        />
         Addresses
       </DropdownMenuItem>
+      {wallet.keySource === 'ledger' && (
+        <LedgerNetworksMenuItem walletId={wallet.id} accountId={account.id} />
+      )}
       <DropdownMenuItem
         onClick={async e => {
           e.stopPropagation()

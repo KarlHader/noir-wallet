@@ -2,6 +2,10 @@ import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import { connectionAuthorizesAccount, dappManager } from '../core/dapp/dapp-manager'
 import { shouldAutoConnectDApp } from '@/core/dapp/first-party-policy'
+import {
+  mergeShieldSiteGrants,
+  type WalletConnectedDApp
+} from '@/core/dapp/shield-site-connections'
 import { syncScheduler } from './sync-scheduler'
 import type {
   AccountData,
@@ -57,6 +61,8 @@ import { accountContextTransition } from './account-context-transition'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { isStoredAccountNetworkEnabled } from '@/lib/wallet-metadata-storage'
 import { getZcashChainId } from '@/core/chains/registry'
+import { getActiveChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
+import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import { Caip25ProviderError } from '@/core/dapp/caip25'
 import {
   activeDAppSessionAccountMatches,
@@ -66,6 +72,8 @@ import {
 } from './dapp-session-accounts'
 import { dappExecutionModeRequestGate } from './dapp-execution-mode'
 import { parseEvmFeeSelection, type EvmFeeSelection } from '@/infrastructure/chains/evm'
+import { createConfiguredNearRpcClient } from '@/infrastructure/chains/near/near-configured-rpc-client'
+import { ChromeConfidentialFundingStore } from './confidential-funding-store'
 
 type DAppTabInfo = {
   readonly title?: string
@@ -137,7 +145,8 @@ const CONNECT_APPROVAL_ACTIONS = new Set([
   'bitcoinConnect',
   'solanaConnect',
   'nearConnect',
-  'multichainConnect'
+  'multichainConnect',
+  'shieldConnect'
 ])
 
 const APPROVAL_ACTION_PREFIXES = Object.freeze({
@@ -260,6 +269,7 @@ export class DAppHandler {
 
   async clearConnections(): Promise<void> {
     const origins = await dappManager.clearConnections()
+    await new ChromeConfidentialFundingStore().clearShieldSiteGrants()
     this.permissions.clear()
     await Promise.all(
       origins.map(origin => this.broadcastEvent(origin, 'accountsChanged', null).catch(() => {}))
@@ -1831,6 +1841,7 @@ export class DAppHandler {
 
   private async checkLendingMcaAccount(origin: string) {
     const bound = await this.ensurePermission(origin)
+    if (DEFAULT_NETWORK !== 'mainnet') return null
     return this.runBoundZcashOperation(bound.walletId, bound.accountId, async () => {
       await this.ensureApprovedAccountContext(
         origin,
@@ -1838,8 +1849,15 @@ export class DAppHandler {
         bound.accountId,
         bound.revision
       )
-      return checkZcashMcaAccount(bound.walletId, bound.accountId, mode =>
-        this.resolveLendingPublicKey(bound.walletId, bound.accountId, mode)
+      const network = resolveNearRuntimeNetworkConfig(
+        DEFAULT_NETWORK,
+        getActiveChainEndpointSettings()
+      )
+      return checkZcashMcaAccount(
+        bound.walletId,
+        bound.accountId,
+        mode => this.resolveLendingPublicKey(bound.walletId, bound.accountId, mode),
+        createConfiguredNearRpcClient(network)
       )
     })
   }
@@ -2018,6 +2036,7 @@ export class DAppHandler {
     options?: {
       readonly onNetworkFeeTierChange?: (tier: 'low' | 'standard' | 'fast') => Promise<unknown>
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
+      readonly onEvmFeeTierPreviews?: () => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
     }
@@ -2090,6 +2109,7 @@ export class DAppHandler {
     options?: {
       readonly onNetworkFeeTierChange?: (tier: 'low' | 'standard' | 'fast') => Promise<unknown>
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
+      readonly onEvmFeeTierPreviews?: () => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
     }
@@ -2136,6 +2156,7 @@ export class DAppHandler {
     options?: {
       readonly onNetworkFeeTierChange?: (tier: 'low' | 'standard' | 'fast') => Promise<unknown>
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
+      readonly onEvmFeeTierPreviews?: () => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
     },
@@ -2394,6 +2415,29 @@ export class DAppHandler {
               typeof msg === 'object' &&
               msg !== null &&
               !Array.isArray(msg) &&
+              Reflect.get(msg, 'type') === 'DAPP_EVM_FEE_TIER_PREVIEWS' &&
+              Reflect.get(msg, 'requestId') === requestId &&
+              options?.onEvmFeeTierPreviews
+            ) {
+              void Promise.resolve()
+                .then(() => options.onEvmFeeTierPreviews?.())
+                .then(previews => {
+                  sendResponse(
+                    finished ? { error: 'Approval request is no longer active' } : { previews }
+                  )
+                })
+                .catch(error => {
+                  sendResponse({
+                    error: error instanceof Error ? error.message : 'Fee preview failed'
+                  })
+                })
+              return true
+            }
+
+            if (
+              typeof msg === 'object' &&
+              msg !== null &&
+              !Array.isArray(msg) &&
               Reflect.get(msg, 'type') === 'DAPP_EVM_FEE_SELECTION_CHANGE' &&
               Reflect.get(msg, 'requestId') === requestId &&
               options?.onEvmFeeSelectionChange
@@ -2516,8 +2560,12 @@ export class DAppHandler {
     this.trackDisconnected()
   }
 
-  async revokeAllPermissions(origin: string): Promise<void> {
-    await dappManager.removeConnection(origin)
+  async revokeAllPermissions(
+    origin: string,
+    initiatedBy: 'wallet' | 'site' = 'wallet'
+  ): Promise<void> {
+    await dappManager.removeConnection(origin, initiatedBy)
+    await new ChromeConfidentialFundingStore().deleteShieldSiteGrantsByOrigin(origin)
     this.permissions.delete(origin)
     pendingRequestsManager.cancelOrigin(origin)
     await Promise.allSettled([
@@ -2538,8 +2586,12 @@ export class DAppHandler {
     return Array.from(this.permissions.values())
   }
 
-  async getAllConnectedDApps() {
-    return await dappManager.getAllConnections()
+  async getAllConnectedDApps(): Promise<WalletConnectedDApp[]> {
+    const [connections, shieldGrants] = await Promise.all([
+      dappManager.getAllConnections(),
+      new ChromeConfidentialFundingStore().listShieldSiteGrants(DEFAULT_NETWORK)
+    ])
+    return mergeShieldSiteGrants(connections, shieldGrants)
   }
 
   /**

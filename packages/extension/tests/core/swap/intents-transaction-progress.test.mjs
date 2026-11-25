@@ -5,7 +5,7 @@ import {
   getLegacyIntentsProgressPresentation
 } from '../../../src/popup/services/transaction-progress.ts'
 import { getZcashIntentsOriginStatus } from '../../../src/lib/cross-chain-transaction.ts'
-import { getActivityProgressSteps } from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+import { getActivityProgressSteps } from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 test('an origin hash alone does not claim on-chain success', () => {
   const progress = getIntentsProgressPresentation({
@@ -178,7 +178,7 @@ test('RHEA signed orders and relay use the same progress language in Activity', 
   )
   expect(steps.map(step => [step.label, step.state, step.statusLabel])).toEqual([
     ['Order submitted', 'complete', 'Submitted'],
-    ['Intents processing', 'active', 'Processing'],
+    ['Crosschain', 'active', 'Processing'],
     ['Destination transaction', 'pending', 'Pending']
   ])
 })
@@ -219,7 +219,7 @@ test('Activity hides an unused refund branch but shows a refund that actually st
 
   expect(getActivityProgressSteps(item, chainName).map(step => step.label)).toEqual([
     'Origin transaction',
-    'Intents processing',
+    'Crosschain',
     'Destination transaction'
   ])
   expect(
@@ -235,6 +235,33 @@ test('Activity hides an unused refund branch but shows a refund that actually st
       chainName
     ).at(-1)
   ).toMatchObject({ label: 'Refund transaction', state: 'complete' })
+})
+
+test('a finished Shield receive no longer presents its relay step as processing', () => {
+  const steps = getActivityProgressSteps(
+    {
+      status: 'final',
+      segments: [
+        {
+          id: 'origin',
+          role: 'origin',
+          target: { kind: 'protocol', provider: 'Confidential Intents' },
+          status: 'final'
+        },
+        {
+          id: 'relay',
+          role: 'relay',
+          target: { kind: 'protocol', provider: 'Confidential Intents' },
+          status: 'final'
+        }
+      ]
+    },
+    () => 'Ethereum'
+  )
+  expect(steps.map(step => [step.label, step.state, step.statusLabel])).toEqual([
+    ['Deposit confirmed', 'complete', 'Completed'],
+    ['Received', 'complete', 'Completed']
+  ])
 })
 
 test('legacy Withdraw keeps destination Zcash confirmations separate from source status', () => {

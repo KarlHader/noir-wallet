@@ -7,6 +7,11 @@ import {
   mapTransactionGraphToActivityItem,
   parseActivityReadModel
 } from '../../../src/core/activity/index.ts'
+import {
+  collectActivityReceiptNotifications,
+  formatActivityNotification,
+  resolveActivityNotification
+} from '../../../src/core/activity/activity-notification.ts'
 import { parseChainId } from '../../../src/core/chains/registry/index.ts'
 import { parseKeyDomainId } from '../../../src/core/keyring/domain/index.ts'
 import {
@@ -32,6 +37,123 @@ const zecAssetId = `${zcashChainId}/slip44:133`
 const btcAssetId = `${bitcoinChainId}/slip44:0`
 const evmHash = `0x${'A'.repeat(64)}`
 const peaAddress = '0x9999999999999999999999999999999999999999'
+
+test('Activity notifications baseline historical receipts and deduplicate route payouts', () => {
+  const receipt = (id, status, hash, createdAt) => ({
+    id,
+    source: 'rpc',
+    kind: 'transfer',
+    status,
+    createdAt,
+    scope,
+    snapshot: { schemaVersion: 1, direction: 'incoming' },
+    segments: [
+      {
+        role: 'origin',
+        status,
+        target: { kind: 'onchain', chainId: evmChainId },
+        evidence: { transactionHash: hash }
+      }
+    ]
+  })
+  const historical = receipt('old', 'final', '0x1', 10)
+  const pending = new Set()
+  expect(
+    collectActivityReceiptNotifications(
+      [historical, receipt('pending', 'confirming', '0x2', 10)],
+      {},
+      pending
+    )
+  ).toEqual([])
+  const walletSwap = {
+    source: 'wallet-v2',
+    kind: 'swap',
+    segments: [
+      {
+        role: 'destination',
+        target: { kind: 'onchain', chainId: evmChainId },
+        evidence: { transactionHash: '0x3' }
+      }
+    ]
+  }
+  expect(
+    collectActivityReceiptNotifications(
+      [
+        historical,
+        receipt('confirmed', 'final', '0x2', 10),
+        receipt('wallet payout', 'final', '0x3', 20),
+        receipt('new', 'final', '0x4', 20),
+        walletSwap
+      ],
+      { [`${evmChainId}:main`]: 15 },
+      pending
+    ).map(outcome => outcome.item.id)
+  ).toEqual(['confirmed', 'new'])
+})
+
+test('Activity notifications report settlement amounts and wait for a refund outcome', () => {
+  const origin = {
+    role: 'origin',
+    status: 'final',
+    target: { kind: 'onchain', chainId: evmChainId },
+    evidence: { transactionHash: evmHash }
+  }
+  const destination = {
+    role: 'destination',
+    status: 'confirming',
+    target: { kind: 'onchain', chainId: arbitrumChainId }
+  }
+  const swap = {
+    id: 'swap',
+    source: 'wallet-v2',
+    kind: 'swap',
+    status: 'confirming',
+    scope,
+    snapshot: {
+      direction: 'outgoing',
+      primaryAmount: { assetId: ethAssetId, amountRaw: '50000000000000000' },
+      counterAmount: { assetId: usdcAssetId, amountRaw: '91000000' }
+    },
+    segments: [origin, destination]
+  }
+  expect(resolveActivityNotification(swap)).toBeUndefined()
+  const settled = { assetId: usdcAssetId, amountRaw: '90000000' }
+  const confirmation = resolveActivityNotification({
+    ...swap,
+    status: 'final',
+    segments: [origin, { ...destination, status: 'final', evidence: { settledAmount: settled } }]
+  })
+  expect(
+    formatActivityNotification(confirmation, {
+      asset: assetId =>
+        assetId === ethAssetId ? { symbol: 'ETH', decimals: 18 } : { symbol: 'USDC', decimals: 6 },
+      chain: () => 'Ethereum'
+    })
+  ).toEqual({ title: 'Swap completed', message: '0.05 ETH → 90 USDC' })
+
+  const refund = { ...origin, role: 'refund', status: 'confirming' }
+  const failed = { ...swap, status: 'failed', failureCode: 'relay-failed' }
+  expect(resolveActivityNotification({ ...failed, segments: [origin, refund] })).toBeUndefined()
+  expect(
+    resolveActivityNotification({ ...failed, segments: [origin, { ...refund, status: 'final' }] })
+      ?.result
+  ).toBe('refunded')
+  expect(
+    resolveActivityNotification({ ...failed, failureCode: 'user-rejected', segments: [] })
+  ).toBeUndefined()
+  expect(
+    resolveActivityNotification({
+      ...failed,
+      id: 'tx:confidential-external:demo',
+      kind: 'shield',
+      failureCode: 'refunded',
+      snapshot: {
+        direction: 'incoming',
+        shield: { operation: 'deposit', destinationDomain: 'shield' }
+      }
+    })?.result
+  ).toBe('refunded')
+})
 
 function graph({
   id = 'transaction:activity',
@@ -87,6 +209,7 @@ function supplemental({
   chainId,
   assetId,
   hash,
+  direction = 'incoming',
   createdAt = 900,
   updatedAt,
   itemScope = scope
@@ -99,7 +222,7 @@ function supplemental({
     status: 'final',
     snapshot: {
       schemaVersion: 1,
-      direction: 'incoming',
+      direction,
       primaryAmount: { assetId, amountRaw: '100' }
     },
     segments: [
@@ -118,6 +241,76 @@ function supplemental({
 }
 
 test.describe('Activity read model', () => {
+  test('projects a signed EVM cancellation on the original confirmed transaction only', () => {
+    const original = graph({ id: 'transaction:confirmed-original' })
+    original.root.status = 'final'
+    original.segments[0].status = 'final'
+    const cancellation = graph({ id: 'transaction:cancel-attempt', hash: `0x${'b'.repeat(64)}` })
+    cancellation.root.kind = 'cancel'
+    cancellation.root.status = 'signed'
+    cancellation.root.relation = { kind: 'replacement-of', transactionId: original.root.id }
+    cancellation.segments[0].status = 'signed'
+
+    const readOriginal = localGraphs =>
+      parseActivityReadModel(buildActivityReadModel({ scope, localGraphs })).items.find(
+        item => item.id === original.root.id
+      )
+    expect(readOriginal([original, cancellation])).toMatchObject({
+      status: 'final',
+      cancellationStatus: 'signed',
+      evmReplacement: { id: cancellation.root.id, action: 'cancel', status: 'signed' },
+      segments: [{ status: 'final', evidence: { transactionHash: evmHash } }]
+    })
+    expect(
+      buildActivityReadModel({ scope, localGraphs: [original, cancellation] }).items
+    ).toHaveLength(1)
+
+    const unrelatedChain = structuredClone(cancellation)
+    unrelatedChain.segments[0].target.chainId = arbitrumChainId
+    expect(readOriginal([original, unrelatedChain]).cancellationStatus).toBeUndefined()
+
+    delete cancellation.segments[0].evidence
+    expect(readOriginal([original, cancellation]).cancellationStatus).toBeUndefined()
+  })
+
+  test('omits an unmined EVM cancellation hash after the original confirms', () => {
+    const cancellationHash = `0x${'b'.repeat(64)}`
+    const original = graph({ id: 'transaction:original-confirmed-before-cancel' })
+    original.root.status = 'final'
+    original.segments[0].status = 'final'
+    original.segments[0].evidence = {
+      transactionHash: evmHash,
+      blockHeight: 100,
+      replacementTransactionHash: cancellationHash
+    }
+    const cancellation = graph({ id: 'transaction:unmined-cancel', hash: cancellationHash })
+    cancellation.root.kind = 'cancel'
+    cancellation.root.status = 'failed'
+    cancellation.root.relation = { kind: 'replacement-of', transactionId: original.root.id }
+    cancellation.root.failure = { code: 'dropped', occurredAt: 1_100 }
+    cancellation.segments[0].status = 'failed'
+    cancellation.segments[0].failure = cancellation.root.failure
+
+    for (const winningHash of [undefined, evmHash.toLowerCase()]) {
+      cancellation.segments[0].evidence = {
+        transactionHash: cancellationHash,
+        ...(winningHash === undefined ? {} : { replacementTransactionHash: winningHash })
+      }
+      const { items } = parseActivityReadModel(
+        buildActivityReadModel({ scope, localGraphs: [original, cancellation] })
+      )
+      expect(items).toHaveLength(1)
+      expect(items[0]).toMatchObject({
+        id: original.root.id,
+        status: 'final',
+        cancellationStatus: 'failed',
+        segments: [{ evidence: { transactionHash: evmHash, blockHeight: 100 } }]
+      })
+      expect(items[0].segments[0].evidence).not.toHaveProperty('replacementTransactionHash')
+      expect(original.segments[0].evidence.replacementTransactionHash).toBe(cancellationHash)
+    }
+  })
+
   test('orders cross-chain source and destination records by transaction time', () => {
     const origin = graph({ id: 'transaction:cross-chain', updatedAt: 2_000 })
     const received = supplemental({
@@ -243,6 +436,7 @@ test.describe('Activity read model', () => {
         item => item.id === original.root.id
       )
     const model = buildActivityReadModel({ scope, localGraphs: [original, replacement] })
+    expect(model.items).toHaveLength(1)
     const item = model.items.find(candidate => candidate.id === original.root.id)
     expect(item?.snapshot?.feeLimit?.amountRaw).toBe('2520000')
     expect(item?.snapshot?.evm?.maxFeePerGasWei).toBe('120')
@@ -373,15 +567,15 @@ test.describe('Activity read model', () => {
       filterActivityItems({ ...selection, accountMode: 'main', executionAddressModes })
         .map(item => item.id)
         .sort()
-    ).toEqual([mainContractCall.root.id, mainToPrivate.root.id, privateToMain.root.id].sort())
+    ).toEqual([mainContractCall.root.id, mainToPrivate.root.id].sort())
     expect(
       filterActivityItems({ ...selection, accountMode: 'private', executionAddressModes })
         .map(item => item.id)
         .sort()
-    ).toEqual([incomingPrivate.root.id, mainToPrivate.root.id, privateToMain.root.id].sort())
+    ).toEqual([incomingPrivate.root.id, privateToMain.root.id].sort())
   })
 
-  test('keeps Shield withdrawals visible across execution modes while preserving explicit filters', () => {
+  test('keeps a Shield withdrawal in Shield until the recipient has observable credit', () => {
     const withdrawal = graph({ id: 'transaction:shield-withdrawal' })
     withdrawal.root.intent.shield = {
       schemaVersion: 1,
@@ -412,7 +606,7 @@ test.describe('Activity read model', () => {
         filterActivityItems({ ...selection, accountMode })
           .map(item => item.id)
           .sort()
-      ).toEqual([withdrawal.root.id, ordinaryId].sort())
+      ).toEqual([ordinaryId])
     }
     expect(
       filterActivityItems({ ...selection, accountMode: 'private', domain: 'private' }).map(
@@ -426,7 +620,7 @@ test.describe('Activity read model', () => {
       filterActivityItems({ ...selection, domain: 'public' })
         .map(item => item.id)
         .sort()
-    ).toEqual([ordinaryPublic.root.id, withdrawal.root.id].sort())
+    ).toEqual([ordinaryPublic.root.id])
     expect(filterActivityItems({ ...selection, assetId: 'invalid-asset' })).toEqual([])
     expect(
       filterActivityItems({
@@ -439,7 +633,80 @@ test.describe('Activity read model', () => {
     expect(filterActivityItems({ ...selection, selectedChainIds: [arbitrumChainId] })).toEqual([])
   })
 
-  test('Shield provider Activity keeps NEAR Confidential and Zcash records separate', () => {
+  test('prefers observed Zcash receipts for a Shield send without merging distinct credits', () => {
+    const hash = 'd'.repeat(64)
+    const recipient = { chainId: zcashChainId, address: `t1${'a'.repeat(33)}` }
+    const payout = supplemental({
+      id: 'zcash:credit:0',
+      source: 'zcash-v1',
+      chainId: zcashChainId,
+      assetId: zecAssetId,
+      hash,
+      updatedAt: 1_100
+    })
+    const receive = {
+      ...payout,
+      kind: 'receive',
+      assetDomains: ['public'],
+      snapshot: { ...payout.snapshot, recipient }
+    }
+    const send = {
+      ...payout,
+      id: 'tx:confidential:zcash-send',
+      source: 'wallet-v2',
+      kind: 'withdraw',
+      snapshot: {
+        ...payout.snapshot,
+        direction: 'outgoing',
+        shield: {
+          schemaVersion: 1,
+          operation: 'withdraw',
+          sourceDomain: 'shield',
+          destinationDomain: 'public'
+        },
+        counterAmount: { assetId: zecAssetId, amountRaw: '95' },
+        recipient
+      },
+      segments: [
+        {
+          ...payout.segments[0],
+          id: 'tx:confidential:zcash-send:destination',
+          role: 'destination',
+          evidence: {
+            transactionHash: hash,
+            settledAmount: { assetId: zecAssetId, amountRaw: '95' }
+          }
+        }
+      ]
+    }
+    const selection = {
+      selectedChainIds: [zcashChainId],
+      executionAddressModes: new Map([[`${zcashChainId}:${recipient.address}`, 'Public']])
+    }
+    const publicActivity = items => filterActivityItems({ ...selection, items, domain: 'public' })
+    const pending = {
+      ...receive,
+      status: 'confirming',
+      segments: [{ ...receive.segments[0], status: 'confirming' }]
+    }
+    const separate = {
+      ...receive,
+      id: 'zcash:credit:1',
+      segments: [{ ...receive.segments[0], id: 'zcash:credit:1:origin' }]
+    }
+
+    expect(publicActivity([send, pending])).toEqual([pending])
+    expect(publicActivity([send, receive])).toEqual([receive])
+    expect(publicActivity([send, receive, separate])).toEqual([receive, separate])
+    expect(publicActivity([send])).toMatchObject([
+      { kind: 'receive', snapshot: { primaryAmount: { amountRaw: '95' } } }
+    ])
+    expect(filterActivityItems({ ...selection, items: [send, receive], domain: 'shield' })).toEqual(
+      [send]
+    )
+  })
+
+  test('All Networks and NEAR Confidential show Shield sends on unavailable chains', () => {
     const zcashChainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
     const zcash = {
       id: 'zcash-shield',
@@ -464,8 +731,18 @@ test.describe('Activity read model', () => {
       id: 'older-near-confidential',
       snapshot: { primaryAmount: { assetId: 'eip155:1/slip44:60', amountRaw: '1' } }
     }
+    const send = {
+      ...near,
+      id: 'confidential-send',
+      kind: 'withdraw',
+      snapshot: {
+        direction: 'outgoing',
+        primaryAmount: { assetId: 'eip155:137/slip44:966', amountRaw: '1' },
+        shield: { operation: 'withdraw', sourceDomain: 'shield', destinationDomain: 'public' }
+      }
+    }
     const selection = {
-      items: [zcash, near, olderNear],
+      items: [zcash, near, olderNear, send],
       selectedChainIds: ['eip155:1'],
       domain: 'shield'
     }
@@ -478,7 +755,17 @@ test.describe('Activity read model', () => {
         shieldProvider: 'near-confidential',
         confidentialIntentsOnly: true
       }).map(item => item.id)
-    ).toEqual(['near-confidential', 'older-near-confidential'])
+    ).toEqual(['near-confidential', 'older-near-confidential', 'confidential-send'])
+    expect(filterActivityItems(selection).map(item => item.id)).toEqual([
+      'near-confidential',
+      'older-near-confidential'
+    ])
+    expect(
+      filterActivityItems({ ...selection, includeAllConfidentialChains: true }).map(item => item.id)
+    ).toEqual(['near-confidential', 'older-near-confidential', 'confidential-send'])
+    expect(
+      filterActivityItems({ ...selection, domain: 'public', includeAllConfidentialChains: true })
+    ).toEqual([])
   })
 
   test('preserves a persisted pre-finality reorg through the strict Activity boundary', () => {
@@ -520,20 +807,25 @@ test.describe('Activity read model', () => {
       hash: 'ABCDEF',
       updatedAt: 1_300
     })
-    const zcashV1 = supplemental({
-      id: 'zcash-v1:ABCDEF',
-      source: 'zcash-v1',
-      chainId: zcashChainId,
-      assetId: zecAssetId,
-      hash: 'abcdef',
-      updatedAt: 1_100
-    })
+    const zcashV1 = {
+      ...supplemental({
+        id: 'zcash-v1:ABCDEF',
+        source: 'zcash-v1',
+        chainId: zcashChainId,
+        assetId: zecAssetId,
+        hash: 'abcdef',
+        direction: 'outgoing',
+        updatedAt: 1_100
+      }),
+      assetDomains: ['public']
+    }
     const remoteDuplicate = supplemental({
       id: 'rpc:zcash:ABCDEF',
       source: 'rpc',
       chainId: zcashChainId,
       assetId: zecAssetId,
       hash: 'ABCDEF',
+      direction: 'outgoing',
       updatedAt: 1_400
     })
     const remoteExternal = supplemental({
@@ -553,14 +845,32 @@ test.describe('Activity read model', () => {
 
     expect(model.items.map(item => item.id)).toEqual(['rpc:evm:external', 'zcash-v1:ABCDEF'])
     expect(model.items.find(item => item.id === 'zcash-v1:ABCDEF')?.source).toBe('zcash-v1')
-    for (const accountMode of ['main', 'private']) {
-      expect(
-        filterActivityItems({
-          items: model.items,
-          selectedChainIds: [zcashChainId],
-          accountMode
-        }).map(item => item.id)
-      ).toEqual(['zcash-v1:ABCDEF'])
+    const selection = { items: model.items, selectedChainIds: [zcashChainId] }
+    expect(filterActivityItems({ ...selection, accountMode: 'main' }).map(item => item.id)).toEqual(
+      ['zcash-v1:ABCDEF']
+    )
+    expect(filterActivityItems({ ...selection, accountMode: 'private' })).toEqual([])
+  })
+
+  test('preserves both EVM balance modes for the same hash and restores the recipient without local history', () => {
+    const sender = graph()
+    const observed = supplemental({
+      id: 'rpc:evm:private-credit',
+      source: 'rpc',
+      chainId: evmChainId,
+      assetId: ethAssetId,
+      hash: evmHash.toLowerCase(),
+      updatedAt: 1_500
+    })
+    const receive = { ...observed, kind: 'receive', accountMode: 'private' }
+    for (const localGraphs of [[sender], []]) {
+      const model = buildActivityReadModel({ scope, localGraphs, supplementalItems: [receive] })
+      const selection = { items: model.items, selectedChainIds: [evmChainId] }
+      expect(filterActivityItems({ ...selection, domain: 'public' }).map(item => item.id)).toEqual(
+        localGraphs.map(item => item.root.id)
+      )
+      expect(filterActivityItems({ ...selection, domain: 'private' })).toEqual([receive])
+      expect(parseActivityReadModel(model).items).toHaveLength(localGraphs.length + 1)
     }
   })
 
@@ -571,6 +881,7 @@ test.describe('Activity read model', () => {
       chainId: evmChainId,
       assetId: ethAssetId,
       hash: evmHash.toLowerCase(),
+      direction: 'outgoing',
       updatedAt: 1_500
     })
     const model = buildActivityReadModel({
@@ -594,6 +905,7 @@ test.describe('Activity read model', () => {
       chainId: evmChainId,
       assetId: usdcAssetId,
       hash: evmHash.toLowerCase(),
+      direction: 'contract',
       updatedAt: 1_500
     })
     observed.segments[0].evidence.assetEffects = {
@@ -662,6 +974,43 @@ test.describe('Activity read model', () => {
       supplementalItems: [observed]
     })
     expect(reconfirming.items[0].segments[0].evidence.assetEffects).toBeUndefined()
+  })
+
+  test('preserves independently identified receipts that share an origin hash on every chain', () => {
+    for (const [chainId, assetId, hash, source] of [
+      [zcashChainId, zecAssetId, 'abcdef', 'zcash-v1'],
+      [evmChainId, usdcAssetId, evmHash, 'rpc'],
+      ['near:mainnet', 'near:mainnet/slip44:397', 'near-transaction', 'rpc']
+    ]) {
+      const credit = supplemental({
+        id: 'credit:1',
+        source,
+        chainId,
+        assetId,
+        hash,
+        updatedAt: 1_000
+      })
+      const second = { ...credit, id: 'credit:2', kind: 'receive' }
+      const debit = supplemental({
+        id: 'debit',
+        source,
+        chainId,
+        assetId,
+        hash,
+        direction: 'outgoing',
+        updatedAt: 1_000
+      })
+      const model = buildActivityReadModel({
+        scope,
+        localGraphs: [],
+        supplementalItems: [credit, second, debit, { ...credit }]
+      })
+      expect(
+        parseActivityReadModel(model)
+          .items.map(item => item.id)
+          .sort()
+      ).toEqual([credit.id, second.id, debit.id])
+    }
   })
 
   test('keeps the destination receipt beside a local cross-chain transfer', () => {
@@ -762,6 +1111,7 @@ test.describe('Activity read model', () => {
       chainId: bitcoinChainId,
       assetId: btcAssetId,
       hash: bitcoinHash.toLowerCase(),
+      direction: 'outgoing',
       updatedAt: 1_500
     })
     const model = buildActivityReadModel({

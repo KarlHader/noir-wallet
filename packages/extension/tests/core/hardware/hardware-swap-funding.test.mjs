@@ -15,9 +15,16 @@ const swapRequest = {
 
 test('hardware Swap preserves the selected Zcash funding source through request validation', () => {
   for (const fundingSource of ['shielded', 'transparent']) {
-    const request = parseHardwareSignRequest({ ...swapRequest, fundingSource })
+    const quoteBinding = {
+      provider: 'near-intents',
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      fundingSource,
+      userAction: 'swap'
+    }
+    const request = parseHardwareSignRequest({ ...swapRequest, fundingSource, quoteBinding })
     assert.equal(request.kind, 'swap')
     assert.equal(request.fundingSource, fundingSource)
+    assert.deepEqual(request.quoteBinding, quoteBinding)
     assert.equal(request.amount, '0.5')
     assert.equal(request.to, 't1deposit')
   }

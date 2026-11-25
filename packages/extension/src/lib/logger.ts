@@ -2,6 +2,7 @@ import { formatWalletLogPrefix } from './log-format'
 import type { DiagnosticLogDraft, DiagnosticLogLevel, DiagnosticLogSource } from './diagnostic-log'
 import { sanitizeDiagnosticMessage, serializeDiagnosticArgs } from './diagnostic-log'
 import { formatDiagnosticContext } from './diagnostic-log-store'
+import { developmentConsoleErrors, developmentErrorArgs } from './development-console'
 
 const isServiceWorker =
   typeof self !== 'undefined' &&
@@ -63,31 +64,31 @@ class WalletLogger {
     this.persist('debug', msg, walletId, accountId, error)
     if (!debugLogsEnabled) return
     const prefix = this.getPrefix(walletId, accountId)
-    console.log(prefix, sanitizeDiagnosticMessage(msg))
+    console.log(prefix, sanitizeDiagnosticMessage(msg), ...developmentErrorArgs(error))
   }
 
   info(msg: string, walletId?: string, accountId?: string, error?: unknown): void {
     this.persist('info', msg, walletId, accountId, error)
     if (!debugLogsEnabled) return
     const prefix = this.getPrefix(walletId, accountId)
-    console.info(prefix, sanitizeDiagnosticMessage(msg))
+    console.info(prefix, sanitizeDiagnosticMessage(msg), ...developmentErrorArgs(error))
   }
 
   warn(msg: string, walletId?: string, accountId?: string, error?: unknown): void {
     this.persist('warn', msg, walletId, accountId, error)
     if (!debugLogsEnabled) return
     const prefix = this.getPrefix(walletId, accountId)
-    console.warn(prefix, sanitizeDiagnosticMessage(msg))
+    console.warn(prefix, sanitizeDiagnosticMessage(msg), ...developmentErrorArgs(error))
   }
 
   error(msg: string, walletId?: string, accountId?: string, error?: unknown): void {
     this.persist('error', msg, walletId, accountId, error)
     if (!debugLogsEnabled) return
     const prefix = this.getPrefix(walletId, accountId)
-    if (isServiceWorker) {
+    if (isServiceWorker && !developmentConsoleErrors) {
       console.warn(prefix, '[ERROR]', sanitizeDiagnosticMessage(msg))
     } else {
-      console.error(prefix, sanitizeDiagnosticMessage(msg))
+      console.error(prefix, sanitizeDiagnosticMessage(msg), ...developmentErrorArgs(error))
     }
   }
 

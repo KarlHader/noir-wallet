@@ -5,6 +5,7 @@
 export type Network = 'mainnet' | 'testnet'
 
 import type { AccountNetworkFamily } from '@/core/wallet/account-network-selection'
+import type { OneClickOrder } from '@/core/services/near-intents/one-click-order'
 
 export type AddressType = 'transparent' | 'shielded'
 export type FundingSource = AddressType
@@ -149,7 +150,7 @@ export type TransactionStatus = 'pending' | 'confirming' | 'relay_confirmed' | '
 
 export interface QuoteBinding {
   provider?: 'near-intents' | 'rhea-cross-chain-dex'
-  userAction?: 'transfer'
+  userAction?: 'transfer' | 'swap'
   quoteHandle?: string
   executionId?: string
   router?: string
@@ -158,6 +159,7 @@ export interface QuoteBinding {
   isCrossChain?: boolean
   destinationChain?: string
   depositAddress?: string
+  oneClickOrder?: OneClickOrder
   originAsset?: string
   destinationAsset?: string
   expectedAmountOut?: string
@@ -195,6 +197,7 @@ export interface Transaction {
   failureReason?: TxFailureReason
   /** Destination-chain transaction hash reported by an Intents or RHEA order. */
   destinationTxHash?: string
+  settledSelfTransferAmount?: string
   /** Current destination-chain confirmation count when known. */
   confirmations?: number
   /** Confirmations required before this transaction is final or spendable. */

@@ -10,7 +10,7 @@ import {
   setGoogleAnalyticsEnabled
 } from '@/lib/analytics/preferences'
 import { Switch } from '@/popup/components/ui/switch'
-import { ZcashBroadcastHelp } from '@/popup/components/settings/ZcashBroadcastHelp'
+import { ZcashBroadcastHelp } from '@/popup/components/zcash/ZcashBroadcastHelp'
 import { toast } from '@/store/toast-store'
 import { SETTINGS_STORAGE_KEY } from '@/lib/wallet-settings-storage'
 import { sendZeroIndexerNodeMessage } from '@/popup/services/zero-indexer-node-client'

@@ -17,6 +17,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogDescription,
   DialogHeader,
   DialogTitle
@@ -392,14 +393,14 @@ export function Networks() {
               {error}
             </p>
           )}
-          <div className="grid grid-cols-2 gap-2">
+          <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setDeleteTarget(null)}>
               Cancel
             </Button>
             <Button variant="destructive" isLoading={busy} onClick={() => void remove()}>
               Remove
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

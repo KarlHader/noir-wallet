@@ -1,6 +1,6 @@
 {
   "name": "@noir-wallet/extension",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Noir Wallet is a self-custodial crypto wallet designed to support privacy-preserving on-chain activity.",
   "type": "module",
   "license": "BUSL-1.1",
@@ -14,7 +14,6 @@
     "test": "node scripts/run-tests.mjs",
     "wallets:provision:evm": "node scripts/provision-evm-live-test-wallet.mjs",
     "wallets:provision:bitcoin": "node scripts/provision-bitcoin-live-test-wallet.mjs",
-    "wallets:check": "node scripts/check-test-wallets.mjs",
     "icons:from-logo": "node scripts/generate-icons-from-logo.mjs"
   },
   "dependencies": {
@@ -40,8 +39,6 @@
     "@radix-ui/react-slot": "1.2.4",
     "@radix-ui/react-tabs": "1.1.13",
     "@radix-ui/react-tooltip": "1.2.8",
-    "@rhea-finance/cross-chain-aggregation-dex": "2.0.6",
-    "@rhea-finance/cross-chain-sdk": "0.1.22",
     "@scure/bip32": "1.7.0",
     "@scure/bip39": "1.6.0",
     "@solana/web3.js": "1.99.0",

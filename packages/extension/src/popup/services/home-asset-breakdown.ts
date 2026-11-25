@@ -1,4 +1,4 @@
-import type { PortfolioFiatSummary } from '@/popup/components/portfolio/portfolio-prices'
+import type { PortfolioFiatSummary } from '@/popup/services/portfolio-prices'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { buildAccountKey } from '@/core/wallet/account-scope'
@@ -7,6 +7,16 @@ import { isPortfolioModelForScope } from './portfolio-cache'
 import { getAssetDomainRaw, summarizeAssetDomainsUsd, type AssetDomain } from './asset-domains'
 
 export type HomePortfolioTotalStatus = 'loading' | 'ready' | 'partial' | 'unavailable'
+
+const homePrices = new Map<'mainnet' | 'testnet', AssetPriceReadModel>()
+
+export function readHomePrices(network: 'mainnet' | 'testnet'): AssetPriceReadModel | null {
+  return homePrices.get(network) ?? null
+}
+
+export function rememberHomePrices(network: 'mainnet' | 'testnet', prices: AssetPriceReadModel) {
+  if (prices.status !== 'error') homePrices.set(network, prices)
+}
 
 export function resolveHomePortfolioTotalStatus(
   model: PortfolioReadModel | null,
@@ -65,6 +75,7 @@ export interface HomeAssetBreakdown {
 export interface HomeAssetDomainDisplay {
   readonly totals: Readonly<Record<AssetDomain, string | null>>
   readonly loading: Readonly<Record<AssetDomain, boolean>>
+  readonly partial: Readonly<Record<AssetDomain, boolean>>
 }
 
 export function resolveHomeCachedTotal(
@@ -151,15 +162,24 @@ export function resolveHomeAssetDomainDisplay(input: {
     shield: false,
     private: false
   }
+  const partial = {
+    all: input.totalStatus === 'partial',
+    public: false,
+    shield: false,
+    private: false
+  }
   for (const domain of ['public', 'shield', 'private'] as const) {
     const value = model ? (input.breakdown?.[`${domain}Usd`] ?? null) : null
     loading[domain] = !model
       ? input.loadStatus === 'loading'
       : (!available[domain] && pending[domain]) ||
         (value === null && input.priceStatus === 'loading')
-    totals[domain] = loading[domain] ? null : (value ?? (available[domain] ? '0' : null))
+    totals[domain] = loading[domain] ? null : value
+    partial[domain] =
+      totals[domain] !== null &&
+      Boolean(input.breakdown?.[`${domain}UsdPartial`] || pending[domain])
   }
-  return { totals, loading }
+  return { totals, loading, partial }
 }
 
 export function hasCompletePortfolioTotal(

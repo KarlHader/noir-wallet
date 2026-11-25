@@ -7,7 +7,7 @@ import {
 import { DialogHeader, DialogTitle } from '../ui/dialog'
 import { HardwareWalletLogo } from '../hardware/HardwareWalletLogo'
 import { WalletOptionButton } from './WalletOptionButton'
-import { WALLET_OPTION_ICONS } from './wallet-option-icons'
+import { WALLET_OPTION_ICONS } from '@/popup/lib/wallet-option-icons'
 
 export type AddWalletAction = 'import' | 'private-key' | 'create' | HardwareConnectVendor
 

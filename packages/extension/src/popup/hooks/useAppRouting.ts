@@ -11,7 +11,8 @@ import { accountNetworksClient } from '../services/account-networks-client'
 import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import { getTransactionToastCopy } from '@/lib/transaction-status-copy'
 import { waitForDelayOrAbort, withTimeout } from '@/lib/async-utils'
-import { EXTENSION_ACTIVITY_ROUTE } from '@/config/extension'
+import { resolveWalletEntryRoute } from '@/popup/services/home-navigation'
+import { isShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 
 /**
  * Custom hook for application routing logic
@@ -43,15 +44,10 @@ export function useAppRouting() {
   // Hardware wallet flows (connect/sign) run in a dedicated full tab and must
   // keep their route across init and unlock redirects
   const isHardwareTab = useRef(window.location.hash.includes('/hardware/'))
+  const keepTabRoute = isHardwareTab.current || isShieldHardwareTab(window.location.search)
   const isActivationDApp = useRef(window.location.hash.includes('from=dapp'))
   const isUpdatePage = useRef(window.location.hash.includes('/update'))
-  const walletEntryRoute = useRef(
-    window.location.hash === `#${EXTENSION_ACTIVITY_ROUTE}`
-      ? EXTENSION_ACTIVITY_ROUTE
-      : window.location.hash === '#/manage-tokens'
-        ? '/manage-tokens'
-        : '/'
-  )
+  const walletEntryRoute = useRef(resolveWalletEntryRoute(window.location.hash))
 
   const routeToUnlock = useCallback(() => {
     // Import/create can complete without remounting the app. Read the current
@@ -186,14 +182,13 @@ export function useAppRouting() {
     const showNotifications = async () => {
       const pendingNotifications = getPendingNotifications()
       for (const tx of pendingNotifications) {
-        if (tx.status === 'success') {
+        if (tx.status === 'success' && (await markAsNotified(tx.id, tx.status))) {
           const copy = getTransactionToastCopy('success', tx.amount)
           toast.success(copy.title, copy.message)
-        } else if (tx.status === 'failed') {
+        } else if (tx.status === 'failed' && (await markAsNotified(tx.id, tx.status))) {
           const copy = getTransactionToastCopy('failed', tx.amount)
           toast.error(copy.title, copy.message)
         }
-        await markAsNotified(tx.id)
       }
     }
     showNotifications()
@@ -284,7 +279,7 @@ export function useAppRouting() {
           if (requestId) {
             redirectParams.set('requestId', requestId)
           }
-        } else if (isHardwareTab.current && currentPath !== '/unlock') {
+        } else if (keepTabRoute && currentPath !== '/unlock') {
           // Hardware tabs must return to their flow (with query, e.g. sign request id)
           redirectParams.set('redirect', `${currentPath}${location.search || ''}`)
         } else {
@@ -313,7 +308,7 @@ export function useAppRouting() {
       await SecureStorage.saveLastActivityTime()
 
       // dApp windows and hardware tabs stay on their route; normal popup goes home
-      if ((!isDApp.current || isActivationDApp.current) && !isHardwareTab.current) {
+      if ((!isDApp.current || isActivationDApp.current) && !keepTabRoute) {
         replace(walletEntryRoute.current)
       }
     } catch (error) {

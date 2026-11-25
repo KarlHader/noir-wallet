@@ -5,6 +5,7 @@ import { RheaSwapTransactionMonitor } from '../../../src/background/rhea-swap-tr
 import {
   createRheaSwapSignedBatchGraph,
   createRheaSwapSignedOrderGraph,
+  createRheaSwapSignedSourceGraph,
   parseTransactionEventId,
   parseTransactionId,
   parseTransactionSegmentId
@@ -12,11 +13,452 @@ import {
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 import { getZcashChainId } from '../../../src/core/chains/registry/index.ts'
+import { mapTransactionGraphToActivityItem } from '../../../src/core/activity/activity-read-model.ts'
 import { prepareRheaSwapZcashDestinationCatchUp } from '../../../src/background/rhea-swap-zcash-sync.ts'
+import { EvmTransactionMonitor } from '../../../src/infrastructure/chains/evm/evm-transaction-monitor.ts'
+import { getRheaSwapProgressStatus } from '../../../src/lib/swap-progress.ts'
 
 const scope = { keyDomainId: 'wallet:near', accountId: 'account:near' }
 const sourceHashes = ['1'.repeat(32), `${'1'.repeat(31)}2`]
 const destinationHash = `0x${'ab'.repeat(32)}`
+
+function sameChainBinding() {
+  return {
+    schemaVersion: 1,
+    provider: 'rhea-cross-chain-dex',
+    kind: 'swap',
+    quoteHandle: 'rhea-quote:same-chain-monitor',
+    executionId: 'execution-same-chain-monitor',
+    router: 'cow',
+    sourceTarget: '0x2222222222222222222222222222222222222222',
+    sender: '0x1111111111111111111111111111111111111111',
+    originAmountRaw: '1000',
+    expiresAt: 5_000,
+    isCrossChain: false,
+    origin: {
+      chainId: 'eip155:1',
+      assetId: 'eip155:1/slip44:60',
+      protocolChainId: '1',
+      protocolAssetId: 'native'
+    },
+    destination: {
+      chainId: 'eip155:1',
+      assetId: 'eip155:1/erc20:0x3333333333333333333333333333333333333333',
+      protocolChainId: '1',
+      protocolAssetId: '0x3333333333333333333333333333333333333333',
+      recipient: '0x4444444444444444444444444444444444444444',
+      expectedAmountRaw: '900',
+      minimumAmountRaw: '850'
+    }
+  }
+}
+
+function sameChainGraph(signedOrder = true, binding = sameChainBinding()) {
+  const input = {
+    transactionId: parseTransactionId('tx:rhea:same-chain-monitor'),
+    scope,
+    binding,
+    segmentIds: {
+      origin: parseTransactionSegmentId('segment:rhea:same-chain:origin'),
+      relay: parseTransactionSegmentId('segment:rhea:same-chain:relay'),
+      destination: parseTransactionSegmentId('segment:rhea:same-chain:destination'),
+      refund: parseTransactionSegmentId('segment:rhea:same-chain:refund')
+    },
+    now: 1_000
+  }
+  return signedOrder
+    ? createRheaSwapSignedOrderGraph({ ...input, orderId: 'order:same-chain-monitor' })
+    : createRheaSwapSignedSourceGraph({ ...input, sourceHash: `0x${'cd'.repeat(32)}` })
+}
+
+test('keeps a same-chain signed order pending until completion has an onchain hash', async () => {
+  let status = 'pending'
+  let hash = null
+  const notifications = []
+  const calls = []
+  const repository = new InMemoryTransactionRepository()
+  const initial = sameChainGraph()
+  await repository.create(initial)
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async reportSubmission() {
+        calls.push('report')
+      },
+      async getOrderStatus() {
+        return { status, destinationHash: hash }
+      },
+      async retireReportedSubmission() {
+        calls.push('retire')
+      }
+    },
+    { notifyStatus: (_handle, value) => notifications.push(value.status) }
+  )
+  monitor.repository = repository
+
+  assert.equal(await monitor.checkGraph(initial), false)
+  assert.equal((await repository.get(scope, initial.root.id)).root.status, 'broadcast')
+  status = 'completed'
+  assert.equal(await monitor.checkGraph(initial), false)
+  assert.equal((await repository.get(scope, initial.root.id)).root.status, 'broadcast')
+  hash = destinationHash
+  assert.equal(await monitor.checkGraph(initial), true)
+  const completed = await repository.get(scope, initial.root.id)
+  assert.equal(completed.root.status, 'final')
+  assert.equal(
+    completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
+    destinationHash
+  )
+  assert.deepEqual(notifications, ['SUCCESS'])
+  assert.deepEqual(calls, ['report', 'report', 'report', 'retire'])
+})
+
+test('marks same-chain signed orders failed for backend terminal outcomes', async () => {
+  for (const status of ['failed', 'expired', 'refunded']) {
+    const repository = new InMemoryTransactionRepository()
+    const initial = sameChainGraph()
+    await repository.create(initial)
+    const notifications = []
+    let orderStatus = status
+    let backendHash = null
+    const monitor = new RheaSwapTransactionMonitor(
+      {
+        async reportSubmission() {},
+        async getOrderStatus() {
+          return { status: orderStatus, destinationHash: backendHash }
+        },
+        async retireReportedSubmission() {}
+      },
+      { notifyStatus: (_handle, value) => notifications.push(value.status) }
+    )
+    monitor.repository = repository
+
+    assert.equal(await monitor.checkGraph(initial), true)
+    const failed = await repository.get(scope, initial.root.id)
+    assert.equal(failed.root.status, 'failed')
+    assert.equal(
+      failed.segments.find(segment => segment.role === 'destination').failure.code,
+      status === 'failed' ? 'relay-failed' : status
+    )
+    assert.equal(
+      failed.segments.find(segment => segment.role === 'refund').status,
+      status === 'refunded' ? 'final' : 'created'
+    )
+    assert.deepEqual(notifications, [status === 'refunded' ? 'REFUNDED' : 'FAILED'])
+    orderStatus = 'completed'
+    backendHash = destinationHash
+    assert.equal(await monitor.checkGraph(initial), true)
+    assert.equal((await repository.get(scope, initial.root.id)).root.status, 'failed')
+    assert.deepEqual(notifications, [status === 'refunded' ? 'REFUNDED' : 'FAILED'])
+  }
+})
+
+async function prepareConfirmedSameChainSource(binding, evidence) {
+  const repository = new InMemoryTransactionRepository()
+  const initial = sameChainGraph(false, binding)
+  await repository.create(initial)
+  const origin = initial.segments.find(segment => segment.role === 'origin')
+  const result = await repository.applySegmentEvent({
+    scope,
+    transactionId: initial.root.id,
+    segmentId: origin.id,
+    event: {
+      id: parseTransactionEventId('event:rhea:same-chain:origin-final'),
+      status: 'final',
+      cause: 'progress',
+      observedAt: 1_001,
+      ...(evidence === undefined
+        ? {}
+        : { evidence: { ...evidence, transactionHash: origin.evidence.transactionHash } })
+    },
+    expectedRootRevision: initial.root.revision,
+    expectedSegmentRevision: origin.revision
+  })
+  assert.equal(result.status, 'applied')
+  return { repository, graph: result.graph, origin }
+}
+
+test('keeps ordinary same-chain onchain completion independent of backend status', async () => {
+  const { repository, graph, origin } = await prepareConfirmedSameChainSource()
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async recordTransactionSubmission() {
+        throw new Error('The old quote session is unavailable')
+      },
+      async reportSubmission() {},
+      async getOrderStatus() {
+        throw new Error('same-chain onchain swap must not poll status')
+      },
+      async retireReportedSubmission() {}
+    },
+    { notifyStatus: () => {} }
+  )
+  monitor.repository = repository
+
+  assert.equal(await monitor.checkGraph(graph), true)
+  const completed = await repository.get(scope, graph.root.id)
+  assert.equal(completed.root.status, 'final')
+  assert.equal(
+    completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
+    origin.evidence.transactionHash
+  )
+})
+
+test('uses receipt-proven output for an owned same-chain swap with an unavailable status session', async () => {
+  const original = sameChainBinding()
+  const binding = {
+    ...original,
+    isCrossChain: true,
+    router: 'preswap-nearintents',
+    destination: { ...original.destination, recipient: original.sender }
+  }
+  for (const hasCredit of [false, true]) {
+    const { repository, graph, origin } = await prepareConfirmedSameChainSource(binding, {
+      blockHeight: 100,
+      blockHash: `0x${'cd'.repeat(32)}`,
+      assetEffects: {
+        source: 'receipt',
+        completeness: 'partial',
+        changes: hasCredit
+          ? [{ assetId: binding.destination.assetId, direction: 'incoming', amountRaw: '995' }]
+          : []
+      }
+    })
+    const monitor = new RheaSwapTransactionMonitor(
+      {
+        async recordTransactionSubmission() {
+          throw new Error('Quote session is unavailable')
+        },
+        async getOrderStatus() {
+          return { status: 'processing', destinationHash: null }
+        },
+        async retireReportedSubmission() {}
+      },
+      { notifyStatus: () => {} }
+    )
+    monitor.repository = repository
+    assert.equal(await monitor.checkGraph(graph), hasCredit)
+    const observed = await repository.get(scope, graph.root.id)
+    assert.equal(observed.root.status, hasCredit ? 'final' : 'confirming')
+    if (hasCredit) {
+      const evidence = observed.segments.find(segment => segment.role === 'destination').evidence
+      assert.equal(evidence.transactionHash, origin.evidence.transactionHash)
+    }
+  }
+})
+
+test('keeps a same-chain Intents transfer open until its separate destination transaction is known', async () => {
+  const { repository, graph, origin } = await prepareConfirmedSameChainSource({
+    ...sameChainBinding(),
+    router: 'preswap-nearintents',
+    userAction: 'transfer'
+  })
+  let observation = { status: 'pending', destinationHash: null }
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async recordTransactionSubmission() {},
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return observation
+      },
+      async retireReportedSubmission() {}
+    },
+    { notifyStatus: () => {} }
+  )
+  monitor.repository = repository
+
+  for (const status of ['pending', 'completed']) {
+    observation = { status, destinationHash: null }
+    assert.equal(await monitor.checkGraph(graph), false)
+    const current = await repository.get(scope, graph.root.id)
+    assert.notEqual(current.root.status, 'final')
+    assert.equal(
+      current.segments.find(segment => segment.role === 'destination').evidence?.transactionHash,
+      undefined
+    )
+  }
+  observation = { status: 'completed', destinationHash }
+  assert.equal(await monitor.checkGraph(graph), true)
+  const completed = await repository.get(scope, graph.root.id)
+  assert.equal(completed.root.status, 'final')
+  assert.equal(
+    completed.segments.find(segment => segment.role === 'origin').evidence.transactionHash,
+    origin.evidence.transactionHash
+  )
+  assert.equal(
+    completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
+    destinationHash
+  )
+})
+
+test('waits for the independent EVM settlement of a same-chain Intents deposit', async () => {
+  for (const receiptStatus of ['success', 'failed']) {
+    const { repository, graph, origin } = await prepareConfirmedSameChainSource({
+      ...sameChainBinding(),
+      isCrossChain: true,
+      router: 'preswap-nearintents',
+      userAction: 'transfer'
+    })
+    let observedHash = null
+    let receipt = null
+    const notifications = []
+    const retired = []
+    const service = {
+      async recordTransactionSubmission() {},
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return { status: 'completed', destinationHash: observedHash }
+      },
+      async retireReportedSubmission(handle) {
+        retired.push(handle)
+      }
+    }
+    const createMonitor = () => {
+      const monitor = new RheaSwapTransactionMonitor(service, {
+        notifyStatus: (_handle, value) => notifications.push(value.status)
+      })
+      monitor.repository = repository
+      return monitor
+    }
+    const evmMonitor = new EvmTransactionMonitor({
+      repository,
+      chainId: 'eip155:1',
+      rpc: {
+        getTransactionReceipt: async () => receipt,
+        getTransactionLocation: async () => ({ status: 'pending' }),
+        getFinalizedBlockNumber: async () => '101'
+      }
+    })
+    const readGraph = () => repository.get(scope, graph.root.id)
+    const readDestination = async () =>
+      (await readGraph()).segments.find(segment => segment.role === 'destination')
+    const monitor = createMonitor()
+
+    for (const invalidHash of [null, origin.evidence.transactionHash, '1'.repeat(64)]) {
+      observedHash = invalidHash
+      assert.equal(await monitor.checkGraph(graph), false)
+      assert.equal((await readDestination()).evidence?.transactionHash, undefined)
+    }
+    observedHash = destinationHash
+    assert.equal(await monitor.checkGraph(graph), false)
+    assert.equal((await readDestination()).status, 'broadcast')
+    assert.equal((await readDestination()).evidence.transactionHash, destinationHash)
+    await evmMonitor.poll([scope])
+    assert.equal((await readGraph()).root.status, 'confirming')
+    assert.deepEqual(notifications, [])
+    assert.deepEqual(retired, [])
+
+    receipt = {
+      status: receiptStatus,
+      transactionHash: destinationHash,
+      blockHash: `0x${'ef'.repeat(32)}`,
+      blockNumber: '100'
+    }
+    await evmMonitor.poll([scope])
+    observedHash = null
+    assert.equal(await createMonitor().checkGraph(graph), true)
+    const settled = await readGraph()
+    if (receiptStatus === 'success') {
+      assert.equal(settled.root.status, 'final')
+      assert.equal((await readDestination()).evidence.blockHash, receipt.blockHash)
+      assert.deepEqual(notifications, ['SUCCESS'])
+      assert.deepEqual(retired, [sameChainBinding().quoteHandle])
+    } else {
+      assert.equal(settled.root.status, 'failed')
+      assert.equal(
+        getRheaSwapProgressStatus(settled.segments, { status: 'PROCESSING' }).status,
+        'FAILED'
+      )
+      assert.deepEqual(notifications, [])
+    }
+  }
+})
+
+test('tracks a Polygon to BNB Chain swap from confirmed origin to reported destination', async () => {
+  const binding = {
+    ...sameChainBinding(),
+    quoteHandle: 'rhea-quote:polygon-bnb-monitor',
+    executionId: 'execution-polygon-bnb-monitor',
+    isCrossChain: true,
+    origin: {
+      chainId: 'eip155:137',
+      assetId: 'eip155:137/slip44:966',
+      protocolChainId: '137',
+      protocolAssetId: 'native'
+    },
+    destination: {
+      ...sameChainBinding().destination,
+      chainId: 'eip155:56',
+      assetId: 'eip155:56/erc20:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
+      protocolChainId: '56',
+      protocolAssetId: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'
+    }
+  }
+  const initial = createRheaSwapSignedSourceGraph({
+    transactionId: parseTransactionId('tx:rhea:polygon-bnb-monitor'),
+    scope,
+    binding,
+    sourceHash: `0x${'cd'.repeat(32)}`,
+    segmentIds: {
+      origin: parseTransactionSegmentId('segment:rhea:polygon-bnb:origin'),
+      relay: parseTransactionSegmentId('segment:rhea:polygon-bnb:relay'),
+      destination: parseTransactionSegmentId('segment:rhea:polygon-bnb:destination'),
+      refund: parseTransactionSegmentId('segment:rhea:polygon-bnb:refund')
+    },
+    now: 1_000
+  })
+  const repository = new InMemoryTransactionRepository()
+  await repository.create(initial)
+  const origin = initial.segments.find(segment => segment.role === 'origin')
+  const observed = await repository.applySegmentEvent({
+    scope,
+    transactionId: initial.root.id,
+    segmentId: origin.id,
+    event: {
+      id: parseTransactionEventId('event:rhea:polygon-bnb:origin-final'),
+      status: 'final',
+      cause: 'progress',
+      observedAt: 1_001
+    },
+    expectedRootRevision: initial.root.revision,
+    expectedSegmentRevision: origin.revision
+  })
+  assert.equal(observed.status, 'applied')
+  let status = 'pending'
+  const notifications = []
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async recordTransactionSubmission() {},
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return { status, destinationHash: status === 'completed' ? destinationHash : null }
+      },
+      async retireReportedSubmission() {}
+    },
+    {
+      notifyStatus: (_handle, value) => notifications.push(value.status),
+      prepareZcashDestinationCatchUp: async () => {
+        throw new Error('BNB destination must not start Zcash sync')
+      }
+    }
+  )
+  monitor.repository = repository
+
+  assert.equal(await monitor.checkGraph(observed.graph), false)
+  assert.notEqual((await repository.get(scope, initial.root.id)).root.status, 'final')
+  status = 'completed'
+  assert.equal(await monitor.checkGraph(observed.graph), true)
+  const completed = await repository.get(scope, initial.root.id)
+  assert.equal(completed.root.status, 'final')
+  assert.equal(
+    completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
+    destinationHash
+  )
+  assert.equal(
+    mapTransactionGraphToActivityItem(completed).snapshot.recipient.address,
+    binding.destination.recipient
+  )
+  assert.deepEqual(notifications, ['SUCCESS'])
+})
 
 function graph() {
   return createRheaSwapSignedBatchGraph({
@@ -219,6 +661,7 @@ test('retains a processing destination hash when completion omits it', async () 
 
 test('still reads cross-chain completion when submission reporting fails', async () => {
   const calls = []
+  let observedHash = sourceHashes[1]
   const service = {
     async recordTransactionSubmission() {
       calls.push('record')
@@ -229,7 +672,7 @@ test('still reads cross-chain completion when submission reporting fails', async
     },
     async getOrderStatus() {
       calls.push('status')
-      return { status: 'completed' }
+      return { status: 'completed', destinationHash: observedHash }
     },
     async retireReportedSubmission() {
       calls.push('retire')
@@ -243,6 +686,14 @@ test('still reads cross-chain completion when submission reporting fails', async
   const monitor = new RheaSwapTransactionMonitor(service, { notifyStatus: () => {} })
   monitor.repository = repository
 
+  assert.equal(await monitor.checkGraph(fullBroadcast), false)
+  const waiting = await repository.get(scope, fullBroadcast.root.id)
+  assert.equal(
+    waiting.segments.find(segment => segment.role === 'destination').evidence?.transactionHash,
+    undefined
+  )
+  assert.deepEqual(calls.splice(0), ['record', 'report', 'status'])
+  observedHash = destinationHash
   assert.equal(await monitor.checkGraph(fullBroadcast), true)
   assert.deepEqual(calls, ['record', 'report', 'status', 'retire'])
 })

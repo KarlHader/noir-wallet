@@ -1,8 +1,10 @@
-import type {
-  ConfidentialFundingPhase,
-  ConfidentialFundingPlan,
-  ConfidentialFundingPreview,
-  ConfidentialFundingReview
+import {
+  CONFIDENTIAL_FUNDING_PURPOSES,
+  confidentialQuoteAppFeeBps,
+  type ConfidentialFundingPhase,
+  type ConfidentialFundingPlan,
+  type ConfidentialFundingPreview,
+  type ConfidentialFundingReview
 } from '@/core/services/confidential-funding'
 import type {
   CreateExternalShieldDepositInput,
@@ -10,10 +12,14 @@ import type {
   ExternalShieldDepositScope
 } from '@/core/services/confidential-funding'
 import type { SwapStatus } from '@/core/services/intents-api'
-import type { NetworkFeeTier } from '@/core/transactions/domain'
+import { NETWORK_FEE_TIERS, type NetworkFeeTier } from '@/core/transactions/domain'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { Network } from '@/types'
 import { parseZcashAddress } from '@/core/address-book/address-book'
+import { formatBaseUnitAmount } from '@/lib/number-format'
+import { formatSymbol } from '@/lib/format'
+import { evmWalletClient } from './evm-wallet-client'
+import { getEvmFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
 export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
@@ -21,17 +27,18 @@ export type ConfidentialBalanceErrorCode =
   | 'authorization_required'
   | 'account_unavailable'
   | 'balance_unavailable'
-export type ExternalShieldDeposit = Omit<StoredExternalShieldDeposit, 'quote'>
+export type ExternalShieldDeposit = Omit<StoredExternalShieldDeposit, 'quote'> &
+  Readonly<{ minimumInputRaw?: string; quoteAppFeeBps?: number }>
 export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
 
 export { CONFIDENTIAL_SESSION_REQUIRED_ERROR as CONFIDENTIAL_PREVIEW_CONNECTION_ERROR } from '@/core/services/confidential-funding'
 
 export interface PrepareConfidentialFundingRequest {
-  readonly purpose?: 'move' | 'native-zec-swap'
+  readonly purpose?: ConfidentialFundingPlan['purpose']
   readonly network: Network
   readonly keyDomainId: string
   readonly accountId: string
-  readonly operation: 'deposit' | 'withdraw' | 'cluster' | 'swap'
+  readonly operation: 'deposit' | 'withdraw' | 'cluster' | 'swap' | 'confidential-transfer'
   readonly sourceDomain: 'public' | 'private' | 'shield'
   readonly destinationDomain: 'public' | 'private' | 'shield'
   readonly source: Readonly<{
@@ -89,13 +96,7 @@ export function getConfidentialFundingResult(plan: ConfidentialFundingPlan): Rea
   })
 }
 
-const CONFIDENTIAL_TRANSACTION_PREFIX = 'tx:confidential:'
-
-export function getConfidentialFundingPlanId(transactionId: string): string | null {
-  if (!transactionId.startsWith(CONFIDENTIAL_TRANSACTION_PREFIX)) return null
-  const planId = transactionId.slice(CONFIDENTIAL_TRANSACTION_PREFIX.length)
-  return /^[a-zA-Z0-9:_-]{1,160}$/.test(planId) ? planId : null
-}
+export { getConfidentialFundingPlanId } from '@/core/services/confidential-funding/confidential-funding-graph'
 
 const PHASES = new Set<ConfidentialFundingPhase>([
   'prepared',
@@ -221,6 +222,10 @@ function parseReview(value: unknown): ConfidentialFundingReview {
     !/^\d+$/.test(review.sourceAmountRaw) ||
     !/^\d+$/.test(review.expectedOutputRaw) ||
     !/^\d+$/.test(review.minimumOutputRaw) ||
+    (review.quoteAppFeeBps !== undefined &&
+      (!Number.isSafeInteger(review.quoteAppFeeBps) ||
+        review.quoteAppFeeBps < 0 ||
+        review.quoteAppFeeBps > 10_000)) ||
     !/^0x[0-9a-fA-F]{40}$/.test(review.sourceAddress) ||
     (review.externalRecipient === undefined &&
       !/^0x[0-9a-fA-F]{40}$/.test(review.destinationAddress)) ||
@@ -235,17 +240,21 @@ function parseReview(value: unknown): ConfidentialFundingReview {
           review.network
         ))) ||
     (review.purpose !== undefined &&
-      (!['move', 'native-zec-swap'].includes(review.purpose) ||
+      (!CONFIDENTIAL_FUNDING_PURPOSES.includes(review.purpose) ||
         review.operation !== 'withdraw' ||
         review.sourceDomain !== 'shield' ||
         review.destinationDomain !== 'public' ||
         review.externalRecipient === undefined)) ||
     !Number.isSafeInteger(review.withdrawCount) ||
     (review.operation !== undefined &&
-      !['deposit', 'withdraw', 'cluster', 'swap'].includes(review.operation)) ||
+      !['deposit', 'withdraw', 'cluster', 'swap', 'confidential-transfer'].includes(
+        review.operation
+      )) ||
     (review.operation === 'deposit'
       ? review.withdrawCount !== 0
-      : review.operation === 'withdraw' || review.operation === 'swap'
+      : review.operation === 'withdraw' ||
+          review.operation === 'swap' ||
+          review.operation === 'confidential-transfer'
         ? review.withdrawCount !== 1
         : review.withdrawCount < 2 || review.withdrawCount > 5) ||
     (review.operation === 'swap' &&
@@ -292,7 +301,9 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
     !PHASES.has(plan.phase) ||
     !/^\d+$/.test(plan.expectedOutputRaw) ||
     (plan.operation !== undefined &&
-      !['deposit', 'withdraw', 'cluster', 'swap'].includes(plan.operation)) ||
+      !['deposit', 'withdraw', 'cluster', 'swap', 'confidential-transfer'].includes(
+        plan.operation
+      )) ||
     (plan.externalRecipient !== undefined &&
       (plan.operation !== 'withdraw' ||
         plan.destinationDomain !== 'public' ||
@@ -304,7 +315,7 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
           plan.network
         ))) ||
     (plan.purpose !== undefined &&
-      (!['move', 'native-zec-swap'].includes(plan.purpose) ||
+      (!CONFIDENTIAL_FUNDING_PURPOSES.includes(plan.purpose) ||
         plan.operation !== 'withdraw' ||
         plan.sourceDomain !== 'shield' ||
         plan.destinationDomain !== 'public' ||
@@ -314,7 +325,9 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         plan.batchSubmissionAttemptedAt <= 0)) ||
     (plan.operation === 'deposit'
       ? plan.withdraws.length !== 0
-      : plan.operation === 'withdraw' || plan.operation === 'swap'
+      : plan.operation === 'withdraw' ||
+          plan.operation === 'swap' ||
+          plan.operation === 'confidential-transfer'
         ? plan.withdraws.length !== 1
         : plan.withdraws.length < 2 || plan.withdraws.length > 5) ||
     (plan.operation === 'swap' &&
@@ -384,8 +397,21 @@ function parseExternalDeposit(value: unknown): ExternalShieldDeposit {
   ) {
     throw new Error('External Shield deposit response is invalid')
   }
-  const { quote: _quote, ...view } = value
-  return Object.freeze(view) as ExternalShieldDeposit
+  const { quote, ...view } = value
+  const minimumInputRaw = isRecord(quote) && isRecord(quote.quote) ? quote.quote.minAmountIn : null
+  const quoteAppFeeBps =
+    isRecord(quote) && isRecord(quote.quoteRequest)
+      ? confidentialQuoteAppFeeBps({ quoteRequest: quote.quoteRequest })
+      : 0
+  return Object.freeze({
+    ...view,
+    ...(quoteAppFeeBps > 0 ? { quoteAppFeeBps } : {}),
+    ...(value.amountMode === 'minimum' &&
+    typeof minimumInputRaw === 'string' &&
+    /^[1-9]\d{0,77}$/.test(minimumInputRaw)
+      ? { minimumInputRaw }
+      : {})
+  }) as ExternalShieldDeposit
 }
 
 export function createConfidentialFundingClient(
@@ -469,3 +495,46 @@ export function createExternalShieldDepositClient(
 export const externalShieldDepositClient = createExternalShieldDepositClient()
 
 export const confidentialFundingClient = createConfidentialFundingClient()
+
+export async function previewReviewedConfidentialDepositFeeTiers(
+  review: ConfidentialFundingReview,
+  assetId: string,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const { depositAddress, sourceAmountRaw, sourceNetworkFee, sourceDomain } = review
+  if (
+    !depositAddress ||
+    !sourceNetworkFee ||
+    (sourceDomain !== 'public' && sourceDomain !== 'private')
+  ) {
+    return {}
+  }
+  const executionMode = sourceDomain === 'public' ? 'main' : 'private'
+  const estimate = await evmWalletClient.estimateTransferFee(
+    { assetId, recipient: depositAddress, amountRaw: sourceAmountRaw },
+    { executionMode, feeTier: reviewedTier ?? 'low' }
+  )
+  return getEvmFeeTierPreviews(estimate, sourceNetworkFee, reviewedTier)
+}
+
+export async function previewClusterNetworkFeeTiers(
+  request: PrepareConfidentialFundingRequest,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const previews: NetworkFeePreviews = {}
+  await Promise.allSettled(
+    NETWORK_FEE_TIERS.filter(tier => tier !== reviewedTier).map(async tier => {
+      const fee = await confidentialFundingClient.previewClusterNetworkFee({
+        ...request,
+        feeSelection: { kind: 'tier', tier }
+      })
+      if (fee)
+        previews[tier] = {
+          amount: formatBaseUnitAmount(fee.raw, fee.decimals),
+          symbol: formatSymbol(fee.symbol),
+          approximate: true
+        }
+    })
+  )
+  return previews
+}

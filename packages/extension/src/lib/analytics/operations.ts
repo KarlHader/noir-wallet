@@ -8,6 +8,7 @@ import type { AssetRegistry } from '@/core/chains/registry'
 import { formatUnits } from 'viem'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { sanitizeAnalyticsAmount } from './collector-metrics'
+import type { QuoteBinding } from '@/types'
 
 export type ZcashAnalyticsOperation = 'send' | 'unshield' | 'shield' | 'swap' | 'transfer'
 export type AnalyticsSwapDirection = 'zec_to_other' | 'other_to_zec' | 'same_chain' | 'cross_chain'
@@ -28,7 +29,7 @@ export interface OperationAnalyticsEvent {
 
 export function resolveZcashAnalyticsOperation(
   kind: ZcashAnalyticsOperation,
-  userAction?: 'transfer'
+  userAction?: QuoteBinding['userAction']
 ): ZcashAnalyticsOperation {
   return kind === 'swap' && userAction === 'transfer' ? 'transfer' : kind
 }
@@ -251,7 +252,10 @@ export function projectConfidentialPlanResult(
       privacyRoute: 'confidential',
       provider: 'near_confidential',
       transferType:
-        next.externalRecipient && next.purpose !== 'native-zec-swap' ? 'external' : 'self',
+        next.operation === 'confidential-transfer' ||
+        (next.externalRecipient && next.purpose !== 'native-zec-swap')
+          ? 'external'
+          : 'self',
       activityType:
         next.operation === 'swap' || next.purpose === 'native-zec-swap' ? 'swap' : 'transfer'
     },

@@ -1,4 +1,5 @@
 import { test } from 'node:test'
+import { createHash } from 'node:crypto'
 import { expect } from '@playwright/test'
 
 import { RheaSwapNearCoordinator } from '../../../src/background/rhea-swap-near.ts'
@@ -7,9 +8,9 @@ import { assertPersistableTransactionGraph } from '../../../src/infrastructure/p
 
 const sender = 'alice.near'
 const sourceHashes = ['1'.repeat(32), `${'1'.repeat(31)}2`]
-const fingerprints = ['a'.repeat(64), 'b'.repeat(64)]
+const fingerprints = ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)]
 
-function binding() {
+function binding(native = false) {
   return {
     schemaVersion: 1,
     provider: 'rhea-cross-chain-dex',
@@ -24,9 +25,9 @@ function binding() {
     isCrossChain: true,
     origin: {
       chainId: 'near:mainnet',
-      assetId: 'near:mainnet/slip44:397',
+      assetId: native ? 'near:mainnet/slip44:397' : 'near:mainnet/nep141:wrap.near',
       protocolChainId: 'near',
-      protocolAssetId: 'native'
+      protocolAssetId: native ? 'native' : 'nep141:wrap.near'
     },
     destination: {
       chainId: 'zcash:mainnet',
@@ -45,6 +46,8 @@ function plan() {
     quoteHandle: binding().quoteHandle,
     executionId: binding().executionId,
     chain: 'near',
+    tokenIn: 'wrap.near',
+    amountIn: '1000',
     transactions: [
       {
         signerId: sender,
@@ -112,6 +115,7 @@ function createHarness(overrides = {}) {
   let preparedIndex = 0
   let confirmedIndex = 0
   const calls = []
+  const preparedTransactions = []
   const store = createStore()
   const repository = new InMemoryTransactionRepository()
   const submission = {
@@ -145,6 +149,7 @@ function createHarness(overrides = {}) {
     async prepare(_keyDomainId, payload) {
       const index = preparedIndex++
       calls.push(`prepare:${index}`)
+      preparedTransactions.push(payload.transaction)
       return {
         commandId: `command-near-${index}`,
         chainId: 'near:mainnet',
@@ -199,6 +204,14 @@ function createHarness(overrides = {}) {
         blockHeight: 10
       }
     },
+    async getFungibleTokenBalance() {
+      calls.push('wrapped-balance')
+      return { contractId: 'wrap.near', accountId: sender, amountRaw: '1000' }
+    },
+    async isFungibleTokenAccountRegistered() {
+      calls.push('wrapped-registration')
+      return true
+    },
     async broadcastSignedTransaction(transaction) {
       const index = transaction === 'AQ==' ? 0 : 1
       calls.push(`broadcast:${index}`)
@@ -229,6 +242,7 @@ function createHarness(overrides = {}) {
   return {
     coordinator,
     calls,
+    preparedTransactions,
     repository,
     store,
     setNow(value) {
@@ -346,4 +360,328 @@ test('Ledger NEAR review binds the batch and prevents concurrent confirmation', 
   releaseSigning()
   await expect(first).resolves.toMatchObject({ graph: { root: { status: 'broadcast' } } })
   expect(harness.calls.filter(call => call.startsWith('confirm:'))).toHaveLength(2)
+})
+
+test('Ledger NEAR confirms a persisted transaction-only fingerprint and the prior expanded fingerprint', async () => {
+  for (const expanded of [false, true]) {
+    const harness = createHarness({ ledger: true })
+    const review = await harness.coordinator.prepare(binding().quoteHandle, binding())
+    const [pending] = await harness.store.list()
+    const fingerprintInput = expanded
+      ? { tokenIn: plan().tokenIn, amountIn: plan().amountIn, transactions: plan().transactions }
+      : plan().transactions
+    const expected = createHash('sha256')
+      .update(JSON.stringify([JSON.stringify(fingerprintInput)]))
+      .digest('hex')
+    if (!expanded) expect(pending.planFingerprint).toBe(expected)
+    if (expanded) await harness.store.put({ ...pending, planFingerprint: expected })
+    await expect(
+      harness.coordinator.confirm(binding().quoteHandle, review.payloadFingerprint)
+    ).resolves.toMatchObject({ graph: { root: { status: 'broadcast' } } })
+  }
+})
+
+test('native NEAR prepends the wrapped shortfall and registration deposit before signer review', async () => {
+  const harness = createHarness({
+    rpc: {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '400' }
+      },
+      async isFungibleTokenAccountRegistered() {
+        return false
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+
+  expect(review.summaries).toHaveLength(3)
+  expect(harness.preparedTransactions.map(transaction => transaction.receiverId)).toEqual([
+    'wrap.near',
+    'router.near',
+    'recipient.near'
+  ])
+  expect(harness.preparedTransactions[0].actions).toEqual([
+    {
+      type: 'functionCall',
+      methodName: 'near_deposit',
+      args: 'e30=',
+      gas: '50000000000000',
+      depositYocto: '1250000000000000000600'
+    }
+  ])
+  expect(harness.preparedTransactions.map(transaction => transaction.nonce)).toEqual([
+    '41',
+    '42',
+    '43'
+  ])
+})
+
+test('explicit wrap.near input wraps only its missing amount', async () => {
+  const harness = createHarness({
+    rpc: {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '400' }
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding().quoteHandle, binding())
+  expect(review.summaries).toHaveLength(3)
+  expect(harness.preparedTransactions[0]).toMatchObject({
+    receiverId: 'wrap.near',
+    actions: [{ methodName: 'near_deposit', gas: '50000000000000', depositYocto: '600' }]
+  })
+})
+
+test('unrelated NEAR FT skips wNEAR funding and mismatched wrap bindings fail before signing', async () => {
+  const otherAsset = binding()
+  otherAsset.origin.assetId = 'near:mainnet/nep141:usdc.near'
+  otherAsset.origin.protocolAssetId = 'nep141:usdc.near'
+  const otherPlan = { ...plan(), tokenIn: 'usdc.near' }
+  const otherHarness = createHarness({
+    service: {
+      async readNearTransactionBatchPlan() {
+        return otherPlan
+      }
+    }
+  })
+  await otherHarness.coordinator.prepare(otherAsset.quoteHandle, otherAsset)
+  expect(otherHarness.calls).not.toContain('wrapped-balance')
+  expect(otherHarness.preparedTransactions).toHaveLength(2)
+
+  const wrongFtSource = createHarness({
+    service: {
+      async readNearTransactionBatchPlan() {
+        return plan()
+      }
+    }
+  })
+  await expect(
+    wrongFtSource.coordinator.prepare(otherAsset.quoteHandle, otherAsset)
+  ).rejects.toThrow(/quote source does not match/)
+
+  for (const changed of [
+    { origin: { ...binding().origin, protocolAssetId: 'nep141:usdc.near' } },
+    { origin: { ...binding().origin, chainId: 'near:testnet' } }
+  ]) {
+    const invalid = { ...binding(), ...changed }
+    const harness = createHarness()
+    await expect(harness.coordinator.prepare(invalid.quoteHandle, invalid)).rejects.toThrow()
+    expect(harness.calls).not.toContain('prepare:0')
+  }
+  const wrongSource = createHarness({
+    service: {
+      async readNearTransactionBatchPlan() {
+        return { ...plan(), tokenIn: 'native' }
+      }
+    }
+  })
+  await expect(wrongSource.coordinator.prepare(binding().quoteHandle, binding())).rejects.toThrow(
+    /quote source does not match/
+  )
+})
+
+test('legacy Ledger review rejects a changed wrap.near quote source before confirmation', async () => {
+  let tokenIn = 'wrap.near'
+  const harness = createHarness({
+    ledger: true,
+    service: {
+      async readNearTransactionBatchPlan() {
+        return { ...plan(), tokenIn }
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding().quoteHandle, binding())
+  tokenIn = 'native'
+  await expect(
+    harness.coordinator.confirm(binding().quoteHandle, review.payloadFingerprint)
+  ).rejects.toThrow(/quote source does not match/)
+  expect(harness.calls).not.toContain('confirm:0')
+})
+
+test('native NEAR records the final swap hash after broadcasting the wrap', async () => {
+  let confirmed = 0
+  const hashes = [...sourceHashes, `${'1'.repeat(31)}3`]
+  const payloads = ['AQ==', 'Ag==', 'Aw==']
+  const harness = createHarness({
+    signer: {
+      async confirm() {
+        const index = confirmed++
+        return {
+          kind: 'signed-payload',
+          payload: { encoding: 'base64', value: payloads[index] },
+          transactionId: hashes[index]
+        }
+      }
+    },
+    rpc: {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '0' }
+      },
+      async broadcastSignedTransaction(transaction) {
+        const index = payloads.indexOf(transaction)
+        harness.calls.push(`broadcast:${index}`)
+        return hashes[index]
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+  const result = await harness.coordinator.confirm(
+    binding(true).quoteHandle,
+    review.payloadFingerprint
+  )
+
+  expect(result.graph.segments.filter(segment => segment.role === 'origin')).toHaveLength(3)
+  expect(harness.calls.filter(call => call.startsWith('broadcast:'))).toEqual([
+    'broadcast:0',
+    'broadcast:1',
+    'broadcast:2'
+  ])
+  expect(harness.calls).toContain(`record:${hashes[2]}`)
+  expect(harness.calls.indexOf('broadcast:2')).toBeLessThan(
+    harness.calls.indexOf(`record:${hashes[2]}`)
+  )
+})
+
+test('native NEAR uses sufficient existing wNEAR without another deposit', async () => {
+  const harness = createHarness({
+    rpc: {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '1000' }
+      }
+    }
+  })
+  await harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+  expect(harness.preparedTransactions.map(transaction => transaction.receiverId)).toEqual([
+    'router.near',
+    'recipient.near'
+  ])
+})
+
+test('native NEAR accepts a sufficient first backend wrap without duplicating it', async () => {
+  const wrappedPlan = plan()
+  wrappedPlan.transactions.unshift({
+    signerId: sender,
+    receiverId: 'wrap.near',
+    actions: [
+      {
+        type: 'FunctionCall',
+        params: { methodName: 'near_deposit', args: {}, gas: '50000000000000', deposit: '1000' }
+      }
+    ]
+  })
+  const harness = createHarness({
+    rpc: {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '0' }
+      }
+    },
+    service: {
+      async readNearTransactionBatchPlan() {
+        return wrappedPlan
+      }
+    }
+  })
+  await harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+  expect(harness.preparedTransactions.map(transaction => transaction.receiverId)).toEqual([
+    'wrap.near',
+    'router.near',
+    'recipient.near'
+  ])
+})
+
+test('native NEAR fails closed on insufficient or ambiguous existing wraps', async () => {
+  for (const { deposit, args, receiverId, position, gas = '50000000000000', registered = true } of [
+    { deposit: '999', args: {}, receiverId: 'wrap.near', position: 'first' },
+    { deposit: '1000', args: { unexpected: true }, receiverId: 'wrap.near', position: 'first' },
+    { deposit: '1000', args: {}, receiverId: 'other.near', position: 'first' },
+    { deposit: '1000', args: {}, receiverId: 'wrap.near', position: 'last' },
+    { deposit: '1000', args: {}, receiverId: 'wrap.near', position: 'first', gas: '1' },
+    { deposit: '1000', args: {}, receiverId: 'wrap.near', position: 'first', registered: false }
+  ]) {
+    const wrappedPlan = plan()
+    const transaction = {
+      signerId: sender,
+      receiverId,
+      actions: [
+        {
+          type: 'FunctionCall',
+          params: { methodName: 'near_deposit', args, gas, deposit }
+        }
+      ]
+    }
+    if (position === 'first') wrappedPlan.transactions.unshift(transaction)
+    else wrappedPlan.transactions.push(transaction)
+    const harness = createHarness({
+      rpc: {
+        async getFungibleTokenBalance() {
+          return { contractId: 'wrap.near', accountId: sender, amountRaw: '0' }
+        },
+        async isFungibleTokenAccountRegistered() {
+          return registered
+        }
+      },
+      service: {
+        async readNearTransactionBatchPlan() {
+          return wrappedPlan
+        }
+      }
+    })
+    await expect(
+      harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+    ).rejects.toThrow(/existing wrap/)
+    expect(harness.calls).not.toContain('prepare:0')
+  }
+})
+
+test('native NEAR refuses missing funding data and a mismatched quote source', async () => {
+  for (const rpc of [
+    {
+      async getFungibleTokenBalance() {
+        throw new Error('balance unavailable')
+      }
+    },
+    {
+      async isFungibleTokenAccountRegistered() {
+        throw new Error('registration unavailable')
+      }
+    },
+    {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: 'other.near', amountRaw: '0' }
+      }
+    }
+  ]) {
+    const harness = createHarness({ rpc })
+    await expect(
+      harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+    ).rejects.toThrow()
+    expect(harness.calls).not.toContain('prepare:0')
+  }
+  const wrongSource = createHarness({
+    service: {
+      async readNearTransactionBatchPlan() {
+        return { ...plan(), tokenIn: 'fake.near' }
+      }
+    }
+  })
+  await expect(
+    wrongSource.coordinator.prepare(binding(true).quoteHandle, binding(true))
+  ).rejects.toThrow(/quote source does not match/)
+  expect(wrongSource.calls).not.toContain('prepare:0')
+})
+
+test('explicit backend signer must match the active NEAR account', async () => {
+  const mismatched = plan()
+  mismatched.transactions[0].signerId = 'other.near'
+  const harness = createHarness({
+    service: {
+      async readNearTransactionBatchPlan() {
+        return mismatched
+      }
+    }
+  })
+  await expect(harness.coordinator.prepare(binding().quoteHandle, binding())).rejects.toThrow(
+    /binding does not match/
+  )
+  expect(harness.calls).not.toContain('prepare:0')
 })

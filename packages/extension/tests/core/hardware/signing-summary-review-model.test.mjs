@@ -5,7 +5,7 @@ import { hashTypedData } from 'viem'
 
 import { SIGNING_SUMMARY_SCHEMAS } from '../../../src/core/keyring/domain/index.ts'
 import { decodeEvmPermitReview } from '../../../src/infrastructure/chains/evm/evm-permit-review.ts'
-import { buildSigningSummaryReviewModel } from '../../../src/popup/components/signing/signing-summary-review-model.ts'
+import { buildSigningSummaryReviewModel } from '../../../src/popup/services/signing-review/index.ts'
 
 const digest = '00'.repeat(32)
 const content = (encoding = 'utf8', value = 'hello') => ({
@@ -876,18 +876,13 @@ test.describe('Signing summary review model', () => {
 
   test('keeps the renderer independent from runtime, Worker, store, and WASM inputs', () => {
     const source = [
-      'signing-summary-review-model.ts',
-      'signing-summary-review-model-other.ts',
-      'signing-summary-review-model-tron.ts',
-      'signing-summary-review-model-types.ts',
-      'SigningSummaryReview.tsx'
+      'services/signing-review/index.ts',
+      'services/signing-review/protocol-review.ts',
+      'services/signing-review/tron-review.ts',
+      'services/signing-review/review-model.ts',
+      'components/signing/SigningSummaryReview.tsx'
     ]
-      .map(file =>
-        readFileSync(
-          new URL(`../../../src/popup/components/signing/${file}`, import.meta.url),
-          'utf8'
-        )
-      )
+      .map(file => readFileSync(new URL(`../../../src/popup/${file}`, import.meta.url), 'utf8'))
       .join('\n')
 
     expect(source).not.toMatch(/\bany\b|chrome\.|postMessage|WORKER_RPC|wasm-pkg/i)

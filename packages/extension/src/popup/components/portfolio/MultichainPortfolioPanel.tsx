@@ -2,15 +2,23 @@ import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import type { AccountNetworksView } from '@/popup/services/account-networks-client'
 import { PortfolioShell } from './PortfolioShell'
 import { resolvePortfolioChainSelection } from '@/popup/services/portfolio-presentation'
+import { withNearConfidentialZecChain } from '@/popup/services/near-confidential-holdings'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { ListSkeleton } from '../ui/skeleton'
 import { useSettingsStore } from '@/store/settings-store'
 import { useWalletStore } from '@/store/wallet-store'
-import { getPortfolioRecoveryDelayMs, hasPortfolioBalanceRefreshIssue } from './portfolio-recovery'
-import { hasRetryablePortfolioPriceGap, summarizePortfolioFiat } from './portfolio-prices'
+import {
+  getPortfolioRecoveryDelayMs,
+  hasPortfolioBalanceRefreshIssue
+} from '@/popup/services/portfolio-recovery'
+import {
+  hasRetryablePortfolioPriceGap,
+  summarizePortfolioFiat
+} from '@/popup/services/portfolio-prices'
 import {
   isPortfolioModelForScope,
   shouldRefreshPortfolioFromNetwork
@@ -19,14 +27,15 @@ import { projectPortfolioForDomain, type AssetDomain } from '@/popup/services/as
 
 const FAST_TRANSACTION_RECHECK_INTERVAL_MS = 5_000
 
-interface MultichainPortfolioPanelProps {
+export interface MultichainPortfolioPanelProps {
+  listHeader?: ComponentProps<typeof PortfolioShell>['listHeader']
   domain?: AssetDomain
-  hideToolbar?: boolean
   walletId: string | null
   accountId: string | null
   model: PortfolioReadModel | null
   activeAccount?: AccountNetworksView | null
   status: 'loading' | 'ready' | 'error'
+  accountLoading: boolean
   prices: AssetPriceReadModel | null
   priceStatus?: 'loading' | 'ready' | 'error'
   balancesHidden?: boolean
@@ -35,6 +44,7 @@ interface MultichainPortfolioPanelProps {
   onSelectAsset?: (assetId: string) => void
   onSelectConfidentialAsset?: (tokenId: string) => void
   onManageTokens?: () => void
+  onShieldForAsset?: ComponentProps<typeof PortfolioShell>['onShieldForAsset']
 }
 
 function PortfolioState({
@@ -58,13 +68,14 @@ function PortfolioState({
 }
 
 export function MultichainPortfolioPanel({
+  listHeader,
   domain = 'all',
-  hideToolbar = false,
   walletId,
   accountId,
   model,
   activeAccount,
   status,
+  accountLoading,
   prices,
   priceStatus,
   balancesHidden,
@@ -72,7 +83,8 @@ export function MultichainPortfolioPanel({
   onRetryPrices,
   onSelectAsset,
   onSelectConfidentialAsset,
-  onManageTokens
+  onManageTokens,
+  onShieldForAsset
 }: MultichainPortfolioPanelProps) {
   const scopeKey = JSON.stringify([walletId ?? '', accountId ?? ''])
   const network = useWalletStore(state => state.currentNetwork)
@@ -115,11 +127,20 @@ export function MultichainPortfolioPanel({
     activeAccount?.walletId === walletId && activeAccount?.accountId === accountId
       ? activeAccount
       : null
-  const domainModel = visibleModel
-    ? projectPortfolioForDomain(visibleModel, domain, {
-        evmPrivateAvailable: supportsEvmPrivateExecution(scopedAccount?.walletSource)
-      })
-    : null
+  const projectedModel =
+    domain === 'all'
+      ? visibleModel
+      : visibleModel
+        ? projectPortfolioForDomain(visibleModel, domain, {
+            evmPrivateAvailable: supportsEvmPrivateExecution(scopedAccount?.walletSource),
+            evmShieldAvailable:
+              getShieldTransferChainIds(scopedAccount, network === 'mainnet').length > 0
+          })
+        : null
+  const domainModel =
+    domain === 'all' || domain === 'shield'
+      ? withNearConfidentialZecChain(projectedModel, network)
+      : projectedModel
   const availableChainIds = resolvePortfolioChainSelection(
     domainModel,
     null,
@@ -127,7 +148,7 @@ export function MultichainPortfolioPanel({
   )
   const selectedChainIds = resolvePortfolioChainSelection(
     domainModel,
-    hideToolbar ? null : persistedChainSelection,
+    persistedChainSelection,
     __ENABLED_CHAIN_FEATURE_FLAGS__
   )
   const balanceRecoveryNeeded =
@@ -174,7 +195,7 @@ export function MultichainPortfolioPanel({
     walletId
   ])
 
-  if (status === 'loading' && !visibleModel) {
+  if (!visibleModel && (accountLoading || status === 'loading')) {
     return <ListSkeleton rows={3} label="Loading portfolio" className="px-5 py-3" />
   }
 
@@ -192,19 +213,19 @@ export function MultichainPortfolioPanel({
     return (
       <PortfolioState
         icon="lucide:layers"
-        title="Portfolio is not ready"
-        description="Finish wallet setup or unlock this account to load enabled networks."
+        title="No active account"
+        description="Select an account to view its assets."
       />
     )
   }
 
   return (
     <PortfolioShell
+      listHeader={listHeader}
       model={domainModel!}
       sourceModel={visibleModel}
       network={network}
       domain={domain}
-      hideToolbar={hideToolbar}
       prices={prices}
       priceStatus={priceStatus}
       balancesHidden={balancesHidden}
@@ -224,9 +245,11 @@ export function MultichainPortfolioPanel({
         )
       }
       onSelectAsset={onSelectAsset}
+      onShieldForAsset={domain === 'public' ? onShieldForAsset : undefined}
       onSelectConfidentialAsset={onSelectConfidentialAsset}
       onRefresh={() => void load(true)}
       onManageTokens={onManageTokens}
     />
   )
 }
+import type { ComponentProps } from 'react'

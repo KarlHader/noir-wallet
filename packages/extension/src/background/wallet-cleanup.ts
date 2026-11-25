@@ -63,6 +63,7 @@ import {
   clearSwapApprovalContinuationsForAccount
 } from './swap-approval-continuation'
 import { ChromeEvmDAppPrivateTransferStore } from './evm-dapp-private-transfer'
+import { clearActivityNotifications } from './activity-notifications'
 import { WalletMetadataCoordinator } from '@/infrastructure/keyring/wallet-metadata-coordinator'
 import { pendingRequestsManager } from './pending-requests'
 import {
@@ -85,6 +86,7 @@ import { dappExecutionModeCoordinator } from './dapp-execution-mode'
 import type { WalletBackupVerification } from '@/core/wallet/secret-phrase-backup'
 import { isNativeV2CredentialKeyDomain } from '@/core/wallet/native-hardware-identity'
 import type { StorageV2Snapshot } from '@/ports/repositories'
+import { removeOneClickStatusTokens } from './one-click-status-tokens'
 
 type ActiveAccount = {
   walletId: string | null
@@ -754,12 +756,21 @@ export class WalletCleanupCoordinator {
         ])
         await Promise.all([
           deleteIndexedDbTransactionPersistence(),
+          ...wallets.map(wallet => removeOneClickStatusTokens(wallet.id)),
           deleteIndexedDbPortfolioCache(),
           deleteIndexedDbBitcoinDiscovery(),
           deleteIndexedDbBitcoinChangeReservations(),
           deleteIndexedDbBitcoinInputReservations(),
           deleteHistoryCache(),
           this.activityHistoryCache.clear(),
+          ...wallets.flatMap(wallet =>
+            wallet.accounts.map(account =>
+              clearActivityNotifications({
+                keyDomainId: parseKeyDomainId(wallet.id),
+                accountId: parseAccountId(account.id)
+              })
+            )
+          ),
           dappExecutionModeCoordinator.clear(),
           clearAllSwapApprovalContinuations(),
           new ChromeConfidentialFundingStore().clearAllWalletData(),
@@ -799,6 +810,7 @@ export class WalletCleanupCoordinator {
     const confidentialFundingStore = new ChromeConfidentialFundingStore()
     await Promise.all([
       this.bitcoinDiscovery.deleteByAccountScope(scope),
+      removeOneClickStatusTokens(walletId, accountId),
       this.bitcoinChangeReservations.deleteByAccountScope(scope),
       this.bitcoinInputReservations.deleteByAccountScope(scope),
       deleteHistoryCacheByAccountScope(scope),
@@ -807,8 +819,10 @@ export class WalletCleanupCoordinator {
       confidentialFundingStore.deleteExternalDepositsByAccountScope(walletId, accountId),
       confidentialFundingStore.deleteBalancesByAccountScope(walletId, accountId),
       confidentialFundingStore.deleteSessionsByAccountScope(walletId, accountId),
+      confidentialFundingStore.deleteShieldSiteGrantsByAccountScope(walletId, accountId),
       chrome.storage.local.remove(LEGACY_LENDING_MARKET_CACHE_STORAGE_KEY),
       this.activityHistoryCache.deleteByScope(scope),
+      clearActivityNotifications(scope),
       dappExecutionModeCoordinator.removeAccount(walletId, accountId),
       clearSwapApprovalContinuationsForAccount(walletId, accountId),
       new ChromeEvmDAppPrivateTransferStore().clearForAccount(walletId, accountId)

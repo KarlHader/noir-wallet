@@ -2,13 +2,13 @@ import assert from 'node:assert/strict'
 import { it } from 'node:test'
 import {
   normalizeCrossChainToTokenList,
-  normalizeFromTokenList,
-  serializeQuoteRequest
-} from '@rhea-finance/cross-chain-aggregation-dex'
+  normalizeFromTokenList
+} from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
+import { serializeQuoteRequest } from '../../../src/core/services/rhea-swap/rhea-swap-protocol.ts'
 import {
   parseRheaSwapQuoteRequest,
   toRheaSwapToken,
-  toSdkQuoteRequest
+  toRheaSwapProtocolRequest
 } from '../../../src/core/services/rhea-swap/rhea-swap-model.ts'
 import { parseRheaSwapToken } from '../../../src/core/services/rhea-swap/rhea-swap-runtime.ts'
 import {
@@ -81,7 +81,7 @@ it('quotes Zcash catalog aliases in both directions without changing the wallet 
     assert.equal(token.isNative, true)
     assert.equal(token.contractAddress, null)
     const serialized = serializeQuoteRequest(
-      toSdkQuoteRequest(
+      toRheaSwapProtocolRequest(
         parseRheaSwapQuoteRequest({
           fromChain: 'zcash',
           toChain: '42161',
@@ -115,7 +115,7 @@ it('normalizes retained Zcash quote addresses for source and destination at the 
       sender: 'test-sender',
       recipient: 'test-recipient'
     })
-    const serialized = serializeQuoteRequest(toSdkQuoteRequest(request))
+    const serialized = serializeQuoteRequest(toRheaSwapProtocolRequest(request))
     assert.equal(reverse ? serialized.tokenOut : serialized.tokenIn, 'zec')
     assert.equal(zcash.address, 'zec:mainnet:native')
   }
@@ -147,7 +147,7 @@ it('quotes an EVM ERC-20 by its on-chain contract while retaining the catalog as
   assert.equal(token.contractAddress, contractAddress)
   assert.deepEqual(token.sources, ['nearintents'])
 
-  const request = toSdkQuoteRequest(
+  const request = toRheaSwapProtocolRequest(
     parseRheaSwapQuoteRequest({
       fromChain: '1',
       toChain: token.rheaChainId,

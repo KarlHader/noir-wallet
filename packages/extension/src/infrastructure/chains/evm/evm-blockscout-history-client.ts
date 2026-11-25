@@ -5,6 +5,7 @@ import { EvmRpcError } from './evm-rpc-client'
 import {
   EVM_HISTORY_LIMIT,
   mapEvmIndexedActivity,
+  indexedTransferLogIndex,
   type EvmActivityHistorySource,
   type FindEvmConfirmedReplacementInput,
   type IndexedTransaction,
@@ -148,6 +149,7 @@ function parseTokenTransfer(value: unknown, trackedAsset: TrackedErc20Asset): In
   if (String(value.tokenDecimal) !== String(trackedAsset.decimals)) {
     throw new EvmRpcError('invalid-response', 'EVM token history decimals do not match')
   }
+  const logIndex = indexedTransferLogIndex(value.logIndex)
   return Object.freeze({
     transactionHash: parseHash(value.hash, 'EVM token history transaction hash'),
     ...(value.blockHash === ''
@@ -158,6 +160,7 @@ function parseTokenTransfer(value: unknown, trackedAsset: TrackedErc20Asset): In
     from: parseAddress(value.from, 'EVM token history sender'),
     to: parseAddress(value.to, 'EVM token history recipient'),
     amountRaw: parseUnsignedDecimal(value.value, 'EVM token history amount'),
+    ...(logIndex === undefined ? {} : { logIndex }),
     ...(value.nonce === ''
       ? {}
       : { nonce: parseUnsignedDecimal(value.nonce, 'EVM token history nonce') }),

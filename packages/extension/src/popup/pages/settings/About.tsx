@@ -3,7 +3,7 @@ import { PageHeader } from '../../components/common/PageHeader'
 import { useNavigate } from '../../provider/Router'
 import WalletIcon from '@/images/wallet-icon.svg'
 import { license } from '../../../../package.json'
-import { SocialLinks } from '@/popup/components/common/SocialLinks'
+import { SocialLinks } from '@/popup/components/settings/SocialLinks'
 
 declare const __APP_VERSION__: string
 declare const __BUILD_TIME__: string
@@ -11,7 +11,14 @@ declare const __BUILD_TIME__: string
 export function About() {
   const { navigate } = useNavigate()
   const version = __APP_VERSION__
-  const buildTime = new Date(__BUILD_TIME__).toLocaleDateString()
+  const buildTime = new Date(__BUILD_TIME__).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  })
   const currentYear = new Date().getFullYear()
 
   return (
@@ -54,9 +61,11 @@ export function About() {
             </div>
 
             <div className="p-4 bg-card rounded-xl">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-sm text-muted">Build</span>
-                <span className="text-sm">{buildTime}</span>
+                <time dateTime={__BUILD_TIME__} className="text-right text-sm">
+                  {buildTime}
+                </time>
               </div>
             </div>
           </div>

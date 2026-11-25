@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastructure/activity/zcash-v1-activity-source.ts'
+import { filterActivityItems } from '../../../../src/popup/services/activity-list-model.ts'
+import { getZcashChainId } from '../../../../src/core/chains/registry/index.ts'
 import {
   getActivityProgressSteps,
   getActivitySwapPresentation,
   getActivityAccountRouteLabel,
   getActivityRouteTitle,
   getActivityDetailTitle
-} from '../../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+} from '../../../../src/popup/services/multichain-activity-presentation.ts'
 
 const destinationAsset = 'eip155:42161/erc20:0xaf88d065e77c8cc2239327c5edb3a432268e5831'
 const transaction = {
@@ -66,6 +68,68 @@ test('pending ZEC swap Activity projects the quote-time final recipient and dest
   )
 })
 
+test('a Shield ZEC swap stays at its source and its destination requires separately credited activity', () => {
+  const destinationChainId = 'eip155:42161'
+  const sourceChainId = getZcashChainId('mainnet')
+  const completed = { ...transaction, status: 'success' }
+  const item = mapZcashV1TransactionToActivityItem(
+    {
+      ...completed,
+      chainHashes: [{ hash: `0x${'cd'.repeat(32)}`, chain: 'Arbitrum' }]
+    },
+    scope
+  )
+  const executionAddressModes = new Map([
+    [`${destinationChainId}:${transaction.quoteBinding.recipient}`, 'Public']
+  ])
+  const publicActivity = {
+    items: [item],
+    selectedChainIds: [destinationChainId],
+    domain: 'public',
+    executionAddressModes
+  }
+  assert.deepEqual(filterActivityItems({ ...publicActivity, assetId: destinationAsset }), [])
+  const privateModes = new Map([
+    [`${destinationChainId}:${transaction.quoteBinding.recipient}`, 'Confidential']
+  ])
+  const privateActivity = {
+    ...publicActivity,
+    domain: 'private',
+    executionAddressModes: privateModes
+  }
+  assert.deepEqual(filterActivityItems({ ...privateActivity, assetId: destinationAsset }), [])
+  assert.deepEqual(filterActivityItems({ ...privateActivity, domain: 'public' }), [])
+  assert.deepEqual(filterActivityItems({ ...privateActivity, selectedChainIds: ['eip155:1'] }), [])
+  assert.deepEqual(
+    filterActivityItems({ ...privateActivity, items: [{ ...item, reconfirming: true }] }),
+    []
+  )
+  const privateRoute = getActivitySwapPresentation(item, new Map(), new Map(), privateModes)
+  assert.equal(privateRoute.destinationAccountMode, 'Confidential')
+  assert.equal(getActivityRouteTitle(item, privateRoute, { viewedDomain: 'private' }), 'Receive')
+  assert.equal(getActivityRouteTitle(item, privateRoute, { viewedDomain: 'shield' }), 'Swap')
+  assert.deepEqual(
+    filterActivityItems({ ...publicActivity, selectedChainIds: [sourceChainId] }),
+    []
+  )
+  assert.deepEqual(filterActivityItems({ ...publicActivity, executionAddressModes: new Map() }), [])
+  assert.deepEqual(
+    filterActivityItems({
+      ...publicActivity,
+      items: [mapZcashV1TransactionToActivityItem(completed, scope)]
+    }),
+    []
+  )
+  assert.deepEqual(
+    filterActivityItems({
+      ...publicActivity,
+      domain: 'shield',
+      selectedChainIds: [sourceChainId]
+    }),
+    [item]
+  )
+})
+
 test('native ZEC Confidential settlement projects an internal destination without a public recipient', () => {
   const confidential = {
     ...transaction,
@@ -88,9 +152,47 @@ test('native ZEC Confidential settlement projects an internal destination withou
   assert.equal(presentation.destinationAccountMode, 'Confidential')
   assert.equal(presentation.sourceAccountMode, 'Public')
   assert.equal(presentation.sourceFundingSource, 'transparent')
+  assert.equal(getActivityRouteTitle(item, presentation, { viewedDomain: 'public' }), 'Swap')
+  assert.equal(
+    getActivityRouteTitle(item, presentation, {
+      viewedDomain: 'shield',
+      shieldProvider: 'near-confidential'
+    }),
+    'Deposit'
+  )
   assert.equal(getActivityAccountRouteLabel(presentation), 'Transparent → NEAR Confidential')
   assert.equal(presentation.destinationChainIconAlias, 'near')
   assert.equal(presentation.recipientAddress, undefined)
+  const nativeZecAssetId = `${getZcashChainId('mainnet')}/slip44:133`
+  const deposit = mapZcashV1TransactionToActivityItem(
+    {
+      ...confidential,
+      quoteBinding: { ...confidential.quoteBinding, destinationAsset: nativeZecAssetId }
+    },
+    scope
+  )
+  const depositRoute = getActivitySwapPresentation(deposit, new Map(), new Map())
+  assert.equal(deposit.kind, 'transfer')
+  assert.equal(getActivityRouteTitle(deposit, depositRoute, { viewedDomain: 'public' }), 'Send')
+  const explicitSwap = mapZcashV1TransactionToActivityItem(
+    {
+      ...confidential,
+      quoteBinding: {
+        ...confidential.quoteBinding,
+        destinationAsset: nativeZecAssetId,
+        userAction: 'swap'
+      }
+    },
+    scope
+  )
+  const swapRoute = getActivitySwapPresentation(explicitSwap, new Map(), new Map())
+  assert.equal(explicitSwap.kind, 'swap')
+  assert.equal(getActivityRouteTitle(explicitSwap, swapRoute, { viewedDomain: 'public' }), 'Swap')
+  assert.equal(
+    getActivityDetailTitle(explicitSwap, undefined, { viewedDomain: 'public' }, swapRoute),
+    'Swap'
+  )
+  assert.equal(swapRoute.recipientAddress, undefined)
   const shieldedItem = mapZcashV1TransactionToActivityItem(
     {
       ...confidential,
@@ -101,6 +203,24 @@ test('native ZEC Confidential settlement projects an internal destination withou
   )
   const shieldedPresentation = getActivitySwapPresentation(shieldedItem, new Map(), new Map())
   assert.equal(shieldedPresentation.sourceFundingSource, 'shielded')
+  assert.equal(
+    getActivityRouteTitle(shieldedItem, shieldedPresentation, { viewedDomain: 'shield' }),
+    'Swap'
+  )
+  assert.equal(
+    getActivityRouteTitle(shieldedItem, shieldedPresentation, {
+      viewedDomain: 'shield',
+      shieldProvider: 'zcash-shield'
+    }),
+    'Withdraw'
+  )
+  assert.equal(
+    getActivityRouteTitle(shieldedItem, shieldedPresentation, {
+      viewedDomain: 'shield',
+      shieldProvider: 'near-confidential'
+    }),
+    'Deposit'
+  )
   assert.equal(
     getActivityAccountRouteLabel(shieldedPresentation),
     'Zcash Shield → NEAR Confidential'
@@ -141,7 +261,7 @@ test('a bound ZEC private send remains a monitored route but appears as a transf
     ['origin', 'relay', 'destination']
   )
   assert.equal(item.snapshot.recipient.address, 't1recipient')
-  assert.equal(getActivityRouteTitle(item, route), 'Transfer')
+  assert.equal(getActivityRouteTitle(item, route), 'Send')
   assert.equal(getActivityDetailTitle(item), 'Send')
 
   const unmarked = mapZcashV1TransactionToActivityItem(

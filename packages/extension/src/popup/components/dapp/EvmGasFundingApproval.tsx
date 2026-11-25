@@ -125,7 +125,7 @@ export function EvmGasFundingApproval(props: EvmGasFundingApprovalProps) {
         <DAppRequestHeader
           domain={props.domain}
           pageUrl={props.pageUrl}
-          action={props.fundingComplete ? 'Confidential Gas added' : 'Fund Confidential Gas'}
+          action={props.fundingComplete ? 'Incognito Gas added' : 'Fund Incognito Gas'}
         />
         {details && (
           <section className="overflow-hidden rounded-2xl border border-border bg-card/35">
@@ -134,7 +134,7 @@ export function EvmGasFundingApproval(props: EvmGasFundingApprovalProps) {
                 <Icon icon="noir:private-assets" width={20} height={20} />
               </span>
               <div className="min-w-0">
-                <p className="text-sm font-medium">Confidential account</p>
+                <p className="text-sm font-medium">Incognito account</p>
                 <p className="truncate font-mono text-xs text-muted" title={details.privateAddress}>
                   {formatSortAddress(details.privateAddress)}
                 </p>

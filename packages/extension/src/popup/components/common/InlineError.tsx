@@ -7,10 +7,12 @@ interface InlineErrorProps {
   readonly onRetry?: () => void
   readonly retrying?: boolean
   readonly retryLabel?: string
-  readonly tone?: 'error' | 'warning'
+  readonly tone?: 'error' | 'warning' | 'muted'
   readonly role?: 'alert' | 'status'
   readonly className?: string
 }
+
+const toneClasses = { error: 'text-danger', warning: 'text-warning', muted: 'text-muted' }
 
 export function InlineError({
   message,
@@ -41,6 +43,7 @@ export function InlineError({
   }, [message, isText, expanded])
 
   if (!message) return null
+  const toggleLabel = `${expanded ? 'Collapse' : 'Expand'} ${tone === 'error' ? 'error' : 'message'}`
 
   return (
     <div
@@ -50,9 +53,9 @@ export function InlineError({
       <span
         ref={textRef}
         className={cn(
-          'min-w-0 flex-1',
+          'min-w-0 flex-1 text-left',
           isText && !expanded ? 'truncate' : 'break-words whitespace-pre-wrap',
-          tone === 'error' ? 'text-danger' : 'text-warning'
+          toneClasses[tone]
         )}
       >
         {message}
@@ -61,10 +64,13 @@ export function InlineError({
         <button
           type="button"
           onClick={() => setExpanded(value => !value)}
-          aria-label={expanded ? 'Collapse error' : 'Expand error'}
+          aria-label={toggleLabel}
           aria-expanded={expanded}
-          title={expanded ? 'Collapse error' : 'Expand error'}
-          className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-danger focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          title={toggleLabel}
+          className={cn(
+            'shrink-0 cursor-pointer border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
+            toneClasses[tone]
+          )}
         >
           <Icon
             icon={expanded ? 'lucide:chevron-up' : 'lucide:chevron-down'}

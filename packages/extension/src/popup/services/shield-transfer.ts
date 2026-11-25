@@ -1,4 +1,5 @@
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
+import { supportsEvmConfidentialShield } from '@/core/chains/evm'
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 import type { SwapToken } from '@/core/services/intents-api'
 import { isDeprecatedIntentsToken } from '@/core/services/intents-evm-assets'
@@ -17,7 +18,7 @@ import {
   getAssetMarketMappings,
   getAssetProtocolSourceMappings
 } from '@/core/prices/asset-market-mappings'
-import type { Network } from '@/types'
+import type { FundingSource, Network } from '@/types'
 import { isAddress } from 'viem'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import type { PrepareConfidentialFundingRequest } from './confidential-funding-client'
@@ -28,8 +29,10 @@ import type {
 } from '@/core/services/confidential-funding'
 import { getConfidentialAvailableForAsset } from '@/core/services/confidential-funding'
 import type { TransferDomain } from './private-balance-transfer'
+import type { TokenPickerBalance } from './token-selector-visibility'
 import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
 import { formatIntentsConfirmationTime } from './confirmation-time-format'
+import type { AccountNetworksView } from './account-networks-client'
 
 type ShieldTransferAsset = Pick<
   IntentsManagedAsset,
@@ -42,6 +45,72 @@ export type ShieldFundingAsset = Readonly<{
   managed: ShieldTransferAsset
   marketAssetId?: string
 }>
+
+export interface ShieldTokenPickerItem {
+  readonly key: string
+  readonly assetId: string
+  readonly symbol: string
+  readonly name?: string
+  readonly searchTerms?: readonly string[]
+  readonly contractAddress?: string
+  readonly iconUrl?: string
+  readonly chainName: string
+  readonly chainId: string
+  readonly chainIds?: readonly string[]
+  readonly badgeBlockchain?: string
+  readonly nativeIconChain?: string
+  readonly zcashFundingSource?: FundingSource
+  readonly sourceLabel?: string
+  readonly availableRaw?: string
+  readonly displayBalance?: string
+  readonly isNative?: boolean
+  readonly pinned?: boolean
+  readonly decimals: number
+  readonly priceUsd?: string | number | null
+  readonly valueUsd?: string | null
+  readonly disabledReason?: string
+  readonly subtitle?: string
+  readonly title?: string
+  readonly ariaLabel?: string
+}
+
+export function getZcashTokenPickerChain(network: Network) {
+  return {
+    chainId: getZcashChainId(network),
+    chainName: network === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+    badgeBlockchain: 'zec'
+  }
+}
+
+export function shieldTokenPickerBalance(row: ShieldTokenPickerItem): TokenPickerBalance {
+  return {
+    ...row,
+    amount: row.displayBalance,
+    isNative: row.isNative ?? row.assetId.startsWith(`${row.chainId}/slip44:`),
+    pinOrder:
+      row.zcashFundingSource === 'shielded'
+        ? 0
+        : row.zcashFundingSource === 'transparent'
+          ? 1
+          : undefined
+  }
+}
+
+export function listShieldTokenPickerNetworks(
+  rows: readonly Readonly<{ chainId: string; chainName: string; badgeBlockchain?: string }>[]
+) {
+  const networks = new Map<string, { id: string; label: string; iconChain: string }>()
+  for (const { chainId, chainName, badgeBlockchain } of rows) {
+    if (!networks.has(chainId)) {
+      networks.set(chainId, {
+        id: chainId,
+        label: chainName,
+        iconChain: badgeBlockchain ?? chainId
+      })
+    }
+  }
+  return [...networks.values()]
+}
 
 export function formatShieldQuoteTime(seconds: number): string {
   return formatIntentsConfirmationTime(seconds)
@@ -57,12 +126,13 @@ function confidentialHolding(
 }
 
 export function shieldPortfolioBalances(
-  model: PortfolioReadModel | null
+  model: PortfolioReadModel | null,
+  field: 'availableRaw' | 'spendableRaw' = 'availableRaw'
 ): readonly Readonly<{ tokenId: string; available: string }>[] | null {
   return model?.confidential?.status === 'ready'
     ? model.confidential.assets.map(asset => ({
         tokenId: asset.tokenId,
-        available: asset.availableRaw
+        available: asset[field] ?? asset.availableRaw
       }))
     : null
 }
@@ -337,6 +407,24 @@ export function isShieldTransferRoute(from: TransferDomain, to: TransferDomain):
   )
 }
 
+export function getShieldTransferChainIds(
+  account: AccountNetworksView | null,
+  mainnet: boolean
+): readonly string[] {
+  if (!mainnet || !account || !supportsEvmConfidentialShield(account.walletSource)) return []
+  return account.networks.flatMap(({ chain, addresses }) =>
+    chain.family === 'evm' &&
+    chain.network.kind === 'mainnet' &&
+    chain.capabilities.transaction.status === 'available' &&
+    addresses.some(
+      ({ preferredForReceive, value }) =>
+        preferredForReceive && /^0x[0-9a-f]{40}$/i.test(value) && !/^0x0{40}$/i.test(value)
+    )
+      ? [chain.id]
+      : []
+  )
+}
+
 export function isClusterTransferRoute(from: TransferDomain, to: TransferDomain): boolean {
   return (from === 'public' && to === 'private') || (from === 'private' && to === 'public')
 }
@@ -426,6 +514,34 @@ export function listShieldSendDestinations(
   return options.filter(option => isShieldSendDestination(source, option, network))
 }
 
+export function createShieldSendRoutes(options: readonly ShieldFundingAsset[], network: Network) {
+  const destinationsByChain = new Map<string, ShieldFundingAsset[]>()
+  for (const option of options) {
+    if (!isShieldSendDestination(option, option, network)) continue
+    const chainId = option.chain.chain.id
+    const destinations = destinationsByChain.get(chainId)
+    if (destinations) destinations.push(option)
+    else destinationsByChain.set(chainId, [option])
+  }
+
+  const getDestination = (source: ShieldFundingAsset | null, chainId: string | null) => {
+    if (!source || !chainId) return null
+    const candidates = destinationsByChain.get(chainId)
+    if (!candidates) return null
+    return selectShieldWithdrawDestinationForNetwork(
+      listShieldSendDestinations(source, candidates, network),
+      source,
+      chainId
+    )
+  }
+
+  return {
+    networks: Array.from(destinationsByChain.values(), ([first]) => first!.chain.chain),
+    getDestination,
+    getSources: (chainId: string) => options.filter(source => getDestination(source, chainId))
+  }
+}
+
 export function estimateShieldSendRouteFee(
   source: ShieldFundingAsset,
   destination: ShieldFundingAsset,
@@ -496,7 +612,12 @@ export function shieldQuoteFeeRaw(review: ConfidentialFundingReview): string | n
 export function hasShieldTransferStarted(plan: ConfidentialFundingPlan): boolean {
   if (plan.operation === 'deposit')
     return Boolean(plan.preparedDeposit?.transactionHash || plan.preparedDeposit?.rawTransaction)
-  if (plan.operation === 'withdraw' || plan.operation === 'cluster' || plan.operation === 'swap')
+  if (
+    plan.operation === 'withdraw' ||
+    plan.operation === 'cluster' ||
+    plan.operation === 'swap' ||
+    plan.operation === 'confidential-transfer'
+  )
     return Boolean(
       plan.batchSubmissionAttemptedAt ||
       plan.orderId ||
@@ -514,6 +635,10 @@ export function isUnsignedShieldTerminal(plan: ConfidentialFundingPlan): boolean
     (plan.phase === 'failed' || plan.phase === 'expired' || plan.phase === 'cancelled') &&
     !hasShieldTransferStarted(plan)
   )
+}
+
+export function canOpenShieldActivity(plan: ConfidentialFundingPlan): boolean {
+  return plan.phase === 'needs-auth' || hasShieldTransferStarted(plan)
 }
 
 export function buildExternalShieldWithdrawRequest(
@@ -598,6 +723,7 @@ export function buildShieldTransferRequest(
     asset: PortfolioAssetView
     chain: PortfolioChainView
     managed: ShieldTransferAsset
+    slippageBps: number
     destination?: ShieldFundingAsset
     feeSelection?: EvmFeeSelection
     dedupKey?: string
@@ -647,7 +773,7 @@ export function buildShieldTransferRequest(
     destinationDomain: input.to,
     source: Object.freeze({ ...sourceRoute, amountRaw: input.amountRaw }),
     destination: destinationRoute,
-    slippageBps: 50,
+    slippageBps: input.slippageBps,
     ...(input.from === 'shield' || !input.feeSelection ? {} : { feeSelection: input.feeSelection }),
     ...(input.dedupKey ? { dedupKey: input.dedupKey } : {})
   })

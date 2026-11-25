@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { ASSET_PRICE_SOURCE_ASSETS } from '../../../src/config/asset-market-assets.ts'
+import { ONE_CLICK_TOKEN_CATALOG_URL } from '../../../src/config/intents.ts'
 import { parseAssetPriceReadModel } from '../../../src/core/prices/index.ts'
 import {
   FourMemeMarketClient,
-  FourMemeAssetPriceService,
-  ONE_CLICK_ASSET_PRICE_URL
+  FourMemeAssetPriceService
 } from '../../../src/infrastructure/prices/index.ts'
 
 const NOW = Date.parse('2026-11-10T08:00:00Z')
@@ -73,7 +73,7 @@ test('converts Four.Meme curve prices with the exact quote asset and preserves s
             })
       )
     }
-    expect(url.href).toBe(ONE_CLICK_ASSET_PRICE_URL)
+    expect(url.href).toBe(ONE_CLICK_TOKEN_CATALOG_URL)
     return new Response(
       JSON.stringify([
         {

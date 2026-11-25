@@ -1,4 +1,5 @@
 import type { Caip25CreateSessionRequest, NoirWalletProvider } from '@noir-wallet/sdk'
+import { getEvmNetworkExamples } from './evm-network-catalog'
 
 export function buildExampleMultichainSessionRequest(
   wallet: NoirWalletProvider,
@@ -18,7 +19,12 @@ export function buildExampleMultichainSessionRequest(
       ? 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
       : 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
   const nearChainId = networkMode === 'mainnet' ? 'near:mainnet' : 'near:testnet'
-  const evmChainId = `eip155:${Number.parseInt(evmChainIdHex, 16)}`
+  const evmChainIds = new Set(
+    [
+      evmChainIdHex,
+      ...getEvmNetworkExamples(networkMode).map(network => network.request.chainId)
+    ].map(chainId => `eip155:${Number.parseInt(chainId, 16)}`)
+  )
 
   return {
     scopes: {
@@ -32,19 +38,22 @@ export function buildExampleMultichainSessionRequest(
         notifications: ['wallet_sessionChanged', 'accountsChanged']
       },
       ...(wallet.ethereum
-        ? {
-            [evmChainId]: {
-              methods: [
-                'eth_chainId',
-                'eth_accounts',
-                'eth_getBalance',
-                'eth_sendTransaction',
-                'personal_sign',
-                'eth_signTypedData_v4'
-              ],
-              notifications: ['wallet_sessionChanged', 'accountsChanged', 'chainChanged']
-            }
-          }
+        ? Object.fromEntries(
+            [...evmChainIds].map(chainId => [
+              chainId,
+              {
+                methods: [
+                  'eth_chainId',
+                  'eth_accounts',
+                  'eth_getBalance',
+                  'eth_sendTransaction',
+                  'personal_sign',
+                  'eth_signTypedData_v4'
+                ],
+                notifications: ['wallet_sessionChanged', 'accountsChanged', 'chainChanged']
+              }
+            ])
+          )
         : {}),
       ...(wallet.bitcoin
         ? {

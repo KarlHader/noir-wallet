@@ -1,4 +1,5 @@
 import { NearWalletClientError } from './near-wallet-client'
+import { formatInsufficientBalance } from '@/lib/format'
 
 export function getNearSendPrepareError(error: unknown, networkName: string): string {
   if (!(error instanceof NearWalletClientError)) {
@@ -11,7 +12,7 @@ export function getNearSendPrepareError(error: unknown, networkName: string): st
     return 'This Account has no usable full-access NEAR key.'
   }
   if (error.code === 'insufficient-funds') {
-    return 'The NEAR balance cannot cover the amount, fee, and storage reserve.'
+    return formatInsufficientBalance('NEAR')
   }
   if (error.code === 'invalid-request') {
     return 'Check the amount and ensure the recipient account already exists.'

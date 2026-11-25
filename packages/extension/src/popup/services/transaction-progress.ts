@@ -9,6 +9,7 @@ import {
 import type { IntentsProgressEntry } from '@/lib/intents-progress'
 import type { Transaction } from '@/types/wallet'
 import { WALLET_CONFIG } from '@/config/wallet'
+import { isInternalSwapProvider } from './swap-provider-presentation'
 
 export { getZcashIntentsOriginStatus } from '@/lib/cross-chain-transaction'
 
@@ -22,6 +23,35 @@ export interface TransactionProgressStep {
   readonly statusLabel: string
 }
 
+export interface SwapApprovalProgress {
+  readonly chainId: string
+  readonly networkName: string
+  readonly transactionHash?: string
+  readonly status: 'confirming' | 'confirmed' | 'failed'
+}
+
+export function getSwapApprovalProgressStep(
+  approval: SwapApprovalProgress
+): TransactionProgressStep {
+  return {
+    id: 'token-approval',
+    label: 'Token approval',
+    detail: approval.networkName,
+    state:
+      approval.status === 'confirmed'
+        ? 'complete'
+        : approval.status === 'failed'
+          ? 'failed'
+          : 'active',
+    statusLabel:
+      approval.status === 'confirmed'
+        ? 'Confirmed'
+        : approval.status === 'failed'
+          ? 'Failed'
+          : 'Confirming'
+  }
+}
+
 export interface IntentsProgressPresentation {
   readonly title: string
   readonly description: string
@@ -30,6 +60,7 @@ export interface IntentsProgressPresentation {
 
 function getSwapProcessingLabel(router: string | undefined, actionName: string): string {
   const name = router?.trim()
+  if (name && isInternalSwapProvider(name)) return 'Cross-chain'
   if (
     !name ||
     name.length > 32 ||

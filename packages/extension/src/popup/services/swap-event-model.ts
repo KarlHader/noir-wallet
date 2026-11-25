@@ -98,7 +98,9 @@ export function projectSwapCollector(input: {
       ? 'external'
       : input.purpose === 'wallet-swap' ||
           input.purpose === 'confidential-funding' ||
-          input.purpose === 'private-transfer'
+          input.purpose === 'public-private-move' ||
+          input.purpose === 'private-transfer' ||
+          input.purpose === 'private-cross-chain-withdraw'
         ? 'self'
         : 'unknown',
     activityType: input.isTransfer ? 'transfer' : 'swap',

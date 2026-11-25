@@ -236,6 +236,21 @@ export function createInitialProductChainRegistry(
   return createChainRegistry(getInitialProductChainDefinitions(network, additionalEvmNetworks))
 }
 
+/** Built-in EVM chains are already in the product registry. Passing them again duplicates eip155:1. */
+export function selectAdditionalEvmNetworks(
+  network: Network,
+  evmNetworks: readonly EvmNetworkConfig[]
+): readonly EvmNetworkConfig[] {
+  const seen = new Set(getEvmNetworkConfigs(network).map(item => item.chainId))
+  const additional: EvmNetworkConfig[] = []
+  for (const item of evmNetworks) {
+    if (seen.has(item.chainId)) continue
+    seen.add(item.chainId)
+    additional.push(item)
+  }
+  return Object.freeze(additional)
+}
+
 export function getZcashChainId(network: Network): string {
   return ZCASH_CHAIN_IDS[network]
 }
@@ -271,13 +286,46 @@ export function getEvmAssetDefinitions(config: EvmNetworkConfig): readonly Asset
             verification: 'trusted' as const
           })
         ]
-      : [])
+      : []),
+    ...(config.bundledErc20Assets ?? []).map(({ contract, ...metadata }) =>
+      Object.freeze({
+        chainId: config.chainId,
+        namespace: 'erc20',
+        reference: contract,
+        kind: 'token' as const,
+        metadata,
+        source: 'bundled' as const,
+        verification: 'trusted' as const
+      })
+    )
   ])
 }
 
 export function getBundledEvmAssetDefinitions(network: Network): readonly AssetDefinitionInput[] {
   return Object.freeze(getEvmNetworkConfigs(network).flatMap(getEvmAssetDefinitions))
 }
+
+const starterEvmAssets = getBundledEvmAssetDefinitions('mainnet')
+export const MAINNET_STARTER_PORTFOLIO_ASSET_IDS = Object.freeze([
+  `${ZCASH_CHAIN_IDS.mainnet}/slip44:133`,
+  ...[
+    ['eip155:56', 'BNB'],
+    ['eip155:1', 'ETH'],
+    ['eip155:56', 'USDC'],
+    ['eip155:56', 'USDT'],
+    ['eip155:1', 'USDC'],
+    ['eip155:1', 'USDT'],
+    ['eip155:42161', 'ETH'],
+    ['eip155:8453', 'ETH'],
+    ['eip155:137', 'WETH']
+  ].map(([chainId, symbol]) => {
+    const asset = starterEvmAssets.find(
+      item => item.chainId === chainId && item.metadata.symbol === symbol
+    )
+    if (!asset) throw new Error(`Unknown starter portfolio asset: ${chainId} ${symbol}`)
+    return `${asset.chainId}/${asset.namespace}:${asset.reference.toLowerCase()}`
+  })
+])
 
 export function getBundledBitcoinAssetDefinitions(
   network: Network

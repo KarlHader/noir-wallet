@@ -185,7 +185,7 @@ export function isSwapAssetOnEnabledChain(
   assetId: string | null | undefined,
   enabledChains: readonly ChainDefinition[] | undefined
 ): boolean {
-  const chain = assetChain(assetId)
+  const chain = getSwapCatalogChainForAsset(assetId)
   return Boolean(
     chain &&
     enabledChains &&
@@ -269,7 +269,7 @@ export async function loadReversedSwapPair(input: {
   return { tokenIn, tokenOut }
 }
 
-function assetChain(assetId?: string | null) {
+export function getSwapCatalogChainForAsset(assetId?: string | null) {
   if (!assetId) return undefined
   if (
     assetId === ASSET_PRICE_SOURCE_ASSETS.bnb ||
@@ -310,7 +310,7 @@ function assetChain(assetId?: string | null) {
 export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) {
   const enabled = getEnabledSwapChains(options.enabledChains)
   const explicitDestination =
-    assetChain(options.destinationAssetId) ??
+    getSwapCatalogChainForAsset(options.destinationAssetId) ??
     RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === options.destinationApiChainId)
   const preferredAccountChain = options.enabledChains?.find(
     chain => chain.id === options.defaultSourceChainId
@@ -320,10 +320,11 @@ export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) 
     : undefined
   const source =
     (isSwapAssetOnEnabledChain(options.sourceAssetId, options.enabledChains)
-      ? assetChain(options.sourceAssetId)
+      ? getSwapCatalogChainForAsset(options.sourceAssetId)
       : undefined) ??
     enabled.find(
-      chain => chain.apiChainId === assetChain(options.savedSourceAssetId)?.apiChainId
+      chain =>
+        chain.apiChainId === getSwapCatalogChainForAsset(options.savedSourceAssetId)?.apiChainId
     ) ??
     preferredSource ??
     enabled.find(chain => chain.blockchain === 'zec') ??
@@ -332,8 +333,8 @@ export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) 
   if (!source) return { sourceChainIds: [], destinationChainIds: [] }
   const savedDestination =
     options.savedSourceAssetId &&
-    assetChain(options.savedSourceAssetId)?.apiChainId === source.apiChainId
-      ? assetChain(options.savedDestinationAssetId)
+    getSwapCatalogChainForAsset(options.savedSourceAssetId)?.apiChainId === source.apiChainId
+      ? getSwapCatalogChainForAsset(options.savedDestinationAssetId)
       : undefined
   const target =
     explicitDestination ??
@@ -348,22 +349,6 @@ export function buildInitialSwapCatalogPlan(options: SwapInitialCatalogOptions) 
       target && target.apiChainId !== source.apiChainId ? [target.tokenListChainId] : []
   }
 }
-
-export const WALLET_SOURCE_CHAIN_IDS = Object.freeze(
-  RHEA_SWAP_CHAIN_CATALOG.filter(chain => chain.walletFamily !== undefined)
-    .sort((left, right) => Number(right.blockchain === 'zec') - Number(left.blockchain === 'zec'))
-    .map(chain => chain.tokenListChainId)
-)
-export const ALL_DESTINATION_CHAIN_IDS = Object.freeze(
-  [
-    ...RHEA_SWAP_CHAIN_CATALOG.filter(chain =>
-      ['eth', 'zec', 'sol', 'near', 'btc'].includes(chain.blockchain)
-    ),
-    ...RHEA_SWAP_CHAIN_CATALOG.filter(
-      chain => !['eth', 'zec', 'sol', 'near', 'btc'].includes(chain.blockchain)
-    )
-  ].map(chain => chain.tokenListChainId)
-)
 
 export function mergeTokenCatalogs(
   ...catalogs: readonly (readonly RheaSwapToken[])[]
@@ -507,11 +492,14 @@ export async function loadTokenCatalogByChain(
         const result = await traceDebugStage(requestId, `list-chain-${chainId}`, () =>
           client.listTokens({ direction, tokenListChainIds: [chainId] }, { bypassCache })
         )
-        if (result.failedChainIds.length > 0) {
+        if (options.strict && result.failedChainIds.includes(chainId)) {
           throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
         }
         const onChain = result.tokens.filter(token => token.tokenListChainId === chainId)
         if (result.tokens.length > 0 && onChain.length === 0) {
+          throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
+        }
+        if (result.failedChainIds.includes(chainId) && onChain.length === 0) {
           throw new Error(`RHEA Swap token catalog is unavailable for chain ${chainId}`)
         }
         const available = mergeTokenCatalogs(onChain)

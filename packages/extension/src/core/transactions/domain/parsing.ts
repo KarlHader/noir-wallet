@@ -297,6 +297,9 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
                   shield.sourceDomain === 'shield' &&
                   (shield.destinationDomain === 'shield' ||
                     shield.destinationDomain === 'public')) ||
+                (shield.operation === 'confidential-transfer' &&
+                  shield.sourceDomain === 'shield' &&
+                  shield.destinationDomain === 'shield') ||
                 (shield.operation === 'cluster' &&
                   (shield.sourceDomain === 'public' ||
                     shield.sourceDomain === 'private' ||
@@ -310,7 +313,12 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
             }
             return Object.freeze({
               schemaVersion: 1 as const,
-              operation: shield.operation as 'deposit' | 'withdraw' | 'cluster' | 'swap',
+              operation: shield.operation as
+                | 'deposit'
+                | 'withdraw'
+                | 'cluster'
+                | 'swap'
+                | 'confidential-transfer',
               sourceDomain: shield.sourceDomain as 'public' | 'private' | 'shield',
               destinationDomain: shield.destinationDomain as 'public' | 'private' | 'shield'
             })
@@ -643,11 +651,15 @@ export function parseTransactionSegment(value: unknown): TransactionSegment {
   if (
     segment.evidence?.settledAmount &&
     (segment.role !== 'destination' ||
-      segment.target.kind !== 'protocol' ||
+      (segment.target.kind !== 'protocol' &&
+        (segment.target.kind !== 'onchain' ||
+          !segment.evidence.transactionHash ||
+          parseAssetId(segment.evidence.settledAmount.assetId).chainId !==
+            segment.target.chainId)) ||
       segment.status !== 'final' ||
       segment.evidence.settledAmount.amountRaw === '0')
   ) {
-    throw new Error('Settled amount requires a final protocol destination')
+    throw new Error('Settled amount requires a final destination')
   }
   assertTransactionSegmentState(segment)
   return segment
@@ -667,6 +679,13 @@ export function parseTransactionGraph(value: unknown): TransactionGraph {
     segments: Object.freeze(value.segments.map(parseTransactionSegment))
   })
   for (const segment of graph.segments) {
+    if (
+      segment.evidence?.settledAmount &&
+      segment.target.kind === 'onchain' &&
+      graph.root.intent?.shield?.operation !== 'withdraw'
+    ) {
+      throw new Error('Onchain settled amount requires a reviewed Confidential withdrawal')
+    }
     if (
       segment.evidence?.settledAmount &&
       segment.evidence.settledAmount.assetId !== graph.root.intent?.counterAmount?.assetId

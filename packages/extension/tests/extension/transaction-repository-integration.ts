@@ -1,5 +1,9 @@
+import { ActivityNotifications } from '@/background/activity-notifications'
+import type { ActivityReadModel } from '@/core/activity'
 import { parseAccountId } from '@/core/accounts/domain'
+import { deleteHistoryCacheByAccountScope } from '@/infrastructure/chains/evm/evm-activity-history-cache'
 import { buildAccountKey } from '@/core/wallet/account-scope'
+import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import {
   parseTransactionEventId,
@@ -737,6 +741,28 @@ const productionActivityAccountKey = buildAccountKey(
   portfolioChainAccount.scope.accountId
 )
 
+function expireProductionActivityHistory() {
+  const { keyDomainId, accountId } = portfolioChainAccount.scope
+  return deleteHistoryCacheByAccountScope({ keyDomainId, accountId })
+}
+
+async function openProductionActivityNotification(id: string) {
+  const read = async () => {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_ACTIVITY', action: 'read' })
+    return (response?.result ?? null) as ActivityReadModel | null
+  }
+  await new ActivityNotifications({
+    activeScope: async () => {
+      const active = (await readActiveStorageV2Snapshot(new IndexedDbStorageV2Repository()))
+        ?.manifest.activeAccount
+      return active ? { ...active, network: 'mainnet' } : null
+    },
+    readActivity: read,
+    assetMetadata: () => undefined,
+    hasUnlockSession: async () => false
+  }).open(id)
+}
+
 async function initializeProductionActivity() {
   await Promise.all([
     initializeProductionEvmPortfolio(),
@@ -964,6 +990,8 @@ export interface TransactionRepositoryIntegration {
   readonly inspectProductionEvmPortfolioCache: typeof inspectProductionEvmPortfolioCache
   readonly resetProductionEvmPortfolio: typeof resetProductionEvmPortfolio
   readonly initializeProductionActivity: typeof initializeProductionActivity
+  readonly expireProductionActivityHistory: typeof expireProductionActivityHistory
+  readonly openProductionActivityNotification: typeof openProductionActivityNotification
   readonly resetProductionActivity: typeof resetProductionActivity
   readonly initializeResyncIsolationProbe: typeof initializeResyncIsolationProbe
   readonly inspectResyncIsolationProbe: typeof inspectResyncIsolationProbe
@@ -995,6 +1023,8 @@ window.transactionRepositoryIntegration = Object.freeze({
   inspectProductionEvmPortfolioCache,
   resetProductionEvmPortfolio,
   initializeProductionActivity,
+  expireProductionActivityHistory,
+  openProductionActivityNotification,
   resetProductionActivity,
   initializeResyncIsolationProbe,
   inspectResyncIsolationProbe

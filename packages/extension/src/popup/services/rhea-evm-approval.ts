@@ -1,5 +1,10 @@
 import type { RheaSwapEvmTransactionPlan } from '@/core/services/rhea-swap'
 import type { EvmWalletClient } from './evm-wallet-client'
+export {
+  canContinueCombinedSwap,
+  getCombinedSwapFeeLimit,
+  type CombinedSwapFeeLimit
+} from '@/core/services/rhea-swap/combined-swap-review'
 
 export async function requiredRheaEvmApproval(input: {
   readonly approval: RheaSwapEvmTransactionPlan['approval']

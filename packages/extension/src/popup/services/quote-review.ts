@@ -15,7 +15,12 @@ export interface QuoteTerms {
 }
 
 export function rheaQuoteTerms(quote: RheaSwapQuoteView): QuoteTerms {
-  return { expected: quote.estimatedOut, minimum: quote.minAmountOut, route: quote.router }
+  return {
+    expected: quote.estimatedOut,
+    minimum: quote.minAmountOut,
+    route: quote.router,
+    ...(quote.appFeeBps !== undefined ? { appFeeBps: quote.appFeeBps } : {})
+  }
 }
 
 export function confidentialQuoteTerms(
@@ -35,8 +40,19 @@ export function confidentialQuoteTerms(
       }
 }
 
+export function shieldSwapPreviewTerms(
+  preview: ConfidentialFundingPreview,
+  operation: ConfidentialFundingReview['operation']
+): QuoteTerms {
+  return operation === 'swap' ? { appFeeBps: preview.appFeeBps } : confidentialQuoteTerms(preview)
+}
+
 export function nativeZecQuoteTerms(quote: NativeZecIntentsSwapReview): QuoteTerms {
-  return { expected: quote.expectedOutputRaw, minimum: quote.minimumOutputRaw }
+  return {
+    expected: quote.expectedOutputRaw,
+    minimum: quote.minimumOutputRaw,
+    appFeeBps: quote.appFeeBps
+  }
 }
 
 export interface QuoteTermsChange {
@@ -60,6 +76,40 @@ export function compareQuoteTerms(previous: QuoteTerms, current: QuoteTerms): Qu
 export function quoteReviewActionLabel(changes: readonly QuoteTermsChange[]): string | undefined {
   if (!changes.length) return undefined
   return changes.every(change => change.field === 'route') ? 'Accept new route' : 'Accept new price'
+}
+
+export function quoteReviewPrimaryAction({
+  confirmLabel,
+  onConfirm,
+  confirmDisabled = false,
+  refresh,
+  accept
+}: {
+  readonly confirmLabel: string
+  readonly onConfirm: () => void
+  readonly confirmDisabled?: boolean
+  readonly refresh?: { readonly onClick: () => void; readonly retry?: boolean }
+  readonly accept?: { readonly label: string; readonly onClick: () => void }
+}): {
+  confirmLabel: string
+  onConfirm: () => void
+  confirmDisabled: boolean
+  confirmTone: 'default' | 'warning'
+} {
+  if (refresh) {
+    return {
+      confirmLabel: refresh.retry ? 'Try again' : 'Get new quote',
+      onConfirm: refresh.onClick,
+      confirmDisabled: false,
+      confirmTone: 'default'
+    }
+  }
+  return {
+    confirmLabel: accept?.label ?? confirmLabel,
+    onConfirm: accept?.onClick ?? onConfirm,
+    confirmDisabled,
+    confirmTone: accept ? 'warning' : 'default'
+  }
 }
 
 export interface QuoteReviewCandidate {

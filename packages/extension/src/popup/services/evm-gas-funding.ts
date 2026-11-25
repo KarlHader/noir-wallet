@@ -1,4 +1,5 @@
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { formatInsufficientBalance } from '@/lib/format'
 import { findAssetPrice } from '@/core/prices'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { calculateSuggestedPrivateGasFundingRaw } from '@/core/transactions/private-funding'
@@ -113,7 +114,7 @@ export function resolveEvmGasFundingPreview(input: {
       ? 'Unable to check the Public balance. Try again.'
       : BigInt(publicBalanceRaw) === 0n ||
           (suggestedOutputRaw !== null && BigInt(publicBalanceRaw) <= BigInt(suggestedOutputRaw))
-        ? `Insufficient ${details.symbol} balance in Public account.`
+        ? formatInsufficientBalance(details.symbol)
         : suggestedOutputRaw === null
           ? 'Unable to load a gas funding amount. Try again.'
           : null

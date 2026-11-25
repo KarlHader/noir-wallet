@@ -29,6 +29,7 @@ import {
   type TransactionId,
   type NearIntentsTransactionBinding,
   type RheaSwapTransactionBinding,
+  NETWORK_FEE_TIERS,
   type NetworkFeeTier
 } from '@/core/transactions/domain'
 import {
@@ -41,7 +42,10 @@ import {
   type EvmNonceRecoveryState,
   type EvmTransferIntent
 } from '@/infrastructure/chains/evm'
-import { parseEvmTransferActivityResponse, type EvmTransferActivity } from './evm-transfer-activity'
+import {
+  parseOnchainTransferActivityResponse,
+  type OnchainTransferActivity
+} from './onchain-transfer-activity'
 import { resolveEvmNetworkCatalog } from '@/core/chains/evm-runtime-config'
 import { getActiveChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import {
@@ -53,7 +57,6 @@ import {
   type UserEvmAssetRecord
 } from '@/core/chains/user-assets'
 
-export type { EvmTransferActivity } from './evm-transfer-activity'
 export type { EvmFeeEstimate } from '@/infrastructure/chains/evm'
 
 export type EvmWalletClientErrorCode = EvmWalletRuntimeErrorCode | 'invalid-response'
@@ -151,8 +154,11 @@ export interface EvmWalletClient {
     action: 'read' | 'refresh',
     options?: {
       readonly forceDiscovery?: boolean
+      readonly waitForTokenDiscovery?: boolean
+      readonly refreshConfidential?: boolean
       readonly chainIds?: readonly string[]
       readonly automatic?: boolean
+      readonly detailAssetId?: string
       readonly expectedWalletId?: string
       readonly expectedAccountId?: string
     }
@@ -200,6 +206,18 @@ export interface EvmWalletClient {
     executionMode?: 'main' | 'private',
     feeSelection?: EvmFeeSelection
   ) => Promise<EvmTransferReview>
+  readonly estimateReplacementFee: (
+    action: 'cancel' | 'speed-up',
+    chainId: string,
+    originalTransactionId: TransactionId,
+    executionMode: 'main' | 'private',
+    feeSelection: EvmFeeSelection
+  ) => Promise<EvmFeeEstimate>
+  readonly estimateNonceRecoveryFee: (
+    chainId: string,
+    executionMode: 'main' | 'private',
+    feeSelection: EvmFeeSelection
+  ) => Promise<EvmFeeEstimate>
   readonly getNonceRecovery: (
     chainId: string,
     executionMode?: 'main' | 'private'
@@ -224,7 +242,7 @@ export interface EvmWalletClient {
     signatureCborBase64: string
   ) => Promise<EvmTransferSubmission>
   readonly resumeTransfer: (transactionId: TransactionId) => Promise<EvmTransferSubmission>
-  readonly getTransferActivity: (graph: TransactionGraph) => Promise<EvmTransferActivity | null>
+  readonly getTransferActivity: (graph: TransactionGraph) => Promise<OnchainTransferActivity | null>
 }
 
 export type EvmRuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
@@ -281,11 +299,13 @@ function parseFeeEstimate(
   ]
   const hasAmountIndependent = Object.prototype.hasOwnProperty.call(record, 'amountIndependent')
   const hasFeeModel = Object.prototype.hasOwnProperty.call(record, 'transactionType')
+  const hasTierPreviews = Object.prototype.hasOwnProperty.call(record, 'tierMaximumFeeWei')
   assertExactKeys(
     record,
     [
       ...expectedKeys,
       ...(hasFeeModel ? ['transactionType', 'gasPriceWei'] : []),
+      ...(hasTierPreviews ? ['tierMaximumFeeWei'] : []),
       ...(hasAmountIndependent ? ['amountIndependent'] : [])
     ],
     'EVM fee estimate'
@@ -331,6 +351,19 @@ function parseFeeEstimate(
   }
   if (record.amountIndependent === true && (!nativeTransfer || gasLimit !== 21_000n)) {
     throw new Error('Invalid EVM amount-independent estimate')
+  }
+  if (hasTierPreviews) {
+    const tiers = readRecord(record.tierMaximumFeeWei, 'EVM fee tier previews')
+    for (const [tier, fee] of Object.entries(tiers)) {
+      if (
+        !NETWORK_FEE_TIERS.some(known => known === tier) ||
+        typeof fee !== 'string' ||
+        !/^[1-9][0-9]{0,77}$/.test(fee)
+      ) {
+        throw new Error('Invalid EVM fee tier preview')
+      }
+    }
+    record.tierMaximumFeeWei = Object.freeze(tiers)
   }
   return Object.freeze(record) as unknown as EvmFeeEstimate
 }
@@ -909,8 +942,11 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
       action: 'read' | 'refresh',
       options: {
         readonly forceDiscovery?: boolean
+        readonly waitForTokenDiscovery?: boolean
+        readonly refreshConfidential?: boolean
         readonly chainIds?: readonly string[]
         readonly automatic?: boolean
+        readonly detailAssetId?: string
         readonly expectedWalletId?: string
         readonly expectedAccountId?: string
       } = {}
@@ -933,8 +969,13 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         type: 'GET_PORTFOLIO',
         action,
         ...(options.forceDiscovery === undefined ? {} : { forceDiscovery: options.forceDiscovery }),
+        ...(options.waitForTokenDiscovery ? { waitForTokenDiscovery: true } : {}),
+        ...(options.refreshConfidential === undefined
+          ? {}
+          : { refreshConfidential: options.refreshConfidential }),
         ...(chainIds === undefined ? {} : { chainIds }),
         ...(options.automatic === undefined ? {} : { automatic: options.automatic }),
+        ...(options.detailAssetId === undefined ? {} : { detailAssetId: options.detailAssetId }),
         ...(options.expectedWalletId === undefined
           ? {}
           : { expectedWalletId: options.expectedWalletId }),
@@ -1289,6 +1330,57 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         }
       )
     },
+    estimateReplacementFee: async (
+      action: 'cancel' | 'speed-up',
+      chainId: string,
+      originalTransactionId: TransactionId,
+      executionMode: 'main' | 'private',
+      feeSelection: EvmFeeSelection
+    ) => {
+      const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
+      const parsedTransactionId = parseClientInput(() => parseTransactionId(originalTransactionId))
+      const parsedFeeSelection = parseClientInput(() => parseEvmFeeSelection(feeSelection))
+      if (!parsedChainId.startsWith('eip155:') || (action !== 'cancel' && action !== 'speed-up')) {
+        throw new EvmWalletClientError(
+          'invalid-request',
+          'Invalid EVM replacement estimate request'
+        )
+      }
+      return send(
+        {
+          type: 'ESTIMATE_EVM_REPLACEMENT_FEE',
+          action,
+          chainId: parsedChainId,
+          originalTransactionId: parsedTransactionId,
+          executionMode,
+          feeSelection: parsedFeeSelection
+        },
+        value => parseFeeEstimate(value, parsedChainId, false)
+      )
+    },
+    estimateNonceRecoveryFee: async (
+      chainId: string,
+      executionMode: 'main' | 'private',
+      feeSelection: EvmFeeSelection
+    ) => {
+      const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
+      const parsedFeeSelection = parseClientInput(() => parseEvmFeeSelection(feeSelection))
+      if (!parsedChainId.startsWith('eip155:')) {
+        throw new EvmWalletClientError(
+          'invalid-request',
+          'Invalid EVM nonce recovery estimate request'
+        )
+      }
+      return send(
+        {
+          type: 'ESTIMATE_EVM_NONCE_RECOVERY_FEE',
+          chainId: parsedChainId,
+          executionMode,
+          feeSelection: parsedFeeSelection
+        },
+        value => parseFeeEstimate(value, parsedChainId, false)
+      )
+    },
     getNonceRecovery: async (chainId: string, executionMode: 'main' | 'private' = 'main') => {
       const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
       if (!parsedChainId.startsWith('eip155:')) {
@@ -1433,7 +1525,7 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         throw parseRuntimeError(envelope.error)
       }
       try {
-        return parseEvmTransferActivityResponse(envelope, parsedGraph)
+        return parseOnchainTransferActivityResponse(envelope, parsedGraph)
       } catch {
         throw new EvmWalletClientError('invalid-response', 'Invalid EVM runtime result')
       }

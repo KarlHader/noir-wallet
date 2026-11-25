@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../ui/button'
 import { DialogTitle } from '../ui/dialog'
-import { TransactionResult } from './TransactionResult'
+import { fullHeightTransactionDialogClassName, TransactionResult } from './TransactionResult'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { openModal } from '@/popup/provider/ModalManager'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
@@ -18,20 +18,19 @@ import {
   getConfidentialFundingPlanId
 } from '@/popup/services/confidential-funding-client'
 import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
+import type { ActivityPerspective } from '@/popup/services/activity-action-label'
 import type { ActivityItem } from '@/core/activity'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { Network } from '@/types'
-import {
-  getActivityStatusPresentation,
-  isLegacyPrivateShieldWithdrawDestination
-} from './multichain-activity-presentation'
-import { EvmPendingTransactionActions } from './EvmPendingTransactionActions'
+import { getActivityStatusPresentation } from '@/popup/services/multichain-activity-presentation'
+import { EvmPendingTransactionActions } from '../evm/EvmPendingTransactionActions'
 
 export interface ConfidentialActivityTarget {
   readonly network: Network
   readonly keyDomainId: string
   readonly accountId: string
   readonly transactionId: string
+  readonly depositQuote?: ConfidentialFundingPlan['depositQuote']
 }
 
 interface ConfidentialActivitySheetProps {
@@ -44,6 +43,7 @@ interface ConfidentialActivitySheetProps {
 
 export interface ConfidentialActivityDisplay {
   readonly operation: 'send' | 'move' | 'swap'
+  readonly perspective?: ActivityPerspective
   readonly amount: string
   readonly symbol: string
   readonly receiveAmount?: string
@@ -110,13 +110,46 @@ export function ConfidentialActivityView({
     let active = true
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     let inFlight: Promise<void> | null = null
+    let planInFlight = false
+    let pendingPlanUpdate = false
     let pendingUpdate = false
+    let refunded = false
     const delayTimer = setTimeout(() => {
       if (active) setStillLoading(true)
     }, 10_000)
 
     const planId = getConfidentialFundingPlanId(plan.transactionId)
-    const load = () => {
+    const loadPlan = () => {
+      if (!active || !planId || refunded) return
+      if (planInFlight) {
+        pendingPlanUpdate = true
+        return
+      }
+      planInFlight = true
+      void confidentialFundingClient
+        .get(planId)
+        .then(nextPlan => {
+          if (
+            active &&
+            nextPlan.transactionId === plan.transactionId &&
+            nextPlan.network === plan.network &&
+            nextPlan.keyDomainId === plan.keyDomainId &&
+            nextPlan.accountId === plan.accountId
+          ) {
+            refunded = nextPlan.phase === 'refunded'
+            setConfidentialPlan(nextPlan)
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          planInFlight = false
+          if (pendingPlanUpdate) {
+            pendingPlanUpdate = false
+            loadPlan()
+          }
+        })
+    }
+    const loadActivity = () => {
       if (!active) return
       if (inFlight) {
         pendingUpdate = true
@@ -124,23 +157,11 @@ export function ConfidentialActivityView({
       }
       if (retryTimer !== undefined) clearTimeout(retryTimer)
       retryTimer = undefined
-      inFlight = Promise.allSettled([
-        planId ? confidentialFundingClient.get(planId) : Promise.resolve(null),
-        evmWalletClient.getActivity('read', 'all')
-      ])
-        .then(([planResult, activityResult]) => {
+      inFlight = evmWalletClient
+        .getActivity('read', 'all')
+        .catch(() => null)
+        .then(model => {
           if (!active) return
-          const nextPlan = planResult.status === 'fulfilled' ? planResult.value : null
-          const scopedPlan =
-            nextPlan?.transactionId === plan.transactionId &&
-            nextPlan.network === plan.network &&
-            nextPlan.keyDomainId === plan.keyDomainId &&
-            nextPlan.accountId === plan.accountId
-              ? nextPlan
-              : null
-          if (scopedPlan) setConfidentialPlan(scopedPlan)
-
-          const model = activityResult.status === 'fulfilled' ? activityResult.value : null
           const item = model?.items.find(candidate => candidate.id === plan.transactionId)
           if (
             model?.scope.keyDomainId === plan.keyDomainId &&
@@ -156,7 +177,7 @@ export function ConfidentialActivityView({
           }
           const current = activityRef.current
           if (
-            scopedPlan?.phase !== 'refunded' &&
+            !refunded &&
             !(
               current?.status === 'failed' ||
               (current?.status === 'final' &&
@@ -172,9 +193,13 @@ export function ConfidentialActivityView({
           inFlight = null
           if (active && pendingUpdate) {
             pendingUpdate = false
-            load()
+            loadActivity()
           }
         })
+    }
+    const load = () => {
+      loadPlan()
+      loadActivity()
     }
     const listener = (message: unknown, sender: chrome.runtime.MessageSender) => {
       if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
@@ -228,12 +253,7 @@ export function ConfidentialActivityView({
         assetMetadata: catalog.assetMetadata,
         chainMetadata: catalog.chainMetadata,
         confidentialPlan: scopedPlan,
-        legacyPrivateShieldWithdrawDestination: isLegacyPrivateShieldWithdrawDestination(
-          scopedActivity,
-          scopedPlan,
-          activeAccount,
-          plan.network
-        ),
+        perspective: display?.perspective,
         refunded,
         ...(refunded ? { statusLabel: 'Refunded', statusTone: 'neutral' as const } : {}),
         fallback: display
@@ -297,6 +317,7 @@ export function ConfidentialActivityView({
                   ? 'Transaction Failed'
                   : progressTitle
         }
+        onClose={inDialog ? undefined : onDone}
         footer={
           <div className="space-y-2">
             {scopedActivity && (
@@ -323,7 +344,9 @@ export function ConfidentialActivityView({
                         .symbol ?? scopedActivity.snapshot.feeLimit.metadata?.symbol)
                     : undefined
                 }
-                shieldQuoteExpiresAt={Date.parse(scopedPlan?.depositQuote?.quote.deadline ?? '')}
+                shieldQuoteExpiresAt={Date.parse(
+                  (scopedPlan ? scopedPlan.depositQuote : plan.depositQuote)?.quote.deadline ?? ''
+                )}
               />
             )}
             {confirmed || failed || refunded ? (
@@ -346,30 +369,34 @@ export function ConfidentialActivityView({
         }
       >
         {activityView ? (
-          <ActivityTransactionBody view={activityView} />
+          <ActivityTransactionBody
+            view={activityView}
+            showAmountsAsDetails
+            showDate={activityView.item.snapshot?.shield?.operation === 'cluster'}
+          />
         ) : (
           <div className="divide-y divide-border/60 border-y border-border/60 text-sm">
             {display && (
               <div className="flex justify-between gap-4 py-4">
                 <span className="text-muted">Amount</span>
-                <span className="min-w-0 text-right font-medium">
-                  <AmountDisplay
-                    value={display.amount}
-                    symbol={formatSymbol(display.symbol)}
-                    prefix={display.operation === 'swap' ? '-' : ''}
-                  />
-                  {display.operation === 'swap' &&
-                    display.receiveAmount &&
-                    display.receiveSymbol && (
-                      <span className="block">
-                        <AmountDisplay
-                          value={display.receiveAmount}
-                          symbol={formatSymbol(display.receiveSymbol)}
-                          prefix="+"
-                        />
-                      </span>
-                    )}
+                <AmountDisplay
+                  value={display.amount}
+                  symbol={formatSymbol(display.symbol)}
+                  prefix={display.operation === 'swap' || display.operation === 'send' ? '−' : ''}
+                  className="min-w-0 justify-end text-sm font-medium"
+                />
+              </div>
+            )}
+            {!refunded && display?.receiveAmount && display.receiveSymbol && (
+              <div className="flex justify-between gap-4 py-4">
+                <span className="text-muted">
+                  {display.operation === 'send' ? 'Recipient receives' : 'Expected receive'}
                 </span>
+                <AmountDisplay
+                  value={display.receiveAmount}
+                  symbol={formatSymbol(display.receiveSymbol)}
+                  className="min-w-0 justify-end text-sm font-medium"
+                />
               </div>
             )}
             {display?.from && (
@@ -403,7 +430,9 @@ export function openConfidentialActivity(
   display?: ConfidentialActivityDisplay
 ): Promise<void> {
   return openModal<void>({
-    className: 'max-h-[calc(100dvh-1rem)] grid-rows-[minmax(0,1fr)_auto] gap-0 p-0',
+    ...(display?.operation === 'send'
+      ? { className: `${fullHeightTransactionDialogClassName} gap-0 p-0`, scroll: 'body' }
+      : { className: 'max-h-[calc(100dvh-1rem)] grid-rows-[minmax(0,1fr)_auto] gap-0 p-0' }),
     body: resolve => (
       <ConfidentialActivityView
         plan={plan}

@@ -4,8 +4,20 @@ import { Icon } from '@iconify/react'
 import { Button } from '@/popup/components/ui/button'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle
+} from '@/popup/components/ui/dialog'
 import { Skeleton } from '@/popup/components/ui/skeleton'
-import { TransactionResult, TransactionResultDetailRow } from './TransactionResult'
+import { cn } from '@/lib/utils'
+import {
+  fullHeightTransactionDialogClassName,
+  TransactionResult,
+  TransactionResultDetailRow
+} from './TransactionResult'
 
 export interface TransactionReviewAsset {
   readonly assetId?: string
@@ -18,6 +30,43 @@ export interface TransactionReviewAsset {
 export interface TransactionReviewRow {
   readonly label: string
   readonly content: ReactNode
+}
+
+export function TransactionReviewDialog({
+  open,
+  onOpenChange,
+  title,
+  titleId,
+  description,
+  fullHeight = false,
+  children
+}: {
+  readonly open: boolean
+  readonly onOpenChange: (open: boolean) => void
+  readonly title: string
+  readonly titleId?: string
+  readonly description: string
+  readonly fullHeight?: boolean
+  readonly children: ReactNode
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        position="bottom"
+        showCloseButton={false}
+        aria-label={titleId ? undefined : title}
+        aria-labelledby={titleId}
+        scroll="body"
+        className={cn('gap-0 p-0', fullHeight && fullHeightTransactionDialogClassName)}
+      >
+        <DialogTitle className="sr-only" aria-hidden={titleId ? true : undefined}>
+          {title}
+        </DialogTitle>
+        <DialogDescription className="sr-only">{description}</DialogDescription>
+        {children}
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 export function ReviewDownTriangle({ className }: { readonly className?: string }) {
@@ -40,9 +89,10 @@ interface TransactionReviewViewProps {
   readonly network: string
   readonly rows: readonly TransactionReviewRow[]
   readonly summary?: ReactNode
-  readonly exchange?: boolean
+  readonly submissionDestination?: TransactionReviewRow
   readonly notice?: ReactNode
   readonly afterRows?: ReactNode
+  readonly quoteChanges?: ReactNode
   readonly error?: ReactNode
   readonly confirmLabel: string
   readonly confirmTone?: 'default' | 'warning'
@@ -53,6 +103,57 @@ interface TransactionReviewViewProps {
   readonly cancelDisabled?: boolean
   readonly onCancel: () => void
   readonly onConfirm: () => void
+}
+
+export type SendReview = Omit<
+  TransactionReviewViewProps,
+  'title' | 'titleId' | 'variant' | 'amountPrefix' | 'onCancel' | 'onConfirm' | 'cancelDisabled'
+>
+
+export function SendReviewDialog({
+  review,
+  titleId,
+  description,
+  active = true,
+  approving,
+  onCancel,
+  onConfirm
+}: {
+  readonly review: SendReview | null
+  readonly titleId: string
+  readonly description: string
+  readonly active?: boolean
+  readonly approving: boolean
+  readonly onCancel: () => void
+  readonly onConfirm: () => void
+}) {
+  return (
+    <TransactionReviewDialog
+      open={active && review !== null}
+      title="Confirm Send"
+      titleId={titleId}
+      description={description}
+      fullHeight={approving}
+      onOpenChange={open => {
+        if (!open && !approving) onCancel()
+      }}
+    >
+      {review && (
+        <TransactionReviewView
+          {...review}
+          title="Confirm Send"
+          titleId={titleId}
+          variant="figma"
+          amountPrefix="-"
+          confirming={approving}
+          submitting={approving}
+          cancelDisabled={approving}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      )}
+    </TransactionReviewDialog>
+  )
 }
 
 export function TransactionReviewView({
@@ -67,9 +168,10 @@ export function TransactionReviewView({
   network,
   rows,
   summary,
-  exchange = false,
+  submissionDestination,
   notice,
   afterRows,
+  quoteChanges,
   error,
   confirmLabel,
   confirmTone = 'default',
@@ -81,27 +183,39 @@ export function TransactionReviewView({
   onCancel,
   onConfirm
 }: TransactionReviewViewProps) {
-  const figma = variant === 'figma'
+  const figma = variant !== 'default'
   if (submitting) {
     return (
       <TransactionResult
         status="loading"
         title="Transaction Submitting"
+        titleId={titleId}
         layout={figma ? 'single-asset' : 'default'}
-        onClose={figma ? onCancel : undefined}
+        onClose={figma && showTitle ? onCancel : undefined}
         closeDisabled={cancelDisabled || confirming}
       >
         <div>
-          {exchange && summary ? (
-            summary
-          ) : (
-            <TransactionResultDetailRow label="Amount">
-              <AmountDisplay value={amount} symbol={asset?.symbol} />
+          <TransactionResultDetailRow label="Amount">
+            <AmountDisplay value={amount} symbol={asset?.symbol} prefix={amountPrefix} />
+          </TransactionResultDetailRow>
+          {submissionDestination && (
+            <TransactionResultDetailRow label={submissionDestination.label}>
+              {submissionDestination.content}
             </TransactionResultDetailRow>
           )}
           {rows
             .filter(row =>
-              ['From', 'To', 'Send from', 'Network', 'Recipient', 'Send To'].includes(row.label)
+              [
+                'From',
+                'To',
+                'Send from',
+                'Network',
+                'Recipient',
+                'Send To',
+                'Recipient receive',
+                'Expected receive',
+                'Estimated receive'
+              ].includes(row.label)
             )
             .map((row, index) => (
               <TransactionResultDetailRow key={`${row.label}-${index}`} label={row.label}>
@@ -175,12 +289,7 @@ export function TransactionReviewView({
               }
             >
               {amount && asset ? (
-                <AmountDisplay
-                  value={amount}
-                  symbol={asset.symbol}
-                  prefix={amountPrefix}
-                  className={figma ? 'justify-start gap-x-1' : undefined}
-                />
+                <AmountDisplay value={amount} symbol={asset.symbol} prefix={amountPrefix} />
               ) : (
                 <Skeleton className="h-7 w-36" />
               )}
@@ -198,8 +307,6 @@ export function TransactionReviewView({
               ))}
           </div>
         )}
-
-        {notice}
 
         <div className={figma ? '' : 'rounded-xl border border-border/60 bg-card/60 px-4'}>
           {rows.map((row, index) => (
@@ -234,30 +341,37 @@ export function TransactionReviewView({
         </div>
 
         {afterRows}
+        {notice}
         {error}
       </div>
 
-      <div className={figma ? 'page-footer flex gap-2.5' : 'flex gap-3 p-5 pt-3'}>
-        <Button
-          variant="outline"
-          size={figma ? 'wallet' : 'default'}
-          className={
-            figma ? 'h-[45px] min-w-0 flex-1 border-white/10 bg-card' : 'h-[45px] min-w-0 flex-1'
-          }
-          disabled={cancelDisabled || confirming}
-          onClick={onCancel}
+      <div className={figma ? 'page-footer' : 'shrink-0 p-5 pt-3'}>
+        {quoteChanges}
+        <DialogFooter
+          className={figma ? 'grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2.5' : 'gap-3'}
         >
-          Cancel
-        </Button>
-        <Button
-          size={figma ? 'wallet' : 'default'}
-          className={`${figma ? 'h-[45px] min-w-0 flex-[2]' : 'h-[45px] min-w-0 flex-1'} whitespace-normal text-center leading-tight ${confirmTone === 'warning' ? 'bg-warning text-black hover:bg-warning/90' : ''}`}
-          disabled={confirmDisabled || preparing}
-          isLoading={preparing || confirming}
-          onClick={onConfirm}
-        >
-          {confirmLabel}
-        </Button>
+          <Button
+            variant="outline"
+            size={figma ? 'wallet' : 'default'}
+            className={figma ? 'border-white/10 bg-card' : undefined}
+            disabled={cancelDisabled || confirming}
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+          <Button
+            size={figma ? 'wallet' : 'default'}
+            className={cn(
+              'text-center',
+              confirmTone === 'warning' && 'bg-warning text-black hover:bg-warning/90'
+            )}
+            disabled={confirmDisabled || preparing}
+            isLoading={preparing || confirming}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </Button>
+        </DialogFooter>
       </div>
     </div>
   )

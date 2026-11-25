@@ -2,8 +2,8 @@ import { createSolanaWalletRuntimeError, type SolanaWalletRuntimeError } from '@
 import { SolanaRpcError, SolanaTransferError } from '@/infrastructure/chains/solana'
 
 export function mapSolanaWalletRuntimeError(error: unknown): SolanaWalletRuntimeError {
-  if (error instanceof SolanaTransferError && error.code === 'insufficient-funds') {
-    return createSolanaWalletRuntimeError('insufficient-funds')
+  if (error instanceof SolanaTransferError) {
+    return createSolanaWalletRuntimeError(error.code)
   }
   if (
     error instanceof SolanaRpcError &&

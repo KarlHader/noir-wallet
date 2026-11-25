@@ -15,6 +15,7 @@ import { NETWORKS } from '../../src/config/networks'
 import { DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS } from '../../src/config/multichain-feature-flags'
 
 export { captureScreenshot } from './screenshot-fixture'
+export { waitForBackgroundWalletInitialization } from './background-initialization'
 
 type ExtensionFixtures = {
   context: BrowserContext
@@ -75,21 +76,6 @@ if (typeof extensionPackage.version !== 'string') {
 }
 
 export const mockReleaseNotesVersion = extensionPackage.version
-
-export async function waitForBackgroundWalletInitialization(page: Page): Promise<void> {
-  await expect
-    .poll(
-      () =>
-        page.evaluate(async () => {
-          const response = await chrome.runtime.sendMessage({
-            type: 'GET_BACKGROUND_INITIALIZATION_STATE'
-          })
-          return response?.ready === true
-        }),
-      { timeout: 20_000 }
-    )
-    .toBe(true)
-}
 
 export async function selectImportedZcashHistory(
   page: Page,

@@ -7,6 +7,7 @@ import {
   resolveSpeedUpAmount
 } from '../../../src/lib/transaction-replacement.ts'
 import { isTransactionStatusUpdatedMessage } from '../../../src/types/transaction-messages.ts'
+import { applyLocalZcashActivityWrite } from '../../../src/core/wallet/local-zcash-activity.ts'
 
 function transaction(overrides = {}) {
   return {
@@ -28,6 +29,48 @@ function transaction(overrides = {}) {
 }
 
 test.describe('Speed Up replacement lifecycle', () => {
+  test('keeps the stored broadcast and independent receive when stale writers report another outcome', () => {
+    const hash = 'a'.repeat(64)
+    const intermediateHash = 'b'.repeat(64)
+    const conflictingHash = 'c'.repeat(64)
+    const send = transaction({ status: 'pending', txHash: '', expiryHeight: 50, notified: false })
+    const receipt = transaction({
+      id: `wasm_${hash}`,
+      txHash: hash,
+      type: 'receive',
+      fromType: 'transparent',
+      status: 'confirming',
+      confirmations: 1
+    })
+    const broadcast = applyLocalZcashActivityWrite([send, receipt], {
+      kind: 'worker-broadcast',
+      context: { accountKey: 'testnet_wallet_account', transactionId: send.id },
+      walletId: 'wallet',
+      result: { txHash: hash, txHashes: [intermediateHash, hash] }
+    }).transactions
+    expect(broadcast[0]).toMatchObject({ txHash: hash, expiryHeight: 50 })
+    expect(broadcast[0].chainHashes).toEqual([
+      { chain: 'Zcash', hash: intermediateHash },
+      { chain: 'Zcash', hash }
+    ])
+    expect(broadcast[1]).toBe(receipt)
+
+    const conflictingBroadcast = applyLocalZcashActivityWrite(broadcast, {
+      kind: 'broadcast',
+      id: send.id,
+      hash: conflictingHash,
+      hashes: [intermediateHash, conflictingHash]
+    })
+    expect(conflictingBroadcast.transactions).toBe(broadcast)
+    const staleFailure = applyLocalZcashActivityWrite(broadcast, {
+      kind: 'update',
+      id: send.id,
+      onlyIfUnsubmitted: true,
+      updates: { status: 'failed' }
+    })
+    expect(staleFailure.transactions).toBe(broadcast)
+  })
+
   test('marks the expired transaction as replaced after the retry broadcasts', () => {
     const original = transaction()
     const replacement = transaction({

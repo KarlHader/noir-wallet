@@ -16,9 +16,9 @@ import {
 import { parseNearLendingSupplyBinding } from '@/core/chains/near/near-burrow-supply-binding'
 
 import {
-  parseNearTransferActivityResponse,
-  type EvmTransferActivity as NearTransferActivity
-} from './evm-transfer-activity'
+  parseOnchainTransferActivityResponse,
+  type OnchainTransferActivity
+} from './onchain-transfer-activity'
 
 export interface NearTransferIntent {
   readonly assetId: string
@@ -75,7 +75,7 @@ export interface NearWalletClient {
   ) => Promise<NearTransferSubmission>
   readonly rejectTransfer: (transactionId: TransactionId) => Promise<TransactionGraph>
   readonly resumeTransfer: (transactionId: TransactionId) => Promise<NearTransferSubmission>
-  readonly getTransferActivity: (graph: TransactionGraph) => Promise<NearTransferActivity | null>
+  readonly getTransferActivity: (graph: TransactionGraph) => Promise<OnchainTransferActivity | null>
 }
 
 export type NearRuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
@@ -422,7 +422,7 @@ export function createNearWalletClient(sendMessage: NearRuntimeMessenger): NearW
       const graph = parseClientInput(() => parseTransactionGraph(graphValue))
       const response = await sendMessage({ type: 'GET_ACTIVITY', action: 'read' })
       try {
-        return parseNearTransferActivityResponse(response, graph)
+        return parseOnchainTransferActivityResponse(response, graph)
       } catch {
         throw new NearWalletClientError('invalid-response', 'Invalid NEAR activity result')
       }

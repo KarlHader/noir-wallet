@@ -14,9 +14,9 @@ import {
   type TransactionId
 } from '@/core/transactions/domain'
 import {
-  parseSolanaTransferActivityResponse,
-  type EvmTransferActivity as SolanaTransferActivity
-} from './evm-transfer-activity'
+  parseOnchainTransferActivityResponse,
+  type OnchainTransferActivity
+} from './onchain-transfer-activity'
 
 export interface SolanaTransferIntent {
   readonly assetId: string
@@ -69,7 +69,7 @@ export interface SolanaWalletClient {
   ) => Promise<SolanaTransferSubmission>
   readonly rejectTransfer: (transactionId: TransactionId) => Promise<TransactionGraph>
   readonly resumeTransfer: (transactionId: TransactionId) => Promise<SolanaTransferSubmission>
-  readonly getTransferActivity: (graph: TransactionGraph) => Promise<SolanaTransferActivity | null>
+  readonly getTransferActivity: (graph: TransactionGraph) => Promise<OnchainTransferActivity | null>
 }
 
 export type SolanaRuntimeMessenger = (
@@ -347,7 +347,7 @@ export function createSolanaWalletClient(sendMessage: SolanaRuntimeMessenger): S
       const graph = parseClientInput(() => parseTransactionGraph(graphValue))
       const response = await sendMessage({ type: 'GET_ACTIVITY', action: 'read' })
       try {
-        return parseSolanaTransferActivityResponse(response, graph)
+        return parseOnchainTransferActivityResponse(response, graph)
       } catch {
         throw new SolanaWalletClientError('invalid-response', 'Invalid Solana activity result')
       }

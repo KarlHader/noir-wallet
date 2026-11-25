@@ -11,7 +11,7 @@ import {
   getZcashChainId
 } from '../../../../src/core/chains/registry/index.ts'
 import { readZcashPortfolioSource } from '../../../../src/infrastructure/chains/zcash/zcash-balance-reader.ts'
-import { getZcashPrivacyBalanceDisplay } from '../../../../src/popup/pages/portfolio/asset-detail-balance.ts'
+import { getZcashPrivacyBalanceDisplay } from '../../../../src/popup/services/asset-detail-balance.ts'
 
 const chainId = getZcashChainId('mainnet')
 const chains = createInitialProductChainRegistry('mainnet')

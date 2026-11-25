@@ -2,6 +2,7 @@ import { DedupPromise } from '../lib/async-utils.ts'
 import { normalizeTxHash } from '../lib/tx-history-dedup.ts'
 import { buildAccountKey } from '../core/wallet/account-scope.ts'
 import type { Network, Transaction } from '../types/wallet.ts'
+import type { LocalZcashActivityWrite } from '../core/wallet/local-zcash-activity.ts'
 
 interface RecoveryDependencies {
   isActive(network: Network, walletId: string, accountId: string): boolean
@@ -14,11 +15,11 @@ interface RecoveryDependencies {
     accountKey: string,
     signal: AbortSignal
   ): Promise<Map<string, string>>
-  mutate(
+  write(
     accountKey: string,
-    update: (current: Transaction[]) => Transaction[],
-    signal: AbortSignal
-  ): Promise<unknown>
+    write: Extract<LocalZcashActivityWrite, { kind: 'recipients' }>,
+    options: { signal: AbortSignal; isActive: () => boolean }
+  ): Promise<{ changed: boolean }>
   notify(accountKey: string): Promise<void>
 }
 
@@ -80,26 +81,10 @@ export class TransactionRecipientRecovery {
             .filter(transaction => transaction.type === 'send' && !transaction.to)
             .map(transaction => [normalizeTxHash(transaction.txHash), transaction.amount])
         )
-        let changed = false
-        await this.dependencies.mutate(
+        const { changed } = await this.dependencies.write(
           accountKey,
-          current => {
-            if (signal.aborted || !active()) return current
-            return current.map(transaction => {
-              const hash = normalizeTxHash(transaction.txHash)
-              if (
-                transaction.type !== 'send' ||
-                transaction.to ||
-                originalAmounts.get(hash) !== transaction.amount
-              )
-                return transaction
-              const recipient = recipients.get(hash)
-              if (!recipient) return transaction
-              changed = true
-              return { ...transaction, to: recipient }
-            })
-          },
-          signal
+          { kind: 'recipients', addresses: recipients, originalAmounts },
+          { signal, isActive: active }
         )
         if (changed && !signal.aborted && active()) await this.dependencies.notify(accountKey)
       })

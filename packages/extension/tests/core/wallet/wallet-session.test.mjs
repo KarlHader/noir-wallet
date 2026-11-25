@@ -420,6 +420,7 @@ function lockHarness({
   const state = {
     syncPaused: false,
     syncDrained: false,
+    keystoneSigningCancelled: false,
     ledgerSigningCancelled: false,
     zcashLocked: false,
     sessionLocked: false,
@@ -429,6 +430,9 @@ function lockHarness({
   }
   const zcashError = new Error('Zcash cleanup failed')
   const dependencies = {
+    cancelAllKeystoneEvmSigning() {
+      state.keystoneSigningCancelled = true
+    },
     async cancelAllLedgerSigning() {
       state.ledgerSigningCancelled = true
     },
@@ -516,6 +520,7 @@ for (const functionName of lockFunctionNames) {
     assert.equal(state.sessionLocked, true)
     assert.equal(state.workerRecreated, true)
     if (functionName === 'performWalletLockState') {
+      assert.equal(state.keystoneSigningCancelled, true)
       assert.equal(state.ledgerSigningCancelled, true)
       assert.equal(state.confidentialSessionsCleared, true)
     }

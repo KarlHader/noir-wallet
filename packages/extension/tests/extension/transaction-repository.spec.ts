@@ -9,6 +9,14 @@ async function getExtensionWorker(context: BrowserContext): Promise<Worker> {
   return context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'))
 }
 
+async function getActivityNotifications(page: Page): Promise<string[]> {
+  return page.evaluate(async () =>
+    Object.keys(await chrome.notifications.getAll()).filter(id =>
+      id.startsWith('activity-transaction:')
+    )
+  )
+}
+
 async function terminateServiceWorker(context: BrowserContext, page: Page): Promise<void> {
   const worker = await getExtensionWorker(context)
   const cdp = await context.newCDPSession(page)
@@ -274,8 +282,16 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
 }) => {
   await waitForBackgroundWalletInitialization(popup)
   const rpcMethods: string[] = []
+  const tokenBalances = new Map([
+    ['0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', 2_000_000n],
+    ['0xdac17f958d2ee523a2206206994597c13d831ec7', 3_000_000n]
+  ])
   await context.route(ethereumMainnetRpcRoute, async route => {
-    const request = route.request().postDataJSON() as { id: number; method: string }
+    const request = route.request().postDataJSON() as {
+      id: number
+      method: string
+      params: [{ to: string }?]
+    }
     rpcMethods.push(request.method)
     const result =
       request.method === 'eth_chainId'
@@ -283,7 +299,7 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
         : request.method === 'eth_getBalance'
           ? '0xde0b6b3a7640000'
           : request.method === 'eth_call'
-            ? `0x${2_000_000n.toString(16).padStart(64, '0')}`
+            ? `0x${(tokenBalances.get(request.params[0]!.to.toLowerCase()) ?? 0n).toString(16).padStart(64, '0')}`
             : null
     await route.fulfill({
       contentType: 'application/json',
@@ -320,17 +336,18 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
       status: 'ready',
       assets: [
         { metadata: { symbol: 'ETH' }, balance: { totalRaw: '1000000000000000000' } },
-        { metadata: { symbol: 'USDC' }, balance: { totalRaw: '2000000' } }
+        { metadata: { symbol: 'USDC' }, balance: { totalRaw: '2000000' } },
+        { metadata: { symbol: 'USDT' }, balance: { totalRaw: '3000000' } }
       ]
     }
   })
   await expect(requestPortfolio('read')).resolves.toMatchObject({
     result: {
       status: 'ready',
-      assets: [{ freshness: 'fresh' }, { freshness: 'fresh' }]
+      assets: [{ freshness: 'fresh' }, { freshness: 'fresh' }, { freshness: 'fresh' }]
     }
   })
-  expect(rpcMethods.sort()).toEqual(['eth_call', 'eth_chainId', 'eth_getBalance'])
+  expect(rpcMethods.sort()).toEqual(['eth_call', 'eth_call', 'eth_chainId', 'eth_getBalance'])
 
   await popup.goto(
     `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
@@ -350,6 +367,10 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
       {
         assetId: 'eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
         totalRaw: '2000000'
+      },
+      {
+        assetId: 'eip155:1/erc20:0xdac17f958d2ee523a2206206994597c13d831ec7',
+        totalRaw: '3000000'
       }
     ]
   })
@@ -418,6 +439,7 @@ test('reads unified Activity through the real MV3 service worker', async ({
       ]
     }
   })
+  expect(await getActivityNotifications(popup)).toEqual([])
 
   await popup.goto(
     `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
@@ -426,6 +448,171 @@ test('reads unified Activity through the real MV3 service worker', async ({
     .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
     .toBe(true)
   await popup.evaluate(() => window.transactionRepositoryIntegration!.resetProductionActivity())
+})
+
+test('detects a new external receipt with the wallet tab closed', async ({
+  context,
+  popup,
+  extensionId
+}) => {
+  test.skip(
+    !process.env.ENABLED_CHAIN_FEATURE_FLAGS?.split(',').includes('chain.evm'),
+    'Requires a build with the EVM Activity history source enabled'
+  )
+  test.setTimeout(90_000)
+  const worker = await getExtensionWorker(context)
+  await waitForBackgroundWalletInitialization(popup)
+  await worker.evaluate(() => {
+    const create = chrome.notifications.create.bind(chrome.notifications)
+    chrome.notifications.create = ((
+      id: string,
+      options: chrome.notifications.NotificationOptions
+    ) => {
+      Object.assign(globalThis, {
+        lastActivityNotification: { title: options.title, message: options.message }
+      })
+      return create(id, options)
+    }) as typeof chrome.notifications.create
+  })
+  const baselineKey =
+    'activity-notifications:["mainnet","key-domain:portfolio","account:portfolio"]'
+  const incoming = (timestamp: number, character: string) => ({
+    blockchain: 'eth',
+    hash: `0x${character.repeat(64)}`,
+    blockHash: `0x${'b'.repeat(64)}`,
+    blockNumber: '0x64',
+    from: `0x${'2'.repeat(40)}`,
+    to: `0x${'1'.repeat(40)}`,
+    value: '0x16345785d8a0000',
+    gasPrice: '0x2',
+    gasUsed: '0x5208',
+    nonce: '0x1',
+    timestamp: `0x${Math.floor(timestamp / 1000).toString(16)}`,
+    status: '0x1',
+    input: '0x'
+  })
+  const transactions = [incoming(Date.now() - 86_400_000, 'a')]
+  let historyAvailable = false
+  await context.route('https://history-proxy.zknoir.com/**', async route => {
+    if (!historyAvailable) {
+      await route.fulfill({ status: 503 })
+      return
+    }
+    const request = route.request().postDataJSON() as {
+      id: number
+      method: string
+      params?: { blockchain?: string[] }
+    }
+    await route.fulfill({
+      json: {
+        jsonrpc: '2.0',
+        id: request.id,
+        result:
+          request.method === 'ankr_getTransactionsByAddress'
+            ? { transactions: request.params?.blockchain?.includes('eth') ? transactions : [] }
+            : { transfers: [] }
+      }
+    })
+  })
+  await popup.goto(
+    `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
+  )
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  await popup.evaluate(() =>
+    window.transactionRepositoryIntegration!.initializeProductionActivity()
+  )
+  const alarm = () =>
+    worker.evaluate(async () => {
+      const name = 'activity-receipts'
+      const fired = new Promise<void>(resolve => {
+        const listener = (alarm: chrome.alarms.Alarm) => {
+          if (alarm.name !== name) return
+          chrome.alarms.onAlarm.removeListener(listener)
+          resolve()
+        }
+        chrome.alarms.onAlarm.addListener(listener)
+      })
+      await chrome.alarms.create(name, { when: Date.now() + 1_000 })
+      await fired
+    })
+  await expect
+    .poll(() =>
+      worker.evaluate(async () => (await chrome.alarms.get('activity-receipts'))?.periodInMinutes)
+    )
+    .toBe(5)
+  await alarm()
+  await expect
+    .poll(
+      () =>
+        worker.evaluate(
+          async key => (await chrome.storage.local.get(key))[key]?.receiptBaselines,
+          baselineKey
+        ),
+      { timeout: 35_000 }
+    )
+    .toEqual({})
+  transactions.push(incoming(Date.now(), 'd'))
+  historyAvailable = true
+  await popup.evaluate(() =>
+    window.transactionRepositoryIntegration!.expireProductionActivityHistory()
+  )
+  await alarm()
+  await expect
+    .poll(
+      () =>
+        worker.evaluate(
+          async key =>
+            (await chrome.storage.local.get(key))[key]?.receiptBaselines?.['eip155:1:main'],
+          baselineKey
+        ),
+      { timeout: 35_000 }
+    )
+    .toEqual(expect.any(Number))
+  expect(await getActivityNotifications(popup)).toEqual([])
+  await popup.evaluate(() =>
+    window.transactionRepositoryIntegration!.expireProductionActivityHistory()
+  )
+  await popup.close()
+  transactions.push(incoming(Math.ceil(Date.now() / 1000) * 1000, 'c'))
+  await alarm()
+  await expect
+    .poll(
+      () =>
+        worker.evaluate(async () =>
+          Object.keys(await chrome.notifications.getAll()).filter(id =>
+            id.startsWith('activity-transaction:')
+          )
+        ),
+      { timeout: 35_000 }
+    )
+    .toHaveLength(1)
+  expect(await worker.evaluate(() => Reflect.get(globalThis, 'lastActivityNotification'))).toEqual({
+    title: 'Transaction update',
+    message: 'Open Activity for details.'
+  })
+
+  const fixture = await context.newPage()
+  await fixture.goto(
+    `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
+  )
+  const [noticeId] = await getActivityNotifications(fixture)
+  expect(noticeId).toBeTruthy()
+  const [activityTab] = await Promise.all([
+    context.waitForEvent('page'),
+    fixture.evaluate(
+      id => window.transactionRepositoryIntegration!.openProductionActivityNotification(id),
+      noticeId
+    )
+  ])
+  await expect(activityTab).toHaveURL(url => {
+    const query = new URLSearchParams(url.hash.slice(3))
+    return (
+      query.get('tab') === 'activity' &&
+      query.get('transactionId') === `rpc:evm:eip155:1:0x${'c'.repeat(64)}:native`
+    )
+  })
 })
 
 test('runs the persisted EVM receipt monitor inside the real MV3 service worker', async ({
@@ -498,6 +685,7 @@ test('runs the persisted EVM receipt monitor inside the real MV3 service worker'
     blockHash,
     blockHeight: 101
   })
+  await expect.poll(() => getActivityNotifications(popup)).toHaveLength(1)
   await popup.evaluate(() => window.transactionRepositoryIntegration!.resetProductionEvmMonitor())
 })
 
@@ -572,5 +760,9 @@ test('resumes the persisted EVM receipt monitor after service worker reconstruct
       blockHeight: 101
     })
   expect(rpcMethods).toContain('eth_getTransactionReceipt')
+  await expect.poll(() => getActivityNotifications(popup)).toHaveLength(1)
+  await terminateServiceWorker(context, popup)
+  await popup.reload()
+  expect(await getActivityNotifications(popup)).toHaveLength(1)
   await popup.evaluate(() => window.transactionRepositoryIntegration!.resetProductionEvmMonitor())
 })

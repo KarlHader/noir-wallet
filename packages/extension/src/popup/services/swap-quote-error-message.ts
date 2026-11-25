@@ -1,6 +1,18 @@
 import { getRheaSwapMinimumAmountMessage } from '@/core/services/rhea-swap/rhea-swap-error'
 
 export const SWAP_QUOTE_DISPLAY_ERROR = 'no route'
+const UNSUPPORTED_SWAP_DESTINATION =
+  'This destination is unavailable for this swap. Choose another asset.'
+
+export function getSwapQuoteNotice(message: string | null | undefined): string | null {
+  if (!message) return null
+  if (message === SWAP_QUOTE_DISPLAY_ERROR) return 'No route'
+  if (message === 'Quote expired. Try again.' || message === 'Shield quote expired. Try again.') {
+    return 'Quote expired.'
+  }
+  if (message === UNSUPPORTED_SWAP_DESTINATION) return message
+  return getRheaSwapMinimumAmountMessage(message)
+}
 
 export function isSwapQuoteTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null
@@ -75,7 +87,7 @@ export function getSwapQuoteFailureMessage(error: unknown): string | null {
     return reason
   }
   if (/unsupported destination token|destinationtoken.*not supported/i.test(reason)) {
-    return 'This destination is unavailable for this swap. Choose another asset.'
+    return UNSUPPORTED_SWAP_DESTINATION
   }
   if (/\b(?:crossChainTimeoutMs|sameChainTimeoutMs|quoteWaitingTimeMs)\b/i.test(reason)) {
     return 'Quote unavailable. Please try again.'
@@ -86,7 +98,7 @@ export function getSwapQuoteFailureMessage(error: unknown): string | null {
       reason
     )
   ) {
-    return 'no route'
+    return SWAP_QUOTE_DISPLAY_ERROR
   }
   return null
 }

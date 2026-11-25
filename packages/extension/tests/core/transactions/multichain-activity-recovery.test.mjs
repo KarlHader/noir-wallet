@@ -3,7 +3,7 @@ import { expect } from '@playwright/test'
 import {
   getActivityRecoveryAction,
   isActivityRecoveryTransition
-} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+} from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 const chainId = 'eip155:11155111'
 const bitcoinChainId = 'bip122:000000000933ea01ad0ee984209779ba'

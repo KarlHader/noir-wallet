@@ -13,6 +13,7 @@ import {
   EvmTokenDiscoveryClient,
   getDetectedEvmAssetCatalogStorageKey
 } from '../../../src/infrastructure/chains/evm/index.ts'
+import { EvmTokenDiscoverySchedule } from '../../../src/infrastructure/chains/evm/evm-token-discovery-schedule.ts'
 import {
   ChromeTokenVisibilityRepository,
   getTokenVisibilityStorageKey
@@ -46,6 +47,16 @@ function memoryChrome() {
           }
         }
       }
+    }
+  }
+}
+
+function memoryDiscoverySession() {
+  const values = new Map()
+  return {
+    get: async key => ({ [key]: structuredClone(values.get(key)) }),
+    set: async update => {
+      for (const [key, value] of Object.entries(update)) values.set(key, structuredClone(value))
     }
   }
 }
@@ -113,8 +124,9 @@ test('strictly parses the credential-free discovery proxy response', async () =>
   expect(requests).toEqual([`https://history.example/balances?address=${ADDRESS}&chainIds=1`])
 })
 
-test('manual discovery refresh bypasses the automatic request cooldown', async () => {
+test('manual discovery joins an in-flight request but bypasses the persisted automatic cooldown', async () => {
   const chains = createInitialProductChainRegistry('mainnet')
+  const session = memoryDiscoverySession()
   const record = createDetectedEvmAssetRecord(chains, {
     chainId: 'eip155:1',
     contractAddress: CONTRACT,
@@ -122,8 +134,9 @@ test('manual discovery refresh bypasses the automatic request cooldown', async (
     detectedAt: NOW,
     lastSeenAt: NOW
   })
+  const firstRequest = Promise.withResolvers()
   let discoveryRequests = 0
-  const coordinator = new DetectedEvmAssetCoordinator({
+  const options = {
     chains,
     repository: {
       list: async () => [record],
@@ -133,6 +146,7 @@ test('manual discovery refresh bypasses the automatic request cooldown', async (
       available: true,
       discover: async () => {
         discoveryRequests++
+        if (discoveryRequests === 1) await firstRequest.promise
         return [
           {
             assetId: ASSET_ID,
@@ -146,13 +160,84 @@ test('manual discovery refresh bypasses the automatic request cooldown', async (
       throw new Error('Existing Token metadata must not be queried again')
     },
     now: () => NOW
+  }
+  const schedule = new EvmTokenDiscoverySchedule('mainnet', session)
+  const coordinator = new DetectedEvmAssetCoordinator({ ...options, schedule })
+  const reconfigured = new DetectedEvmAssetCoordinator({ ...options, schedule })
+  const target = { address: ADDRESS, chainIds: ['eip155:1', 'eip155:137'] }
+  const automatic = coordinator.refresh([target])
+  const concurrentManual = reconfigured.refresh(
+    [{ ...target, chainIds: [...target.chainIds].reverse() }],
+    { force: true }
+  )
+  firstRequest.resolve()
+  await Promise.all([automatic, concurrentManual])
+  expect(discoveryRequests).toBe(1)
+
+  const restarted = new DetectedEvmAssetCoordinator({
+    ...options,
+    schedule: new EvmTokenDiscoverySchedule('mainnet', session)
   })
-
-  await coordinator.refresh([{ address: ADDRESS, chainIds: ['eip155:1'] }])
-  await coordinator.refresh([{ address: ADDRESS, chainIds: ['eip155:1'] }])
-  await coordinator.refresh([{ address: ADDRESS, chainIds: ['eip155:1'] }], { force: true })
-
+  await restarted.refresh([target])
+  expect(discoveryRequests).toBe(1)
+  await Promise.all([restarted.refresh([target]), restarted.refresh([target], { force: true })])
   expect(discoveryRequests).toBe(2)
+})
+
+test('waits three minutes after each failed discovery and returns to one minute on success', async () => {
+  const chains = createInitialProductChainRegistry('mainnet')
+  const session = memoryDiscoverySession()
+  const target = { address: ADDRESS, chainIds: ['eip155:1'] }
+  const requests = []
+  const minute = 60_000
+  let now = NOW
+  let unavailable = true
+  const createCoordinator = () =>
+    new DetectedEvmAssetCoordinator({
+      chains,
+      repository: { list: async () => [], upsert: async () => false },
+      discovery: {
+        available: true,
+        discover: async (_address, chainIds) => {
+          requests.push(chainIds)
+          if (unavailable) {
+            now += 10_000
+            throw new Error('Discovery timed out')
+          }
+          return []
+        }
+      },
+      schedule: new EvmTokenDiscoverySchedule('mainnet', session, () => now),
+      resolveRpc: () => {
+        throw new Error('No candidate metadata is needed')
+      },
+      now: () => now
+    })
+
+  await createCoordinator().refresh([target])
+  const restarted = createCoordinator()
+  now += 3 * minute - 1
+  await restarted.refresh([target])
+  expect(requests).toEqual([['eip155:1']])
+  now += 1
+  await restarted.refresh([target])
+  await restarted.refresh([{ ...target, chainIds: ['eip155:137'] }])
+  expect(requests).toEqual([['eip155:1'], ['eip155:1'], ['eip155:137']])
+
+  now += 3 * minute - 10_000 - 1
+  await restarted.refresh([target])
+  expect(requests).toHaveLength(3)
+  now += 1
+  unavailable = false
+  await restarted.refresh([target])
+  expect(requests).toHaveLength(4)
+
+  now += minute - 1
+  await restarted.refresh([target])
+  expect(requests).toHaveLength(4)
+  now += 1
+  await restarted.refresh([target])
+  expect(requests).toHaveLength(5)
 })
 
 test('uses the Four.Meme icon only when discovery and stored metadata have no icon', async () => {
@@ -187,6 +272,7 @@ test('uses the Four.Meme icon only when discovery and stored metadata have no ic
         }
       ]
     },
+    schedule: new EvmTokenDiscoverySchedule('mainnet', memoryDiscoverySession()),
     resolveRpc: () => {
       throw new Error('Existing Token metadata must not be queried again')
     },

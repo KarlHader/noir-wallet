@@ -24,7 +24,8 @@ import { createEvmBlockscoutHistoryClient } from './evm-blockscout-history-clien
 import type {
   EvmActivityHistorySource,
   ReadEvmAddressActivityInput,
-  FindEvmConfirmedReplacementInput
+  FindEvmConfirmedReplacementInput,
+  TrackedErc20Asset
 } from './evm-indexed-activity'
 import { createEvmAnkrHistoryClient, type EvmAnkrHistoryChain } from './evm-ankr-history-client'
 import {
@@ -67,19 +68,35 @@ export function createConfiguredEvmRpcClient(
 export { attestEvmRpcEndpoint, type AttestEvmRpcEndpointInput } from './evm-network-attestation'
 
 export function buildTrackedErc20Assets(config: EvmNetworkConfig) {
-  return config.usdcContract
-    ? Object.freeze([
-        Object.freeze({
-          assetId: `${config.chainId}/erc20:${config.usdcContract.toLowerCase()}`,
-          contract: config.usdcContract.toLowerCase(),
-          decimals: 6
-        })
-      ])
-    : Object.freeze([])
+  return Object.freeze([
+    ...(config.usdcContract
+      ? [
+          Object.freeze({
+            assetId: `${config.chainId}/erc20:${config.usdcContract.toLowerCase()}`,
+            contract: config.usdcContract.toLowerCase(),
+            decimals: 6
+          })
+        ]
+      : []),
+    ...(config.bundledErc20Assets ?? []).map(asset =>
+      Object.freeze({
+        assetId: `${config.chainId}/erc20:${asset.contract.toLowerCase()}`,
+        contract: asset.contract.toLowerCase(),
+        decimals: asset.decimals
+      })
+    )
+  ])
 }
 
 function resolveHistoryApiUrl(config: EvmNetworkConfig): string | undefined {
   return getEvmAnkrHistoryBlockchain(config.chainId) ? undefined : config.historyApiUrl
+}
+
+function trackedErc20AssetKey(assets: readonly TrackedErc20Asset[]): string {
+  return assets
+    .map(asset => `${asset.contract}:${asset.decimals}`)
+    .sort()
+    .join(',')
 }
 
 export function createConfiguredEvmActivityHistorySource(
@@ -104,6 +121,7 @@ export function createConfiguredEvmActivityHistorySource(
     }
     return createCachedEvmActivityHistorySource({
       chainId: config.chainId,
+      trackedAssetKey: trackedErc20AssetKey(trackedErc20Assets),
       source: Object.freeze({
         readAddressActivity: async (input: ReadEvmAddressActivityInput) =>
           (await readAddressActivityWithMetadata(input)).items,
@@ -127,6 +145,7 @@ export function createConfiguredEvmActivityHistorySource(
     })
     return createCachedEvmActivityHistorySource({
       chainId: config.chainId,
+      trackedAssetKey: trackedErc20AssetKey(trackedErc20Assets),
       source
     })
   }
@@ -147,7 +166,10 @@ export function createEvmActivityHistoryBatchReader(configs: readonly EvmNetwork
   return Object.freeze({
     chainIds: new Set(chains.map(chain => chain.chainId)),
     ...createCachedEvmAnkrHistoryBatchSource({
-      source: createEvmAnkrHistoryClient(evmHistoryApiOrigin, chains)
+      source: createEvmAnkrHistoryClient(evmHistoryApiOrigin, chains),
+      trackedAssetKeys: new Map(
+        chains.map(chain => [chain.chainId, trackedErc20AssetKey(chain.trackedErc20Assets)])
+      )
     })
   })
 }
@@ -225,6 +247,7 @@ export {
   buildEvmNonceRecoveryTransaction,
   buildEvmSpeedUpTransaction,
   buildEvmTransfer,
+  estimateBuiltEvmTransactionFee,
   estimateEvmContractCallFee,
   estimateEvmTransferFee,
   computeEvmSigningPayloadFingerprint,

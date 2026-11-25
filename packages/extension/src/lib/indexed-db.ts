@@ -851,6 +851,18 @@ export async function loadTransactions(key: string): Promise<Transaction[]> {
  * background monitors, wallet-history refreshes, and popup updates from
  * overwriting each other's changes with stale snapshots.
  */
+type LegacyTransactionCommitObserver = (
+  key: string,
+  previous: readonly Transaction[],
+  current: readonly Transaction[]
+) => void
+
+let observeLegacyTransactionCommit: LegacyTransactionCommitObserver | undefined
+
+export function observeLegacyTransactionCommits(observer: LegacyTransactionCommitObserver): void {
+  observeLegacyTransactionCommit = observer
+}
+
 export async function mutateTransactions(
   key: string,
   updater: (transactions: Transaction[]) => Transaction[],
@@ -866,7 +878,9 @@ export async function mutateTransactions(
       'readwrite'
     )
     const store = transaction.objectStore(TRANSACTIONS_STORE_NAME)
+    let previousTransactions: Transaction[] = []
     let updatedTransactions: Transaction[] = []
+    let didWrite = false
     let updateError: unknown
     const abort = () => {
       try {
@@ -881,6 +895,9 @@ export async function mutateTransactions(
       cleanup()
       console.log(`[IndexedDB] Updated ${updatedTransactions.length} transactions for key: ${key}`)
       resolve(updatedTransactions)
+      if (didWrite) {
+        observeLegacyTransactionCommit?.(key, previousTransactions, updatedTransactions)
+      }
     }
     transaction.onerror = () => {
       cleanup()
@@ -908,9 +925,14 @@ export async function mutateTransactions(
       request.onsuccess = () => {
         try {
           signal?.throwIfAborted()
-          updatedTransactions = updater(normalizeTransactions(request.result))
+          const current = normalizeTransactions(request.result)
+          if (observeLegacyTransactionCommit) previousTransactions = current.slice()
+          updatedTransactions = updater(current)
           signal?.throwIfAborted()
-          store.put(updatedTransactions, key)
+          if (updatedTransactions !== current) {
+            didWrite = true
+            store.put(updatedTransactions, key)
+          }
         } catch (error) {
           updateError = error
           abort()

@@ -35,7 +35,6 @@ import {
   getJournalManifest,
   clearJournalEntries,
   loadTransactions,
-  mutateTransactions,
   deleteVotingState,
   deleteWalletPersistenceAndQuarantine,
   deleteWalletRecords,
@@ -101,10 +100,9 @@ import {
 } from '@/core/wallet/balance-summary'
 import {
   fetchTransparentReceiveTransactions,
-  fetchMissingTransparentSendRecipients,
-  mergeTransactionsWithWasmHistory,
-  associateIncomingIntentsTransactions
+  fetchMissingTransparentSendRecipients
 } from '@/core/wallet/transparent-history'
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { shouldMarkSyncJobInterrupted, syncJobStore } from '@/lib/sync-job-store'
 import {
   runSpendabilitySnapshotRefresh,
@@ -146,6 +144,7 @@ import { credentialSession } from './credential-session'
 import { generateCanonicalMnemonic } from '@/infrastructure/keyring/multichain/canonical-mnemonic-generator'
 import {
   getFullZcashRecoveryBirthdayHeight,
+  getRetainedZcashHardwareBirthdayHeight,
   getSafeNewWalletBirthdayHeight,
   isValidZcashBirthdayHeight,
   selectCachedChainTipHeight
@@ -383,7 +382,8 @@ export class BackgroundZcashWalletRuntime {
         cacheKey: accountKey,
         signal
       }),
-    mutate: mutateTransactions,
+    write: (accountKey, write, options) =>
+      writeLocalActivity('legacy-zcash', accountKey, write, options),
     notify: async accountKey => {
       await chrome.runtime
         .sendMessage({
@@ -786,7 +786,10 @@ export class BackgroundZcashWalletRuntime {
           seedFingerprintHex: credential.hw.seedFingerprintHex,
           accountHdIndex: account.derivationIndex,
           keySource: this.store.getWallet(walletId)?.keySource === 'ledger' ? 'ledger' : 'keystone',
-          birthdayHeight: account.birthdayHeight || undefined
+          birthdayHeight: getRetainedZcashHardwareBirthdayHeight(
+            account.birthdayHeight,
+            this.network
+          )
         })
       } else {
         await core.createAccount(
@@ -1230,7 +1233,6 @@ export class BackgroundZcashWalletRuntime {
     await prepareWalletStoreForUse()
 
     if (this.isInitialized && this.walletCore && !network) {
-      logger.log('Already initialized, skipping')
       return
     }
 
@@ -1511,7 +1513,11 @@ export class BackgroundZcashWalletRuntime {
     }
   }
 
-  private async setPrimaryWalletState(wallet: WalletItem, password: string): Promise<void> {
+  private async setPrimaryWalletState(
+    wallet: WalletItem,
+    password: string,
+    startSync = true
+  ): Promise<void> {
     this.store.setWallets([wallet])
     this.store.setCurrentAccount(wallet.id, wallet.accounts[0].id)
     this.store.setCurrentNetwork(this.network)
@@ -1520,7 +1526,7 @@ export class BackgroundZcashWalletRuntime {
     this.setSessionPassword(password)
     this.sessionCredentialWalletId = null
 
-    this.startSyncFor(wallet.id)
+    if (startSync) this.startSyncFor(wallet.id)
 
     logger.refreshCache(this.store.wallets)
   }
@@ -2999,16 +3005,13 @@ export class BackgroundZcashWalletRuntime {
         logger.warn('transparent receive history fetch failed', walletId, accountId)
       }
 
-      let newWasmTransactionCount = 0
-      const persistedTransactions = await mutateTransactions(accountKey, currentTransactions => {
-        const merged = mergeTransactionsWithWasmHistory(
-          currentTransactions,
-          wasmTransactions,
-          transparentReceiveTransactions
-        )
-        newWasmTransactionCount = merged.newWasmTransactionCount
-        return associateIncomingIntentsTransactions(merged.transactions)
-      })
+      const { transactions: persistedTransactions, newWasmTransactionCount } =
+        await writeLocalActivity('legacy-zcash', accountKey, {
+          kind: 'history',
+          wasm: wasmTransactions,
+          receipts: transparentReceiveTransactions,
+          addresses: account.addresses
+        })
       if (canApplyStatus()) {
         if (transparentHistoryFailed) this.historyRefreshFailures.add(historyScope)
         else this.historyRefreshFailures.delete(historyScope)
@@ -3832,6 +3835,9 @@ export class BackgroundZcashWalletRuntime {
         if (existing.keySource !== (params.keySource ?? 'keystone')) {
           throw new Error('This Zcash account is already connected to another hardware device')
         }
+        if (params.existingLedgerWalletId && existing.id !== params.existingLedgerWalletId) {
+          throw new Error('This Zcash account is already added to another Ledger wallet.')
+        }
         await this.switchWallet(existing.id)
         return existing.id
       }
@@ -3869,7 +3875,7 @@ export class BackgroundZcashWalletRuntime {
       this.currentWalletId = walletId
       await core.initialize()
 
-      await core.createAccountFromUfvk({
+      const wasmAccountId = await core.createAccountFromUfvk({
         accountName: name,
         ufvk: params.ufvk,
         seedFingerprintHex: params.seedFingerprintHex,
@@ -3879,8 +3885,8 @@ export class BackgroundZcashWalletRuntime {
       })
 
       const [addresses, actualBirthday] = await Promise.all([
-        core.getUnifiedAddresses(),
-        core.getAccountBirthday()
+        core.getUnifiedAddresses(wasmAccountId),
+        core.getAccountBirthday(wasmAccountId)
       ])
 
       const account: AccountData = {
@@ -3903,13 +3909,14 @@ export class BackgroundZcashWalletRuntime {
         keySource: params.keySource ?? 'keystone'
       }
 
+      const startSync = params.existingLedgerWalletId === undefined
       if (isFirstWallet) {
-        await this.setPrimaryWalletState(wallet, password)
+        await this.setPrimaryWalletState(wallet, password, startSync)
       } else {
         await this.addWalletToList(wallet)
         this.store.setCurrentAccount(walletId, account.id)
         await flushWalletStore()
-        this.startSyncFor(walletId)
+        if (startSync) this.startSyncFor(walletId)
       }
 
       logger.log('Hardware wallet created', walletId)
@@ -4305,6 +4312,9 @@ export class BackgroundZcashWalletRuntime {
 
     const currentSyncState = this.accountDataStore.getWalletSyncState(syncNetwork, syncWalletId)
     const lastSyncTime = currentSyncState.lastSyncTime || 0
+    const startedWithSyncedBalance =
+      currentSyncState.latestHeight > 0 &&
+      currentSyncState.currentHeight >= currentSyncState.latestHeight
 
     const setSyncState = (partial: Partial<import('@/store/account-data-store').SyncState>) => {
       this.accountDataStore.setWalletSyncStateFor(syncNetwork, syncWalletId!, partial)
@@ -4653,7 +4663,12 @@ export class BackgroundZcashWalletRuntime {
         }
       }
 
-      if (!isNearChainTip(fullyScannedHeight, latestHeight)) {
+      const isSilentSync =
+        isNearChainTip(fullyScannedHeight, latestHeight) ||
+        (options?.priority === 'background' &&
+          fullyScannedHeight > 0 &&
+          latestHeight - fullyScannedHeight <= WALLET_CONFIG.SYNC.BACKGROUND_SILENT_SYNC_MAX_BLOCKS)
+      if (!isSilentSync) {
         this.updateSyncProgressForWallet(syncWalletId, {
           isSyncing: true,
           syncProgress: 0,
@@ -4698,7 +4713,6 @@ export class BackgroundZcashWalletRuntime {
 
       const isSmallSync =
         totalRange <= getSyncBatchSize(totalRange, syncWalletId === this.currentWalletId)
-      const isSilentSync = isNearChainTip(fullyScannedHeight, latestHeight)
       const showSyncUi = !isSilentSync
 
       if (isSilentSync) {
@@ -5400,8 +5414,9 @@ export class BackgroundZcashWalletRuntime {
                 checkpointErr
               )
             }
-            // Surface scanned-so-far balances in the UI during long syncs
-            await this.refreshBalances(syncWalletId, true).catch(() => {})
+            if (startedWithSyncedBalance) {
+              await this.refreshBalances(syncWalletId, true).catch(() => {})
+            }
           }
         }
       }

@@ -1,0 +1,863 @@
+import { useEffect, useRef, useState } from 'react'
+import { PageHeader } from '../../components/common/PageHeader'
+import { StandardTransactionResult } from '../../components/transaction/StandardTransactionResult'
+import { SwapStatusDisplay } from '../../components/swap/SwapStatus'
+import { useTransactionResultStore } from '@/store/transaction-result-store'
+import { useAccountDataStore } from '@/store/account-data-store'
+import { useWalletStore } from '@/store/wallet-store'
+import { useLocation, useNavigate } from '../../provider/Router'
+import {
+  getConfirmationFailureResultCopy,
+  getConfirmedTransactionResultCopy,
+  getStandardTransactionResultCopy,
+  getSubmittedTransactionResultCopy
+} from '@/lib/transaction-status-copy'
+import {
+  getTransactionRecoveryAction,
+  resolveWalletSnapshotRecoveryTarget
+} from '@/lib/transaction-replacement'
+import { isWalletSnapshotRecoveryError } from '@/lib/errors'
+import { isWalletSnapshotIntegrityError } from '@/lib/wallet-snapshot-errors'
+import { inspectWalletDb, loadTransactions, loadWalletDb } from '@/lib/indexed-db'
+import { openModal } from '@/popup/provider/ModalManager'
+import { ResyncZcashContent } from '@/popup/components/account/AccountModals'
+import { resyncZcashWallet } from '@/popup/services/zcash-settings-client'
+import { useSpeedUp } from '@/popup/hooks/useSpeedUp'
+import { isTransactionStatusUpdatedMessage } from '@/types/transaction-messages'
+import { isZcashDestination } from '@/lib/cross-chain-transaction'
+import { pollingTransactionConfirmations } from '@/lib/zcash-node-rpc'
+import { getNetworkConfig } from '@/lib/runtime-network'
+import { WALLET_CONFIG } from '@/config/wallet'
+import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
+import { offerSaveRecipient } from '@/popup/services/save-recipient-prompt'
+import { evmWalletClient } from '@/popup/services/evm-wallet-client'
+import { resolveSwapStatusPollingProvider } from '@/popup/services/swap-page-model'
+import { homeActivityPath } from '@/popup/services/home-navigation'
+import { needsShieldHardwareTab, openShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
+import {
+  confidentialFundingClient,
+  getConfidentialFundingResult
+} from '@/popup/services/confidential-funding-client'
+import { getConfidentialFundingProgress } from '@/core/services/confidential-funding'
+import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
+import { toast } from '@/store/toast-store'
+import type { ActivityItem } from '@/core/activity'
+import {
+  getActivityOriginHash,
+  getActivityOriginStatus,
+  getZcashIntentsOriginStatus
+} from '@/popup/services/transaction-progress'
+import { resolveZcashResultView } from '@/lib/transaction-result-model'
+import { getRheaSwapProgressStatus } from '@/lib/swap-progress'
+import { selectActivityObservation } from '@/popup/services/activity-observation'
+import { mapZcashV1TransactionToActivityItem } from '@/infrastructure/activity/zcash-v1-activity-source'
+import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
+import { buildActivityTransactionView } from '../../components/transaction/ActivityTransactionBody'
+import { useSettingsStore } from '@/store/settings-store'
+import { buildAccountKey } from '@/store/account-data-store'
+import { parseKeyDomainId } from '@/core/keyring/domain'
+import { parseAccountId } from '@/core/accounts/domain'
+import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
+import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
+import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
+import { getNativeZecIntentsSwapStatus } from '@/popup/services/native-zec-intents-swap-client'
+
+const RHEA_STATUS_RECHECK_INTERVAL_MS = 15_000
+
+export function TransactionOutcome() {
+  const { navigate, goBack, goBackIfPrevious, goBackSteps } = useNavigate()
+  const location = useLocation()
+  const { requestSpeedUp, speedUpSheet } = useSpeedUp()
+  const {
+    data,
+    returnPath,
+    retry,
+    clear,
+    updateStep,
+    updateSwapStatus,
+    updateConfidentialFunding
+  } = useTransactionResultStore()
+  const dataRef = useRef(data)
+  const leavingResultRef = useRef(false)
+  const [destinationConfirmations, setDestinationConfirmations] = useState<number | null>(null)
+  const [resumingConfidentialFunding, setResumingConfidentialFunding] = useState(false)
+  const [confidentialPlan, setConfidentialPlan] = useState<ConfidentialFundingPlan | null>(null)
+  const [originActivity, setOriginActivity] = useState<ActivityItem | null>(null)
+  const [originActivityNetwork, setOriginActivityNetwork] = useState<string | null>(null)
+  const originActivityRef = useRef<ActivityItem | null>(null)
+  const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const currentWalletId = useWalletStore(state => state.currentWalletId)
+  const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const { activeAccount } = useActiveAccountNetworks()
+  const effectiveAccount = resolveEffectiveActiveAccountIdentity({
+    currentWalletId,
+    currentAccountId,
+    nativeAccount: activeAccount
+  })
+  const effectiveWalletId = effectiveAccount?.walletId ?? null
+  const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const { model: resultPortfolio } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId, {
+    enabled: data?.type === 'swap',
+    autoRefresh: false
+  })
+  const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
+  const wallets = useWalletStore(state => state.wallets)
+  const resultAccountKey = data?.type === 'zcash' ? data.accountKey : undefined
+  const resultTransactionId = data?.type === 'zcash' ? data.transactionId : undefined
+  const resultTransaction = useAccountDataStore(state => {
+    if (
+      !resultAccountKey ||
+      !resultTransactionId ||
+      !currentWalletId ||
+      !currentAccountId ||
+      resultAccountKey !== buildAccountKey(currentNetwork, currentWalletId, currentAccountId)
+    )
+      return undefined
+    return state.getTransactions(resultAccountKey).find(tx => tx.id === resultTransactionId)
+  })
+  const resultActivityView = (() => {
+    if (
+      !resultTransaction ||
+      !currentWalletId ||
+      !currentAccountId ||
+      resultTransaction.network !== currentNetwork
+    )
+      return null
+    try {
+      const item = mapZcashV1TransactionToActivityItem(resultTransaction, {
+        keyDomainId: parseKeyDomainId(currentWalletId),
+        accountId: parseAccountId(currentAccountId)
+      })
+      const catalog = buildActivityPresentationCatalog({
+        network: currentNetwork,
+        endpointSettings,
+        userEvmAssets: []
+      })
+      return buildActivityTransactionView({
+        item,
+        network: currentNetwork,
+        assetMetadata: catalog.assetMetadata,
+        chainMetadata: catalog.chainMetadata,
+        replacementHash: resultTransaction.replacedByTxHash,
+        fallback: resultTransaction.fee
+          ? { fee: { value: resultTransaction.fee, symbol: 'ZEC' } }
+          : undefined
+      })
+    } catch {
+      return null
+    }
+  })()
+  const resultView =
+    data?.type === 'zcash' ? resolveZcashResultView(data, resultTransaction) : undefined
+  const resultStep = resultView?.step ?? 'idle'
+  const swapZcashAccountKey = data?.type === 'swap' ? data.zcashAccountKey : undefined
+  const swapZcashTransactionId = data?.type === 'swap' ? data.zcashTransactionId : undefined
+  const swapZcashTransaction = useAccountDataStore(state => {
+    if (!swapZcashAccountKey || !swapZcashTransactionId) return undefined
+    return state
+      .getTransactions(swapZcashAccountKey)
+      .find(transaction => transaction.id === swapZcashTransactionId)
+  })
+  const activityTransactionId = data?.type === 'swap' ? data.activityTransactionId : undefined
+  const confidentialFundingPlanId =
+    data?.type === 'swap' ? data.confidentialFunding?.planId : undefined
+  const scopedOriginActivity =
+    originActivity &&
+    originActivityNetwork === currentNetwork &&
+    originActivity.id === activityTransactionId &&
+    originActivity.scope.keyDomainId === effectiveWalletId &&
+    originActivity.scope.accountId === effectiveAccountId
+      ? originActivity
+      : null
+  const scopedConfidentialPlan =
+    confidentialPlan &&
+    confidentialPlan.planId === confidentialFundingPlanId &&
+    scopedOriginActivity &&
+    confidentialPlan.transactionId === scopedOriginActivity.id &&
+    confidentialPlan.network === currentNetwork &&
+    confidentialPlan.keyDomainId === effectiveWalletId &&
+    confidentialPlan.accountId === effectiveAccountId
+      ? confidentialPlan
+      : null
+  const sourceExecutionMode = data?.type === 'swap' ? (data.sourceExecutionMode ?? 'main') : 'main'
+  const recoveryAction = getTransactionRecoveryAction(resultTransaction)
+  const snapshotRecoveryTarget =
+    data?.type === 'zcash' && resultStep === 'failed' && isWalletSnapshotRecoveryError(data.error)
+      ? resolveWalletSnapshotRecoveryTarget(
+          resultAccountKey,
+          resultTransactionId,
+          resultTransaction,
+          wallets,
+          currentNetwork
+        )
+      : null
+  const isSyncing = useAccountDataStore(state =>
+    currentWalletId ? state.getWalletSyncState(currentNetwork, currentWalletId).isSyncing : false
+  )
+  const swapDepositAddress = data?.type === 'swap' ? data.depositAddress : undefined
+  const rheaQuoteHandle = data?.type === 'swap' ? data.rheaQuoteHandle : undefined
+  const nativeIntentsInternalDestination =
+    data?.type === 'swap' && data.nativeIntentsInternalDestination === true
+  const nativeIntentsQuoteHandle = data?.type === 'swap' ? data.nativeIntentsQuoteHandle : undefined
+  const waitsForZcashDestination =
+    data?.type === 'swap' &&
+    !nativeIntentsInternalDestination &&
+    data.status?.status === 'SUCCESS' &&
+    isZcashDestination({
+      destinationAsset: data.status.destinationAsset,
+      destinationChain: data.destinationChain
+    })
+  const destinationZcashTxHash =
+    waitsForZcashDestination && data.status?.swapDetails?.destinationChainTxHashes?.length
+      ? data.status.swapDetails.destinationChainTxHashes[0].hash
+      : undefined
+  const swapStatusPollingProvider = resolveSwapStatusPollingProvider({
+    depositAddress: swapDepositAddress,
+    rheaQuoteHandle
+  })
+
+  useEffect(() => {
+    dataRef.current = data
+  }, [data])
+
+  useEffect(() => {
+    if (resultAccountKey && resultTransactionId) {
+      void useAccountDataStore.getState().reloadTransactions(resultAccountKey)
+    }
+  }, [resultAccountKey, resultTransactionId])
+
+  useEffect(() => {
+    setOriginActivity(null)
+    setOriginActivityNetwork(null)
+    originActivityRef.current = null
+    if (!activityTransactionId || !effectiveWalletId || !effectiveAccountId) return
+    let active = true
+    const refresh = () => {
+      void evmWalletClient
+        .getActivity('read', sourceExecutionMode)
+        .then(model => {
+          if (!active) return
+          const walletState = useWalletStore.getState()
+          const latestAccount = resolveEffectiveActiveAccountIdentity({
+            currentWalletId: walletState.currentWalletId,
+            currentAccountId: walletState.currentAccountId,
+            nativeAccount: activeAccount
+          })
+          const item = model?.items.find(
+            candidate =>
+              candidate.id === activityTransactionId &&
+              candidate.scope.keyDomainId === effectiveWalletId &&
+              candidate.scope.accountId === effectiveAccountId
+          )
+          if (
+            !item ||
+            model?.scope.keyDomainId !== effectiveWalletId ||
+            model.scope.accountId !== effectiveAccountId ||
+            walletState.currentNetwork !== currentNetwork ||
+            latestAccount?.walletId !== effectiveWalletId ||
+            latestAccount.accountId !== effectiveAccountId
+          )
+            return
+          const latestItem = originActivityRef.current
+            ? selectActivityObservation(originActivityRef.current, item)
+            : item
+          originActivityRef.current = latestItem
+          setOriginActivity(latestItem)
+          setOriginActivityNetwork(currentNetwork)
+          const current = useTransactionResultStore.getState().data
+          if (
+            current?.type === 'swap' &&
+            current.rheaQuoteHandle &&
+            current.activityTransactionId === item.id
+          ) {
+            updateSwapStatus(
+              getRheaSwapProgressStatus(
+                latestItem.segments,
+                current.status ?? { status: 'PENDING_DEPOSIT' }
+              )
+            )
+          }
+        })
+        .catch(() => {})
+    }
+    const listener = (message: unknown, sender: chrome.runtime.MessageSender) => {
+      if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
+      if (!message || typeof message !== 'object' || !('type' in message)) return
+      if (
+        message.type === 'TRANSACTION_ADDED' ||
+        message.type === 'TRANSACTION_UPDATED' ||
+        message.type === 'TRANSACTION_STATUS_UPDATED' ||
+        message.type === 'CROSS_CHAIN_STATUS_UPDATED'
+      ) {
+        refresh()
+      }
+    }
+    refresh()
+    const timer = setInterval(refresh, 10_000)
+    chrome.runtime.onMessage.addListener(listener)
+    return () => {
+      active = false
+      clearInterval(timer)
+      chrome.runtime.onMessage.removeListener(listener)
+    }
+  }, [
+    activeAccount,
+    activityTransactionId,
+    effectiveAccountId,
+    currentNetwork,
+    effectiveWalletId,
+    sourceExecutionMode,
+    updateSwapStatus
+  ])
+
+  useEffect(() => {
+    if (!data && !leavingResultRef.current) {
+      navigate('/', { replace: true })
+    }
+  }, [data, navigate])
+
+  useEffect(() => {
+    setConfidentialPlan(null)
+    if (!confidentialFundingPlanId) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const recheck = async () => {
+      try {
+        const plan = await confidentialFundingClient.get(confidentialFundingPlanId)
+        if (!active) return
+        setConfidentialPlan(plan)
+        const result = getConfidentialFundingResult(plan)
+        const progress = getConfidentialFundingProgress(plan)
+        updateConfidentialFunding({
+          phase: plan.phase,
+          completed: result.completed,
+          total: result.total,
+          stage: progress.stage,
+          message: progress.message,
+          status: result.status
+        })
+        if (
+          !['ready', 'partial', 'refunded', 'failed', 'expired', 'cancelled'].includes(plan.phase)
+        ) {
+          timer = setTimeout(() => void recheck(), 5_000)
+        }
+      } catch {
+        if (active) timer = setTimeout(() => void recheck(), 5_000)
+      }
+    }
+    void recheck()
+    return () => {
+      active = false
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [confidentialFundingPlanId, updateConfidentialFunding])
+
+  useEffect(() => {
+    if (!nativeIntentsQuoteHandle) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const recheck = async () => {
+      try {
+        const status = await getNativeZecIntentsSwapStatus(nativeIntentsQuoteHandle)
+        if (!active) return
+        const current = useTransactionResultStore.getState().data
+        const wallet = useWalletStore.getState()
+        if (
+          current?.type !== 'swap' ||
+          current.nativeIntentsQuoteHandle !== nativeIntentsQuoteHandle ||
+          wallet.currentNetwork !== currentNetwork ||
+          wallet.currentWalletId !== effectiveWalletId ||
+          wallet.currentAccountId !== effectiveAccountId
+        )
+          return
+        if (status) {
+          updateSwapStatus(status)
+          if (['SUCCESS', 'FAILED', 'REFUNDED'].includes(status.status)) return
+        }
+      } catch {
+        // A later check can recover after temporary service worker or provider failures.
+      }
+      if (active) timer = setTimeout(() => void recheck(), 5_000)
+    }
+    void recheck()
+    return () => {
+      active = false
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [
+    nativeIntentsQuoteHandle,
+    currentNetwork,
+    effectiveWalletId,
+    effectiveAccountId,
+    updateSwapStatus
+  ])
+
+  useEffect(() => {
+    if (swapStatusPollingProvider !== 'rhea-swap') return
+
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const recheck = async () => {
+      try {
+        const response: unknown = await chrome.runtime.sendMessage({
+          type: 'RECHECK_PENDING_TRANSACTIONS'
+        })
+        if (!active) return
+        const rheaPending =
+          typeof response === 'object' && response !== null
+            ? Reflect.get(response, 'rheaPending')
+            : undefined
+        if (rheaPending === false) return
+      } catch {
+        // The persistent alarm remains the fallback when the service worker is unavailable.
+      }
+      if (active) timer = setTimeout(() => void recheck(), RHEA_STATUS_RECHECK_INTERVAL_MS)
+    }
+    void recheck()
+
+    return () => {
+      active = false
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [rheaQuoteHandle, swapStatusPollingProvider])
+
+  useEffect(() => {
+    setDestinationConfirmations(null)
+    if (!waitsForZcashDestination || !destinationZcashTxHash) return
+
+    const rpcUrl = getNetworkConfig(currentNetwork).nodeRpcUrl
+    if (!rpcUrl) return
+
+    const controller = new AbortController()
+    void pollingTransactionConfirmations(
+      rpcUrl,
+      destinationZcashTxHash,
+      WALLET_CONFIG.SPENDABILITY_CONFIRMATIONS,
+      setDestinationConfirmations,
+      { interval: 5_000, signal: controller.signal }
+    ).catch(error => {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      console.error('[TransactionOutcome] Zcash confirmation polling failed:', error)
+    })
+
+    return () => controller.abort()
+  }, [currentNetwork, destinationZcashTxHash, waitsForZcashDestination])
+
+  useEffect(() => {
+    const listener = (message: any, sender: chrome.runtime.MessageSender) => {
+      if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
+      const currentData = dataRef.current
+
+      if (
+        message.type === 'ZCASH_TX_COMPLETED' &&
+        currentData?.type === 'zcash' &&
+        currentData.accountKey === message.accountKey &&
+        currentData.transactionId === message.transactionId
+      ) {
+        if (message.error) {
+          const outcomeStep = message.completionPending === true ? 'pending' : 'failed'
+          const copy = getStandardTransactionResultCopy(outcomeStep, {
+            shield: currentData.customTitle?.includes('Shield'),
+            error: message.error
+          })
+          updateStep(
+            outcomeStep,
+            {
+              error: message.error,
+              customTitle: copy.title,
+              customDescription: copy.description
+            },
+            message.accountKey,
+            message.transactionId
+          )
+        } else if (message.txHash) {
+          const copy = getSubmittedTransactionResultCopy(
+            currentData.customTitle?.includes('Shield')
+          )
+          updateStep(
+            'submitted',
+            {
+              txHash: message.txHash,
+              customTitle: copy.title,
+              customDescription: copy.description
+            },
+            message.accountKey,
+            message.transactionId
+          )
+        }
+      }
+
+      if (
+        isTransactionStatusUpdatedMessage(message) &&
+        currentData?.type === 'zcash' &&
+        currentData.accountKey === message.accountKey &&
+        currentData.transactionId === message.transactionId
+      ) {
+        if (message.status === 'success') {
+          const copy = getConfirmedTransactionResultCopy()
+          updateStep(
+            'success',
+            {
+              customTitle: copy.title,
+              customDescription: copy.description
+            },
+            message.accountKey,
+            message.transactionId
+          )
+        } else if (message.status === 'failed') {
+          const copy = getConfirmationFailureResultCopy(message.failureReason)
+          updateStep(
+            'failed',
+            {
+              customTitle: copy.title,
+              customDescription: copy.description,
+              accountKey: message.accountKey,
+              transactionId: message.transactionId
+            },
+            message.accountKey,
+            message.transactionId
+          )
+        }
+        void useAccountDataStore.getState().reloadTransactions(message.accountKey)
+      }
+
+      if (
+        message.type === 'CROSS_CHAIN_STATUS_UPDATED' &&
+        currentData?.type === 'swap' &&
+        !currentData.nativeIntentsInternalDestination
+      ) {
+        if (
+          (typeof message.quoteHandle === 'string' &&
+            message.quoteHandle !== currentData.rheaQuoteHandle) ||
+          (typeof message.depositAddress === 'string' &&
+            message.depositAddress !== currentData.depositAddress)
+        ) {
+          return
+        }
+        const { updateSwapStatus } = useTransactionResultStore.getState()
+        updateSwapStatus(message.status)
+      }
+    }
+
+    chrome.runtime.onMessage.addListener(listener)
+    return () => chrome.runtime.onMessage.removeListener(listener)
+  }, [updateStep])
+
+  if (!data) return null
+
+  const handleDone = () => {
+    const path =
+      data.type === 'swap' &&
+      data.status?.status === 'SUCCESS' &&
+      data.approvalRequestIdAfterFunding
+        ? `/approval?requestId=${encodeURIComponent(data.approvalRequestIdAfterFunding)}&fundingComplete=1`
+        : returnPath
+    leavingResultRef.current = true
+    const saveRecipient =
+      data.type === 'zcash' &&
+      (resultStep === 'submitted' || resultStep === 'confirming' || resultStep === 'success')
+        ? data.saveRecipient
+        : null
+    const sendOriginHistory = (
+      location.state as {
+        sendOriginHistory?: {
+          originPath?: unknown
+          network?: unknown
+          walletId?: unknown
+          accountId?: unknown
+          entryKey?: unknown
+          sendKey?: unknown
+        }
+      } | null
+    )?.sendOriginHistory
+    const returnToPreviousEntry =
+      data.type === 'zcash' &&
+      path === returnPath &&
+      sendOriginHistory?.originPath === returnPath &&
+      sendOriginHistory.network === currentNetwork &&
+      sendOriginHistory.walletId === currentWalletId &&
+      sendOriginHistory.accountId === currentAccountId &&
+      typeof sendOriginHistory.entryKey === 'string' &&
+      sendOriginHistory.entryKey.length > 0 &&
+      typeof sendOriginHistory.sendKey === 'string' &&
+      sendOriginHistory.sendKey.length > 0
+    const returnedToAssetDetail =
+      data.type === 'swap' && path.startsWith('/asset-detail?') && goBackIfPrevious(path)
+    if (returnToPreviousEntry) goBackSteps(2)
+    else if (!returnedToAssetDetail) navigate(path, { replace: true })
+    clear()
+    if (saveRecipient) void offerSaveRecipient(saveRecipient)
+  }
+
+  const handleViewActivity = () => {
+    if (data.type !== 'swap') return
+    const transactionId = data.activityTransactionId ?? data.zcashTransactionId
+    leavingResultRef.current = true
+    navigate(homeActivityPath(data.activityDomain, transactionId), { replace: true })
+    clear()
+  }
+
+  const handleRetry = () => {
+    const retrySend =
+      data?.type === 'zcash' &&
+      retry &&
+      retry.draft.network === currentNetwork &&
+      retry.draft.walletId === currentWalletId &&
+      retry.draft.accountId === currentAccountId
+        ? retry
+        : null
+    leavingResultRef.current = true
+    clear()
+    if (retrySend)
+      navigate(retrySend.path, { replace: true, state: { retryDraft: retrySend.draft } })
+    else if (data?.type === 'zcash' && retry)
+      navigate(retry.draft.fundingSource === 'shielded' ? '/?domain=shield' : '/', {
+        replace: true
+      })
+    else goBack()
+  }
+
+  const handleSpeedUp = () => {
+    if (recoveryAction === 'speed_up' && resultTransaction) {
+      requestSpeedUp(resultTransaction)
+    }
+  }
+
+  const handleSnapshotRecovery = () => {
+    const target = snapshotRecoveryTarget
+    if (!target || target.walletId !== currentWalletId) return
+    void openModal<void>({
+      title: 'Resync Zcash',
+      body: resolve => (
+        <ResyncZcashContent
+          walletId={target.walletId}
+          accountId={target.accountId}
+          birthdayHeight={target.birthdayHeight}
+          onConfirm={async height => {
+            const key = `${target.network}_${target.walletId}`
+            const inspection = await inspectWalletDb(key)
+            let stillNeedsRecovery =
+              inspection.status === 'incompatible' || inspection.status === 'quarantined'
+            if (!stillNeedsRecovery) {
+              try {
+                await loadWalletDb(key)
+              } catch (error) {
+                if (!isWalletSnapshotIntegrityError(error)) throw error
+                stillNeedsRecovery = true
+              }
+            }
+            if (!stillNeedsRecovery) {
+              throw new Error('Wallet data has changed. Close this page and try sending again.')
+            }
+            const currentResult = useTransactionResultStore.getState().data
+            const active = useWalletStore.getState()
+            const transactions = resultAccountKey ? await loadTransactions(resultAccountKey) : []
+            const transaction = transactions.find(record => record.id === resultTransactionId)
+            const verifiedTarget = resolveWalletSnapshotRecoveryTarget(
+              currentResult?.type === 'zcash' &&
+                currentResult.accountKey === resultAccountKey &&
+                currentResult.transactionId === resultTransactionId &&
+                currentResult.step === 'failed' &&
+                isWalletSnapshotRecoveryError(currentResult.error)
+                ? resultAccountKey
+                : undefined,
+              resultTransactionId,
+              transaction,
+              active.wallets,
+              active.currentNetwork
+            )
+            if (
+              !verifiedTarget ||
+              verifiedTarget.walletId !== target.walletId ||
+              verifiedTarget.accountId !== target.accountId ||
+              verifiedTarget.network !== target.network ||
+              active.currentWalletId !== target.walletId
+            ) {
+              throw new Error(
+                'Transaction account could not be verified. Resync it from Account details.'
+              )
+            }
+            await resyncZcashWallet({
+              walletId: target.walletId,
+              accountId: target.accountId,
+              birthdayHeight: height
+            })
+            resolve()
+            leavingResultRef.current = true
+            clear()
+            navigate('/', { replace: true })
+          }}
+          close={() => resolve()}
+        />
+      )
+    })
+  }
+
+  const handleCancel = () => {
+    leavingResultRef.current = true
+    clear()
+    goBack()
+  }
+
+  const handleResumeConfidentialFunding = async () => {
+    if (!confidentialFundingPlanId || resumingConfidentialFunding) return
+    setResumingConfidentialFunding(true)
+    try {
+      const current = await confidentialFundingClient.get(confidentialFundingPlanId)
+      if (
+        current.phase !== 'needs-auth' ||
+        current.network !== currentNetwork ||
+        current.keyDomainId !== activeAccount?.walletId ||
+        current.accountId !== activeAccount.accountId
+      )
+        return
+      if (needsShieldHardwareTab(activeAccount?.walletSource.kind === 'hardware')) {
+        await openShieldHardwareTab(homeActivityPath('shield', current.transactionId))
+        return
+      }
+      const plan = await confidentialFundingClient.confirm(
+        current.planId,
+        current.approvalFingerprint
+      )
+      setConfidentialPlan(plan)
+      const result = getConfidentialFundingResult(plan)
+      const progress = getConfidentialFundingProgress(plan)
+      updateConfidentialFunding({
+        phase: plan.phase,
+        completed: result.completed,
+        total: result.total,
+        stage: progress.stage,
+        message: progress.message,
+        status: result.status
+      })
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Confidential funding could not continue'
+      )
+    } finally {
+      setResumingConfidentialFunding(false)
+    }
+  }
+
+  if (data.type === 'zcash') {
+    const recordCopy =
+      resultStep === data.step
+        ? undefined
+        : resultStep === 'failed'
+          ? getConfirmationFailureResultCopy(resultTransaction?.failureReason)
+          : resultStep === 'success'
+            ? getConfirmedTransactionResultCopy()
+            : getStandardTransactionResultCopy(resultStep, {
+                shield: resultTransaction?.type === 'shield'
+              })
+    const isLoadingRecoveryRecord =
+      resultStep === 'failed' &&
+      !!data.accountKey &&
+      !!data.transactionId &&
+      resultTransaction?.status !== 'failed'
+    const failureAction =
+      resultStep !== 'failed' || isLoadingRecoveryRecord
+        ? undefined
+        : snapshotRecoveryTarget
+          ? { label: 'Resync Zcash', onClick: handleSnapshotRecovery }
+          : recoveryAction === 'speed_up'
+            ? { label: 'Speed Up', onClick: handleSpeedUp }
+            : { label: 'Retry', onClick: handleRetry, retry: true }
+    const pendingDescription =
+      resultStep === 'pending'
+        ? data.error ||
+          (isSyncing
+            ? 'Waiting for sync to complete before sending...'
+            : data.customDescription ||
+              'Building and broadcasting your transaction. This may take a few minutes.')
+        : data.customDescription
+
+    return (
+      <div className="page-container">
+        <PageHeader title="" />
+        <StandardTransactionResult
+          activityView={resultActivityView}
+          step={resultStep}
+          phaseLayout={data.operation === 'send'}
+          operation={
+            data.operation ??
+            (resultTransaction?.type === 'shield' || resultTransaction?.type === 'unshield'
+              ? 'move'
+              : 'send')
+          }
+          amount={data.amount}
+          fromAddress={data.fromAddress}
+          toAddress={data.toAddress}
+          txHash={resultView?.txHash}
+          timestamp={resultView?.timestamp}
+          error={data.error}
+          customTitle={recordCopy?.title ?? data.customTitle}
+          customDescription={recordCopy?.description ?? pendingDescription}
+          showFrom={data.showFrom}
+          showTo={data.showTo}
+          showTxHash={data.showTxHash}
+          showTime={data.showTime}
+          extraDetails={data.extraDetails}
+          failureAction={failureAction}
+          onDone={handleDone}
+          onCancel={resultStep === 'failed' ? handleCancel : undefined}
+        />
+        {speedUpSheet}
+      </div>
+    )
+  }
+
+  if (data.type === 'swap') {
+    return (
+      <div className="page-container">
+        <PageHeader title={data.actionName || 'Swap'} />
+        <SwapStatusDisplay
+          network={currentNetwork}
+          portfolio={resultPortfolio}
+          confidentialPlan={scopedConfidentialPlan}
+          status={data.status}
+          tokenInSymbol={data.tokenInSymbol}
+          tokenOutSymbol={data.tokenOutSymbol}
+          amountIn={data.amountIn}
+          amountOut={data.amountOut}
+          actionName={data.actionName}
+          router={data.router}
+          destinationChain={data.destinationChain}
+          internalDestination={nativeIntentsInternalDestination}
+          destinationConfirmations={destinationConfirmations}
+          originChain={data.originChain}
+          originTxHash={
+            data.originTxHash ??
+            (scopedOriginActivity ? getActivityOriginHash(scopedOriginActivity) : undefined)
+          }
+          originStatus={
+            swapZcashTransaction
+              ? getZcashIntentsOriginStatus(swapZcashTransaction)
+              : scopedOriginActivity
+                ? getActivityOriginStatus(scopedOriginActivity)
+                : undefined
+          }
+          originConfirmations={swapZcashTransaction?.confirmations}
+          signedOrder={data.signedOrder}
+          fee={data.fee}
+          confidentialFunding={data.confidentialFunding}
+          activityItem={scopedOriginActivity}
+          approvalProgress={data.approvalProgress}
+          activeAccount={activeAccount}
+          onResumeConfidentialFunding={handleResumeConfidentialFunding}
+          resumingConfidentialFunding={resumingConfidentialFunding}
+          onClose={handleDone}
+          onViewActivity={handleViewActivity}
+          viewActivityDisabled={
+            data.originChain === 'zcash' &&
+            Boolean(data.rheaQuoteHandle) &&
+            !data.activityTransactionId &&
+            !data.zcashTransactionId
+          }
+        />
+      </div>
+    )
+  }
+
+  return null
+}

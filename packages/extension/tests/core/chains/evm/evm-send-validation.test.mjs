@@ -28,7 +28,7 @@ test.describe('EVM send validation', () => {
           'review-unavailable',
           'The EVM transfer review is no longer available'
         ),
-        'main'
+        'ETH'
       )
     ).toBe('This review is no longer available. Check Activity before preparing another transfer.')
   })
@@ -67,8 +67,8 @@ test.describe('EVM send validation', () => {
   })
 
   test('explains the missing native gas balance before preparing a token transfer', () => {
-    expect(getEvmTokenFeeBalanceError('token', '0', 'ETH')).toBe('Insufficient ETH balance.')
-    expect(getEvmTokenFeeBalanceError('token', undefined, 'ETH')).toBe('Insufficient ETH balance.')
+    expect(getEvmTokenFeeBalanceError('token', '0', 'ETH')).toBe('Insufficient ETH balance')
+    expect(getEvmTokenFeeBalanceError('token', undefined, 'ETH')).toBe('Insufficient ETH balance')
   })
 
   test('allows preparation when a native gas balance exists', () => {
@@ -80,8 +80,8 @@ test.describe('EVM send validation', () => {
     expect(resolveEvmNativeMaximumAmount('28213333648391137919', '21000000000000')).toBe(
       '28213312648391137919'
     )
-    expect(() => resolveEvmNativeMaximumAmount('21000000000000', '21000000000000')).toThrow(
-      'does not cover'
+    expect(() => resolveEvmNativeMaximumAmount('21000000000000', '21000000000000', 'ETH')).toThrow(
+      'Insufficient ETH balance'
     )
     expect(() => resolveEvmNativeMaximumAmount('1.5', '1')).toThrow('Invalid')
   })
@@ -112,10 +112,16 @@ test.describe('EVM send validation', () => {
     }
     const recipient = `t1${'B'.repeat(33)}`
     const route = new URL(
-      buildPublicPrivateEvmSendPath({ ...scope, recipient, amount: '0.1' }),
+      buildPublicPrivateEvmSendPath({ ...scope, recipient, amount: '0.00199', maximum: true }),
       'https://wallet.invalid'
     )
     expect(route.searchParams.get('fundingSource')).toBe('transparent')
+    expect(route.searchParams.get('amount')).toBe('0.00199')
+    expect(route.searchParams.has('maximum')).toBe(false)
+    expect(parsePublicPrivateEvmSwapRoute(route.searchParams, scope)).toMatchObject({
+      amount: '0.00199',
+      maximum: false
+    })
     expect(parsePublicPrivateEvmSwapRoute(route.searchParams, scope)?.recipient).toBe(recipient)
     expect(
       parsePublicPrivateEvmSwapRoute(route.searchParams, { ...scope, accountId: 'other' })

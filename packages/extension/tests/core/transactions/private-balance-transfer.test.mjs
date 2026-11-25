@@ -2,7 +2,10 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import {
+  buildCrossChainPrivateWithdrawReviewPath,
+  buildPrivateDepositReviewPath,
   normalizePrivateBalanceTransferInput,
+  resolveCrossChainPrivateWithdrawRoute,
   resolvePrivateBalanceTransferAmount,
   selectDefaultTransferAssetId
 } from '../../../src/popup/services/private-balance-transfer.ts'
@@ -13,6 +16,7 @@ import { resolveManagedIntentsAssets } from '../../../src/core/services/intents-
 import {
   buildExternalShieldWithdrawRequest,
   buildShieldTransferRequest,
+  createShieldSendRoutes,
   listShieldFundingAssets,
   listShieldMoveDestinations,
   listShieldSendDestinations,
@@ -22,18 +26,24 @@ import {
   shieldPortfolioBalances
 } from '../../../src/popup/services/shield-transfer.ts'
 import {
+  buildFixedShieldFundsRequest,
+  matchesFixedShieldFundsRecipient
+} from '../../../src/popup/services/shield-funds-route.ts'
+import {
   buildShieldSwapRequest,
   buildShieldSwapPreviewRequest,
   matchesShieldSwapReview
 } from '../../../src/popup/services/shield-swap-form.ts'
-import { initialMoveDraft } from '../../../src/popup/pages/transactions/move-draft.ts'
+import { initialBalanceTransferDraft } from '../../../src/popup/services/balance-transfer-draft.ts'
+import { estimateDirectTransfer } from '../../../src/popup/services/balance-transfer-estimate.ts'
+import { listPrivateTransferDestinationAssets } from '../../../src/popup/services/balance-transfer-asset-picker.ts'
 import {
-  readShieldMovePreference,
-  selectShieldMoveAssetId,
-  shieldMovePreferenceKey
-} from '../../../src/popup/pages/transactions/move-preference.ts'
+  readShieldTransferPreference,
+  selectShieldTransferAssetId,
+  shieldTransferPreferenceKey
+} from '../../../src/popup/services/shield-transfer-preference.ts'
 
-test('restores a Move draft only for its wallet account and network', () => {
+test('restores a balance transfer draft only for its wallet account and network', () => {
   const scope = 'mainnet:wallet-1:account-1:rpc-1'
   const draft = {
     scope,
@@ -52,23 +62,41 @@ test('restores a Move draft only for its wallet account and network', () => {
     routeAssetId: null
   }
 
-  expect(initialMoveDraft({ ...input, scope })).toEqual(draft)
+  expect(initialBalanceTransferDraft({ ...input, scope })).toEqual(draft)
   for (const otherScope of [
     'mainnet:wallet-1:account-2:rpc-1',
     'testnet:wallet-1:account-1:rpc-1'
   ]) {
-    expect(initialMoveDraft({ ...input, scope: otherScope })).toMatchObject({
+    expect(initialBalanceTransferDraft({ ...input, scope: otherScope })).toMatchObject({
       assetId: null,
       amount: '',
       maxSelected: false
     })
   }
+  expect(
+    initialBalanceTransferDraft({
+      ...input,
+      scope,
+      routeFrom: 'public',
+      routeTo: 'private',
+      intent: 'deposit'
+    })
+  ).toMatchObject({ from: 'public', to: 'private', assetId: null, amount: '' })
+  expect(
+    initialBalanceTransferDraft({
+      ...input,
+      scope,
+      routeFrom: 'private',
+      routeTo: 'shield',
+      intent: 'withdraw'
+    })
+  ).toEqual(draft)
 })
 
-test('defaults Shield Move and keeps preferences scoped to a supported account asset', () => {
+test('defaults Shield transfers and keeps preferences scoped to a supported account asset', () => {
   const scope = 'mainnet:wallet-1:account-1:rpc-1'
   expect(
-    initialMoveDraft({
+    initialBalanceTransferDraft({
       state: null,
       scope,
       mode: 'private',
@@ -78,46 +106,33 @@ test('defaults Shield Move and keeps preferences scoped to a supported account a
     })
   ).toMatchObject({ from: 'private', to: 'shield', assetId: null, amount: '' })
   expect(
-    initialMoveDraft({
+    initialBalanceTransferDraft({
       state: null,
       scope,
       mode: 'public',
       routeFrom: null,
       routeTo: null,
-      routeAssetId: null,
-      entry: 'shield'
+      routeAssetId: null
     })
   ).toMatchObject({ from: 'public', to: 'shield', assetId: null, amount: '' })
   expect(
-    initialMoveDraft({
-      state: null,
-      scope,
-      mode: 'private',
-      routeFrom: null,
-      routeTo: null,
-      routeAssetId: null,
-      entry: 'shield'
-    })
-  ).toMatchObject({ from: 'private', to: 'shield', assetId: null, amount: '' })
-  expect(
-    initialMoveDraft({
+    initialBalanceTransferDraft({
       state: null,
       scope,
       mode: 'private',
       routeFrom: 'shield',
       routeTo: 'public',
-      routeAssetId: 'eip155:1/slip44:60',
-      entry: 'asset-detail'
+      routeAssetId: 'eip155:1/slip44:60'
     })
   ).toMatchObject({ from: 'shield', to: 'public', assetId: 'eip155:1/slip44:60' })
-  expect(shieldMovePreferenceKey('mainnet', 'wallet-1', 'account-1')).not.toBe(
-    shieldMovePreferenceKey('testnet', 'wallet-1', 'account-1')
+  expect(shieldTransferPreferenceKey('mainnet', 'wallet-1', 'account-1')).not.toBe(
+    shieldTransferPreferenceKey('testnet', 'wallet-1', 'account-1')
   )
-  expect(shieldMovePreferenceKey('mainnet', 'wallet-1', 'account-1')).not.toBe(
-    shieldMovePreferenceKey('mainnet', 'wallet-1', 'account-2')
+  expect(shieldTransferPreferenceKey('mainnet', 'wallet-1', 'account-1')).not.toBe(
+    shieldTransferPreferenceKey('mainnet', 'wallet-1', 'account-2')
   )
   expect(
-    readShieldMovePreference({
+    readShieldTransferPreference({
       provider: 'near-confidential',
       assetId: 'eip155:1/slip44:60',
       destinationAssetId: null,
@@ -133,7 +148,7 @@ test('validates a bidirectional transfer amount against the selected source bala
       amount: '1.25',
       decimals: 6,
       availableRaw: '2500000',
-      sourceLabel: 'Public'
+      symbol: 'USDC'
     })
   ).toEqual({ amountRaw: '1250000', error: null })
   expect(
@@ -141,9 +156,9 @@ test('validates a bidirectional transfer amount against the selected source bala
       amount: '3',
       decimals: 6,
       availableRaw: '2500000',
-      sourceLabel: 'Confidential'
+      symbol: 'USDC'
     })
-  ).toEqual({ amountRaw: null, error: 'Amount exceeds the Confidential balance' })
+  ).toEqual({ amountRaw: null, error: 'Insufficient USDC balance' })
 })
 
 test('keeps empty and incomplete amounts non-submittable without an error', () => {
@@ -153,7 +168,7 @@ test('keeps empty and incomplete amounts non-submittable without an error', () =
         amount,
         decimals: 6,
         availableRaw: '2500000',
-        sourceLabel: 'Public'
+        symbol: 'USDC'
       })
     ).toEqual({ amountRaw: null, error: null })
   }
@@ -165,11 +180,262 @@ test('rejects excess precision, exponent notation, and oversized input', () => {
       amount: '0.0000001',
       decimals: 6,
       availableRaw: '2500000',
-      sourceLabel: 'Public'
+      symbol: 'USDC'
     }).error
   ).toBe('Enter a valid amount')
   expect(normalizePrivateBalanceTransferInput('1e3')).toBeNull()
   expect(normalizePrivateBalanceTransferInput('1'.repeat(129))).toBeNull()
+})
+
+function nativeDepositAsset(chainId, status = 'available') {
+  return {
+    chain: {
+      chain: {
+        id: chainId,
+        family: 'evm',
+        capabilities: { transaction: { status } }
+      }
+    },
+    asset: {
+      asset: {
+        id: `${chainId}/slip44:60`,
+        chainId,
+        namespace: 'slip44',
+        reference: '60',
+        kind: 'native'
+      },
+      metadata: { symbol: 'ETH', decimals: 18 },
+      balance: { totalRaw: '0', mainRaw: '0', privateRaw: '0' }
+    }
+  }
+}
+
+test('binds a cross-chain Deposit to the selected source and eligible destination assets', () => {
+  const ethereum = nativeDepositAsset('eip155:1')
+  const arbitrum = nativeDepositAsset('eip155:42161')
+  const unavailable = nativeDepositAsset('eip155:8453', 'unavailable')
+  const unrecognized = nativeDepositAsset('eip155:999999')
+  const choices = listPrivateTransferDestinationAssets({
+    source: ethereum,
+    assets: [ethereum, arbitrum, unavailable, unrecognized],
+    eligibleChainIds: ['eip155:1', 'eip155:42161', 'eip155:8453', 'eip155:999999']
+  })
+  expect(choices.map(item => item.chain.chain.id)).toEqual(['eip155:1', 'eip155:42161'])
+  expect(
+    listPrivateTransferDestinationAssets({
+      source: ethereum,
+      assets: [ethereum, arbitrum],
+      eligibleChainIds: ['eip155:1']
+    }).map(item => item.chain.chain.id)
+  ).toEqual(['eip155:1'])
+  const reviewPath = buildPrivateDepositReviewPath({
+    sourceAssetId: ethereum.asset.asset.id,
+    destinationAssetId: choices[1].asset.asset.id,
+    amount: '0.01',
+    maximum: true
+  })
+  const reviewRoute = new URL(reviewPath, 'https://wallet.test')
+  expect(reviewRoute.pathname).toBe('/swap')
+  expect(Object.fromEntries(reviewRoute.searchParams)).toEqual({
+    source: ethereum.asset.asset.id,
+    destinationAsset: arbitrum.asset.asset.id,
+    destinationChain: '42161',
+    privateDestination: '1',
+    balanceTransfer: '1',
+    amount: '0.01',
+    review: '1',
+    maximum: '1'
+  })
+})
+
+test('offers an unfunded registered USDC destination without trusting matching token symbols', () => {
+  const usdc = (chainId, reference, decimals) => {
+    const row = nativeDepositAsset(chainId)
+    return {
+      ...row,
+      asset: {
+        ...row.asset,
+        asset: {
+          id: `${chainId}/erc20:${reference}`,
+          chainId,
+          namespace: 'erc20',
+          reference,
+          kind: 'token'
+        },
+        metadata: { symbol: 'USDC', decimals }
+      }
+    }
+  }
+  const bnb = usdc('eip155:56', '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', 18)
+  const base = usdc('eip155:8453', '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', 6)
+  const unrecognized = usdc('eip155:56', `0x${'1'.repeat(40)}`, 18)
+  const eligibleChainIds = ['eip155:56', 'eip155:8453']
+  expect(
+    listPrivateTransferDestinationAssets({ source: bnb, assets: [bnb, base], eligibleChainIds })
+  ).toEqual([bnb, base])
+  expect(
+    listPrivateTransferDestinationAssets({
+      source: base,
+      assets: [base, unrecognized],
+      catalogAssets: [bnb],
+      eligibleChainIds
+    })
+  ).toEqual([base, bnb])
+})
+
+test('resolves a cross-chain Withdraw draft to the destination chain Public address of its account', () => {
+  const ethereum = nativeDepositAsset('eip155:1')
+  const arbitrum = nativeDepositAsset('eip155:42161')
+  const publicDestination = `0x${'3'.repeat(40)}`
+  const account = {
+    walletId: 'wallet-1',
+    accountId: 'account-1',
+    walletSource: { kind: 'software' },
+    networks: [
+      { chain: ethereum.chain.chain, privateExecutionAddress: `0x${'1'.repeat(40)}` },
+      {
+        chain: arbitrum.chain.chain,
+        privateExecutionAddress: `0x${'2'.repeat(40)}`,
+        addresses: [{ value: publicDestination, preferredForReceive: true }]
+      }
+    ]
+  }
+  const path = buildCrossChainPrivateWithdrawReviewPath({
+    walletId: account.walletId,
+    accountId: account.accountId,
+    sourceAssetId: ethereum.asset.asset.id,
+    destinationAssetId: arbitrum.asset.asset.id,
+    amount: '0.01',
+    maximum: true
+  })
+  const route = new URL(path, 'https://wallet.test').searchParams
+  expect(route.get('maximum')).toBe('1')
+  expect(resolveCrossChainPrivateWithdrawRoute(route, account, true)).toEqual({
+    destinationApiChainId: '42161',
+    destinationAssetId: arbitrum.asset.asset.id,
+    recipient: publicDestination
+  })
+  expect(
+    resolveCrossChainPrivateWithdrawRoute(route, { ...account, accountId: 'account-2' }, true)
+  ).toBeNull()
+  expect(resolveCrossChainPrivateWithdrawRoute(route, account, false)).toBeNull()
+  route.set('recipient', `0x${'4'.repeat(40)}`)
+  expect(resolveCrossChainPrivateWithdrawRoute(route, account, true)).toBeNull()
+})
+
+test('quotes both cross-chain transfer directions and rejects a same-chain build', async () => {
+  const ethereum = nativeDepositAsset('eip155:1')
+  const arbitrum = nativeDepositAsset('eip155:42161')
+  const sender = '0x' + '1'.repeat(40)
+  const recipient = '0x' + '2'.repeat(40)
+  const amountIn = '10000000000000000'
+  const quoteHandle = 'cross-chain-deposit-quote'
+  const approval = {
+    quoteHandle,
+    recipient,
+    estimatedOut: '9900000000000000',
+    minAmountOut: '9800000000000000',
+    router: 'nearintents',
+    receivedAt: 1,
+    expiresAt: null
+  }
+  let request
+  let purpose = 'public-private-move'
+  let isCrossChain = true
+  let transactionChain = 1
+  const discarded = []
+  const originalChrome = globalThis.chrome
+  globalThis.chrome = {
+    runtime: {
+      sendMessage: async message => {
+        switch (message.type) {
+          case 'GET_RHEA_SWAP_TOKENS':
+            return { result: { tokens: [], failedChainIds: [] } }
+          case 'QUOTE_RHEA_SWAP':
+            expect(message.purpose).toBe(purpose)
+            request = message.request
+            return { result: approval }
+          case 'PREPARE_RHEA_SWAP':
+            return {
+              result: {
+                ...approval,
+                executionId: 'cross-chain-deposit-execution',
+                isCrossChain,
+                fromChain: '1',
+                toChain: '42161',
+                tokenIn: request.tokenIn,
+                tokenOut: request.tokenOut,
+                amountIn,
+                execution: {
+                  kind: 'evm-transaction',
+                  chain: '1',
+                  approvalRequired: false,
+                  target: null,
+                  amountRaw: amountIn
+                }
+              }
+            }
+          case 'DISCARD_RHEA_SWAP':
+            discarded.push(message.quoteHandle)
+            return { success: true }
+          case 'GET_RHEA_SWAP_EVM_PLAN':
+            return {
+              result: {
+                quoteHandle,
+                executionId: 'cross-chain-deposit-execution',
+                transaction: {
+                  chainId: transactionChain,
+                  from: sender,
+                  to: recipient,
+                  value: amountIn,
+                  data: '0x1234'
+                },
+                approval: null
+              }
+            }
+          default:
+            throw new Error(`Unexpected runtime message ${message.type}`)
+        }
+      }
+    }
+  }
+  try {
+    const input = {
+      ...ethereum,
+      destinationAsset: arbitrum.asset,
+      nativeFeeAsset: null,
+      amountRaw: amountIn,
+      sender,
+      recipient,
+      executionMode: 'main',
+      slippageBps: 125,
+      quoteMode: 'fast',
+      signal: new AbortController().signal
+    }
+    await expect(estimateDirectTransfer(input)).resolves.toMatchObject({ routeFeeRaw: null })
+    expect(request).toMatchObject({
+      fromChain: '1',
+      toChain: '42161',
+      tokenIn: { chain: '1', isNative: true },
+      tokenOut: { chain: '42161', isNative: true },
+      amountIn,
+      sender,
+      recipient,
+      slippageBps: 125,
+      quoteMode: 'fast',
+      confidentiality: 'basic'
+    })
+    purpose = 'private-cross-chain-withdraw'
+    const withdraw = { ...input, executionMode: 'private' }
+    await expect(estimateDirectTransfer(withdraw)).resolves.toMatchObject({ routeFeeRaw: null })
+    transactionChain = 42161
+    await expect(estimateDirectTransfer(withdraw)).rejects.toThrow('Cross-chain transfer execution')
+    isCrossChain = false
+    await expect(estimateDirectTransfer(withdraw)).rejects.toThrow('Cross-chain transfer execution')
+    expect(discarded).toEqual([quoteHandle, quoteHandle, quoteHandle, quoteHandle])
+  } finally {
+    globalThis.chrome = originalChrome
+  }
 })
 
 test('keeps the selected Shield withdrawal token when choosing its network', () => {
@@ -320,7 +586,7 @@ test('uses independently held Shield tokens without adding them to Public assets
     }
   }
   expect(
-    selectShieldMoveAssetId({
+    selectShieldTransferAssetId({
       assets: [publicProjection],
       eligibleChainIds: ['eip155:1'],
       managedAssets: managed,
@@ -410,7 +676,51 @@ test('uses independently held Shield tokens without adding them to Public assets
     shieldPortfolioBalances(withZcash)
   ).find(item => item.asset.asset.id === zcashAssetId)
   expect(zcashSource?.asset.balance.confidentialRaw).toBe('140000')
+  const sendRoutes = createShieldSendRoutes(withZcashOptions, 'mainnet')
+  expect(sendRoutes.networks.map(chain => chain.id)).toContain(ZCASH_CHAIN_IDS.mainnet)
+  expect(sendRoutes.getDestination(sources[0], ZCASH_CHAIN_IDS.mainnet)).toBeNull()
+  expect(sendRoutes.getDestination(zcashSource, 'eip155:8453')).toBeNull()
+  expect(
+    selectDefaultShieldWithdrawSource(
+      sendRoutes.getSources(ZCASH_CHAIN_IDS.mainnet),
+      balances,
+      model,
+      null,
+      'mainnet'
+    )
+  ).toBe(zcashSource)
   const zcashRecipient = 't1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F'
+  const unshieldZec = buildFixedShieldFundsRequest({
+    ...zcashSource,
+    direction: 'unshield',
+    network: 'mainnet',
+    keyDomainId: 'wallet',
+    accountId: 'account',
+    amountRaw: '120000',
+    slippageBps: 50,
+    ownTransparentAddress: zcashRecipient
+  })
+  expect(unshieldZec).toMatchObject({
+    purpose: 'move',
+    externalRecipient: zcashRecipient,
+    source: { assetId: zcashAssetId },
+    destination: { assetId: zcashAssetId }
+  })
+  const reviewedRecipient = {
+    purpose: 'move',
+    destinationAddress: zcashRecipient,
+    externalRecipient: zcashRecipient
+  }
+  expect(matchesFixedShieldFundsRecipient(reviewedRecipient, unshieldZec, zcashRecipient)).toBe(
+    true
+  )
+  expect(
+    matchesFixedShieldFundsRecipient(
+      { ...reviewedRecipient, destinationAddress: zcashRecipient.toLowerCase() },
+      unshieldZec,
+      zcashRecipient
+    )
+  ).toBe(false)
   const nativeZecSwap = buildShieldSwapRequest({
     network: 'mainnet',
     keyDomainId: 'wallet',
@@ -555,13 +865,15 @@ test('binds a Shield ETH Move to the selected EVM destination asset', () => {
     amountRaw: '1000000000000000000',
     asset: source.asset,
     chain: source.chain,
-    managed: source.managed
+    managed: source.managed,
+    slippageBps: 125
   }
   expect(
     buildShieldTransferRequest({ ...input, destination, dedupKey: 'move:attempt-1' })
   ).toMatchObject({
     operation: 'withdraw',
     dedupKey: 'move:attempt-1',
+    slippageBps: 125,
     sourceDomain: 'shield',
     destinationDomain: 'private',
     source: {
@@ -582,6 +894,64 @@ test('binds a Shield ETH Move to the selected EVM destination asset', () => {
     assetId: 'eip155:1/slip44:60',
     protocolAssetId: 'nep141:eth.omft.near'
   })
+  const fixedUnshield = buildFixedShieldFundsRequest({
+    ...input,
+    direction: 'unshield',
+    destination
+  })
+  expect(fixedUnshield).toMatchObject({
+    sourceDomain: 'shield',
+    destinationDomain: 'public',
+    destination: {
+      chainId: source.chain.chain.id,
+      assetId: source.asset.asset.id,
+      protocolAssetId: source.managed.protocolAssetId
+    }
+  })
+  const incognitoAddress = `0x${'2'.repeat(40)}`
+  const publicAddress = `0x${'3'.repeat(40)}`
+  const incognitoUnshield = buildFixedShieldFundsRequest({
+    ...input,
+    direction: 'unshield',
+    accountDomain: 'private'
+  })
+  expect(incognitoUnshield).toMatchObject({
+    sourceDomain: 'shield',
+    destinationDomain: 'private',
+    destination: fixedUnshield.destination
+  })
+  expect(
+    matchesFixedShieldFundsRecipient(
+      { destinationAddress: incognitoAddress },
+      incognitoUnshield,
+      incognitoAddress
+    )
+  ).toBe(true)
+  expect(
+    matchesFixedShieldFundsRecipient(
+      { destinationAddress: publicAddress },
+      incognitoUnshield,
+      incognitoAddress
+    )
+  ).toBe(false)
+  const incognitoShield = buildFixedShieldFundsRequest({
+    ...input,
+    direction: 'shield',
+    accountDomain: 'private',
+    slippageBps: 1
+  })
+  expect(incognitoShield).toMatchObject({
+    sourceDomain: 'private',
+    destinationDomain: 'shield',
+    slippageBps: 1
+  })
+  expect(
+    matchesFixedShieldFundsRecipient(
+      { sourceAddress: publicAddress },
+      incognitoShield,
+      incognitoAddress
+    )
+  ).toBe(false)
   const fake = options.find(item => item.asset.asset.id === fakeAssetId)
   expect(fake).toBeDefined()
   const sendInput = {
@@ -658,7 +1028,7 @@ test('lists official cross-network USDC destinations from the managed catalog', 
   const options = listShieldFundingAssets(model, managed, tokens, 'mainnet')
   const moveAssets = options.map(({ asset, chain }) => ({ asset, chain }))
   const selectMoveAsset = (eligibleChainIds, preferredAssetId = null, catalog = managed) =>
-    selectShieldMoveAssetId({
+    selectShieldTransferAssetId({
       assets: moveAssets,
       eligibleChainIds,
       managedAssets: catalog,
@@ -689,7 +1059,7 @@ test('lists official cross-network USDC destinations from the managed catalog', 
       : item
   )
   expect(
-    selectShieldMoveAssetId({
+    selectShieldTransferAssetId({
       assets: fundedBase,
       eligibleChainIds: ['eip155:1', 'eip155:8453'],
       managedAssets: managed,
@@ -755,6 +1125,10 @@ test('lists official cross-network USDC destinations from the managed catalog', 
     'mainnet'
   )
   const sendSource = sendOptions.find(item => item.asset.asset.id === sourceAssetId)
+  const sendRoutes = createShieldSendRoutes(sendOptions, 'mainnet')
+  expect(sendRoutes.getDestination(sendSource, 'eip155:8453')?.asset.asset.id).toBe(
+    destinationAssetId
+  )
   expect(
     listShieldSendDestinations(sendSource, sendOptions, 'mainnet').map(item => item.asset.asset.id)
   ).toEqual([
@@ -774,6 +1148,7 @@ test('lists official cross-network USDC destinations from the managed catalog', 
       asset: source.asset,
       chain: source.chain,
       managed: source.managed,
+      slippageBps: 50,
       destination
     })
   ).toMatchObject({

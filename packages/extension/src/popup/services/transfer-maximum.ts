@@ -1,10 +1,5 @@
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
-import {
-  resolveRheaPrivateTransferToken,
-  type RheaSwapQuoteRequest,
-  type RheaSwapToken
-} from '@/core/services/rhea-swap'
-import { preferWalletEvmQuoteToken } from './token-address-discovery'
+import type { RheaSwapQuoteRequest, RheaSwapToken } from '@/core/services/rhea-swap'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { BitcoinSupportedAddressType } from '@/core/chains/bitcoin'
 import {
@@ -15,13 +10,16 @@ import {
 import { rheaSwapClient } from './rhea-swap-client'
 import { EvmWalletClientError } from './evm-wallet-client'
 import { parseDisplayUnitAmount } from '@/lib/number-format'
+import { InsufficientBalanceError } from '@/lib/errors'
+
+const ETH_ROUTE_FALLBACK_RESERVE = '0.0003'
 
 const evmRouteReserves: Readonly<Record<string, string>> = {
-  'eip155:1': '0.003',
+  'eip155:1': ETH_ROUTE_FALLBACK_RESERVE,
   'eip155:56': '0.001',
-  'eip155:42161': '0.0003',
-  'eip155:8453': '0.0003',
-  'eip155:10': '0.0003',
+  'eip155:42161': ETH_ROUTE_FALLBACK_RESERVE,
+  'eip155:8453': ETH_ROUTE_FALLBACK_RESERVE,
+  'eip155:10': ETH_ROUTE_FALLBACK_RESERVE,
   'eip155:137': '0.1',
   'eip155:43114': '0.02',
   'eip155:143': '0.1',
@@ -29,11 +27,11 @@ const evmRouteReserves: Readonly<Record<string, string>> = {
   'eip155:9745': '0.05',
   'eip155:196': '0.01',
   'eip155:80094': '0.05',
-  'eip155:11155111': '0.003',
+  'eip155:11155111': ETH_ROUTE_FALLBACK_RESERVE,
   'eip155:97': '0.001',
-  'eip155:421614': '0.0003',
-  'eip155:84532': '0.0003',
-  'eip155:11155420': '0.0003',
+  'eip155:421614': ETH_ROUTE_FALLBACK_RESERVE,
+  'eip155:84532': ETH_ROUTE_FALLBACK_RESERVE,
+  'eip155:11155420': ETH_ROUTE_FALLBACK_RESERVE,
   'eip155:80002': '0.1',
   'eip155:43113': '0.02'
 }
@@ -46,19 +44,58 @@ const nativeRouteReserves = {
   zcash: '0.0005'
 } as const
 
-export function resolveNativeRouteMaximum(input: {
-  readonly family: keyof typeof nativeRouteReserves
-  readonly chainId?: string
+const USD_PRICE_DECIMALS = 18
+const NATIVE_ROUTE_RESERVE_USD = 1n
+
+function resolvePricedNativeRouteReserve(
+  priceUsd: string | null | undefined,
+  decimals: number,
+  reserveUsd: bigint
+) {
+  if (!priceUsd) return null
+  let price: bigint
+  try {
+    price = BigInt(parseDisplayUnitAmount(priceUsd, USD_PRICE_DECIMALS))
+  } catch {
+    return null
+  }
+  if (price === 0n) return null
+  const budget = reserveUsd * 10n ** BigInt(decimals + USD_PRICE_DECIMALS)
+  // Round the reserve up to a whole base unit so Max never rounds it away.
+  return (budget + price - 1n) / price
+}
+
+type ReserveMaximum = {
+  readonly mode: 'reserve'
   readonly availableRaw: string
-  readonly decimals: number
-}): string {
-  const reserve = BigInt(
-    parseDisplayUnitAmount(
-      (input.family === 'evm' && input.chainId && evmRouteReserves[input.chainId]) ||
-        nativeRouteReserves[input.family],
-      input.decimals
+} & (
+  | { readonly payFeeFromAsset: false }
+  | {
+      readonly family: keyof typeof nativeRouteReserves | 'tron'
+      readonly chainId?: string
+      readonly decimals: number
+      readonly priceUsd?: string | null
+      readonly payFeeFromAsset?: boolean
+    }
+)
+
+type ExactMaximum<Result> = { readonly mode: 'exact'; readonly estimate: () => Result }
+
+export function resolveTransferMaximum(input: ReserveMaximum): string
+export function resolveTransferMaximum<Result>(input: ExactMaximum<Result>): Result
+export function resolveTransferMaximum<Result>(input: ReserveMaximum | ExactMaximum<Result>) {
+  if (input.mode === 'exact') return input.estimate()
+  if (input.payFeeFromAsset === false) return input.availableRaw
+  if (input.family === 'tron') return '0'
+  const reserve =
+    resolvePricedNativeRouteReserve(input.priceUsd, input.decimals, NATIVE_ROUTE_RESERVE_USD) ??
+    BigInt(
+      parseDisplayUnitAmount(
+        (input.family === 'evm' && input.chainId && evmRouteReserves[input.chainId]) ||
+          nativeRouteReserves[input.family],
+        input.decimals
+      )
     )
-  )
   const available = BigInt(input.availableRaw)
   return available > reserve ? (available - reserve).toString() : '0'
 }
@@ -147,12 +184,16 @@ export async function estimateNativeTransferMaximum(
   },
   client: Pick<typeof quoteDepositTransferClient, 'estimateMaximum'> = quoteDepositTransferClient
 ) {
-  return client.estimateMaximum({
-    source: input.source,
-    depositAddress: input.recipient,
-    feeSelection: input.feeSelection,
-    feeTier: input.feeTier,
-    executionMode: input.executionMode
+  return resolveTransferMaximum({
+    mode: 'exact',
+    estimate: () =>
+      client.estimateMaximum({
+        source: input.source,
+        depositAddress: input.recipient,
+        feeSelection: input.feeSelection,
+        feeTier: input.feeTier,
+        executionMode: input.executionMode
+      })
   })
 }
 
@@ -178,7 +219,7 @@ export async function estimateRheaRouteMaximum(
   } = { rhea: rheaSwapClient, transfer: quoteDepositTransferClient }
 ) {
   let probe = BigInt(input.source.asset.balance.availableRaw) / 2n
-  if (probe <= 0n) throw new Error('The source wallet balance does not cover the network fee')
+  if (probe <= 0n) throw new InsufficientBalanceError(input.source.networkFeeAsset.metadata.symbol)
   const assetRef = (token: RheaSwapToken) => ({
     chain: token.rheaChainId,
     address: token.rheaAddress,
@@ -240,36 +281,4 @@ export async function estimateRheaRouteMaximum(
     }
   }
   throw new Error('Unable to estimate the route maximum')
-}
-
-export async function estimateConfidentialTransferMaximum(input: {
-  readonly asset: PortfolioAssetView
-  readonly chain: PortfolioChainView
-  readonly availableRaw: string
-  readonly sender: string
-  readonly recipient: string
-  readonly executionMode: 'main' | 'private'
-  readonly purpose: 'public-private-send' | 'confidential-funding' | 'private-transfer'
-}) {
-  const catalog = await rheaSwapClient
-    .listTokens({
-      direction: 'from',
-      tokenListChainIds: [Number(input.chain.chain.id.split(':')[1])]
-    })
-    .catch(() => null)
-  const catalogToken = resolveRheaPrivateTransferToken(
-    catalog?.tokens ?? [],
-    input.asset.asset.kind === 'native' ? null : input.asset.asset.reference
-  )
-  const token = preferWalletEvmQuoteToken(input.asset, catalogToken)
-  if (!token) throw new Error('Move source asset could not be mapped to a quote token')
-  return estimateRheaRouteMaximum({
-    source: createNativeTransferSource(input),
-    tokenIn: token,
-    tokenOut: token,
-    recipient: input.recipient,
-    confidential: true,
-    purpose: input.purpose,
-    executionMode: input.executionMode
-  })
 }

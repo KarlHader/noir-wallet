@@ -11,7 +11,7 @@ import {
   parseStoredTransactionGraphRecord
 } from '../../../src/infrastructure/persistence/repositories/indexed-db-transaction-database.ts'
 import { createRheaSwapBinding } from '../../../src/popup/services/quote-deposit-transfer-client.ts'
-import { resolveActivityDisplayAmount } from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+import { resolveActivityDisplayAmount } from '../../../src/popup/services/multichain-activity-presentation.ts'
 
 const sourceAssetId = 'eip155:42161/erc20:0xaf88d065e77c8cc2239327c5edb3a432268e5831'
 const destinationAssetId = 'eip155:56/erc20:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'

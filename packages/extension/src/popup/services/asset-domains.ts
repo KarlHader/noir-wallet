@@ -1,8 +1,9 @@
 import Big from '@/lib/big'
-import { formatBaseUnitDecimalAmount, formatFiatAmount } from '@/lib/number-format'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import { ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { withConfidentialAssetPrices } from './portfolio-prices'
 import {
   summarizeNearConfidentialHoldings,
   type NearConfidentialSummary
@@ -11,11 +12,6 @@ import {
 export type AssetDomain = 'all' | 'public' | 'shield' | 'private'
 export type ShieldProvider = 'near-confidential' | 'zcash-shield'
 const ZCASH_CHAIN_ID_SET = new Set<string>(Object.values(ZCASH_CHAIN_IDS))
-
-export function formatAssetDomainFiat(value: string | number | null, partial = false): string {
-  if (value === null) return '—'
-  return `${partial ? '~' : ''}${formatFiatAmount(value, { showSign: true })}`
-}
 
 function completeRawParts(totalRaw: string, parts: readonly (string | undefined)[]): boolean {
   return (
@@ -84,7 +80,7 @@ function projectDisplayAsset(asset: PortfolioAssetView, totalRaw: string): Portf
 export function projectPortfolioForDomain(
   model: PortfolioReadModel,
   domain: AssetDomain,
-  options: Readonly<{ evmPrivateAvailable?: boolean }> = {}
+  options: Readonly<{ evmPrivateAvailable?: boolean; evmShieldAvailable?: boolean }> = {}
 ): PortfolioReadModel {
   // Display-only: projected totals must never be passed to transaction preparation.
   if (domain === 'all') return model
@@ -94,7 +90,9 @@ export function projectPortfolioForDomain(
     if (raw === null) continue
     if (
       raw === '0' &&
-      options.evmPrivateAvailable === false &&
+      (domain === 'shield'
+        ? (options.evmShieldAvailable ?? options.evmPrivateAvailable)
+        : options.evmPrivateAvailable) === false &&
       asset.asset.chainId.startsWith('eip155:') &&
       domain !== 'public'
     )
@@ -137,7 +135,7 @@ export function projectPortfolioForDomain(
   })
 }
 
-interface ShieldProviderGroup {
+export interface ShieldProviderGroup {
   readonly id: ShieldProvider
   readonly entries: readonly Readonly<{
     asset: PortfolioAssetView
@@ -233,6 +231,7 @@ export function summarizeAssetDomainsUsd(
   model: PortfolioReadModel,
   prices: AssetPriceReadModel | null
 ): AssetDomainFiatSummary {
+  const onchainPrices = withConfidentialAssetPrices(model, prices)
   const independentConfidential =
     model.confidential !== undefined ||
     model.chains?.some(
@@ -248,7 +247,7 @@ export function summarizeAssetDomainsUsd(
         ? BigInt(asset.balance.confidentialRaw ?? '0')
         : 0n
     if (BigInt(asset.balance.totalRaw) - embeddedConfidential === 0n) continue
-    const quote = findAssetPrice(prices, asset.asset.id)
+    const quote = findAssetPrice(onchainPrices, asset.asset.id)
     for (const domain of ['public', 'shield', 'private'] as const) {
       if (independentConfidential && domain === 'shield' && embeddedConfidential > 0n) continue
       const raw = getAssetDomainRaw(asset, domain)

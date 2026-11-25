@@ -19,15 +19,11 @@ const readSource = path => readFileSync(new URL(path, import.meta.url), 'utf-8')
 
 const walletConfigSource = readSource('../../../src/config/wallet.ts')
 const shieldingSource = readSource('../../../src/core/zcash/shielding.ts')
-const shieldSheetSource = readSource(
-  '../../../src/popup/components/transaction/ShieldConfirmSheet.tsx'
-)
-const shieldBannerSource = readSource(
-  '../../../src/popup/components/transaction/ShieldFundsBanner.tsx'
-)
+const shieldSheetSource = readSource('../../../src/popup/components/zcash/ShieldConfirmSheet.tsx')
+const shieldBannerSource = readSource('../../../src/popup/components/zcash/ShieldFundsBanner.tsx')
 const shieldHookSource = readSource('../../../src/popup/hooks/useShieldFunds.tsx')
-const sendSource = readSource('../../../src/popup/components/transaction/ZcashTransfer.tsx')
-const approvalSource = readSource('../../../src/popup/pages/dapp/ApprovalPage.tsx')
+const zcashTransferHookSource = readSource('../../../src/popup/hooks/useZcashTransfer.ts')
+const approvalSource = readSource('../../../src/popup/pages/dapp/Approval.tsx')
 const backgroundSource = readSource('../../../src/background/index.ts')
 const dappHandlerSource = readSource('../../../src/background/dapp-handler.ts')
 const walletRpcErrorsSource = readSource('../../../src/core/zcash/wallet-rpc-errors.ts')
@@ -56,7 +52,7 @@ describe('Shielding minimum balance regressions', () => {
     assert.equal(balance.transparent, '0.001443')
     assert.equal(balance.shieldable, '0')
     assert.equal(canShieldTransparentFunds(balance), false)
-    assert.match(sendSource, /getShieldableTransparentBalance\(balance\)/)
+    assert.match(zcashTransferHookSource, /getShieldableTransparentBalance\(balance\)/)
     assert.match(shieldBannerSource, /!hasEnoughTransparentBalanceToShield\(transparentBalance\)/)
   })
 
@@ -162,7 +158,7 @@ describe('Shielding minimum balance regressions', () => {
     assert.equal(resolveZcashTransparentShieldFundingBalance(balance).available, '0.08')
     assert.equal(
       getZcashTransparentToShieldMoveAmountError('0.09', balance),
-      'Amount exceeds available balance.'
+      'Insufficient ZEC balance'
     )
   })
 

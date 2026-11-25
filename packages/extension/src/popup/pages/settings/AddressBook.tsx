@@ -22,10 +22,11 @@ import {
   getAddressBookContactIconChain,
   getAddressBookNetworkChoices,
   type AddressBookNetworkChoice
-} from '@/popup/components/address-book/address-book-network'
+} from '@/popup/services/address-book-network'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogDescription,
   DialogHeader,
   DialogTitle
@@ -132,7 +133,7 @@ export function AddressBook() {
             <div className="flex size-14 items-center justify-center rounded-full bg-card text-muted">
               <Icon icon="lucide:book-user" width={25} height={25} />
             </div>
-            <h2 className="mt-4 text-base font-semibold">No saved recipients</h2>
+            <h2 className="mt-4 text-base font-semibold text-muted">No saved recipients</h2>
           </div>
         ) : (
           <div className="pb-4">
@@ -215,12 +216,7 @@ export function AddressBook() {
         </Button>
       </div>
 
-      <AddAddressDialog
-        open={adding}
-        onOpenChange={setAdding}
-        networks={availableNetworks}
-        fullHeight
-      />
+      <AddAddressDialog open={adding} onOpenChange={setAdding} networks={availableNetworks} />
 
       <Dialog open={editing !== null} onOpenChange={open => !open && setEditing(null)}>
         <DialogContent position="bottom" className="gap-0 p-0">
@@ -241,14 +237,14 @@ export function AddressBook() {
               onKeyDown={event => event.key === 'Enter' && saveEdit()}
             />
           </div>
-          <div className="flex gap-3 p-5">
-            <Button variant="outline" className="h-[45px] flex-1" onClick={() => setEditing(null)}>
+          <DialogFooter className="gap-3 p-5">
+            <Button variant="outline" onClick={() => setEditing(null)}>
               Cancel
             </Button>
-            <Button className="h-[45px] flex-1" disabled={!name.trim()} onClick={saveEdit}>
+            <Button disabled={!name.trim()} onClick={saveEdit}>
               Save
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -260,13 +256,12 @@ export function AddressBook() {
               {deleting ? `${deleting.name} will be removed from your local Address Book.` : ''}
             </DialogDescription>
           </DialogHeader>
-          <div className="flex gap-3 p-5">
-            <Button variant="outline" className="h-[45px] flex-1" onClick={() => setDeleting(null)}>
+          <DialogFooter className="gap-3 p-5">
+            <Button variant="outline" onClick={() => setDeleting(null)}>
               Cancel
             </Button>
             <Button
               variant="destructive"
-              className="h-[45px] flex-1"
               onClick={() => {
                 if (deleting) removeContact(deleting.id)
                 setDeleting(null)
@@ -274,7 +269,7 @@ export function AddressBook() {
             >
               Delete
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

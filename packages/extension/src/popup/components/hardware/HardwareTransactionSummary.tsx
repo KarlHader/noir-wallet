@@ -1,7 +1,7 @@
 import { TokenIcon } from '../tokens/TokenIcon'
 import { DetailRow } from '../common/DetailRow'
 import { AmountDisplay } from '../common/AmountDisplay'
-import { formatSortAddress } from '@/lib/format'
+import { TransactionReviewParty } from '../transaction/TransactionReviewParty'
 import type { HardwareSignRequest } from '@/lib/hardware-tab'
 import { Skeleton } from '../ui/skeleton'
 
@@ -47,7 +47,7 @@ export function HardwareTransactionSummary({
         )}
         {request.to && (
           <DetailRow label={request.kind === 'swap' ? 'Deposit Address' : 'To'}>
-            <span className="font-mono text-xs text-muted">{formatSortAddress(request.to)}</span>
+            <TransactionReviewParty address={request.to} />
           </DetailRow>
         )}
         {ledgerDisplayAddress && ledgerDisplayAddress !== request.to && (
@@ -57,12 +57,10 @@ export function HardwareTransactionSummary({
         )}
         {request.kind === 'swap' && request.displayTo && (
           <DetailRow label="Recipient">
-            <span className="font-mono text-xs text-muted">
-              {formatSortAddress(request.displayTo)}
-            </span>
+            <TransactionReviewParty address={request.displayTo} />
           </DetailRow>
         )}
-        <DetailRow label="Network Fee">
+        <DetailRow label="Network fee">
           {feeZec ? (
             <span className="text-sm">
               ≈ <AmountDisplay value={feeZec} symbol="ZEC" profile="fee" />

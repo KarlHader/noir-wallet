@@ -29,9 +29,12 @@ function proposal(scope = { chainId: ethereum, chainName: 'Ethereum', iconChain:
 }
 
 function createHandler({
-  selectedIds = ['account-1'],
+  selectedIds,
+  selectScopes = choices =>
+    selectedIds
+      ? { evm: selectedIds }
+      : Object.fromEntries(choices.map(choice => [choice.chainId, choice.preselectedIds])),
   prepareProposal = proposal,
-  activeChainIds,
   manager,
   readFirstPartySnapshot,
   readTokenList,
@@ -46,7 +49,6 @@ function createHandler({
     network: 'mainnet',
     readTokenList,
     openTokenManager,
-    ...(activeChainIds === undefined ? {} : { activeChainIds }),
     ...(readFirstPartySnapshot === undefined ? {} : { readFirstPartySnapshot }),
     evmNetworks: [ethereum, custom].map(chainId => ({
       networkMode: 'mainnet',
@@ -69,6 +71,10 @@ function createHandler({
       getAllConnections: async () => [],
       getAuthorizationRevision: async () => 4,
       getCaip25Session: async () => stored,
+      getChainAuthorization: async (_origin, chainId) =>
+        stored?.scopes.some(scope => scope.chainId === chainId)
+          ? { accounts: [reference], binding: reference, chainId }
+          : null,
       setCaip25Session: async (_origin, _tab, authorizations, session, _zcash, revision) => {
         expect(revision).toBe(4)
         expect(authorizations).toEqual(
@@ -87,7 +93,7 @@ function createHandler({
         return {
           approved: true,
           requestId: 'approval-1',
-          selectedScopes: { evm: selectedIds }
+          selectedScopes: selectScopes(data.scopes)
         }
       },
       broadcastProviderEvent: async (...args) => {
@@ -125,7 +131,13 @@ function createHandler({
 }
 
 test('token metadata and manager require the current authorized account and reject context changes', async () => {
-  let snapshot = { identity: 'one', activeReference: reference }
+  const initialSnapshot = {
+    identity: 'one',
+    activeReference: reference,
+    executionMode: 'main',
+    accounts: { [ethereum]: [{ reference, address, label: 'Account 1' }] }
+  }
+  let snapshot = initialSnapshot
   let reads = 0
   let opens = 0
   let changeDuringRead = false
@@ -181,7 +193,7 @@ test('token metadata and manager require the current authorized account and reje
     handler.request({ method: 'wallet_getTokenList' }, origin, {})
   ).rejects.toMatchObject({ code: 4100 })
   expect(reads).toBe(1)
-  snapshot = { identity: 'one', activeReference: reference }
+  snapshot = initialSnapshot
   changeDuringRead = true
   await expect(
     handler.request({ method: 'wallet_getTokenList' }, origin, {})
@@ -272,11 +284,17 @@ test('creates one shared EVM approval while preserving atomic chain scopes and m
   ).rejects.toMatchObject({ code: 4100 })
 })
 
-test('multichain Connect grants only networks supported by the active account', async () => {
+test('multichain Connect omits networks unavailable across wallet accounts', async () => {
   const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
   const bitcoin = 'bip122:000000000019d6689c085ae165831e93'
   const { handler, approvals, getStored } = createHandler({
-    activeChainIds: async () => [ethereum]
+    selectScopes: choices => ({ evm: choices[0].preselectedIds }),
+    readFirstPartySnapshot: async () => ({
+      identity: 'evm-only',
+      executionMode: 'main',
+      activeReference: reference,
+      accounts: { [ethereum]: [{ reference, address, label: 'Current wallet' }] }
+    })
   })
   const origin = 'https://dapp.example'
   const request = scopes =>
@@ -311,6 +329,76 @@ test('multichain Connect grants only networks supported by the active account', 
   ).rejects.toMatchObject({ code: 5101 })
   expect(approvals).toHaveLength(1)
   expect(getStored().scopes.map(scope => scope.chainId)).toEqual([ethereum])
+})
+
+test('multichain Connect offers other wallets without granting an unchecked or stale scope', async () => {
+  const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const origin = 'https://dapp.example'
+  const scopes = {
+    [zcash]: { methods: ['zcash_getAccounts'], notifications: [] },
+    [ethereum]: { methods: ['eth_accounts'], notifications: [] }
+  }
+  for (const activeChain of [zcash, ethereum]) {
+    const inactiveChain = activeChain === zcash ? ethereum : zcash
+    const other = { walletId: 'wallet-2', accountId: 'account-2' }
+    let snapshot = {
+      identity: 'active-generation',
+      activeReference: reference,
+      executionMode: 'main',
+      accounts: {
+        [activeChain]: [{ reference, address, label: 'Current wallet' }],
+        [inactiveChain]: [{ reference: other, address: 'other-address', label: 'Other wallet' }]
+      }
+    }
+    let mode = 'current-only'
+    let written
+    const { handler } = createHandler({
+      readFirstPartySnapshot: async () => snapshot,
+      executionAccounts: activeChain === ethereum ? [address] : [],
+      manager: {
+        getAuthorizationRevision: async () => 1,
+        getCaip25Session: async () => written?.session ?? null,
+        getChainAuthorization: async (_origin, chainId) =>
+          written?.authorizations.find(item => item.chainId === chainId),
+        setCaip25Session: async (_origin, _tab, authorizations, session) => {
+          written = { authorizations, session }
+        }
+      },
+      selectScopes: choices => {
+        const scopeKey = chainId => (chainId === ethereum ? 'evm' : chainId)
+        expect(choices.map(choice => choice.chainId)).toEqual([
+          scopeKey(activeChain),
+          scopeKey(inactiveChain)
+        ])
+        const [current, optional] = choices
+        expect(optional.preselectedIds).toEqual([])
+        expect(optional.accounts).toMatchObject([{ required: false, label: 'Other wallet' }])
+        if (mode === 'changed') snapshot = { ...snapshot, identity: 'changed-generation' }
+        return {
+          [current.chainId]: current.preselectedIds,
+          [optional.chainId]: mode === 'current-only' ? [] : [optional.accounts[0].id]
+        }
+      }
+    })
+    const connect = () =>
+      handler.request({ method: 'wallet_createSession', params: { scopes } }, origin, {})
+    expect(Object.keys((await connect()).scopes)).toEqual([activeChain])
+    const first = written
+    mode = 'changed'
+    await expect(connect()).rejects.toMatchObject({ code: 4100 })
+    expect(written).toBe(first)
+    mode = 'all'
+    const result = await connect()
+    expect(Object.keys(result.scopes)).toEqual([activeChain, inactiveChain])
+    expect(written.authorizations[1]).toMatchObject({
+      chainId: inactiveChain,
+      accounts: [other],
+      binding: other
+    })
+    if (inactiveChain === ethereum) {
+      expect(result.scopes[ethereum].accounts).toEqual([`${ethereum}:other-address`])
+    }
+  }
 })
 
 test('shared EVM selection cannot widen a scope with a narrower account request', async () => {
@@ -383,8 +471,6 @@ function firstPartyFixture({ executionAccounts, executionMode = 'main' } = {}) {
   }
   const options = {
     manager,
-    // First-party sessions also include enabled chains belonging to other wallets.
-    activeChainIds: async () => [ethereum],
     readFirstPartySnapshot: async () => state.snapshot,
     ...(executionAccounts === undefined ? {} : { executionAccounts })
   }
@@ -437,6 +523,48 @@ test('first-party session reads connect every enabled network and synchronize ac
     expect(await read()).toBeNull()
     expect(approvals).toHaveLength(0)
   }
+})
+
+test('notifications based on stored authorization update the mode address without granting accounts', async () => {
+  const privateAddress = '0x3333333333333333333333333333333333333333'
+  const executionAccounts = [address]
+  const { handler, manager, state, other, events, getWrites } = firstPartyFixture({
+    executionAccounts
+  })
+  const origin = 'https://app.zknoir.com'
+  await handler.request({ method: 'wallet_getSession' }, origin, {})
+  const writes = getWrites()
+  const revision = await manager.getAuthorizationRevision(origin)
+  executionAccounts[0] = privateAddress
+  state.snapshot = {
+    ...state.snapshot,
+    identity: 'incognito-generation',
+    executionMode: 'private',
+    accounts: {
+      ...state.snapshot.accounts,
+      [ethereum]: [
+        ...state.snapshot.accounts[ethereum],
+        { reference: other, address: '0x2222222222222222222222222222222222222222' }
+      ]
+    }
+  }
+
+  await handler.notifyAllSessionsChanged({ storedAuthorizationOnly: true })
+
+  expect(events).toHaveLength(1)
+  expect(events[0]).toEqual([
+    origin,
+    'multichain',
+    'wallet_sessionChanged',
+    expect.objectContaining({
+      scopes: expect.objectContaining({
+        [ethereum]: expect.objectContaining({ accounts: [`${ethereum}:${privateAddress}`] })
+      })
+    })
+  ])
+  expect((await manager.getEvmAuthorization(origin)).accounts).toEqual([reference])
+  expect(await manager.getAuthorizationRevision(origin)).toBe(revision)
+  expect(getWrites()).toBe(writes)
 })
 
 test('official Connect all skips connection approval while third-party Connect retains it', async () => {

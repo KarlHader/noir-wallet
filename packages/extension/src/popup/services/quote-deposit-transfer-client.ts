@@ -24,6 +24,7 @@ import {
   type AssetProtocolSourceMapping
 } from '@/core/prices/asset-market-mappings'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { InsufficientBalanceError } from '@/lib/errors'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import {
   createAssetId,
@@ -44,6 +45,7 @@ import type {
   EvmWalletClient
 } from './evm-wallet-client'
 import { evmWalletClient } from './evm-wallet-client'
+import { getEvmFeeTierPreviews, type NetworkFeePreviews } from './network-fee-presentation'
 import type {
   BitcoinTransferReview,
   BitcoinTransferApprovalResult,
@@ -69,7 +71,6 @@ import {
   type NearWalletClient
 } from './near-wallet-client'
 
-export type QuoteDepositSourceFamily = 'evm' | 'bitcoin' | 'solana' | 'near'
 export type QuoteDepositExecutionMode = 'main' | 'private'
 
 interface WalletOwnedQuoteAssetBase {
@@ -109,6 +110,38 @@ export type QuoteDepositTransferSubmission =
   | Readonly<{ family: 'bitcoin'; value: BitcoinTransferApprovalResult }>
   | Readonly<{ family: 'solana'; value: SolanaTransferSubmission }>
   | Readonly<{ family: 'near'; value: NearTransferSubmission }>
+
+export async function loadQuoteDepositEvmFeePreviews(
+  prepared: Extract<PreparedQuoteDepositTransfer, { family: 'evm' }>,
+  executionMode: QuoteDepositExecutionMode,
+  reviewedTier?: NetworkFeeTier
+): Promise<NetworkFeePreviews> {
+  const transaction = prepared.review.graph.root.intent?.evm?.unsignedTransaction
+  if (!transaction) return {}
+
+  const { source } = prepared
+  const options = { feeTier: reviewedTier ?? 'low', executionMode } as const
+  const estimate =
+    transaction.input === '0x' && source.asset.asset.kind === 'native'
+      ? await evmWalletClient.estimateTransferFee(
+          {
+            assetId: source.asset.asset.id,
+            recipient: transaction.to,
+            amountRaw: transaction.value
+          },
+          options
+        )
+      : await evmWalletClient.estimateContractCallFee(
+          {
+            chainId: source.chain.chain.id,
+            contractAddress: transaction.to,
+            valueRaw: transaction.value,
+            calldata: transaction.input
+          },
+          options
+        )
+  return getEvmFeeTierPreviews(estimate, source.networkFeeAsset.metadata, reviewedTier)
+}
 
 export interface QuoteDepositMaximum {
   readonly amountRaw: string
@@ -163,7 +196,7 @@ export function createRheaSwapBinding(input: {
       ? input.source.refundAddress
       : input.review.execution.target
   if (!sourceTarget) {
-    throw new Error('RHEA Swap did not provide a source-chain transaction target')
+    throw new Error('Transfer details are incomplete. Get a new quote.')
   }
   let destinationMetadata
   try {
@@ -721,7 +754,7 @@ export function createQuoteDepositTransferClient(options: {
           ? availableRaw - feeRaw - feeHeadroomRaw - additionalValueRaw
           : availableRaw
         if (amountRaw <= 0n) {
-          throw new Error('The source wallet balance does not cover the network fee')
+          throw new InsufficientBalanceError(input.source.networkFeeAsset.metadata.symbol)
         }
         return Object.freeze({
           amountRaw: amountRaw.toString(),
@@ -768,7 +801,7 @@ export function createQuoteDepositTransferClient(options: {
             ? availableRaw - feeRaw - reserveRaw - attachedDepositRaw
             : availableRaw
           if (amountRaw <= 0n) {
-            throw new Error('The source wallet balance does not cover the network fee')
+            throw new InsufficientBalanceError(input.source.networkFeeAsset.metadata.symbol)
           }
           return Object.freeze({
             amountRaw: amountRaw.toString(),
@@ -818,7 +851,7 @@ export function createQuoteDepositTransferClient(options: {
         throw new Error('Quote deposit transfer requires exactly one protocol binding')
       }
       if (input.rheaSwapBinding && input.source.family !== 'bitcoin') {
-        throw new Error('This RHEA Swap execution requires a chain-native coordinator')
+        throw new Error('This transfer route is unavailable. Get a new quote.')
       }
       const nearIntentsBinding = input.nearIntentsBinding
       if (input.source.family === 'evm') {

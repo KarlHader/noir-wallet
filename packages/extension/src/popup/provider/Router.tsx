@@ -4,21 +4,33 @@
  * Tracks user activity on route changes for auto-lock functionality
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef
+} from 'react'
 import {
   MemoryRouter,
   Routes,
   Route,
   useNavigate as useRRNavigate,
-  useLocation
+  useLocation,
+  useNavigationType
 } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { NavigateOptions } from 'react-router-dom'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import { sendAnalyticsPageView } from '@/lib/analytics'
 import { useAnalyticsEngagement } from '@/popup/hooks/useAnalyticsEngagement'
+import { isShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 
 export { useLocation }
+
+const PreviousPathContext = createContext<(() => string | undefined) | null>(null)
 
 /**
  * Check if a path is a system redirect (not user activity)
@@ -36,6 +48,7 @@ function isSystemRedirect(path: string): boolean {
  */
 export function useNavigate() {
   const navigate = useRRNavigate()
+  const getPreviousPath = useContext(PreviousPathContext)
 
   const trackActivity = useCallback((path?: string) => {
     // Skip activity tracking for system redirects
@@ -66,6 +79,14 @@ export function useNavigate() {
     },
     [navigate, trackActivity]
   )
+  const goBackIfPrevious = useCallback(
+    (path: string) => {
+      if (getPreviousPath?.() !== path) return false
+      goBack()
+      return true
+    },
+    [getPreviousPath, goBack]
+  )
   const replace = useCallback(
     (path: string) => {
       trackActivity(path)
@@ -75,8 +96,39 @@ export function useNavigate() {
   )
 
   return useMemo(
-    () => ({ navigate: navigateTo, goBack, goBackSteps, replace }),
-    [goBack, goBackSteps, navigateTo, replace]
+    () => ({ navigate: navigateTo, goBack, goBackIfPrevious, goBackSteps, replace }),
+    [goBack, goBackIfPrevious, goBackSteps, navigateTo, replace]
+  )
+}
+
+function RouteHistory({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  const action = useNavigationType()
+  const history = useRef({ entries: [location], index: 0 })
+
+  useLayoutEffect(() => {
+    const current = history.current
+    if (current.entries[current.index]?.key === location.key) return
+    if (action === 'PUSH') {
+      current.index += 1
+      current.entries.length = current.index
+      current.entries.push(location)
+    } else if (action === 'REPLACE') {
+      current.entries[current.index] = location
+    } else {
+      const index = current.entries.findIndex(entry => entry.key === location.key)
+      history.current = index === -1 ? { entries: [location], index: 0 } : { ...current, index }
+    }
+  }, [action, location])
+
+  const getPreviousPath = useCallback(() => {
+    const { entries, index } = history.current
+    const previous = entries[index - 1]
+    return previous && `${previous.pathname}${previous.search}${previous.hash}`
+  }, [])
+
+  return (
+    <PreviousPathContext.Provider value={getPreviousPath}>{children}</PreviousPathContext.Provider>
   )
 }
 
@@ -121,10 +173,15 @@ interface RouterProviderProps {
 }
 
 export function RouterProvider({ children, initialPath = '/' }: RouterProviderProps) {
+  const initialEntries = isShieldHardwareTab(window.location.search)
+    ? ['/?domain=shield', initialPath]
+    : [initialPath]
   return (
-    <MemoryRouter initialEntries={[initialPath]}>
-      <RouteActivityTracker />
-      {children}
+    <MemoryRouter initialEntries={initialEntries}>
+      <RouteHistory>
+        <RouteActivityTracker />
+        {children}
+      </RouteHistory>
     </MemoryRouter>
   )
 }

@@ -8,7 +8,7 @@ import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { useAddressBookStore } from '@/store/address-book-store'
 import type { TransactionStep } from '@/popup/hooks/useTransaction'
 import { getStandardTransactionResultCopy } from '@/lib/transaction-status-copy'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { TransactionNotice } from './TransactionNotice'
 import { ActivityTransactionBody, type ActivityTransactionView } from './ActivityTransactionBody'
 
 export interface StandardTransactionResultProps {
@@ -73,8 +73,7 @@ export function StandardTransactionResult({
   const baseConfig = getStandardTransactionResultCopy(step, { error, shield })
   const title = customTitle || baseConfig.title
   const description = customDescription || baseConfig.description
-  const submittingOnly = phaseLayout && step === 'pending' && !error
-  const detailsOnly =
+  const showStatusDetail =
     phaseLayout && (step === 'submitted' || step === 'confirming' || step === 'success')
 
   const footer =
@@ -104,19 +103,21 @@ export function StandardTransactionResult({
     <TransactionResult
       status={baseConfig.resultStatus}
       title={title}
-      description={step === 'failed' && failureAction?.retry ? undefined : description}
+      description={step === 'failed' ? undefined : description}
       layout="single-asset"
       onClose={onDone}
-      showStatus={!detailsOnly}
-      bodyClassName={detailsOnly ? 'mt-0' : undefined}
       footer={footer}
     >
-      {detailsOnly && <h2 className="sr-only">{title}</h2>}
-      {step === 'failed' && failureAction?.retry && (
-        <InlineError message={description || error || title} onRetry={failureAction.onClick} />
+      {step === 'failed' && (description || error || failureAction?.retry) && (
+        <TransactionNotice
+          message={description || error || title}
+          tone="error"
+          onRetry={failureAction?.retry ? failureAction.onClick : undefined}
+          retryLabel={failureAction?.label}
+        />
       )}
-      {submittingOnly ? null : activityView ? (
-        <ActivityTransactionBody view={activityView} showDate={showTime} />
+      {activityView ? (
+        <ActivityTransactionBody view={activityView} showDate={showTime} showAmountsAsDetails />
       ) : (
         step !== 'failed' && (
           <div className="w-full">
@@ -149,7 +150,7 @@ export function StandardTransactionResult({
               {DEFAULT_NETWORK === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
             </TransactionResultDetailRow>
 
-            {detailsOnly && (
+            {showStatusDetail && (
               <TransactionResultDetailRow label="Status">
                 {step === 'success'
                   ? 'Confirmed'

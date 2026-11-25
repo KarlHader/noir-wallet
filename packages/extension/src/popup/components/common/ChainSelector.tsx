@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { cn } from '@/lib/utils'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
-import { TokenSelectionSearch } from '../tokens/TokenSelectionList'
-import { sortTokenSelectorNetworks } from '../tokens/token-selector-chain-order'
+import { SearchInput } from '../ui/input'
+import { sortTokenSelectorNetworks } from '@/popup/services/token-selector-chain-order'
 import { ChainIcon } from './ChainIcon'
 import { PageHeader } from './PageHeader'
 
@@ -85,7 +85,8 @@ export function ChainSelector({
       <DialogContent
         position="bottom"
         showCloseButton={false}
-        className="inset-0 flex h-full max-h-none max-w-none flex-col gap-0 rounded-none border-0 bg-background p-0 shadow-none"
+        scroll="body"
+        className="gap-0 p-0"
         onOpenAutoFocus={event => event.preventDefault()}
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>
@@ -97,11 +98,11 @@ export function ChainSelector({
           onBack={() => onOpenChange(false)}
         />
         <div className="shrink-0 px-4 pt-1 pb-2">
-          <TokenSelectionSearch
+          <SearchInput
             value={search}
-            onChange={setSearch}
+            onChange={event => setSearch(event.target.value)}
             placeholder="Search network"
-            ariaLabel="Search networks"
+            aria-label="Search networks"
             className="h-[45px] rounded-xl border-white/5 bg-card"
           />
         </div>
@@ -113,6 +114,8 @@ export function ChainSelector({
                 key={option.id}
                 type="button"
                 role="radio"
+                aria-label={option.name}
+                aria-description={option.note}
                 aria-checked={selectedId === option.id}
                 disabled={busy || option.disabled}
                 onClick={() => void select(option.id)}

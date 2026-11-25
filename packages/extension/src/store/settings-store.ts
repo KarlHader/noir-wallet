@@ -7,7 +7,6 @@ import { getResponseErrorMessage } from '@/lib/errors'
 import type { Network } from '@/types'
 import { DEFAULT_FEE_TIER, type FeeTier } from '@/config/fee'
 import { createWalletSettingsPersistStorage } from '@/lib/wallet-settings-persist-storage'
-import { applyRheaSdkEnv, setNearRpcUrl } from '@/core/services/rhea-sdk-init'
 import {
   DEFAULT_BLOCK_EXPLORER_PREFERENCES,
   type BlockExplorerChain,
@@ -67,7 +66,7 @@ function parsePortfolioChainSelectionByAccount(
   )
 }
 
-function parseExpandedPortfolioChainLists(value: unknown): Readonly<Record<string, true>> {
+function parseEnabledScopes(value: unknown): Readonly<Record<string, true>> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
   return Object.fromEntries(
     Object.entries(value)
@@ -119,7 +118,6 @@ interface SettingsStore {
   networkMode: 'mainnet' | 'testnet'
   chainEndpointSettingsByNetwork: Partial<Record<Network, ChainEndpointSettings>>
   autoLockMs: AutoLockMs
-  nearRpcUrl: string
   blockExplorerPreferences: BlockExplorerPreferences
   rpcEndpointPreferences: RpcEndpointPreferences
   chainEndpointSettings: ChainEndpointSettings
@@ -129,12 +127,12 @@ interface SettingsStore {
   portfolioViewMode: 'assets' | 'chains'
   portfolioChainSelectionByAccount: Readonly<Record<string, readonly string[]>>
   expandedPortfolioChainLists: Readonly<Record<string, true>>
+  incognitoCardScopes: Readonly<Record<string, true>>
   ledgerSigningTransportByWallet: Readonly<Record<string, 'usb' | 'bluetooth'>>
   sidePanelMode: boolean
   isSidePanelModeLoaded: boolean
   isLoaded: boolean
   setAutoLockMs: (ms: AutoLockMs) => void
-  setNearRpcUrl: (url: string) => void
   setBlockExplorerPreference: (chain: BlockExplorerChain, explorerId: BlockExplorerId) => void
   setRpcEndpointPreference: (chain: RpcEndpointChain, endpointId: RpcEndpointId) => void
   setChainEndpointSettings: (settings: ChainEndpointSettings) => void
@@ -143,6 +141,7 @@ interface SettingsStore {
   setPortfolioViewMode: (mode: 'assets' | 'chains') => void
   setPortfolioChainSelection: (scopeKey: string, chainIds: readonly string[] | null) => void
   setPortfolioChainListExpanded: (scopeKey: string, expanded: boolean) => void
+  enableIncognitoCard: (scopeKey: string) => void
   setLedgerSigningTransport: (walletId: string, transport: 'usb' | 'bluetooth') => void
   setSidePanelMode: (enabled: boolean) => Promise<void>
   syncSidePanelMode: (enabled: boolean) => void
@@ -155,7 +154,6 @@ export const useSettingsStore = create<SettingsStore>()(
       autoLockMs: WALLET_CONFIG.SECURITY.AUTO_LOCK.DEFAULT_MS,
       networkMode: DEFAULT_NETWORK,
       chainEndpointSettingsByNetwork: {},
-      nearRpcUrl: '',
       blockExplorerPreferences: DEFAULT_BLOCK_EXPLORER_PREFERENCES,
       rpcEndpointPreferences: DEFAULT_RPC_ENDPOINT_PREFERENCES,
       chainEndpointSettings: DEFAULT_CHAIN_ENDPOINT_SETTINGS,
@@ -165,6 +163,7 @@ export const useSettingsStore = create<SettingsStore>()(
       portfolioViewMode: 'assets',
       portfolioChainSelectionByAccount: {},
       expandedPortfolioChainLists: {},
+      incognitoCardScopes: {},
       ledgerSigningTransportByWallet: {},
       sidePanelMode: DEFAULT_SIDE_PANEL_MODE,
       isSidePanelModeLoaded: false,
@@ -172,13 +171,6 @@ export const useSettingsStore = create<SettingsStore>()(
 
       setAutoLockMs: ms => {
         set({ autoLockMs: ms })
-      },
-
-      setNearRpcUrl: url => {
-        set({ nearRpcUrl: url })
-        if (url) {
-          setNearRpcUrl(url)
-        }
       },
 
       setFeeTier: tier => {
@@ -210,6 +202,11 @@ export const useSettingsStore = create<SettingsStore>()(
           else delete next[scopeKey]
           return { expandedPortfolioChainLists: next }
         })
+      },
+
+      enableIncognitoCard: scopeKey => {
+        if (!scopeKey || scopeKey.length > 512 || get().incognitoCardScopes[scopeKey]) return
+        set(state => ({ incognitoCardScopes: { ...state.incognitoCardScopes, [scopeKey]: true } }))
       },
 
       setLedgerSigningTransport: (walletId, transport) => {
@@ -290,16 +287,7 @@ export const useSettingsStore = create<SettingsStore>()(
       loadSettings: async () => {
         await ensureSettingsStoreHydrated()
         if (get().isLoaded) return
-        const {
-          nearRpcUrl,
-          blockExplorerPreferences,
-          rpcEndpointPreferences,
-          chainEndpointSettings
-        } = get()
-        if (nearRpcUrl) {
-          setNearRpcUrl(nearRpcUrl)
-        }
-        applyRheaSdkEnv('prd')
+        const { blockExplorerPreferences, rpcEndpointPreferences, chainEndpointSettings } = get()
         setActiveBlockExplorerPreferences(blockExplorerPreferences)
         setActiveRpcEndpointPreferences(rpcEndpointPreferences)
         setActiveChainEndpointSettings(chainEndpointSettings)
@@ -363,9 +351,8 @@ export const useSettingsStore = create<SettingsStore>()(
           portfolioChainSelectionByAccount: parsePortfolioChainSelectionByAccount(
             value.portfolioChainSelectionByAccount
           ),
-          expandedPortfolioChainLists: parseExpandedPortfolioChainLists(
-            value.expandedPortfolioChainLists
-          ),
+          expandedPortfolioChainLists: parseEnabledScopes(value.expandedPortfolioChainLists),
+          incognitoCardScopes: parseEnabledScopes(value.incognitoCardScopes),
           ledgerSigningTransportByWallet: parseLedgerSigningTransportByWallet(
             value.ledgerSigningTransportByWallet
           ),
@@ -384,7 +371,6 @@ export const useSettingsStore = create<SettingsStore>()(
         networkMode: state.networkMode,
         chainEndpointSettingsByNetwork: state.chainEndpointSettingsByNetwork,
         autoLockMs: state.autoLockMs,
-        nearRpcUrl: state.nearRpcUrl,
         blockExplorerPreferences: state.blockExplorerPreferences,
         rpcEndpointPreferences: state.rpcEndpointPreferences,
         chainEndpointSettings: state.chainEndpointSettings,
@@ -394,6 +380,7 @@ export const useSettingsStore = create<SettingsStore>()(
         portfolioViewMode: state.portfolioViewMode,
         portfolioChainSelectionByAccount: state.portfolioChainSelectionByAccount,
         expandedPortfolioChainLists: state.expandedPortfolioChainLists,
+        incognitoCardScopes: state.incognitoCardScopes,
         ledgerSigningTransportByWallet: state.ledgerSigningTransportByWallet
       })
     }

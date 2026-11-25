@@ -37,7 +37,10 @@ export interface ExternalShieldDeposit {
   readonly minimumOutputRaw: string
   readonly settledOutputRaw?: string
   readonly depositedAmountRaw?: string
+  readonly refundTransactionHash?: string
   readonly fundingObservedAt?: number
+  /** Transparent ZEC payment already broadcast to the deposit address. */
+  readonly originTxHash?: string
   readonly providerStatus?: string
   readonly balanceRefreshedAt?: number
   readonly slippageBps: number
@@ -57,6 +60,7 @@ export interface CreateExternalShieldDepositInput {
   readonly source: Omit<ExternalShieldDeposit['source'], 'amountRaw'> &
     Readonly<{ amountRaw?: string }>
   readonly refundAddress: string
+  readonly slippageBps?: number
   readonly requestId?: string
 }
 
@@ -113,7 +117,6 @@ export function externalShieldDepositFailureMessage(error: unknown): string {
 }
 
 const UNFUNDED_AUTO_REFRESH_MS = 3 * 60 * 60 * 1000
-const UNFUNDED_AUTO_HIDE_MS = 24 * 60 * 60 * 1000
 
 type ExternalShieldDepositLifecycle = Pick<
   ExternalShieldDeposit,
@@ -122,7 +125,6 @@ type ExternalShieldDepositLifecycle = Pick<
   | 'depositedAmountRaw'
   | 'providerStatus'
   | 'updatedAt'
-  | 'createdAt'
   | 'expiresAt'
 >
 
@@ -130,7 +132,9 @@ export function hasExternalShieldDepositFunding(record: ExternalShieldDepositLif
   return (
     record.fundingObservedAt !== undefined ||
     BigInt(record.depositedAmountRaw ?? '0') > 0n ||
-    record.phase !== 'awaiting-payment' ||
+    record.phase === 'processing' ||
+    record.phase === 'ready' ||
+    record.phase === 'refunded' ||
     ['INCOMPLETE_DEPOSIT', 'KNOWN_DEPOSIT_TX', 'PROCESSING', 'PENDING'].includes(
       record.providerStatus ?? ''
     )
@@ -163,17 +167,6 @@ export function shouldAutoRefreshExternalShieldDeposit(
   // Amounts may be absent while a deposit or refund is already in flight.
   return (
     hasExternalShieldDepositFunding(record) || now - record.updatedAt < UNFUNDED_AUTO_REFRESH_MS
-  )
-}
-
-export function isExternalShieldDepositAutoHidden(
-  record: ExternalShieldDepositLifecycle,
-  now = Date.now()
-): boolean {
-  return (
-    !hasExternalShieldDepositFunding(record) &&
-    isExternalShieldDepositExpired(record, now) &&
-    now - record.createdAt >= UNFUNDED_AUTO_HIDE_MS
   )
 }
 
@@ -276,21 +269,44 @@ export function projectExternalShieldDepositActivityGraph(
     record.accountId !== graph.root.scope.accountId ||
     graph.root.status !== 'failed' ||
     !graph.root.failure ||
-    graph.root.failure?.code === 'refunded' ||
     !graph.root.id.startsWith('tx:confidential-external:')
   ) {
     return graph
   }
+  const origin = graph.segments.find(segment => segment.role === 'origin')
+  const refund =
+    record.refundTransactionHash &&
+    origin?.target.kind === 'onchain' &&
+    !graph.segments.some(segment => segment.role === 'refund')
+      ? {
+          id: parseTransactionSegmentId(`segment:confidential-external:${record.depositId}:refund`),
+          transactionId: graph.root.id,
+          role: 'refund',
+          target: origin.target,
+          status: 'final',
+          requiredForFinality: false,
+          dependsOn: [origin.id],
+          evidence: { transactionHash: record.refundTransactionHash },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+          revision: 0
+        }
+      : null
+  if (!refund && graph.root.failure.code === 'refunded') return graph
   return parseTransactionGraph({
     root: {
       ...graph.root,
       failure: { ...graph.root.failure, code: 'refunded' },
+      segmentIds: refund ? [...graph.root.segmentIds, refund.id] : graph.root.segmentIds,
       updatedAt: Math.max(graph.root.updatedAt, record.updatedAt)
     },
-    segments: graph.segments.map(segment =>
-      segment.status === 'failed' && segment.failure
-        ? { ...segment, failure: { ...segment.failure, code: 'refunded' } }
-        : segment
-    )
+    segments: [
+      ...graph.segments.map(segment =>
+        segment.status === 'failed' && segment.failure
+          ? { ...segment, failure: { ...segment.failure, code: 'refunded' } }
+          : segment
+      ),
+      ...(refund ? [refund] : [])
+    ]
   })
 }

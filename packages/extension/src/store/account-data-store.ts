@@ -7,14 +7,8 @@ import {
 } from '@/lib/account-data-persistence'
 import { useWalletStore } from './wallet-store'
 import { safeBig } from '@/lib/big'
-import {
-  loadTransactions,
-  mutateTransactions,
-  deleteTransactions,
-  deleteTransparentTxCache
-} from '@/lib/indexed-db'
+import { loadTransactions, deleteTransactions, deleteTransparentTxCache } from '@/lib/indexed-db'
 import { formatTokenQuantity } from '@/lib/number-format'
-import { mergeTransactionUpdate } from '@/lib/transaction-status'
 import { getTransactionStatusCopy } from '@/lib/transaction-status-copy'
 import { buildAccountKey } from '@/core/wallet/account-scope'
 import {
@@ -216,20 +210,8 @@ interface AccountDataStore {
   // Transaction management (with IndexedDB persistence)
   loadTransactions: () => Promise<void>
   reloadTransactions: (accountKey: string) => Promise<void>
-  addTransaction: (tx: Omit<Transaction, 'id'>) => Promise<Transaction>
-  addTransactionForAccount: (
-    accountKey: string,
-    tx: Omit<Transaction, 'id'>
-  ) => Promise<Transaction>
-  updateTransaction: (id: string, updates: Partial<Transaction>) => Promise<void>
-  updateTransactionForAccount: (
-    accountKey: string,
-    id: string,
-    updates: Partial<Transaction>
-  ) => Promise<void>
-  markAsNotified: (id: string) => Promise<void>
+  markAsNotified: (id: string, status: 'success' | 'failed') => Promise<boolean>
   getPendingNotifications: () => Transaction[]
-  clearTransactions: () => Promise<void>
 
   // Explicit setters with account key (for non-current accounts)
   setBalanceFor: (
@@ -436,63 +418,32 @@ export const useAccountDataStore = create<AccountDataStore>()(
         }
       },
 
-      addTransaction: async tx => {
-        const key = (get() as any)._getCurrentKey()
-        if (!key) throw new Error('No current account')
-        return get().addTransactionForAccount(key, tx)
-      },
-
-      addTransactionForAccount: async (accountKey, tx) => {
-        const id = `tx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-        const newTx: Transaction = { ...tx, id }
-        const allTxs = await mutateTransactions(accountKey, current => [...current, newTx])
-
-        set(state => {
-          const newCache = new Map(state.transactionsCache)
-          newCache.set(accountKey, allTxs)
-          return { transactionsCache: newCache }
-        })
-
-        return newTx
-      },
-
-      updateTransaction: async (id, updates) => {
-        const key = (get() as any)._getCurrentKey()
-        if (!key) return
-        await get().updateTransactionForAccount(key, id, updates)
-      },
-
-      updateTransactionForAccount: async (accountKey, id, updates) => {
-        const allTxs = await mutateTransactions(accountKey, current =>
-          current.map(tx => (tx.id === id ? mergeTransactionUpdate(tx, updates) : tx))
-        )
-
-        set(state => {
-          const newCache = new Map(state.transactionsCache)
-          newCache.set(accountKey, allTxs)
-          return { transactionsCache: newCache }
-        })
-      },
-
-      markAsNotified: async id => {
-        await get().updateTransaction(id, { notified: true })
+      markAsNotified: async (id, status) => {
+        const accountKey = (get() as any)._getCurrentKey()
+        if (
+          !accountKey ||
+          !get()
+            .transactionsCache.get(accountKey)
+            ?.some(tx => tx.id === id)
+        ) {
+          return false
+        }
+        const response = await chrome.runtime
+          .sendMessage({
+            type: 'MARK_ZCASH_TRANSACTION_NOTIFIED',
+            accountKey,
+            transactionId: id,
+            status
+          })
+          .catch(() => null)
+        if (!response?.success) return false
+        await get().reloadTransactions(accountKey)
+        return response.newlyNotified === true
       },
 
       getPendingNotifications: () => {
         const txs = get().getCurrentTransactions()
         return txs.filter(tx => (tx.status === 'success' || tx.status === 'failed') && !tx.notified)
-      },
-
-      clearTransactions: async () => {
-        const key = (get() as any)._getCurrentKey()
-        if (!key) return
-        await mutateTransactions(key, () => [])
-
-        set(state => {
-          const newCache = new Map(state.transactionsCache)
-          newCache.set(key, [])
-          return { transactionsCache: newCache }
-        })
       },
 
       setBalanceFor: (network, walletId, accountId, balance) => {

@@ -1,4 +1,5 @@
 import { SolanaWalletClientError } from './solana-wallet-client'
+import { formatInsufficientBalance } from '@/lib/format'
 
 export function getSolanaSendPrepareError(
   error: unknown,
@@ -12,8 +13,9 @@ export function getSolanaSendPrepareError(
     return `${networkName} is unavailable. Check your connection and try again.`
   }
   if (error.code === 'account-unavailable') return 'This Wallet does not have a Solana account.'
+  if (error.code === 'insufficient-fee-funds') return formatInsufficientBalance('SOL')
   if (error.code === 'insufficient-funds') {
-    return `The ${symbol} balance or SOL fee balance is insufficient.`
+    return formatInsufficientBalance(symbol)
   }
   if (error.code === 'invalid-request') return 'Check the amount and Solana address.'
   if (error.code === 'expired') return 'The review expired. Prepare the transfer again.'

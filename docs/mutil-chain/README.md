@@ -9,7 +9,7 @@ Chain availability comes from the product registry, enabled feature flags, and r
 - [Transaction lifecycle and Activity](architecture/transaction-lifecycle.md): local transaction ownership, lifecycle transitions, remote history, cache fallback, and reconstruction.
 - [Confidential DeFi development](operations/private-defi-development.md): Main, private execution, abstract balances, configuration, and recovery.
 - [UI design conventions](design/ui-design-system.md): production tokens, components, viewport sizes, and design-to-code review.
-- [Test-wallet registry](operations/test-wallet-registry.md): public unfunded vectors, private fixture formats, and local verification boundaries.
+- [Test-wallet registry](operations/test-wallet-registry.md): public unfunded vectors and local verification boundaries.
 - [Release runbook](../release-workflow.md): local versus release inputs, History proxy deployment, and artifact verification.
 
 ## Implementation Sources
@@ -46,6 +46,6 @@ Shared device-signing contracts and boundary validation live in `src/core/keyrin
 
 EVM adapters implement transaction, personal-message, and EIP-712 signing. Bitcoin adapters implement own-input PSBT signing and BIP-322 simple with the existing `smp` response format; BIP-322 requires Bitcoin App 2.1.3 or newer and displays a zero-value device transaction. Mainnet uses the `Bitcoin` device App and Testnet uses `Bitcoin Test`; the adapter requests and verifies the network-specific App before exporting or signing, then disables the Bitcoin SDK's automatic App switching to preserve that choice. Solana implements legacy/v0 transaction signing and preserves other signatures; Ledger accounts do not advertise ordinary `signMessage`. NEAR implements transaction and NEP-413 signing.
 
-Main-mode Swap uses the same Ledger transaction adapters and supports EVM ERC-20 approvals and Mainnet RHEA EIP-712 orders. An ERC-20 approval is recorded as a separate transaction; return to Swap for a fresh quote after it confirms. Persisted signed EVM orders can retry submission after a restart without signing again, including after quote expiry. Confidential DeFi and Lending remain outside this hardware scope.
+Main-mode Swap uses the same Ledger transaction adapters and supports EVM ERC-20 approvals and Mainnet RHEA EIP-712 orders. An ERC-20 approval is recorded as a separate transaction; return to Swap for a fresh quote after it confirms. Persisted signed EVM orders can retry submission after a restart without signing again, including after quote expiry. See [NEAR Confidential Shield](operations/private-defi-development.md) for hardware EVM Shield workflows. Lending requires a software account.
 
 These implementation paths require physical-device acceptance before being described as delivered hardware support. USB/Bluetooth exports, four-chain Testnet transactions and dApp signatures, refusal/disconnection, and the Zcash PCZT regression have not been verified on a physical Ledger.

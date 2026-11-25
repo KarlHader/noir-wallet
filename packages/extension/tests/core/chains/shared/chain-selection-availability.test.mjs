@@ -12,11 +12,11 @@ import {
 import { privateKeyImportFamilyOptions } from '../../../../src/popup/services/private-key-import-options.ts'
 import { supportsEvmPrivateExecution } from '../../../../src/core/chains/evm/execution-capability.ts'
 import { buildAddTokenNetworks } from '../../../../src/popup/services/add-token-model.ts'
-import { buildSendAssetSelectionModel } from '../../../../src/popup/pages/transactions/send-asset-order.ts'
+import { buildSendAssetSelectionModel } from '../../../../src/popup/services/send-asset-order.ts'
 import {
   buildKeystoneNetworkBundles,
   filterKeystoneMultiAccountsPayload
-} from '../../../../src/popup/pages/hardware/keystone-chain-selection.ts'
+} from '../../../../src/popup/services/keystone-chain-selection.ts'
 
 describe('Chain selection availability', () => {
   it('allows Confidential execution for mnemonic and EVM private-key accounts only', () => {
@@ -88,7 +88,7 @@ describe('Chain selection availability', () => {
   it('excludes cached deferred assets from the send picker while listing their disabled networks', () => {
     const model = buildSendAssetSelectionModel({
       assets: [{ chain: { chain: { id: 'bip122:mainnet', family: 'bitcoin' } }, asset: {} }],
-      zcashSources: [{ type: 'shielded', available: '0' }],
+      zcashSources: [{ type: 'shielded', available: '1' }],
       zcashEnabled: true,
       zcashNetwork: 'mainnet',
       zecPrice: 0,

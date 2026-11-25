@@ -1,13 +1,15 @@
 import { formatFiatAmount, formatTokenQuantity } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
-import { calculateTokenFiatValue, parseTokenBalanceDecimal } from './token-balance-format'
+import {
+  calculateTokenFiatValue,
+  parseTokenBalanceDecimal
+} from '@/popup/services/token-balance-format'
 
 export function TokenBalanceDisplay({
   amount,
   symbol,
   priceUsd,
   showSymbol = true,
-  approximateFiat = false,
   balancesHidden = false,
   unavailablePriceLabel = '—',
   className
@@ -16,7 +18,6 @@ export function TokenBalanceDisplay({
   symbol: string
   priceUsd?: number | string | null
   showSymbol?: boolean
-  approximateFiat?: boolean
   balancesHidden?: boolean
   unavailablePriceLabel?: string
   className?: string
@@ -42,7 +43,7 @@ export function TokenBalanceDisplay({
           ? '••••'
           : fiatValue === null
             ? unavailablePriceLabel
-            : `${approximateFiat ? '≈' : ''}${formatFiatAmount(fiatValue, { showSign: true })}`}
+            : formatFiatAmount(fiatValue, { showSign: true })}
       </p>
     </div>
   )

@@ -3,7 +3,14 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { PageHeader } from '../../components/common/PageHeader'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
 import { Button } from '../../components/ui/button'
 import {
@@ -13,12 +20,12 @@ import {
   DropdownMenuTrigger
 } from '../../components/ui/dropdown-menu'
 import { RemoveWalletContent } from '../../components/account/RemoveWalletContent'
-import { openModal } from '../../provider/ModalManager'
 import { useNavigate } from '../../provider/Router'
 import { useDialog } from '../../hooks/useDialog'
 import { useWalletStore } from '@/store/wallet-store'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { getAccountDisplayName } from '@/lib/format'
+import { openHardwareConnectTab } from '@/lib/hardware-tab'
 import { toast } from '@/store/toast-store'
 import { useResyncZcash } from '../../hooks/useResyncZcash'
 import { accountNetworksClient } from '../../services/account-networks-client'
@@ -37,6 +44,7 @@ export function AccountDetail() {
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [renaming, setRenaming] = useState(false)
+  const [removeWalletOpen, setRemoveWalletOpen] = useState(false)
 
   const wallet = walletId ? wallets.find(w => w.id === walletId) : null
   const account = wallet && accountId ? wallet.accounts.find(a => a.id === accountId) : null
@@ -67,17 +75,25 @@ export function AccountDetail() {
       icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
       action: () => navigate(`/addresses-list?accountId=${accountId}&walletId=${walletId}`)
     },
-    !isHardwareWallet && wallet.keySource !== 'private-key'
+    wallet.keySource === 'ledger'
       ? {
-          label: 'Networks',
+          label: 'Add networks',
           value: undefined,
           icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
           action: () =>
-            navigate(
-              `/account-networks?accountId=${encodeURIComponent(accountId!)}&walletId=${encodeURIComponent(walletId!)}`
-            )
+            openHardwareConnectTab('ledger', { walletId: wallet.id, accountId: account.id })
         }
-      : null,
+      : !isHardwareWallet && wallet.keySource !== 'private-key'
+        ? {
+            label: 'Networks',
+            value: undefined,
+            icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
+            action: () =>
+              navigate(
+                `/account-networks?accountId=${encodeURIComponent(accountId!)}&walletId=${encodeURIComponent(walletId!)}`
+              )
+          }
+        : null,
     // Hardware wallets are watch-only: there is no seed phrase on this device
     isHardwareWallet
       ? {
@@ -161,24 +177,7 @@ export function AccountDetail() {
           }
         }
         if (wallet.accounts.length === 1 && !isHardwareWallet) {
-          const removed = await openModal<boolean | undefined>({
-            title: 'Remove wallet',
-            body: resolve => (
-              <RemoveWalletContent
-                walletId={wallet.id}
-                onRemove={async verification => {
-                  await zcashWalletRuntimeClient.removeAccount(wallet.id, account.id, verification)
-                  resolve(true)
-                }}
-                onCancel={() => resolve(false)}
-                onViewBackup={() => {
-                  resolve(false)
-                  navigate(`/view-seed-phrase?walletId=${encodeURIComponent(wallet.id)}`)
-                }}
-              />
-            )
-          })
-          if (removed) goBack()
+          setRemoveWalletOpen(true)
           return
         }
         const ok = await confirm({
@@ -338,6 +337,25 @@ export function AccountDetail() {
           </div>
         </div>
       </div>
+      <Dialog open={removeWalletOpen} onOpenChange={setRemoveWalletOpen}>
+        <DialogContent position="bottom">
+          <DialogHeader>
+            <DialogTitle>Remove wallet</DialogTitle>
+            <DialogDescription className="sr-only">Verify your secret phrase</DialogDescription>
+          </DialogHeader>
+          <RemoveWalletContent
+            walletId={wallet.id}
+            onRemove={async verification => {
+              await zcashWalletRuntimeClient.removeAccount(wallet.id, account.id, verification)
+              goBack()
+            }}
+            onCancel={() => setRemoveWalletOpen(false)}
+            onViewBackup={() =>
+              navigate(`/view-seed-phrase?walletId=${encodeURIComponent(wallet.id)}`)
+            }
+          />
+        </DialogContent>
+      </Dialog>
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent position="bottom" className="gap-4 p-5">
           <DialogHeader>
@@ -349,27 +367,29 @@ export function AccountDetail() {
             maxLength={128}
             onChange={event => setRenameDraft(event.target.value)}
           />
-          <Button
-            disabled={!renameDraft.trim()}
-            isLoading={renaming}
-            onClick={async () => {
-              setRenaming(true)
-              try {
-                await zcashWalletRuntimeClient.renameAccount(
-                  wallet.id,
-                  account.id,
-                  renameDraft.trim()
-                )
-                setRenameOpen(false)
-              } catch (error) {
-                toast.error(error instanceof Error ? error.message : 'Unable to rename account')
-              } finally {
-                setRenaming(false)
-              }
-            }}
-          >
-            Save
-          </Button>
+          <DialogFooter>
+            <Button
+              disabled={!renameDraft.trim()}
+              isLoading={renaming}
+              onClick={async () => {
+                setRenaming(true)
+                try {
+                  await zcashWalletRuntimeClient.renameAccount(
+                    wallet.id,
+                    account.id,
+                    renameDraft.trim()
+                  )
+                  setRenameOpen(false)
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : 'Unable to rename account')
+                } finally {
+                  setRenaming(false)
+                }
+              }}
+            >
+              Save
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

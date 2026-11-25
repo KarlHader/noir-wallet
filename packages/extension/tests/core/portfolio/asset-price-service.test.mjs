@@ -23,7 +23,7 @@ import { createIntentsWalletAssetCatalog } from '../../../src/core/services/inte
 import {
   hasRetryablePortfolioPriceGap,
   summarizePortfolioFiat
-} from '../../../src/popup/components/portfolio/portfolio-prices.ts'
+} from '../../../src/popup/services/portfolio-prices.ts'
 
 function token(mapping, now, price, extra = {}) {
   return {
@@ -130,31 +130,27 @@ test('maps only canonical product assets to explicit 1Click sources on both buil
       'ZEC',
       'ETH',
       'USDC',
+      'ETH',
+      'USDC',
       network === 'mainnet' ? 'BNB' : 'tBNB',
-      'ETH',
-      'USDC',
-      'ETH',
-      'USDC',
       'ETH',
       'USDC',
       'POL',
       'USDC',
-      'AVAX',
-      'USDC',
-      ...(network === 'mainnet' ? ['MON', 'xDAI', 'XPL', 'OKB', 'BERA'] : []),
       'BTC',
       'SOL',
-      'NEAR'
+      'NEAR',
+      ...(network === 'mainnet' ? ['USDT', 'USDC', 'USDT', 'WETH'] : [])
     ]
     expect(mappings.map(item => assets.resolve(item.assetId).metadata.symbol)).toEqual(
       expectedSymbols
     )
     expect(new Set(mappings.map(item => item.assetId)).size).toBe(expectedSymbols.length)
     expect(new Set(mappings.map(item => item.marketAssetId)).size).toBe(
-      network === 'mainnet' ? 14 : 9
+      network === 'mainnet' ? 10 : 8
     )
     expect(new Set(mappings.map(item => item.sourceAssetId)).size).toBe(
-      network === 'mainnet' ? 14 : 9
+      network === 'mainnet' ? 12 : 8
     )
     expect(mappings.find(item => item.marketAssetId === 'solana')?.sourceAssetId).toBe(
       'nep141:sol.omft.near'
@@ -286,21 +282,19 @@ test('does not map a native reference unless it matches the exact built-in chain
 test('maps release assets to fixed DEX Screener pools without symbol discovery', () => {
   for (const network of ['mainnet', 'testnet']) {
     const { assets, mappings } = createMarketMappings(network)
-    expect(mappings).toHaveLength(9)
-    expect(new Set(mappings.map(mapping => mapping.assetId)).size).toBe(9)
-    expect(new Set(mappings.map(mapping => mapping.marketAssetId)).size).toBe(6)
+    expect(mappings).toHaveLength(7)
+    expect(new Set(mappings.map(mapping => mapping.assetId)).size).toBe(7)
+    expect(new Set(mappings.map(mapping => mapping.marketAssetId)).size).toBe(5)
     expect(
       new Set(mappings.map(mapping => `${mapping.pool.chainId}:${mapping.pool.pairAddress}`)).size
-    ).toBe(6)
+    ).toBe(5)
     expect(mappings.map(mapping => assets.resolve(mapping.assetId).metadata.symbol)).toEqual([
       'ZEC',
       'ETH',
+      'ETH',
       network === 'mainnet' ? 'BNB' : 'tBNB',
       'ETH',
-      'ETH',
-      'ETH',
       'POL',
-      'AVAX',
       'BTC'
     ])
     expect(
@@ -345,18 +339,24 @@ test('serves fresh prices, keeps bounded stale cache, and expires old quotes ins
   expect(fresh.quotes).toHaveLength(mappings.length)
   const ethereumNativeAssetIds = new Set([
     'eip155:1/slip44:60',
-    'eip155:10/slip44:60',
     'eip155:8453/slip44:60',
     'eip155:42161/slip44:60'
   ])
   const ethPrices = fresh.quotes
     .filter(quote => ethereumNativeAssetIds.has(quote.assetId))
     .map(quote => quote.priceUsd)
-  expect(ethPrices).toEqual(['11', '11', '11', '11'])
+  expect(ethPrices).toEqual(['11', '11', '11'])
+  const sharedUsdcIds = new Set(
+    mappings
+      .filter(
+        mapping => mapping.marketAssetId === 'usd-coin' && !mapping.assetId.startsWith('eip155:56/')
+      )
+      .map(mapping => mapping.assetId)
+  )
   const usdcPrices = fresh.quotes
-    .filter(quote => quote.assetId.includes('/erc20:'))
+    .filter(quote => sharedUsdcIds.has(quote.assetId))
     .map(quote => quote.priceUsd)
-  expect(usdcPrices).toEqual(Array(6).fill('12'))
+  expect(usdcPrices).toEqual(Array(4).fill('12'))
   expect(fetchCount).toBe(1)
 
   await service.refresh()
@@ -372,6 +372,54 @@ test('serves fresh prices, keeps bounded stale cache, and expires old quotes ins
   const expired = await service.refresh()
   expect(expired).toMatchObject({ status: 'error', quotes: [] })
   expect(expired.missingAssetIds).toEqual(mappings.map(item => item.assetId))
+})
+
+test('uses explicit cross-chain price fallbacks only when the local quote is unavailable', async () => {
+  const { mappings } = createMappings()
+  const ethereumUsdtId = 'eip155:1/erc20:0xdac17f958d2ee523a2206206994597c13d831ec7'
+  const bnbUsdtId = 'eip155:56/erc20:0x55d398326f99059ff775485246999027b3197955'
+  const bnbUsdcId = 'eip155:56/erc20:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'
+  const ethereumUsdt = mappings.find(mapping => mapping.assetId === ethereumUsdtId)
+  const bnbUsdt = mappings.find(mapping => mapping.assetId === bnbUsdtId)
+  const ethereumUsdc = mappings.find(
+    mapping => mapping.assetId.startsWith('eip155:1/erc20:') && mapping.marketAssetId === 'usd-coin'
+  )
+  let now = Date.parse('2026-08-09T10:00:00.000Z')
+  let cached = null
+  const sameSymbol = token({ sourceAssetId: 'nep141:unrelated.omft.near' }, now, 99, {
+    symbol: 'USDC'
+  })
+  let catalog = [token(ethereumUsdt, now, 1.01), token(ethereumUsdc, now, 0.99), sameSymbol]
+  const service = new OneClickAssetPriceService({
+    mappings,
+    now: () => now,
+    cache: {
+      get: async () => cached,
+      put: async snapshot => {
+        cached = snapshot
+      }
+    },
+    fetch: async () => Response.json(catalog)
+  })
+  const pricesById = model =>
+    Object.fromEntries(model.quotes.map(quote => [quote.assetId, quote.priceUsd]))
+  expect(pricesById(await service.refresh())).toMatchObject({
+    [bnbUsdtId]: '1.01',
+    [bnbUsdcId]: '0.99'
+  })
+
+  now += 60_000
+  catalog.push(token(bnbUsdt, now, 1.02))
+  expect(pricesById(await service.refresh())).toMatchObject({
+    [ethereumUsdtId]: '1.01',
+    [bnbUsdtId]: '1.02'
+  })
+
+  now += 60_000
+  catalog = [token(ethereumUsdt, now - 31 * 60_000, 1.01), token(bnbUsdt, now, 1.02), sameSymbol]
+  const refreshed = await service.refresh()
+  expect(pricesById(refreshed)).toMatchObject({ [ethereumUsdtId]: '1.02' })
+  expect(refreshed.missingAssetIds).toContain(bnbUsdcId)
 })
 
 test('preserves shared prices when a dynamic asset catalog changes', async () => {
@@ -629,18 +677,18 @@ test('caches validated DEX changes, deduplicates shared pools, and expires faile
 
   await expect(service.readCached()).resolves.toMatchObject({ quotes: [] })
   const fresh = await service.refresh()
-  expect(fresh.quotes).toHaveLength(9)
+  expect(fresh.quotes).toHaveLength(7)
   expect(fresh.quotes.every(quote => quote.percent24h === '2.5')).toBe(true)
-  expect(fetchCount).toBe(6)
-  expect(stored.quotes).toHaveLength(6)
+  expect(fetchCount).toBe(5)
+  expect(stored.quotes).toHaveLength(5)
 
   await service.refresh()
-  expect(fetchCount).toBe(6)
+  expect(fetchCount).toBe(5)
 
   offline = true
   now += 31 * 60 * 1000
   const stale = await service.refresh()
-  expect(stale.quotes).toHaveLength(9)
+  expect(stale.quotes).toHaveLength(7)
   expect(stale.quotes.every(quote => quote.freshness === 'stale')).toBe(true)
 
   now += 90 * 60 * 1000
@@ -687,7 +735,7 @@ test('rejects a spoofed trusted-pair identity and removes changes below liquidit
       rejectedPools.has(mappings.find(m => m.assetId === quote.assetId).pool.chainId)
     )
   ).toBe(false)
-  expect(result.quotes).toHaveLength(4)
+  expect(result.quotes).toHaveLength(3)
 })
 
 test('prefers a fresh trusted DEX price, falls back to 1Click on divergence, and keeps exact sources', () => {

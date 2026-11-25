@@ -1,6 +1,15 @@
-import type { ActivityItem, ActivityScope } from '@/core/activity'
+import {
+  isActivityReceive,
+  mergeActivityHistoryItems,
+  type ActivityItem,
+  type ActivityScope
+} from '@/core/activity'
 import { EvmRpcError } from './evm-rpc-client'
-import { isZeroValueEvmTokenActivity } from './evm-indexed-activity'
+import {
+  isIndexedBaseAcrossReceipt,
+  isZeroValueEvmTokenActivity,
+  removeSupersededEvmReceipts
+} from './evm-indexed-activity'
 import {
   indexedDbEvmHistoryCache,
   type EvmHistoryCacheRecord,
@@ -35,6 +44,7 @@ function logWarning(message: string): void {
 interface EvmCachedHistorySourceOptions {
   readonly chainId: string
   readonly source: EvmActivityHistorySource
+  readonly trackedAssetKey?: string
   readonly cache?: EvmHistoryCacheRepository
   readonly now?: () => number
   readonly successTtlMs?: number
@@ -105,21 +115,11 @@ function normalizeItems(
   fresh: readonly ActivityItem[],
   scope: ActivityScope
 ): readonly ActivityItem[] {
-  const byId = new Map<string, ActivityItem>()
-  for (const item of fresh) {
-    const normalized = normalizeLegacyInferredEvmActivity(item)
-    if (isZeroValueEvmTokenActivity(normalized)) continue
-    if (!byId.has(normalized.id)) byId.set(normalized.id, normalized)
-  }
+  const normalized = fresh
+    .map(normalizeLegacyInferredEvmActivity)
+    .filter(item => !isZeroValueEvmTokenActivity(item))
   return rescopeItems(
-    [...byId.values()]
-      .sort(
-        (left, right) =>
-          right.updatedAt - left.updatedAt ||
-          right.createdAt - left.createdAt ||
-          left.id.localeCompare(right.id)
-      )
-      .slice(0, MAX_ITEMS),
+    removeSupersededEvmReceipts(mergeActivityHistoryItems([], normalized)).slice(0, MAX_ITEMS),
     scope
   )
 }
@@ -132,11 +132,20 @@ function itemBlockHeight(item: ActivityItem): number | null {
   return heights.length === 0 ? null : Math.max(...heights)
 }
 
-function incrementalStartBlock(record: EvmHistoryCacheRecord | null): number | undefined {
+function trackedAssetsChanged(record: EvmHistoryCacheRecord, trackedAssetKey?: string): boolean {
+  return trackedAssetKey !== undefined && record.trackedAssetKey !== trackedAssetKey
+}
+
+function incrementalStartBlock(
+  record: EvmHistoryCacheRecord | null,
+  trackedAssetKey?: string
+): number | undefined {
   if (!record || record.successfulSyncAt === null) return undefined
+  if (trackedAssetsChanged(record, trackedAssetKey)) return undefined
   if (record.items.some(isLegacyInferredEvmActivity)) return undefined
   if (record.items.some(item => item.completeness === 'partial')) return undefined
   const heights = record.items.flatMap(item => {
+    if (isIndexedBaseAcrossReceipt(item)) return []
     const height = itemBlockHeight(item)
     return height === null ? [] : [height]
   })
@@ -144,47 +153,46 @@ function incrementalStartBlock(record: EvmHistoryCacheRecord | null): number | u
   return Math.max(0, Math.max(...heights) - REORG_OVERLAP_BLOCKS)
 }
 
+function evmNonReceiveHistoryKey(item: ActivityItem): string | undefined {
+  if (item.source !== 'rpc' || isActivityReceive(item)) return undefined
+  const origin = item.segments.find(segment => segment.role === 'origin')
+  if (origin?.target.kind !== 'onchain' || !origin.evidence?.transactionHash) return undefined
+  const key = `rpc:evm:${origin.target.chainId}:${origin.evidence.transactionHash.toLowerCase()}:`
+  return item.id.startsWith(key) ? key : undefined
+}
+
 function mergeItems(
   previous: readonly ActivityItem[],
   fresh: readonly ActivityItem[],
   scope: ActivityScope
 ): readonly ActivityItem[] {
-  const byId = new Map(previous.map(item => [item.id, item] as const))
+  const replacementIds = new Map<string, string>()
   for (const item of fresh) {
-    const segment = item.segments.find(value => value.role === 'origin')
-    if (
-      item.source === 'rpc' &&
-      segment?.target.kind === 'onchain' &&
-      segment.evidence?.transactionHash &&
-      item.id.startsWith(`rpc:evm:${segment.target.chainId}:${segment.evidence.transactionHash}:`)
-    ) {
-      const chainId = segment.target.chainId
-      const hash = segment.evidence.transactionHash.toLowerCase()
-      for (const [id, cached] of byId) {
-        if (
-          cached.source === 'rpc' &&
-          cached.id.startsWith(`rpc:evm:${chainId}:${hash}:`) &&
-          cached.segments?.some(
-            value =>
-              value.target?.kind === 'onchain' &&
-              value.target.chainId === chainId &&
-              value.evidence?.transactionHash?.toLowerCase() === hash
-          )
-        ) {
-          byId.delete(id)
-        }
-      }
-    }
-    byId.set(item.id, item)
+    const key = evmNonReceiveHistoryKey(item)
+    if (key) replacementIds.set(key, item.id)
   }
-  return normalizeItems([...byId.values()], scope)
+  const isRetained = (item: ActivityItem) => {
+    const key = evmNonReceiveHistoryKey(item)
+    const replacementId = key && replacementIds.get(key)
+    return !replacementId || item.id === replacementId
+  }
+  return normalizeItems([...previous.filter(isRetained), ...fresh.filter(isRetained)], scope)
 }
 
 function hasPendingItems(items: readonly ActivityItem[]): boolean {
   return items.some(item => item.status !== 'final' && item.status !== 'failed')
 }
 
-function cacheRetryAfter(record: EvmHistoryCacheRecord, pendingTtlMs: number): number {
+function cacheRetryAfter(
+  record: EvmHistoryCacheRecord,
+  pendingTtlMs: number,
+  trackedAssetKey?: string
+): number {
+  if (
+    record.successfulSyncAt === record.lastAttemptAt &&
+    trackedAssetsChanged(record, trackedAssetKey)
+  )
+    return record.lastAttemptAt
   return record.successfulSyncAt === record.lastAttemptAt && hasPendingItems(record.items)
     ? Math.min(record.retryAfter, record.lastAttemptAt + pendingTtlMs)
     : record.retryAfter
@@ -203,6 +211,7 @@ function successfulRecord(input: {
   readonly historyPageCount?: number
   readonly successTtlMs: number
   readonly pendingTtlMs: number
+  readonly trackedAssetKey?: string
 }): EvmHistoryCacheRecord {
   const items = mergeItems(input.previous?.items ?? [], input.fresh, input.scope)
   return Object.freeze({
@@ -228,6 +237,7 @@ function successfulRecord(input: {
       (input.historyPageCount ?? 1) > 1 || (input.previous?.historyPageCount ?? 1) <= 1
         ? input.attemptedAt
         : (input.previous?.historySyncAt ?? input.previous?.successfulSyncAt ?? null),
+    trackedAssetKey: input.trackedAssetKey ?? input.previous?.trackedAssetKey,
     items
   })
 }
@@ -251,6 +261,7 @@ function failedRecord(input: {
     hasMore: input.previous?.hasMore ?? false,
     historyPageCount: input.previous?.historyPageCount ?? 1,
     historySyncAt: input.previous?.historySyncAt ?? input.previous?.successfulSyncAt ?? null,
+    trackedAssetKey: input.previous?.trackedAssetKey,
     items: normalizeItems(input.previous?.items ?? [], input.scope)
   })
 }
@@ -314,7 +325,9 @@ export function createCachedEvmActivityHistorySource(
           ...input,
           address,
           fromBlock:
-            (input.historyPageCount ?? 1) > 1 ? undefined : incrementalStartBlock(latestPrevious)
+            (input.historyPageCount ?? 1) > 1
+              ? undefined
+              : incrementalStartBlock(latestPrevious, options.trackedAssetKey)
         }
         const result = options.source.readAddressActivityWithMetadata
           ? await options.source.readAddressActivityWithMetadata(sourceInput)
@@ -332,7 +345,8 @@ export function createCachedEvmActivityHistorySource(
           fullScan: sourceInput.fromBlock === undefined,
           historyPageCount: input.historyPageCount,
           successTtlMs,
-          pendingTtlMs
+          pendingTtlMs,
+          trackedAssetKey: options.trackedAssetKey
         })
         await persist(record)
         logInfo(`[EVM History] refreshed chain=${options.chainId} items=${record.items.length}`)
@@ -388,7 +402,7 @@ export function createCachedEvmActivityHistorySource(
         ) {
           await persist({ ...cached, scope: input.scope, items })
         }
-        const retryAfter = cacheRetryAfter(cached, pendingTtlMs)
+        const retryAfter = cacheRetryAfter(cached, pendingTtlMs, options.trackedAssetKey)
         logInfo(
           `[EVM History] cache hit chain=${options.chainId} items=${items.length} successful=${cached.successfulSyncAt !== null}`
         )
@@ -458,6 +472,7 @@ export function createCachedOnlyEvmActivityHistorySource(
 
 export function createCachedEvmAnkrHistoryBatchSource(options: {
   readonly source: EvmAnkrHistoryClient
+  readonly trackedAssetKeys?: ReadonlyMap<string, string>
   readonly cache?: EvmHistoryCacheRepository
   readonly now?: () => number
 }) {
@@ -519,16 +534,22 @@ export function createCachedEvmAnkrHistoryBatchSource(options: {
         const attemptedAt = now()
         const due = targets.flatMap((target, index) => {
           const record = cached[index]
+          const trackedAssetKey = options.trackedAssetKeys?.get(target.chainId)
           if (
             record &&
             !record.items.some(isLegacyInferredEvmActivity) &&
-            attemptedAt < cacheRetryAfter(record, DEFAULT_PENDING_TTL_MS)
+            attemptedAt < cacheRetryAfter(record, DEFAULT_PENDING_TTL_MS, trackedAssetKey)
           ) {
             output.set(target.chainId, normalizeItems(record?.items ?? [], scope))
             return []
           }
           return [
-            { ...target, address, fromBlock: incrementalStartBlock(record), previous: record }
+            {
+              ...target,
+              address,
+              fromBlock: incrementalStartBlock(record, trackedAssetKey),
+              previous: record
+            }
           ]
         })
         if (due.length === 0) return output
@@ -626,7 +647,8 @@ export function createCachedEvmAnkrHistoryBatchSource(options: {
               fullScan: target.fromBlock === undefined,
               historyPageCount: 1,
               successTtlMs: DEFAULT_SUCCESS_TTL_MS,
-              pendingTtlMs: DEFAULT_PENDING_TTL_MS
+              pendingTtlMs: DEFAULT_PENDING_TTL_MS,
+              trackedAssetKey: options.trackedAssetKeys?.get(target.chainId)
             })
             output.set(target.chainId, record.items)
             await persist(record)

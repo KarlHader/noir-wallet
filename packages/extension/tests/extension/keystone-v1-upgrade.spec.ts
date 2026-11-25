@@ -152,29 +152,41 @@ test('provisions a Ledger Zcash account into Storage V2 through the real backgro
     const popup = await openExtensionPage(context, extensionId)
     await waitForBackgroundWalletInitialization(popup)
 
-    await popup.goto(`chrome-extension://${extensionId}/index.html#/hardware/ledger-connect`)
+    await popup.goto(`chrome-extension://${extensionId}/index.html#/hardware/connect`)
     await popup.reload()
+    await Promise.all([
+      popup.waitForEvent('domcontentloaded'),
+      popup.getByRole('button', { name: 'Ledger', exact: true }).click()
+    ])
+    await expect(popup).toHaveURL(/#\/hardware\/ledger-connect$/)
 
     const result = await popup.evaluate(
       async ({ ufvk, password }) => {
         const response = await chrome.runtime.sendMessage({
           type: 'PROVISION_LEDGER_HARDWARE',
           credential: {
-            schemaVersion: 2,
+            schemaVersion: 3,
             vendor: 'ledger',
-            firmwareProfile: 'zcash',
+            firmwareProfile: 'multi-app',
             capabilities: ['zcash'],
             accountExport: {
-              protocol: 'zcash-accounts-v1',
-              ufvk,
-              seedFingerprintHex: '0'.repeat(64),
-              accountHdIndex: 0
+              protocol: 'ledger-accounts-v1',
+              accounts: [
+                {
+                  family: 'zcash',
+                  accountIndex: 0,
+                  derivationPath: "m/32'/133'/0'",
+                  network: 'mainnet',
+                  ufvk,
+                  accountHdIndex: 0,
+                  birthdayHeight: 2_000_000
+                }
+              ]
             },
             deviceModel: 'nanoX',
             deviceName: 'Ledger Nano X'
           },
           displayName: 'Ledger Test',
-          birthdayHeight: 2_000_000,
           password
         })
         const walletState = await chrome.storage.local.get('wallet_state')
@@ -194,12 +206,121 @@ test('provisions a Ledger Zcash account into Storage V2 through the real backgro
         accounts: [
           expect.objectContaining({
             derivationIndex: 0,
+            birthdayHeight: 2_000_000,
             addresses: expect.objectContaining({ fullUnified: ADDRESSES.fullUnified })
           })
         ]
       })
     ])
     await popup.close()
+  } finally {
+    await context?.close()
+    await rm(userDataDir, { recursive: true, force: true })
+  }
+})
+
+test('adds Zcash to an existing Ledger EVM account at the selected birthday height', async () => {
+  test.setTimeout(120_000)
+  const userDataDir = await mkdtemp(path.join(tmpdir(), 'noir-ledger-add-zcash-'))
+  let context: BrowserContext | undefined
+
+  try {
+    context = await launchProfile(userDataDir)
+    const extensionId = await extensionIdFor(context)
+    const popup = await openExtensionPage(context, extensionId)
+    await waitForBackgroundWalletInitialization(popup)
+    await popup.goto(`chrome-extension://${extensionId}/index.html#/hardware/ledger-connect`)
+    await popup.reload()
+
+    const height = 2_000_000
+    const result = await popup.evaluate(
+      async ({ ufvk, password, height }) => {
+        const evm = {
+          family: 'evm',
+          accountIndex: 0,
+          derivationPath: "m/44'/60'/0'/0/0",
+          publicKey:
+            '0x0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
+          address: '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf'
+        }
+        const zcash = {
+          family: 'zcash',
+          accountIndex: 0,
+          derivationPath: "m/32'/133'/0'",
+          network: 'mainnet',
+          ufvk,
+          accountHdIndex: 0,
+          birthdayHeight: height
+        }
+        const credential = {
+          schemaVersion: 3,
+          vendor: 'ledger',
+          firmwareProfile: 'multi-app',
+          capabilities: ['evm'],
+          accountExport: { protocol: 'ledger-accounts-v1', accounts: [evm] },
+          deviceModel: 'nanoX',
+          deviceName: 'Ledger Nano X'
+        }
+        const initial = await chrome.runtime.sendMessage({
+          type: 'PROVISION_LEDGER_HARDWARE',
+          credential,
+          displayName: 'Ledger Test',
+          password
+        })
+        if (!initial.success) return { initial }
+        const expanded = await chrome.runtime.sendMessage({
+          type: 'PROVISION_LEDGER_HARDWARE',
+          credential: {
+            ...credential,
+            capabilities: ['zcash', 'evm'],
+            accountExport: { ...credential.accountExport, accounts: [evm, zcash] }
+          },
+          displayName: 'Ledger Test',
+          existingKeyDomainId: initial.result.keyDomainId,
+          anchorProof: evm
+        })
+        const walletState = await chrome.storage.local.get('wallet_state')
+        return { initial, expanded, walletState: walletState.wallet_state }
+      },
+      { ufvk: UFVK, password: PASSWORD, height }
+    )
+
+    expect(result.initial).toMatchObject({ success: true, result: { status: 'committed' } })
+    expect(result.expanded).toMatchObject({
+      success: true,
+      result: {
+        status: 'committed',
+        keyDomainId: result.initial.result.keyDomainId,
+        accountIds: result.initial.result.accountIds
+      }
+    })
+    const walletId = result.initial.result.keyDomainId
+    const accountId = result.initial.result.accountIds[0]
+    expect(result.walletState.state).toMatchObject({
+      currentWalletId: walletId,
+      currentAccountId: accountId
+    })
+    expect(result.walletState.state.wallets).toEqual([
+      expect.objectContaining({
+        id: walletId,
+        accounts: [
+          expect.objectContaining({
+            id: accountId,
+            birthdayHeight: height,
+            isHidden: false,
+            addresses: expect.objectContaining({ fullUnified: ADDRESSES.fullUnified })
+          })
+        ]
+      })
+    ])
+    await popup.goto(`chrome-extension://${extensionId}/index.html`)
+    await popup.reload()
+    await popup.getByRole('button', { name: 'Choose account, current: Ledger Test' }).hover()
+    await popup.getByRole('button', { name: 'Open Zcash settings' }).click()
+    await expect(popup.getByRole('region', { name: 'Zcash account' })).toBeVisible()
+    await expect(popup.getByRole('button', { name: 'Copy birthday height' })).toContainText(
+      '2,000,000'
+    )
   } finally {
     await context?.close()
     await rm(userDataDir, { recursive: true, force: true })

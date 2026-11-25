@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { BUILTIN_EVM_NETWORKS } from '../../src/config/networks'
+import { createLedgerMultichainHardwareCredential } from '../../src/core/wallet/ledger-hardware-credential'
 import { extensionDir, waitForBackgroundWalletInitialization } from '../helpers/extension-fixtures'
 
 const PASSWORD = 'mixed-v1-upgrade-password'
@@ -54,7 +55,11 @@ async function openExtensionPage(context: BrowserContext, extensionId: string): 
   return page
 }
 
-async function seedMixedV1Profile(page: Page): Promise<void> {
+async function seedMixedV1Profile(
+  page: Page,
+  hardware: 'keystone' | 'ledger' | 'incompatible-ledger' | 'unsupported-ledger' = 'keystone',
+  hardwareOnly = false
+): Promise<void> {
   await waitForBackgroundWalletInitialization(page)
   await page.evaluate(
     async input => {
@@ -102,11 +107,7 @@ async function seedMixedV1Profile(page: Page): Promise<void> {
 
       const [softwareEnvelope, hardwareEnvelope] = await Promise.all([
         encrypt({ seedPhrase: input.softwareMnemonic }),
-        encrypt({
-          ufvk: input.ufvk,
-          seedFingerprintHex: input.seedFingerprintHex,
-          accountHdIndex: 0
-        })
+        encrypt(input.hardwareCredential)
       ])
       await chrome.storage.local.clear()
       await chrome.storage.session.clear()
@@ -115,8 +116,10 @@ async function seedMixedV1Profile(page: Page): Promise<void> {
       await chrome.storage.local.set({
         wallet_state: {
           state: {
-            currentWalletId: input.softwareWalletId,
-            currentAccountId: input.softwareAccountId,
+            currentWalletId: input.activeHardware ? input.hardwareWalletId : input.softwareWalletId,
+            currentAccountId: input.activeHardware
+              ? input.hardwareAccountId
+              : input.softwareAccountId,
             currentNetwork: 'mainnet',
             zecPrice: 0,
             wallets: [
@@ -149,16 +152,16 @@ async function seedMixedV1Profile(page: Page): Promise<void> {
                     name: 'Keystone Account',
                     addresses: input.hardwareAddresses,
                     derivationIndex: 0,
-                    birthdayHeight: 2_000_000,
+                    birthdayHeight: 0,
                     isPinned: false,
                     isHidden: false
                   }
                 ],
                 createdAt: 1_700_000_000_001,
                 isPinned: false,
-                keySource: 'keystone'
+                keySource: input.hardwareSource
               }
-            ],
+            ].filter(wallet => !input.hardwareOnly || wallet.id === input.hardwareWalletId),
             accountDisplayNames: {}
           },
           version: 0
@@ -175,11 +178,98 @@ async function seedMixedV1Profile(page: Page): Promise<void> {
       softwareAddresses: SOFTWARE_ADDRESSES,
       hardwareWalletId: HARDWARE_WALLET_ID,
       hardwareAccountId: HARDWARE_ACCOUNT_ID,
-      hardwareAddresses: HARDWARE_ADDRESSES,
-      ufvk: UFVK,
-      seedFingerprintHex: SEED_FINGERPRINT
+      hardwareAddresses:
+        hardware === 'incompatible-ledger'
+          ? { ...HARDWARE_ADDRESSES, fullUnified: SOFTWARE_ADDRESSES.shielded }
+          : HARDWARE_ADDRESSES,
+      activeHardware:
+        hardwareOnly || hardware === 'incompatible-ledger' || hardware === 'unsupported-ledger',
+      hardwareOnly,
+      hardwareSource: hardware === 'keystone' ? 'keystone' : 'ledger',
+      hardwareCredential:
+        hardware === 'keystone'
+          ? { ufvk: UFVK, seedFingerprintHex: SEED_FINGERPRINT, accountHdIndex: 0 }
+          : hardware === 'unsupported-ledger'
+            ? { schemaVersion: 0, vendor: 'ledger' }
+            : createLedgerMultichainHardwareCredential({
+                deviceModel: 'nanoSP',
+                deviceName: 'Ledger Nano S Plus',
+                accounts: [
+                  {
+                    family: 'zcash',
+                    network: 'mainnet',
+                    accountIndex: 0,
+                    accountHdIndex: 0,
+                    derivationPath: "m/32'/133'/0'",
+                    ufvk: UFVK
+                  }
+                ]
+              })
     }
   )
+}
+
+for (const scenario of [
+  { hardware: 'ledger', hardwareOnly: false },
+  { hardware: 'incompatible-ledger', hardwareOnly: false },
+  { hardware: 'unsupported-ledger', hardwareOnly: true }
+] as const) {
+  const { hardware, hardwareOnly } = scenario
+  test(`recovers a retained profile with ${hardware} through real MV3`, async () => {
+    test.setTimeout(180_000)
+    const userDataDir = await mkdtemp(path.join(tmpdir(), 'noir-retained-ledger-upgrade-'))
+    let context: BrowserContext | undefined
+    try {
+      context = await launchProfile(userDataDir)
+      const setup = await openExtensionPage(context, await extensionIdFor(context))
+      await seedMixedV1Profile(setup, hardware, hardwareOnly)
+      await context.close()
+      context = await launchProfile(userDataDir)
+      const popup = await openExtensionPage(context, await extensionIdFor(context))
+      await waitForBackgroundWalletInitialization(popup)
+      const unlock = (password: string) =>
+        popup.evaluate(
+          value => chrome.runtime.sendMessage({ type: 'WALLET_UNLOCK', password: value }),
+          password
+        )
+      await expect(unlock('incorrect-fixture-password')).resolves.toMatchObject({
+        success: false,
+        failure: 'wrong_password'
+      })
+      await expect(unlock(PASSWORD)).resolves.toMatchObject(
+        hardwareOnly ? { success: false, needsWalletImport: true } : { success: true }
+      )
+      const expectedWalletIds =
+        hardware === 'ledger'
+          ? [SOFTWARE_WALLET_ID, HARDWARE_WALLET_ID]
+          : hardwareOnly
+            ? []
+            : [SOFTWARE_WALLET_ID]
+      const retained = await popup.evaluate(async hardwareId => {
+        const stored = await chrome.storage.local.get(['wallet_state', `hw_${hardwareId}`])
+        return {
+          ids: stored.wallet_state.state.wallets.map((wallet: { id: string }) => wallet.id),
+          selected: stored.wallet_state.state.currentWalletId,
+          encryptedHardwareRetained: Boolean(stored[`hw_${hardwareId}`])
+        }
+      }, HARDWARE_WALLET_ID)
+      expect(retained).toEqual({
+        ids: expectedWalletIds,
+        selected: hardwareOnly ? null : SOFTWARE_WALLET_ID,
+        encryptedHardwareRetained: true
+      })
+      if (hardwareOnly) return
+      const migrated = await inspectV2(popup)
+      const migratedWalletIds = migrated.storage.keyDomains.map(
+        record => (record as { entity: { id: string } }).entity.id
+      )
+      expect(migratedWalletIds.sort()).toEqual([...expectedWalletIds].sort())
+      await expect(unlock(PASSWORD)).resolves.toMatchObject({ success: true })
+    } finally {
+      await context?.close().catch(() => {})
+      await rm(userDataDir, { recursive: true, force: true })
+    }
+  })
 }
 
 async function inspectV2(page: Page) {
@@ -249,7 +339,7 @@ async function inspectV2(page: Page) {
   })
 }
 
-test('migrates mixed retained software and Keystone Wallets through real MV3', async () => {
+test('migrates mixed retained Wallets with an unknown Keystone birthday through real MV3', async () => {
   test.setTimeout(300_000)
   const userDataDir = await mkdtemp(path.join(tmpdir(), 'noir-v1-mixed-upgrade-'))
   let context: BrowserContext | undefined

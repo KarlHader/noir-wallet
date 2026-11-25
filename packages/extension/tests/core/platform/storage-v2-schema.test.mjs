@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 
+import { readActiveStorageV2Snapshot } from '../../../src/core/keyring/application/active-storage-v2-snapshot.ts'
 import {
   STORAGE_V2_ACTIVE_POINTER_KEY,
   buildStorageV2EntityKey,
@@ -109,6 +110,37 @@ test.describe('Storage V2 schema', () => {
         unexpected: true
       })
     ).toThrow(/keys/i)
+  })
+
+  test('exposes only a verified snapshot that matches the active pointer', async () => {
+    const draft = createSnapshot()
+    const committedAt = draft.manifest.createdAt + 1
+    const snapshot = parseStorageV2Snapshot({
+      ...draft,
+      manifest: { ...draft.manifest, status: 'verified', verifiedAt: committedAt }
+    })
+    const pointer = parseStorageV2ActivePointer({
+      schemaVersion: 2,
+      generationId: snapshot.manifest.generationId,
+      sourceFingerprint: snapshot.manifest.sourceFingerprint,
+      committedAt
+    })
+    const read = (active, stored) =>
+      readActiveStorageV2Snapshot({
+        getActivePointer: async () => active,
+        getSnapshot: async generationId => (generationId === active?.generationId ? stored : null)
+      })
+
+    await expect(read(pointer, snapshot)).resolves.toBe(snapshot)
+    await expect(read(null, snapshot)).resolves.toBeNull()
+    await expect(read(pointer, null)).rejects.toThrow('generation is missing')
+    for (const mismatched of [
+      parseStorageV2Snapshot(draft),
+      { ...snapshot, manifest: { ...snapshot.manifest, generationId: 'generation:2' } },
+      { ...snapshot, manifest: { ...snapshot.manifest, sourceFingerprint: 'b'.repeat(64) } }
+    ]) {
+      await expect(read(pointer, mismatched)).rejects.toThrow('does not match its pointer')
+    }
   })
 
   test('builds unambiguous entity and partition keys without parsing opaque IDs', () => {

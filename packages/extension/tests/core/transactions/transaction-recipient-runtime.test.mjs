@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { TransactionRecipientRecovery } from '../../../src/background/transaction-recipient-recovery.ts'
+import { applyLocalZcashActivityWrite } from '../../../src/core/wallet/local-zcash-activity.ts'
 
 const hash = 'ab'.repeat(32)
 const send = { id: 'restored', type: 'send', txHash: hash, amount: '0.01', to: '' }
@@ -24,9 +25,13 @@ function fixture(lookup) {
     getOwnedAddresses: () => new Set(['t1Owned']),
     load: async key => records.get(key) || [],
     lookup,
-    mutate: async (key, update) => {
+    write: async (key, write, { isActive }) => {
       mutations += 1
-      records.set(key, update(records.get(key) || []))
+      if (!isActive()) return { changed: false }
+      const previous = records.get(key) || []
+      const { transactions } = applyLocalZcashActivityWrite(previous, write)
+      records.set(key, transactions)
+      return { changed: transactions !== previous }
     },
     notify: async key => {
       notices.push(key)

@@ -1,4 +1,9 @@
-import { getEvmNetworkConfigs, getNearNetworkConfig } from '@/config/networks'
+import {
+  getKnownEvmNetworkIdentities,
+  getNearNetworkConfig,
+  getRetiredEvmNetworkIdentities
+} from '@/config/networks'
+import { getEvmNativeProtocolAssetId } from '@/config/asset-market-assets'
 import {
   createAssetId,
   createAssetRegistry,
@@ -24,12 +29,24 @@ const byProtocolId = new Map(
     )
     return [
       network,
-      new Map(
-        getAssetProtocolSourceMappings(network, assets).map(mapping => [
-          mapping.protocolAssetId,
-          mapping.assetId
-        ])
-      )
+      new Map([
+        ...getAssetProtocolSourceMappings(network, assets).map(
+          mapping => [mapping.protocolAssetId, mapping.assetId] as const
+        ),
+        ...(network === 'mainnet'
+          ? getRetiredEvmNetworkIdentities(network).flatMap(identity => {
+              const protocolAssetId = getEvmNativeProtocolAssetId(identity.chainId)
+              return protocolAssetId
+                ? [
+                    [
+                      protocolAssetId,
+                      `${identity.chainId}/slip44:${identity.slip44Reference}`
+                    ] as const
+                  ]
+                : []
+            })
+          : [])
+      ])
     ] as const
   })
 )
@@ -44,7 +61,12 @@ export function resolveRheaSwapCanonicalAssetId(
   if (protocolAssetId.includes('/')) {
     try {
       const parsed = parseAssetId(protocolAssetId)
-      return chainsByNetwork[network].get(parsed.chainId) ? parsed.id : null
+      return chainsByNetwork[network].get(parsed.chainId) ||
+        getRetiredEvmNetworkIdentities(network).some(
+          identity => identity.chainId === parsed.chainId
+        )
+        ? parsed.id
+        : null
     } catch {
       // Continue with the provider's protocol ID mappings.
     }
@@ -53,7 +75,7 @@ export function resolveRheaSwapCanonicalAssetId(
   if (mapped) return parseAssetId(mapped).id
   const token = EVM_BRIDGED_TOKEN.exec(protocolAssetId)
   if (network === 'mainnet' && token) {
-    const chainId = resolveIntentsEvmChainId(token[1], getEvmNetworkConfigs(network))
+    const chainId = resolveIntentsEvmChainId(token[1], getKnownEvmNetworkIdentities(network))
     if (chainId) return createAssetId(parseChainId(chainId).id, 'erc20', token[2].toLowerCase())
   }
   if (protocolAssetId.startsWith('nep141:')) {

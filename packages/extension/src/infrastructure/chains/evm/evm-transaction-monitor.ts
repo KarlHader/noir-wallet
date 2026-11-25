@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import { parseAccountId } from '@/core/accounts/domain'
 import type { AssetId } from '@/core/chains/domain'
 import { createAssetId, parseAssetId, parseChainId } from '@/core/chains/registry'
@@ -282,15 +283,16 @@ export class EvmTransactionMonitor {
     scopes: readonly TransactionAccountScope[]
   ): Promise<EvmTransactionMonitorResult> {
     const graphs: TransactionGraph[] = []
+    const activeScopes: TransactionAccountScope[] = []
     for (const scope of scopes) {
-      graphs.push(
-        ...(await this.repository.list({
-          scope,
-          chainId: this.chainId,
-          statuses: ['signed', 'broadcast', 'confirming'],
-          limit: 200
-        }))
-      )
+      const active = await this.repository.list({
+        scope,
+        chainId: this.chainId,
+        statuses: ['signed', 'broadcast', 'confirming'],
+        limit: 200
+      })
+      if (active.length > 0) activeScopes.push(scope)
+      graphs.push(...active)
     }
 
     const work = graphs.flatMap(graph =>
@@ -299,14 +301,55 @@ export class EvmTransactionMonitor {
     const settled = await mapWithConcurrency(work, this.concurrency, item =>
       this.observeAndPersist(item.graph, item.segment)
     )
+    const reconciled = await mapWithConcurrency(activeScopes, this.concurrency, async scope => {
+      const unsettled = await this.repository.list({
+        scope,
+        chainId: this.chainId,
+        statuses: ['signed', 'broadcast', 'confirming'],
+        limit: 200
+      })
+      if (unsettled.length === 0) return 'unchanged'
+      const finalized = await this.repository.list({
+        scope,
+        chainId: this.chainId,
+        statuses: ['final'],
+        limit: 200
+      })
+      let applied = false
+      for (const cancellation of finalized) {
+        if (cancellation.root.kind !== 'cancel') continue
+        const origin = cancellation.segments.find(segment => segment.role === 'origin')
+        const binding = origin && replacementBinding(cancellation, origin, this.chainId)
+        const hash = origin?.evidence?.transactionHash
+        if (!binding || !hash || origin.status !== 'final') continue
+        if (
+          !unsettled.some(candidate => {
+            const candidateOrigin = candidate.segments.find(segment => segment.role === 'origin')
+            const candidateBinding =
+              candidateOrigin && replacementBinding(candidate, candidateOrigin, this.chainId)
+            return (
+              candidate.root.id === cancellation.root.relation?.transactionId ||
+              (candidateBinding?.sender === binding.sender &&
+                candidateBinding.nonce === binding.nonce)
+            )
+          })
+        ) {
+          continue
+        }
+        applied = (await this.persistCancelledNonce(cancellation, hash)) || applied
+      }
+      return applied ? 'applied' : 'unchanged'
+    })
+    const outcomes = [...settled, ...reconciled]
     return Object.freeze({
       checked: settled.length,
-      applied: settled.filter(result => result.status === 'fulfilled' && result.value === 'applied')
-        .length,
+      applied: outcomes.filter(
+        result => result.status === 'fulfilled' && result.value === 'applied'
+      ).length,
       unchanged: settled.filter(
         result => result.status === 'fulfilled' && result.value === 'unchanged'
       ).length,
-      errors: settled.filter(result => result.status === 'rejected').length
+      errors: outcomes.filter(result => result.status === 'rejected').length
     })
   }
 
@@ -399,7 +442,7 @@ export class EvmTransactionMonitor {
       }
       if (receipt?.status !== 'failed') return 'unchanged'
     }
-    const result = await this.repository.applySegmentEvent({
+    const result = await writeLocalActivity('applySegmentEvent', this.repository, {
       scope: graph.root.scope,
       transactionId: graph.root.id,
       segmentId: segment.id,
@@ -462,7 +505,7 @@ export class EvmTransactionMonitor {
     })
     if (!event) return 'unchanged'
     const assetEffects = receiptAssetEffects(graph, observation, this.chainId)
-    const result = await this.repository.applySegmentEvent({
+    const result = await writeLocalActivity('applySegmentEvent', this.repository, {
       scope: graph.root.scope,
       transactionId: graph.root.id,
       segmentId: segment.id,
@@ -532,7 +575,7 @@ export class EvmTransactionMonitor {
   ): Promise<'applied' | 'unchanged'> {
     if (segment.status === 'final' || segment.status === 'failed') return 'unchanged'
     const observedAt = this.now()
-    const result = await this.repository.applySegmentEvent({
+    const result = await writeLocalActivity('applySegmentEvent', this.repository, {
       scope: original.root.scope,
       transactionId: original.root.id,
       segmentId: segment.id,
@@ -573,20 +616,21 @@ export class EvmTransactionMonitor {
   private async persistCancelledNonce(
     cancellation: TransactionGraph,
     replacementTransactionHash: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     const relation = cancellation.root.relation
     const sender = cancellation.root.intent?.sender
     const origin = cancellation.segments.find(segment => segment.role === 'origin')
     const nonce =
       cancellation.root.intent?.evm?.nonce ??
       EVM_NONCE_REFERENCE_PATTERN.exec(origin?.evidence?.externalReference ?? '')?.[1]
-    if (!sender || sender.chainId !== this.chainId || nonce === undefined) return
+    if (!sender || sender.chainId !== this.chainId || nonce === undefined) return false
     const candidates = await this.repository.list({
       scope: cancellation.root.scope,
       chainId: this.chainId,
       statuses: ['signed', 'broadcast', 'confirming'],
       limit: 200
     })
+    let applied = false
     for (const candidate of candidates) {
       if (
         candidate.root.id === cancellation.root.id ||
@@ -596,19 +640,21 @@ export class EvmTransactionMonitor {
       ) {
         continue
       }
-      await this.persistCancelledCandidate(
-        candidate,
-        replacementTransactionHash,
-        relation?.kind === 'replacement-of' && relation.transactionId === candidate.root.id
-      )
+      applied =
+        (await this.persistCancelledCandidate(
+          candidate,
+          replacementTransactionHash,
+          relation?.kind === 'replacement-of' && relation.transactionId === candidate.root.id
+        )) || applied
     }
+    return applied
   }
 
   private async persistCancelledCandidate(
     candidate: TransactionGraph,
     replacementTransactionHash: string,
     linked: boolean
-  ): Promise<void> {
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const original = await this.repository.get(candidate.root.scope, candidate.root.id)
       const segment = original?.segments.find(candidate => candidate.role === 'origin')
@@ -618,10 +664,10 @@ export class EvmTransactionMonitor {
         original.root.status === 'final' ||
         original.root.status === 'failed'
       ) {
-        return
+        return false
       }
       const observedAt = this.now()
-      const result = await this.repository.applySegmentEvent({
+      const result = await writeLocalActivity('applySegmentEvent', this.repository, {
         scope: original.root.scope,
         transactionId: original.root.id,
         segmentId: segment.id,
@@ -644,7 +690,7 @@ export class EvmTransactionMonitor {
         expectedRootRevision: original.root.revision,
         expectedSegmentRevision: segment.revision
       })
-      if (result.status !== 'revision-conflict') return
+      if (result.status !== 'revision-conflict') return result.status === 'applied'
     }
     throw new Error('EVM transaction monitor could not persist cancellation replacement')
   }

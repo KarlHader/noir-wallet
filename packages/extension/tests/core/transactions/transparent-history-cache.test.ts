@@ -2,10 +2,12 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { partitionVerboseTransactions } from '../../../src/core/wallet/transparent-history-cache'
 import {
+  applyExternalReceiveConfirmations,
   fetchTransparentReceiveTransactions,
   mapVerboseTransactionToReceive,
   mergeTransactionsWithWasmHistory,
-  mergeTransactionsWithTransparentReceives
+  mergeTransactionsWithTransparentReceives,
+  readExternalReceiveConfirmations
 } from '../../../src/core/wallet/transparent-history'
 import type { VerboseTransaction } from '../../../src/lib/zcash-node-rpc'
 import type { AccountData, Transaction } from '../../../src/types/wallet'
@@ -129,7 +131,7 @@ test.describe('Transparent history transaction cache', () => {
     }
   })
 
-  test('repairs a stale local shielded self-transfer without duplicating its receive side', () => {
+  test('repairs a stale local shielded send while preserving the scanned transparent receive', () => {
     const staleSend = walletTransaction({
       status: 'confirming',
       confirmations: 2,
@@ -151,7 +153,8 @@ test.describe('Transparent history transaction cache', () => {
       status: 'success',
       confirmations: 3
     })
-    expect(merged.transactions).toHaveLength(1)
+    expect(merged.transactions[1]).toEqual(wasmReceive)
+    expect(merged.transactions).toHaveLength(2)
   })
 
   test('repairs failed local sends from mature WASM history but preserves unrelated terminal records', () => {
@@ -223,7 +226,7 @@ test.describe('Transparent history transaction cache', () => {
     expect(recovered[0]).not.toHaveProperty('failureReason')
   })
 
-  test('keeps one row for a confirmed shielded self-transfer', () => {
+  test('keeps one transparent receive alongside its send when RPC history is temporarily absent', () => {
     const confirmedSend = walletTransaction({
       status: 'success',
       confirmations: 3,
@@ -237,18 +240,23 @@ test.describe('Transparent history transaction cache', () => {
       confirmations: 2,
       requiredConfirmations: 3
     })
-    const staleWasmReceive = {
+    const freshWasmReceive = {
       ...staleReceive,
-      id: `wasm_${confirmedSend.txHash}`
+      id: `wasm_${confirmedSend.txHash}`,
+      status: 'success' as const,
+      confirmations: 4
     }
 
     const merged = mergeTransactionsWithWasmHistory(
       [confirmedSend, staleReceive],
-      [staleWasmReceive],
-      [staleReceive]
+      [freshWasmReceive],
+      []
     )
 
-    expect(merged.transactions).toEqual([confirmedSend])
+    expect(merged.transactions).toEqual([
+      { ...confirmedSend, confirmations: 4 },
+      { ...staleReceive, status: 'success', confirmations: 4 }
+    ])
   })
 
   test('does not apply an unrelated send confirmation to an external receive', () => {
@@ -270,6 +278,79 @@ test.describe('Transparent history transaction cache', () => {
     const merged = mergeTransactionsWithWasmHistory([confirmedSend], [], [externalReceive])
 
     expect(merged.transactions).toEqual([confirmedSend, externalReceive])
+  })
+
+  test('advances a known external receipt without a wallet scan or an address index response', async () => {
+    const matureHash = txid('a')
+    const immatureHash = txid('b')
+    const mismatchedHash = txid('c')
+    const linkedHash = txid('d')
+    const transparentHash = txid('e')
+    const receipt = (hash: string, idPrefix = 'rpc_treceive_') =>
+      walletTransaction({
+        id: `${idPrefix}${hash}`,
+        txHash: hash,
+        type: 'receive',
+        fromType: 'transparent',
+        status: 'confirming',
+        confirmations: 3,
+        requiredConfirmations: 10
+      })
+    const staleWasmReceipt = { ...receipt(matureHash, 'wasm_'), fromType: 'shielded' as const }
+    const linkedSend = walletTransaction({ txHash: linkedHash })
+    const transactions = [
+      staleWasmReceipt,
+      receipt(immatureHash),
+      receipt(transparentHash, 'wasm_'),
+      receipt(mismatchedHash),
+      receipt(linkedHash),
+      linkedSend
+    ]
+    const queried: string[] = []
+    const originalFetch = globalThis.fetch
+    try {
+      globalThis.fetch = async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { method: string; params: string[] }
+        expect(request.method).toBe('getrawtransaction')
+        const hash = request.params[0]
+        queried.push(hash)
+        return Response.json({
+          result: {
+            txid: hash === mismatchedHash ? matureHash : hash,
+            confirmations: hash === immatureHash ? 9 : 41
+          }
+        })
+      }
+      const observed = await readExternalReceiveConfirmations(transactions, 'https://node.example')
+      expect(queried.sort()).toEqual([matureHash, immatureHash, mismatchedHash, transparentHash])
+      const updated = applyExternalReceiveConfirmations(transactions, observed)
+      expect(updated).toEqual([
+        { ...staleWasmReceipt, status: 'success', confirmations: 41 },
+        { ...transactions[1], confirmations: 9 },
+        { ...transactions[2], status: 'success', confirmations: 41 },
+        ...transactions.slice(3)
+      ])
+      const merged = mergeTransactionsWithWasmHistory(
+        updated,
+        [staleWasmReceipt],
+        [receipt(immatureHash)]
+      )
+      expect(merged.transactions.find(tx => tx.txHash === matureHash)).toMatchObject({
+        status: 'success',
+        confirmations: 41,
+        requiredConfirmations: 10
+      })
+      expect(merged.transactions.find(tx => tx.txHash === immatureHash)).toMatchObject({
+        status: 'confirming',
+        confirmations: 9,
+        requiredConfirmations: 10
+      })
+      expect(
+        applyExternalReceiveConfirmations([{ ...staleWasmReceipt, confirmations: 41 }], observed)[0]
+      ).toMatchObject({ status: 'success', confirmations: 41 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test('repairs a stale shield amount from the shielded output and fee', () => {
@@ -297,7 +378,8 @@ test.describe('Transparent history transaction cache', () => {
       ...staleShield,
       status: 'success',
       confirmations: 3,
-      amount: '0.00328475'
+      amount: '0.00328475',
+      settledSelfTransferAmount: '0.00308475'
     })
   })
 

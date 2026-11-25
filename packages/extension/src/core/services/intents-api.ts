@@ -2,12 +2,14 @@
  * NEAR Intents API service for cross-chain swap quotes and status tracking
  */
 
-import { config_near } from '@rhea-finance/cross-chain-sdk'
 import {
   ZEC_ZCASH_ASSET,
   WNEAR_NEAR_ASSET,
+  ONE_CLICK_TOKEN_CATALOG_URL,
+  RHEA_TOKEN_ICONS_API,
   NOIR_SWAP_APP_FEES,
-  NOIR_SWAP_REFERRAL
+  NOIR_SWAP_REFERRAL,
+  getConfidentialFundingNetworkConfig
 } from '@/config/intents'
 import {
   FetchHttpError,
@@ -18,12 +20,11 @@ import {
 import { DedupPromise } from '@/lib/async-utils'
 import { assertMainnetProtocolFeature } from '@/lib/runtime-network'
 import Big from 'big.js'
+import { formatUnits } from 'viem'
 import type { QuoteBinding } from '@/types/wallet'
+import { parseOneClickDepositMemo, type OneClickViewer } from './near-intents/one-click-order'
+import { requestOneClickQuote } from './near-intents/one-click-quote'
 
-const INTENTS_API_BASE = 'https://api.rhea.finance/api/1click'
-const ONECLICK_TOKENS_API = 'https://1click.chaindefuser.com/v0/tokens'
-const ONECLICK_STATUS_API = 'https://1click.chaindefuser.com/v0/status'
-const TOKEN_ICONS_API = `${config_near.indexUrl}/get_multichain_lending_tokens_data`
 const COINGECKO_MARKETS_API = 'https://api.coingecko.com/api/v3/coins/markets'
 const WALLET_TOKEN_BLOCKCHAINS = new Set(['sol', 'near'])
 
@@ -53,6 +54,7 @@ export interface QuoteParams {
   recipient: string
   slippageTolerance?: number
   validateQuoteRequest?: boolean
+  viewer?: OneClickViewer
   signal?: AbortSignal
 }
 
@@ -69,6 +71,7 @@ export interface QuoteResult {
       amountInUsd?: string
       amountOutUsd?: string
       depositAddress: string
+      depositMemo?: string
       deadline: string
     }
   }
@@ -295,6 +298,10 @@ export function parseQuoteSuccessResponse(value: unknown): QuoteResult {
   }
   const quote = value.quote
   const deadline = readQuoteString(quote.deadline, 'deadline')
+  const depositMemo =
+    quote.depositMemo == null || quote.depositMemo === ''
+      ? undefined
+      : parseOneClickDepositMemo(quote.depositMemo, 'Near Intents deposit memo')
   if (!Number.isSafeInteger(Date.parse(deadline))) {
     throw new Error('Invalid Near Intents deadline')
   }
@@ -311,6 +318,7 @@ export function parseQuoteSuccessResponse(value: unknown): QuoteResult {
       ? {}
       : { amountOutUsd: readQuoteString(quote.amountOutUsd, 'output USD amount') }),
     depositAddress: readQuoteString(quote.depositAddress, 'deposit address'),
+    ...(depositMemo ? { depositMemo } : {}),
     deadline
   })
   if (BigInt(parsed.minAmountOut) > BigInt(parsed.amountOut)) {
@@ -356,7 +364,7 @@ function readStatusTransactionHashes(
   return hashes
 }
 
-export function parseSwapStatusResponse(value: unknown): SwapStatus {
+export function parseSwapStatusResponse(value: unknown, outputDecimals?: number): SwapStatus {
   if (!isRecord(value)) throw new Error('Invalid Near Intents status response')
   const rheaStatusCandidate = value.status_response
   if (
@@ -367,7 +375,8 @@ export function parseSwapStatusResponse(value: unknown): SwapStatus {
     throw new Error('Invalid Near Intents RHEA status response')
   }
   const rheaStatus = isRecord(rheaStatusCandidate) ? rheaStatusCandidate : undefined
-  const rawStatus = value.status ?? rheaStatus?.status ?? 'PENDING_DEPOSIT'
+  const returnedStatus = value.status ?? rheaStatus?.status ?? 'PENDING_DEPOSIT'
+  const rawStatus = returnedStatus === 'COMPLETED' ? 'SUCCESS' : returnedStatus
   if (typeof rawStatus !== 'string' || !SWAP_STATUS_TYPES.includes(rawStatus as SwapStatusType)) {
     throw new Error('Invalid Near Intents status')
   }
@@ -384,7 +393,14 @@ export function parseSwapStatusResponse(value: unknown): SwapStatus {
     details?.destinationChainTxHashes,
     'destination transaction hashes'
   )
-  const amountOutFormatted = readOptionalStatusAmount(details?.amountOutFormatted)
+  const amountOutFormatted =
+    readOptionalStatusAmount(details?.amountOutFormatted) ??
+    (outputDecimals !== undefined && details?.amountOut != null && details.amountOut !== ''
+      ? formatUnits(
+          BigInt(readQuoteRawAmount(details.amountOut, 'settled output amount')),
+          outputDecimals
+        )
+      : undefined)
   const quoteResponseCandidate =
     value.quoteResponse ?? rheaStatus?.quoteResponse ?? value.quote_response
   if (quoteResponseCandidate !== undefined && !isRecord(quoteResponseCandidate)) {
@@ -515,7 +531,7 @@ async function ensureRheaIconsLoaded(tokens: SwapToken[]): Promise<void> {
       while (next < chainsToLoad.length) {
         const chain = chainsToLoad[next++]!
         try {
-          const url = new URL(TOKEN_ICONS_API)
+          const url = new URL(RHEA_TOKEN_ICONS_API)
           url.searchParams.set('chains', chain)
           const response = await fetchWithTimeout(url, { timeoutMs: 8_000 })
           const icons = parseRheaIconCatalogResponse(await response.json())
@@ -592,7 +608,7 @@ function enrichTokenIcons(tokens: SwapToken[]): SwapToken[] {
 }
 
 async function fetchAllTokens(): Promise<SwapToken[]> {
-  const response = await fetchWithTimeout(ONECLICK_TOKENS_API)
+  const response = await fetchWithTimeout(ONE_CLICK_TOKEN_CATALOG_URL)
   const tokens = parseSwapTokenCatalogResponse(await response.json())
   tokenCache = enrichTokenIcons(tokens)
   tokenCacheTime = Date.now()
@@ -689,6 +705,8 @@ function getSwapQuoteErrorMessage(error: unknown): string {
 export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
   assertMainnetProtocolFeature('Swap')
   try {
+    const oneClickApiUrl = getConfidentialFundingNetworkConfig('mainnet')?.oneClickApiUrl
+    if (!oneClickApiUrl) throw new Error('Near Intents quote is unavailable')
     const requestBody = {
       originAsset: params.originAsset,
       destinationAsset: params.destinationAsset,
@@ -707,14 +725,12 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
       appFees: NOIR_SWAP_APP_FEES
     }
 
-    const response = await fetchWithTimeout(`${INTENTS_API_BASE}/quote`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      timeoutMs: 20000,
-      maxBytes: 1024 * 1024,
-      signal: params.signal
-    })
+    const response = await requestOneClickQuote(
+      oneClickApiUrl,
+      requestBody,
+      (url, init) => fetchWithTimeout(url, { ...init, timeoutMs: 20000, maxBytes: 1024 * 1024 }),
+      { viewer: params.viewer, signal: params.signal }
+    )
 
     const data = await response.json()
 
@@ -757,90 +773,4 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
       message: getSwapQuoteErrorMessage(error)
     }
   }
-}
-
-/**
- * Fetches the current swap status for a deposit address
- */
-export async function fetchSwapStatus(depositAddress: string): Promise<SwapStatus | null> {
-  assertMainnetProtocolFeature('Swap')
-  const encodedDepositAddress = encodeURIComponent(depositAddress)
-  const endpoints = Object.freeze([
-    `${INTENTS_API_BASE}/status?depositAddress=${encodedDepositAddress}`,
-    `${ONECLICK_STATUS_API}?depositAddress=${encodedDepositAddress}`
-  ])
-  let lastError: unknown
-
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetchWithTimeout(endpoint, { maxBytes: 1024 * 1024 })
-      return parseSwapStatusResponse(await response.json())
-    } catch (error) {
-      lastError = error
-    }
-  }
-
-  console.error(
-    'Error fetching swap status from RHEA and 1Click:',
-    lastError instanceof Error ? lastError.name : 'UnknownError'
-  )
-  return null
-}
-
-/**
- * Polls swap status until completion (SUCCESS, REFUNDED, or FAILED)
- */
-export async function pollingSwapStatus(
-  depositAddress: string,
-  onStatusChange?: (status: SwapStatus) => void,
-  options?: { interval?: number; maxRetries?: number; signal?: AbortSignal }
-): Promise<SwapStatus> {
-  assertMainnetProtocolFeature('Swap')
-  const interval = options?.interval ?? 5000
-  const maxRetries = options?.maxRetries ?? 360
-  const signal = options?.signal
-
-  return new Promise((resolve, reject) => {
-    let retries = 0
-
-    const poll = async () => {
-      if (signal?.aborted) {
-        reject(new DOMException('Swap polling aborted', 'AbortError'))
-        return
-      }
-
-      retries++
-      const status = await fetchSwapStatus(depositAddress)
-
-      if (status) {
-        onStatusChange?.(status)
-
-        if (
-          status.status === 'SUCCESS' ||
-          status.status === 'REFUNDED' ||
-          status.status === 'FAILED'
-        ) {
-          resolve(status)
-          return
-        }
-      }
-
-      if (retries >= maxRetries) {
-        reject(new Error(`Swap polling timed out after ${retries} attempts`))
-        return
-      }
-
-      const timeoutId = setTimeout(poll, interval)
-      signal?.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(timeoutId)
-          reject(new DOMException('Swap polling aborted', 'AbortError'))
-        },
-        { once: true }
-      )
-    }
-
-    poll()
-  })
 }

@@ -1,8 +1,9 @@
+import type { CombinedEvmSwapInput, CombinedEvmSwapProgress } from '@/background/combined-evm-swap'
 import type {
   SwapApprovalContinuation,
-  SwapApprovalContinuationInput
+  SwapApprovalContinuationInput,
+  SwapApprovalContinuationResult
 } from '@/background/swap-approval-continuation'
-import type { RheaSwapQuoteView } from '@/core/services/rhea-swap'
 
 async function request<T>(type: string, fields: Record<string, unknown>): Promise<T> {
   const response = await chrome.runtime.sendMessage({ type, ...fields })
@@ -12,15 +13,16 @@ async function request<T>(type: string, fields: Record<string, unknown>): Promis
 }
 
 export const swapApprovalContinuationClient = {
+  startCombined: (input: CombinedEvmSwapInput) =>
+    request<CombinedEvmSwapProgress>('START_COMBINED_EVM_SWAP', { input }),
+  getCombined: (transactionId: string) =>
+    request<CombinedEvmSwapProgress | null>('GET_COMBINED_EVM_SWAP', { transactionId }),
   save: (input: SwapApprovalContinuationInput) =>
     request<SwapApprovalContinuation>('SAVE_SWAP_APPROVAL_CONTINUATION', { input }),
   get: (transactionId: string) =>
     request<SwapApprovalContinuation | null>('GET_SWAP_APPROVAL_CONTINUATION', { transactionId }),
   continue: (transactionId: string) =>
-    request<SwapApprovalContinuation & { readonly quote: RheaSwapQuoteView | null }>(
-      'CONTINUE_SWAP_AFTER_APPROVAL',
-      { transactionId }
-    ),
+    request<SwapApprovalContinuationResult>('CONTINUE_SWAP_AFTER_APPROVAL', { transactionId }),
   clear: (transactionId: string) =>
     request<void>('CLEAR_SWAP_APPROVAL_CONTINUATION', { transactionId })
 }

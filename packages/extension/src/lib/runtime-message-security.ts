@@ -1,4 +1,5 @@
 import { EVM_DAPP_RUNTIME_METHODS, type EvmDAppRuntimeMethod } from '@/core/dapp/eip1193'
+import { parseDAppExecutionModeScope } from '@/core/dapp/dapp-execution-mode'
 import {
   BITCOIN_DAPP_RUNTIME_METHODS,
   type BitcoinDAppRuntimeMethod
@@ -11,6 +12,10 @@ import {
   type SolanaDAppRuntimeMethod
 } from '@/core/dapp/native-transfer-provider'
 import { CAIP25_RUNTIME_METHODS, type Caip25RuntimeMethod } from '@/core/dapp/caip25'
+import {
+  SHIELD_DAPP_RUNTIME_METHODS,
+  type ShieldDAppRuntimeMethod
+} from '@/core/dapp/shield-provider'
 import {
   RHEA_SWAP_CHAIN_CATALOG,
   parseRheaSwapQuoteRequest
@@ -58,7 +63,8 @@ export const DAPP_RUNTIME_METHODS = Object.freeze([
   ...BITCOIN_DAPP_RUNTIME_METHODS,
   ...SOLANA_DAPP_RUNTIME_METHODS,
   ...NEAR_DAPP_RUNTIME_METHODS,
-  ...CAIP25_RUNTIME_METHODS
+  ...CAIP25_RUNTIME_METHODS,
+  ...SHIELD_DAPP_RUNTIME_METHODS
 ] as const)
 
 export type ZcashDAppRuntimeMethod = (typeof ZCASH_DAPP_RUNTIME_METHODS)[number]
@@ -70,11 +76,12 @@ export type DAppRuntimeMethod =
   | SolanaDAppRuntimeMethod
   | NearDAppRuntimeMethod
   | Caip25RuntimeMethod
+  | ShieldDAppRuntimeMethod
 
 export interface DAppRuntimeRequestMessage {
   readonly type: 'DAPP_REQUEST'
   readonly requestId: string
-  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain'
+  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain' | 'shield'
   readonly siteMetadata?: {
     readonly faviconUrl: string
   }
@@ -206,6 +213,7 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     'refundAddress',
     'slippageBps',
     ...(value.recipientType === undefined ? [] : ['recipientType']),
+    ...(value.userAction === undefined ? [] : ['userAction']),
     ...(value.fundingSource === undefined ? [] : ['fundingSource']),
     ...(value.requestId === undefined ? [] : ['requestId'])
   ]
@@ -217,6 +225,8 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     isNativeZecIntentsQuoteId(value.accountId) &&
     typeof value.amountZats === 'string' &&
     /^[1-9][0-9]{0,77}$/.test(value.amountZats) &&
+    (value.userAction === undefined ||
+      (value.recipientType === 'CONFIDENTIAL_INTENTS' && value.userAction === 'swap')) &&
     hasExactRuntimeKeys(destination, [
       'chainId',
       'assetId',
@@ -333,6 +343,14 @@ const isAssetMarketHistoryRange: RuntimeFieldValidator = value =>
   value === 'all'
 const isNetworkMode: RuntimeFieldValidator = value => value === 'mainnet' || value === 'testnet'
 const isDAppExecutionMode: RuntimeFieldValidator = value => value === 'main' || value === 'private'
+const isDAppExecutionModeScope: RuntimeFieldValidator = value => {
+  try {
+    parseDAppExecutionModeScope(value)
+    return true
+  } catch {
+    return false
+  }
+}
 const isEvmPayloadFingerprint: RuntimeFieldValidator = value =>
   typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)
 const isCanonicalBitcoinPsbtBase64: RuntimeFieldValidator = value =>
@@ -483,6 +501,10 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     }
   },
   GET_DAPP_EXECUTION_MODE: {},
+  GET_ACCOUNT_INCOGNITO_SETUP: { required: { scope: isDAppExecutionModeScope } },
+  COMPLETE_ACCOUNT_INCOGNITO_SETUP: {
+    required: { scope: isDAppExecutionModeScope, confirmPrivateSetup: value => value === true }
+  },
   SET_DAPP_EXECUTION_MODE: {
     required: { mode: isDAppExecutionMode },
     optional: { confirmPrivateSetup: isBoolean, confirmAffectedOperations: isBoolean }
@@ -664,6 +686,8 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
         value === 'private-swap' ||
         value === 'private-transfer' ||
         value === 'private-cross-chain-send' ||
+        value === 'private-cross-chain-withdraw' ||
+        value === 'public-private-move' ||
         value === 'public-private-send',
       zcashFundingSource: (value: unknown) => value === 'transparent' || value === 'shielded'
     }
@@ -776,8 +800,11 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     required: { action: isPortfolioAction },
     optional: {
       forceDiscovery: isBoolean,
+      waitForTokenDiscovery: isBoolean,
+      refreshConfidential: isBoolean,
       automatic: isBoolean,
       chainIds: isChainIdArray,
+      detailAssetId: isShortString,
       expectedWalletId: isShortString,
       expectedAccountId: isShortString
     }
@@ -856,6 +883,19 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       executionMode: value => value === 'main' || value === 'private',
       feeSelection: isEvmFeeSelection
     }
+  },
+  ESTIMATE_EVM_REPLACEMENT_FEE: {
+    required: {
+      chainId: isShortString,
+      originalTransactionId: isShortString,
+      action: value => value === 'cancel' || value === 'speed-up',
+      feeSelection: isEvmFeeSelection
+    },
+    optional: { executionMode: value => value === 'main' || value === 'private' }
+  },
+  ESTIMATE_EVM_NONCE_RECOVERY_FEE: {
+    required: { chainId: isShortString, feeSelection: isEvmFeeSelection },
+    optional: { executionMode: value => value === 'main' || value === 'private' }
   },
   GET_EVM_NONCE_RECOVERY: {
     required: { chainId: isShortString },
@@ -1060,6 +1100,13 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       transactionId: isShortString,
       updates: isRecord
     }
+  },
+  MARK_ZCASH_TRANSACTION_NOTIFIED: {
+    required: {
+      accountKey: isShortString,
+      transactionId: isShortString,
+      status: value => value === 'success' || value === 'failed'
+    }
   }
 })
 
@@ -1123,6 +1170,8 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     GET_EXTENSION_DISPLAY_MODE: ['extension-page'],
     SET_EXTENSION_DISPLAY_MODE: ['extension-page'],
     GET_DAPP_EXECUTION_MODE: ['extension-page'],
+    GET_ACCOUNT_INCOGNITO_SETUP: ['extension-page'],
+    COMPLETE_ACCOUNT_INCOGNITO_SETUP: ['extension-page'],
     SET_DAPP_EXECUTION_MODE: ['extension-page'],
     SWITCH_NETWORK_MODE: ['extension-page'],
     GET_ACTIVITY: ['extension-page'],
@@ -1195,6 +1244,8 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     PREPARE_EVM_CONTRACT_CALL: ['extension-page'],
     PREPARE_EVM_CANCEL: ['extension-page'],
     PREPARE_EVM_SPEED_UP: ['extension-page'],
+    ESTIMATE_EVM_REPLACEMENT_FEE: ['extension-page'],
+    ESTIMATE_EVM_NONCE_RECOVERY_FEE: ['extension-page'],
     GET_EVM_NONCE_RECOVERY: ['extension-page'],
     PREPARE_EVM_NONCE_RECOVERY: ['extension-page'],
     GET_PENDING_EVM_TRANSFER: ['extension-page'],
@@ -1252,7 +1303,8 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     RECHECK_FAST_PENDING_TRANSACTIONS: ['extension-page'],
     GET_TRANSACTION_HISTORY: ['extension-page'],
     ADD_TRANSACTION: ['extension-page'],
-    UPDATE_TRANSACTION: ['extension-page']
+    UPDATE_TRANSACTION: ['extension-page'],
+    MARK_ZCASH_TRANSACTION_NOTIFIED: ['extension-page']
   })
 
 const trustedRuntimeSchemaTypes = Object.keys(TRUSTED_RUNTIME_SCHEMAS).sort()
@@ -1272,6 +1324,7 @@ const bitcoinDappMethodSet = new Set<string>(BITCOIN_DAPP_RUNTIME_METHODS)
 const solanaDappMethodSet = new Set<string>(SOLANA_DAPP_RUNTIME_METHODS)
 const nearDappMethodSet = new Set<string>(NEAR_DAPP_RUNTIME_METHODS)
 const caip25DappMethodSet = new Set<string>(CAIP25_RUNTIME_METHODS)
+const shieldDappMethodSet = new Set<string>(SHIELD_DAPP_RUNTIME_METHODS)
 const FORBIDDEN_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
 export function isRuntimeRecord(value: unknown): value is Record<string, unknown> {
@@ -1554,12 +1607,14 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
     (value.chainId === 'solana' && !solanaDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'near' && !nearDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'multichain' && !caip25DappMethodSet.has(value.request.method)) ||
+    (value.chainId === 'shield' && !shieldDappMethodSet.has(value.request.method)) ||
     (value.chainId !== 'zcash' &&
       value.chainId !== 'evm' &&
       value.chainId !== 'bitcoin' &&
       value.chainId !== 'solana' &&
       value.chainId !== 'near' &&
-      value.chainId !== 'multichain')
+      value.chainId !== 'multichain' &&
+      value.chainId !== 'shield')
   ) {
     throw new Error('dApp runtime method does not match its provider')
   }
@@ -1567,9 +1622,13 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
   const paramsAreEvmRecord = value.chainId === 'evm' && isRuntimeRecord(value.request.params)
   const paramsAreMultichainRecord =
     value.chainId === 'multichain' && isRuntimeRecord(value.request.params)
+  const paramsAreShieldRecord = value.chainId === 'shield' && isRuntimeRecord(value.request.params)
   if (
     value.request.params !== undefined &&
-    ((!paramsAreArray && !paramsAreEvmRecord && !paramsAreMultichainRecord) ||
+    ((!paramsAreArray &&
+      !paramsAreEvmRecord &&
+      !paramsAreMultichainRecord &&
+      !paramsAreShieldRecord) ||
       (paramsAreArray && (value.request.params as unknown[]).length > 16))
   ) {
     throw new Error('Invalid dApp runtime params')

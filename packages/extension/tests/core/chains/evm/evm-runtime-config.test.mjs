@@ -99,25 +99,16 @@ test.describe('EVM runtime configuration', () => {
     })
     expect(resolvePersistedEvmNetworkChainIds(raw)).toEqual([
       'eip155:1',
-      'eip155:10',
-      'eip155:100',
       'eip155:11155111',
-      'eip155:11155420',
       'eip155:137',
-      'eip155:143',
-      'eip155:196',
       'eip155:31337',
       'eip155:42161',
       'eip155:421614',
-      'eip155:43113',
-      'eip155:43114',
       'eip155:56',
       'eip155:80002',
-      'eip155:80094',
       'eip155:8453',
       'eip155:84532',
-      'eip155:97',
-      'eip155:9745'
+      'eip155:97'
     ])
   })
 })

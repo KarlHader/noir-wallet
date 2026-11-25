@@ -1,3 +1,4 @@
+import { writeLocalActivity } from '@/infrastructure/persistence/repositories/local-activity'
 import type { RheaSwapService } from '@/core/services/rhea-swap'
 import type {
   RheaSwapEvmSignatureReview,
@@ -519,7 +520,7 @@ export class RheaSwapEvmSignatureCoordinator {
       },
       now: createdAt
     })
-    const persisted = await this.options.repository.create(graph)
+    const persisted = await writeLocalActivity('create', this.options.repository, graph)
     if (persisted.status === 'id-conflict') {
       throw new Error('RHEA Swap order transaction ID conflicts with an existing record')
     }

@@ -640,7 +640,11 @@ export class SyncScheduler {
                 : wallet.accounts[0].id
 
             this.abortNonCurrentSyncs(syncTarget)
-            logger.log('Sync foreground', syncTarget, accountId)
+            logger.log(
+              passiveRun ? 'Sync periodic background' : 'Sync foreground',
+              syncTarget,
+              accountId
+            )
             const status = await this.runSyncForWallet(syncTarget, accountId, passiveRun)
             if (passiveRun) this.onPassiveSyncOutcome?.(status)
           }
@@ -872,3 +876,26 @@ export class SyncScheduler {
 }
 
 export const syncScheduler = new SyncScheduler()
+
+export class WalletSyncNotIdleError extends Error {
+  constructor() {
+    super('Wallet is syncing. Please try again after sync completes.')
+  }
+}
+
+export async function withTxSyncPause<T>(
+  walletId: string | undefined,
+  operation: () => Promise<T>,
+  timeoutMs = WALLET_CONFIG.SYNC.MAX_BLOCKING_WAIT_MS
+): Promise<T> {
+  syncScheduler.pauseForTx()
+  try {
+    const idle = walletId
+      ? await syncScheduler.waitForWalletSyncIdle(walletId, timeoutMs)
+      : await syncScheduler.waitForActiveSyncIdle(timeoutMs)
+    if (!idle) throw new WalletSyncNotIdleError()
+    return await operation()
+  } finally {
+    syncScheduler.resumeAfterTx()
+  }
+}

@@ -1,7 +1,8 @@
 import type { Network } from '@/types'
+import type { OneClickOrder } from '@/core/services/near-intents/one-click-order'
 import { confidentialPrivateTokenId } from './confidential-funding-portfolio'
 
-const CONFIDENTIAL_WITHDRAW_MIN_COUNT = 2
+export const CONFIDENTIAL_WITHDRAW_MIN_COUNT = 2
 const CONFIDENTIAL_WITHDRAW_MAX_COUNT = 5
 export const CONFIDENTIAL_WITHDRAW_DEFAULT_COUNT = 3
 export const CONFIDENTIAL_SESSION_REQUIRED_ERROR = 'Refresh Shield balances to continue.'
@@ -30,6 +31,7 @@ export type ConfidentialSignedPayload = Readonly<{
 
 export interface ConfidentialQuote {
   readonly correlationId: string
+  readonly oneClickOrder?: OneClickOrder
   readonly quoteRequest: Readonly<Record<string, unknown>>
   readonly quote: Readonly<{
     amountIn: string
@@ -58,12 +60,28 @@ export interface ConfidentialQuoteBinding {
   readonly slippageBps: number
 }
 
+export function confidentialQuoteAppFeeBps(
+  quote: Pick<ConfidentialQuote, 'quoteRequest'> | undefined
+): number {
+  const fees = quote?.quoteRequest?.appFees
+  if (!Array.isArray(fees)) return 0
+  let total = 0
+  for (const entry of fees) {
+    const fee: unknown = entry?.fee
+    if (typeof fee !== 'number' || !Number.isSafeInteger(fee) || fee < 0) return 0
+    total += fee
+    if (total > 10_000) return 0
+  }
+  return total
+}
+
 export interface ConfidentialWithdrawRow {
   readonly sequence: number
   readonly sourceAmountRaw: string
   readonly amountRaw: string
   readonly settledOutputRaw?: string
   readonly depositAddress: string
+  readonly oneClickOrder?: OneClickOrder
   readonly destinationAddress: string
   readonly destinationChain: string
   readonly token: string
@@ -125,10 +143,24 @@ export function normalizeConfidentialWithdrawRequest(
   })
 }
 
+export type ConfidentialFundingOperation =
+  | 'deposit'
+  | 'withdraw'
+  | 'cluster'
+  | 'swap'
+  | 'confidential-transfer'
+
+export const CONFIDENTIAL_FUNDING_PURPOSES = [
+  'move',
+  'native-zec-swap',
+  'same-asset-zec-swap'
+] as const
+export type ConfidentialFundingPurpose = (typeof CONFIDENTIAL_FUNDING_PURPOSES)[number]
+
 export interface ConfidentialFundingPlan {
   readonly schemaVersion: 1
-  readonly purpose?: 'move' | 'native-zec-swap'
-  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
+  readonly purpose?: ConfidentialFundingPurpose
+  readonly operation?: ConfidentialFundingOperation
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly planId: string
@@ -163,6 +195,7 @@ export interface ConfidentialFundingPlan {
   readonly swapQuote?: ConfidentialQuote
   readonly quoteTimeEstimateSeconds?: number
   readonly reviewedAppFeesFingerprint?: string
+  readonly reviewedAppFeeBps?: number
   readonly preparedDeposit?: Readonly<{
     commandId: string
     payloadFingerprint: string
@@ -212,8 +245,8 @@ export function canRetryConfidentialSubmission(
 
 export interface ConfidentialFundingReview {
   readonly planId: string
-  readonly purpose?: 'move' | 'native-zec-swap'
-  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
+  readonly purpose?: ConfidentialFundingPurpose
+  readonly operation?: ConfidentialFundingOperation
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly network?: Network

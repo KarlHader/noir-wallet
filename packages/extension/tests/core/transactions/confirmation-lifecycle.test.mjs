@@ -185,7 +185,7 @@ test.describe('Confirmed transaction wallet settlement', () => {
   })
 })
 
-test.describe('Withdraw and Received merge via destinationTxHash', () => {
+test.describe('Withdraw and Received sharing destinationTxHash', () => {
   test('localTxHashSet includes destinationTxHash from withdraw records', () => {
     const withdrawTx = tx({
       id: 'tx_withdraw_1',
@@ -198,7 +198,7 @@ test.describe('Withdraw and Received merge via destinationTxHash', () => {
     expect(hashes.has(normalizeTxHash('dest_zcash_hash'))).toBe(true)
   })
 
-  test('WASM receive matching withdraw destinationTxHash is deduplicated', () => {
+  test('keeps a shielded WASM receive matching a withdraw destinationTxHash', () => {
     const withdrawTx = tx({
       id: 'tx_withdraw_1',
       txHash: 'near_hash',
@@ -212,7 +212,7 @@ test.describe('Withdraw and Received merge via destinationTxHash', () => {
       fromType: 'shielded'
     })
     const hashes = localTxHashSet([withdrawTx])
-    expect(isDuplicateWasmRow(wasmReceive, hashes)).toBe(true)
+    expect(isDuplicateWasmRow(wasmReceive, hashes)).toBe(false)
   })
 
   test('unrelated WASM receive with same amount is NOT deduplicated (no fuzzy match)', () => {
@@ -401,16 +401,5 @@ test.describe('Source invariants for confirmation lifecycle', () => {
   test('WASM history resolves confirmation status by transaction type', () => {
     assert.match(zcashWalletRuntimeSource, /resolveMinedTransactionStatus/)
     assert.match(zcashWalletRuntimeSource, /chainTip,[\s\S]*?type/)
-  })
-
-  test('Assets shows every unspendable balance without changing activity status', () => {
-    const balanceSource = readFileSync(
-      new URL('../../../src/popup/components/balance/BalanceWithPending.tsx', import.meta.url),
-      'utf-8'
-    )
-    assert.match(balanceSource, /safeBig\(pending\)\.gt\(0\)/)
-    assert.match(balanceSource, /ZEC unspendable/)
-    assert.doesNotMatch(balanceSource, /DUST_THRESHOLD/)
-    assert.doesNotMatch(balanceSource, /ZEC confirming/)
   })
 })

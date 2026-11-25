@@ -1,7 +1,9 @@
-import { test } from 'node:test'
+import { afterEach, test } from 'node:test'
 import { expect } from '@playwright/test'
 import { Buffer } from 'buffer'
 import { UR } from '@ngraveio/bc-ur'
+import { keccak256, numberToHex, serializeTransaction } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 
 import {
   KEYSTONE_ETHEREUM_SIGN_REQUEST_UR_TYPE,
@@ -10,6 +12,14 @@ import {
   parseKeystoneEthereumSignature,
   parseKeystoneEthereumSignatureCborBase64
 } from '../../../src/lib/keystone/index.ts'
+import {
+  cancelAllKeystoneEvmSigning,
+  getKeystoneEvmSigningRequest,
+  registerKeystoneEvmSigningTabLifecycle,
+  requestKeystoneEvmPersonalSignature,
+  requestKeystoneEvmTransactionSignature,
+  submitKeystoneEvmSigningResponse
+} from '../../../src/background/keystone-evm-message-signing.ts'
 
 const requestId = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d'
 const unsignedTransactionHex =
@@ -109,5 +119,187 @@ test.describe('Keystone Ethereum UR protocol', () => {
     ]) {
       expect(() => createKeystoneEthereumSignRequest(input)).toThrow()
     }
+  })
+})
+
+test.describe('Keystone signature-only session', () => {
+  const account = privateKeyToAccount(`0x${'11'.repeat(32)}`)
+  const otherAccount = privateKeyToAccount(`0x${'22'.repeat(32)}`)
+  const messageHex = '0x0068656c6c6fff'
+  const accountBinding = {
+    address: account.address,
+    derivationPath: "m/44'/60'/0'/0/0",
+    masterFingerprintHex: 'e9181cf3'
+  }
+  let nextTabId = 10
+  let tabOpened
+  let tabRemoved
+
+  async function begin(request, overrides = {}) {
+    const opened = new Promise(resolve => {
+      tabOpened = resolve
+    })
+    const requestSignature =
+      request.kind === 'personal-sign'
+        ? requestKeystoneEvmPersonalSignature
+        : requestKeystoneEvmTransactionSignature
+    const result = requestSignature(
+      { ...accountBinding, ...request },
+      {
+        scope: { chainId: 'eip155:1' },
+        expiresAt: Date.now() + 5_000,
+        payloadFingerprint: { algorithm: 'sha256', digestHex: 'a'.repeat(64) },
+        validate: async () => {},
+        ...overrides
+      }
+    )
+    void result.catch(() => {})
+    const { tabId, url } = await Promise.race([opened, result])
+    const id = new URLSearchParams(new URL(url).hash.split('?')[1]).get('requestId')
+    return { id, tabId, result }
+  }
+
+  async function submit(session, signature, id = session.id) {
+    const ur = await signatureUr({ requestId: id, signatureHex: signature.slice(2) })
+    await submitKeystoneEvmSigningResponse(session.id, session.tabId, ur.cbor.toString('base64'))
+  }
+
+  globalThis.chrome = {
+    tabs: {
+      async create() {
+        return { id: nextTabId++ }
+      },
+      async update(tabId, { url }) {
+        tabOpened({ tabId, url })
+      },
+      async remove(tabId) {
+        tabRemoved(tabId)
+      },
+      onRemoved: {
+        addListener(listener) {
+          tabRemoved = listener
+        }
+      }
+    },
+    runtime: {
+      getURL: path => `chrome-extension://wallet/${path}`,
+      sendMessage: async () => {}
+    }
+  }
+  registerKeystoneEvmSigningTabLifecycle()
+  afterEach(() => cancelAllKeystoneEvmSigning('Test cleanup'))
+
+  test('encodes the exact personal message and resolves a tab-bound signature once', async () => {
+    const session = await begin({ kind: 'personal-sign', messageHex })
+    await expect(getKeystoneEvmSigningRequest(session.id, session.tabId + 1)).rejects.toThrow(/tab/)
+    const view = await getKeystoneEvmSigningRequest(session.id, session.tabId)
+    const { CryptoKeypath, extend } = await registry()
+    const data = extend.decodeToDataItem(Buffer.from(view.request.value, 'base64')).getData()
+    expect(data[3]).toBe(3)
+    expect(`0x${data[2].toString('hex')}`).toBe(messageHex)
+    const keypath = CryptoKeypath.fromDataItem(data[5])
+    expect(keypath.getSourceFingerprint().toString('hex')).toBe(accountBinding.masterFingerprintHex)
+    expect(`m/${keypath.getPath()}`).toBe(accountBinding.derivationPath)
+    const signature = await account.signMessage({ message: { raw: messageHex } })
+    const ur = await signatureUr({ requestId: session.id, signatureHex: signature.slice(2) })
+    const cbor = ur.cbor.toString('base64')
+    await expect(
+      submitKeystoneEvmSigningResponse(session.id, session.tabId + 1, cbor)
+    ).rejects.toThrow(/tab/)
+    await submitKeystoneEvmSigningResponse(session.id, session.tabId, cbor)
+    await expect(session.result).resolves.toEqual({ signatureHex: signature })
+    await expect(submitKeystoneEvmSigningResponse(session.id, session.tabId, cbor)).rejects.toThrow(
+      /interrupted/
+    )
+  })
+
+  test('rejects signatures for a different message, address, request, or changed account', async () => {
+    const message = { raw: messageHex }
+    const signature = await account.signMessage({ message })
+    for (const scenario of [
+      {
+        signature: await account.signMessage({ message: { raw: '0x6869' } }),
+        error: /approved payload/
+      },
+      { signature: await otherAccount.signMessage({ message }), error: /approved payload/ },
+      { signature, id: requestId, error: /request ID/ },
+      { signature: `0x${'00'.repeat(64)}1b`, error: /verify/ },
+      { signature, revoke: true, error: /verify/ }
+    ]) {
+      let allowed = true
+      const session = await begin(
+        { kind: 'personal-sign', messageHex },
+        {
+          validate: async () => {
+            if (!allowed) throw new Error('Account changed')
+          }
+        }
+      )
+      allowed = !scenario.revoke
+      await expect(submit(session, scenario.signature, scenario.id)).rejects.toThrow(scenario.error)
+      await expect(session.result).rejects.toThrow(scenario.error)
+    }
+  })
+
+  test('returns normalized signatures for the exact EIP-1559 and legacy transactions', async () => {
+    const legacyChainId = 137
+    const legacyUnsigned = serializeTransaction({
+      type: 'legacy',
+      chainId: legacyChainId,
+      nonce: 7,
+      gasPrice: 1n,
+      gas: 21000n,
+      to: account.address,
+      value: 123n
+    })
+    for (const { unsigned, type, chainId } of [
+      { unsigned: unsignedTransactionHex, type: 4, chainId: 1 },
+      { unsigned: legacyUnsigned, type: 1, chainId: legacyChainId }
+    ]) {
+      const request = { kind: 'transaction', unsignedTransactionHex: unsigned }
+      const binding = { scope: { chainId: `eip155:${chainId}` } }
+      const signed = await account.sign({ hash: keccak256(unsigned) })
+      const parity = Number.parseInt(signed.slice(-2), 16) - 27
+      const normalized = `${signed.slice(0, -2)}0${parity}`
+      const recovery = type === 4 ? parity : 2 * chainId + 35 + parity
+      const deviceSignature = `${signed.slice(0, -2)}${numberToHex(recovery, { size: type === 4 ? 1 : 2 }).slice(2)}`
+      const session = await begin(request, binding)
+      const view = await getKeystoneEvmSigningRequest(session.id, session.tabId)
+      const { extend } = await registry()
+      const data = extend.decodeToDataItem(Buffer.from(view.request.value, 'base64')).getData()
+      expect(data[3]).toBe(type)
+      expect(data[4]).toBe(chainId)
+      expect(`0x${data[2].toString('hex')}`).toBe(unsigned)
+      await submit(session, deviceSignature)
+      await expect(session.result).resolves.toEqual({ signatureHex: normalized })
+
+      const wrongPayload = await begin(request, binding)
+      const wrongSignature = await account.signMessage({ message: { raw: unsigned } })
+      await expect(
+        submit(wrongPayload, `${wrongSignature.slice(0, -2)}${deviceSignature.slice(130)}`)
+      ).rejects.toThrow(/approved payload/)
+      await expect(wrongPayload.result).rejects.toThrow(/approved payload/)
+    }
+  })
+
+  test('tab closure invalidates a pending signature', async () => {
+    const session = await begin({ kind: 'personal-sign', messageHex })
+    tabRemoved(session.tabId)
+    await expect(session.result).rejects.toThrow(/closed/)
+    await expect(getKeystoneEvmSigningRequest(session.id, session.tabId)).rejects.toThrow(
+      /interrupted/
+    )
+  })
+
+  test('rejects a matching signature after the reviewed deadline', async context => {
+    context.mock.timers.enable({ apis: ['Date', 'setTimeout'] })
+    const signature = await account.signMessage({ message: { raw: messageHex } })
+    const session = await begin(
+      { kind: 'personal-sign', messageHex },
+      { expiresAt: Date.now() + 10 }
+    )
+    context.mock.timers.tick(10)
+    await expect(session.result).rejects.toThrow(/expired/)
+    await expect(submit(session, signature)).rejects.toThrow(/interrupted/)
   })
 })

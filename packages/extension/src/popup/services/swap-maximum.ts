@@ -3,6 +3,7 @@ import type { NetworkFeeTier } from '@/core/transactions/domain'
 import { EvmWalletClientError } from './evm-wallet-client'
 import { fallbackTransferMaximum } from './transfer-maximum'
 import { safeBig } from '@/lib/big'
+import { InsufficientBalanceError } from '@/lib/errors'
 import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
 import type {
   QuoteDepositExecutionMode,
@@ -117,7 +118,7 @@ function maximumAdjustment(
   adjustmentCount: number
 ): SwapMaximumAdjustment | null {
   const amount = BigInt(amountRaw)
-  if (amount <= 0n) throw new Error('The source wallet balance does not cover the network fee')
+  if (amount <= 0n) throw new InsufficientBalanceError(input.source.networkFeeAsset.metadata.symbol)
   const currentAmount = BigInt(
     parseDisplayUnitAmount(input.currentAmount, input.source.asset.metadata.decimals)
   )
@@ -191,8 +192,7 @@ export async function resolveSwapMaximumAdjustment(
       // Request a real smaller quote, never alter value independently of the router's calldata.
       const halfBalance = availableRaw / 2n
       const probeRaw = halfBalance === BigInt(review.amountIn) ? halfBalance / 2n : halfBalance
-      if (probeRaw <= 0n)
-        throw new Error('The source wallet balance does not cover the network fee')
+      if (probeRaw <= 0n) throw new InsufficientBalanceError(source.networkFeeAsset.metadata.symbol)
       return {
         amount: formatBaseUnitDecimalAmount(probeRaw.toString(), source.asset.metadata.decimals),
         adjustmentCount: 0

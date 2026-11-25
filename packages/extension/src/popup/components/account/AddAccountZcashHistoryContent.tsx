@@ -6,7 +6,7 @@ import {
   ZcashHistoryFields,
   type ZcashHistoryMode,
   type ZcashRestoreMethod
-} from '../common/ZcashHistoryFields'
+} from '../zcash/ZcashHistoryFields'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { getFullZcashRecoveryBirthdayHeight } from '@/core/wallet/birthday-height'
 import { classifyError } from '@/lib/errors'

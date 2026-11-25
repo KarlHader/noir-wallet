@@ -1,4 +1,5 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/config/extension'
+import { ONE_CLICK_TOKEN_CATALOG_URL } from '@/config/intents'
 import Big from 'big.js'
 import { readBoundedResponseText } from '@/lib/fetch-utils'
 import { parseAssetId } from '@/core/chains/registry'
@@ -17,13 +18,13 @@ import type { AssetPriceSourceMapping } from '@/core/prices/asset-market-mapping
 import type { OneClickContractAssetPriceSourceMapping } from '@/core/prices/user-asset-price-mappings'
 import { DedupPromise } from '@/lib/async-utils'
 
-export const ONE_CLICK_ASSET_PRICE_URL = 'https://1click.chaindefuser.com/v0/tokens'
 const PRICE_CACHE_VERSION = 1
 const NETWORK_REFRESH_INTERVAL_MS = 60 * 1000
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000
 const DEFAULT_MAXIMUM_RESPONSE_BYTES = 2 * 1024 * 1024
 const MAXIMUM_RESPONSE_BYTES = 4 * 1024 * 1024
 const MAXIMUM_TOKEN_COUNT = 4_096
+const SOURCE_ASSET_ID_PATTERN = /^[-%:._a-zA-Z0-9]{1,256}$/
 
 export interface AssetPriceCacheQuote {
   readonly assetId: string
@@ -209,10 +210,16 @@ export class OneClickAssetPriceService {
         marketAssetId: createMarketAssetId(mapping.marketAssetId)
       }
       if ('sourceAssetId' in mapping) {
-        if (!/^[-%:._a-zA-Z0-9]{1,256}$/.test(mapping.sourceAssetId)) {
+        const { sourceAssetId, fallbackSourceAssetId } = mapping
+        if (
+          !SOURCE_ASSET_ID_PATTERN.test(sourceAssetId) ||
+          (fallbackSourceAssetId !== undefined &&
+            (!SOURCE_ASSET_ID_PATTERN.test(fallbackSourceAssetId) ||
+              fallbackSourceAssetId === sourceAssetId))
+        ) {
           throw new Error('Invalid asset price source mapping')
         }
-        return Object.freeze({ ...shared, sourceAssetId: mapping.sourceAssetId })
+        return Object.freeze({ ...shared, sourceAssetId, fallbackSourceAssetId })
       }
       if (
         !/^[-a-z0-9]{1,32}$/.test(mapping.sourceBlockchain) ||
@@ -309,7 +316,7 @@ export class OneClickAssetPriceService {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs)
     try {
-      const response = await this.options.fetch(ONE_CLICK_ASSET_PRICE_URL, {
+      const response = await this.options.fetch(ONE_CLICK_TOKEN_CATALOG_URL, {
         method: 'GET',
         cache: 'no-store',
         credentials: 'omit',
@@ -323,21 +330,28 @@ export class OneClickAssetPriceService {
       if (!Array.isArray(decoded) || decoded.length > MAXIMUM_TOKEN_COUNT) {
         throw new Error('Invalid asset price response')
       }
-      const wanted = new Map<string, (typeof this.options.mappings)[number][]>()
-      const wantedContracts = new Map<string, (typeof this.options.mappings)[number][]>()
+      type Mapping = (typeof this.options.mappings)[number]
+      const wanted = new Map<string, Mapping[]>()
+      const wantedContracts = new Map<string, Mapping[]>()
+      const wantedFallbacks = new Map<string, Mapping[]>()
+      const addMapping = (target: Map<string, Mapping[]>, key: string, mapping: Mapping) => {
+        const entries = target.get(key)
+        if (entries) entries.push(mapping)
+        else target.set(key, [mapping])
+      }
       for (const mapping of mappings) {
         if ('sourceAssetId' in mapping) {
-          const mappings = wanted.get(mapping.sourceAssetId) ?? []
-          mappings.push(mapping)
-          wanted.set(mapping.sourceAssetId, mappings)
+          addMapping(wanted, mapping.sourceAssetId, mapping)
+          if (mapping.fallbackSourceAssetId) {
+            addMapping(wantedFallbacks, mapping.fallbackSourceAssetId, mapping)
+          }
         } else {
           const key = `${mapping.sourceBlockchain}:${mapping.sourceContractAddress}`
-          const mappings = wantedContracts.get(key) ?? []
-          mappings.push(mapping)
-          wantedContracts.set(key, mappings)
+          addMapping(wantedContracts, key, mapping)
         }
       }
       const resolved = new Map<string, AssetPriceCacheQuote>()
+      const fallbackQuotes = new Map<string, AssetPriceCacheQuote>()
       const currentContracts = new Set(
         decoded.flatMap(token => {
           if (
@@ -369,7 +383,8 @@ export class OneClickAssetPriceService {
             ? []
             : (wantedContracts.get(contractKey) ?? []))
         ]
-        if (mappings.length === 0) continue
+        const fallbackMappings = wantedFallbacks.get(token.assetId) ?? []
+        if (mappings.length === 0 && fallbackMappings.length === 0) continue
         if (
           !hasOnlyKeys(token, [
             'assetId',
@@ -384,6 +399,7 @@ export class OneClickAssetPriceService {
           !Object.prototype.hasOwnProperty.call(token, 'price') ||
           !Object.prototype.hasOwnProperty.call(token, 'priceUpdatedAt') ||
           mappings.some(mapping => resolved.has(mapping.assetId)) ||
+          fallbackMappings.some(mapping => fallbackQuotes.has(mapping.assetId)) ||
           mappings.some(
             mapping =>
               'sourceContractAddress' in mapping && token.decimals !== mapping.sourceDecimals
@@ -404,6 +420,21 @@ export class OneClickAssetPriceService {
               sourceUpdatedAt
             })
           )
+        }
+        for (const mapping of fallbackMappings) {
+          fallbackQuotes.set(
+            mapping.assetId,
+            Object.freeze({ assetId: mapping.assetId, priceUsd, sourceUpdatedAt })
+          )
+        }
+      }
+      for (const [assetId, fallback] of fallbackQuotes) {
+        const primary = resolved.get(assetId)
+        if (
+          (!primary || now - primary.sourceUpdatedAt > ASSET_PRICE_EXPIRES_MS) &&
+          now - fallback.sourceUpdatedAt <= ASSET_PRICE_EXPIRES_MS
+        ) {
+          resolved.set(assetId, fallback)
         }
       }
       const mappedAssetIds = new Set(this.options.mappings.map(mapping => mapping.assetId))

@@ -167,6 +167,53 @@ test('publishes cached chains immediately and requests only missing chains', asy
   expect(updates).toEqual([[cached], [fresh]])
 })
 
+test('uses valid source assets from a partial chain response without accepting a failed strict search', async () => {
+  const eth = {
+    assetId: 'nep141:eth.omft.near',
+    tokenListChainId: 1,
+    rheaChainId: '1',
+    rheaAddress: '0x0000000000000000000000000000000000000000',
+    symbol: 'ETH'
+  }
+  const client = {
+    listTokens: async () => ({ tokens: [eth], failedChainIds: [1] })
+  }
+  const published = []
+  expect(
+    await loadTokenCatalogByChain(
+      'from',
+      [1],
+      false,
+      tokens => published.push(...tokens),
+      () => false,
+      client
+    )
+  ).toEqual([eth])
+  expect(published).toEqual([eth])
+
+  await expect(
+    loadTokenCatalogByChain(
+      'from',
+      [1],
+      false,
+      () => {},
+      () => false,
+      client,
+      { strict: true }
+    )
+  ).rejects.toThrow(/chain 1/)
+  expect(
+    await loadTokenCatalogByChain(
+      'from',
+      [1],
+      false,
+      () => {},
+      () => false,
+      { listTokens: async () => ({ tokens: [], failedChainIds: [1] }) }
+    )
+  ).toEqual([])
+})
+
 test('strict single-chain search preserves the provider failure', async () => {
   const failure = new Error('Provider unavailable')
   const calls = []

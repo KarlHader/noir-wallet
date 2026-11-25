@@ -151,7 +151,7 @@ it('derives address roles from chain-scoped local identities and gives PEA prece
   assert.equal(isCurrentAccountPrivateEvmAddress(recipient, chain.id, accounts[0]), false)
   assert.equal(isCurrentAccountPrivateEvmAddress(pea, 'eip155:56', accounts[0]), false)
   assert.equal(isCurrentAccountPrivateEvmAddress(pea, chain.id, null), false)
-  assert.match(getEvmSendRecipientError('main', 'confidential', false, true), /your Private/)
+  assert.match(getEvmSendRecipientError('main', 'confidential', false, true), /your Incognito/)
   assert.match(getEvmSendRecipientError('main', 'confidential'), /Send privately/)
   assert.equal(getEvmSendRecipientError('main', 'unknown'), null)
   assert.equal(getEvmSendPrivacyWarning('main', 'public'), null)

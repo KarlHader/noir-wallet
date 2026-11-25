@@ -22,7 +22,7 @@ interface RheaSwapQuoteOptions {
   currentQuote: RheaSwapQuoteView | null
   currentKey: string | null
   outputDecimals: number | undefined
-  maxSelected: boolean
+  immediate: boolean
   walletId: string | null
   accountId: string | null
   sequence: RefObject<number>
@@ -51,7 +51,7 @@ export function useRheaSwapQuote({
   currentQuote,
   currentKey,
   outputDecimals,
-  maxSelected,
+  immediate,
   walletId,
   accountId,
   sequence,
@@ -72,8 +72,8 @@ export function useRheaSwapQuote({
   const effectKey = JSON.stringify([scopeKey, purpose, request?.key ?? null])
   const lastRefreshTick = useRef(refreshTick)
   // Receiving a quote updates display state; only a new intent or refresh starts a request.
-  const snapshot = useRef({ request, currentQuote, currentKey, maxSelected, walletId, accountId })
-  snapshot.current = { request, currentQuote, currentKey, maxSelected, walletId, accountId }
+  const snapshot = useRef({ request, currentQuote, currentKey, immediate, walletId, accountId })
+  snapshot.current = { request, currentQuote, currentKey, immediate, walletId, accountId }
 
   useEffect(() => {
     const refreshingReview = viewStep === 'review' && reviewRefreshTarget.current !== null
@@ -83,7 +83,7 @@ export function useRheaSwapQuote({
     }
 
     const requestSequence = ++sequence.current
-    const { request, currentQuote, currentKey, maxSelected, walletId, accountId } = snapshot.current
+    const { request, currentQuote, currentKey, immediate, walletId, accountId } = snapshot.current
     const requestChanged = lastRequestedKey.current !== effectKey
     const refreshRequested = lastRefreshTick.current !== refreshTick
     lastRequestedKey.current = effectKey
@@ -157,7 +157,7 @@ export function useRheaSwapQuote({
         if (isCurrent()) setIsQuoting(false)
       }
     }
-    const timer = window.setTimeout(() => void requestQuote(), maxSelected ? 0 : QUOTE_DEBOUNCE_MS)
+    const timer = window.setTimeout(() => void requestQuote(), immediate ? 0 : QUOTE_DEBOUNCE_MS)
     return () => {
       disposed = true
       window.clearTimeout(timer)

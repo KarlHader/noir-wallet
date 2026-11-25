@@ -1,31 +1,10 @@
 import type { SwapStatusType } from '@/core/services/intents-api'
 import { WALLET_CONFIG } from '@/config/wallet'
-import {
-  NOIR_MOVE_REFERRAL,
-  NOIR_RECEIVE_REFERRAL,
-  NOIR_SEND_REFERRAL,
-  NOIR_SWAP_REFERRAL
-} from '@/config/intents'
-import type { TransactionType } from '@/types'
 
 export const INTENTS_PROGRESS_STALE_MS = 60 * 60 * 1000
 
-export function getIntentsExplorerUrl(depositAddress: string, type: TransactionType): string {
-  const referral =
-    type === 'swap'
-      ? NOIR_SWAP_REFERRAL
-      : type === 'send'
-        ? NOIR_SEND_REFERRAL
-        : type === 'receive'
-          ? NOIR_RECEIVE_REFERRAL
-          : type === 'shield' || type === 'unshield'
-            ? NOIR_MOVE_REFERRAL
-            : undefined
-  const url = new URL(
-    `https://explorer.near-intents.org/transactions/${encodeURIComponent(depositAddress)}`
-  )
-  if (referral) url.searchParams.set('referral', referral)
-  return url.toString()
+export function getIntentsExplorerUrl(depositAddress: string): string {
+  return `https://explorer.near-intents.org/transactions/${encodeURIComponent(depositAddress)}`
 }
 
 export function getZcashDestinationCatchUpThreshold(confirmations: number): number {

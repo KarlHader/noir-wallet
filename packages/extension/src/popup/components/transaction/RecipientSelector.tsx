@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Icon } from '@iconify/react'
-import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
+import { formatSortAddress } from '@/lib/format'
 import { resolveEvmAddressRole } from '@/core/accounts/evm-address-role'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
@@ -14,26 +14,25 @@ import {
   getAddressBookContactIconChain,
   getAddressBookNetworkChoice,
   getAddressBookNetworkChoices
-} from '../address-book/address-book-network'
-import { InlineError } from '../common/InlineError'
+} from '@/popup/services/address-book-network'
+import { TransactionNotice } from './TransactionNotice'
 import { ChainIcon } from '../common/ChainIcon'
 import { Button } from '../ui/button'
-import { Input } from '../ui/input'
+import { SearchInput } from '../ui/input'
 import { ListSkeleton } from '../ui/skeleton'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
+import { Tabs, TabsContent } from '../ui/tabs'
+import { PageTabsList, PageTabsTrigger } from '../common/PageTabs'
 import { Tooltip } from '../ui/tooltip'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
+import { buildAccountSwitcherGroups } from '@/popup/services/account-list-model'
 import {
   buildMyAccountRecipientGroups,
   buildMyWalletRecipientGroups,
   buildSavedRecipientList,
   getMyAccountRecipientUnavailableReason
-} from './recipient-selector-model'
+} from '@/popup/services/recipient-selector-model'
 
 const EMPTY_ADDRESSES: readonly string[] = Object.freeze([])
-const RECIPIENT_TAB_CLASS =
-  'relative h-10 rounded-none border-0 bg-transparent px-3 text-sm text-muted shadow-none after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:after:bg-primary dark:data-[state=active]:border-0 dark:data-[state=active]:bg-transparent'
-
 function addressSchemeLabel(scheme: string): string | null {
   const labels: Readonly<Record<string, string>> = Object.freeze({
     'zcash-shielded-unified': 'Shield',
@@ -62,7 +61,7 @@ function EmptyState({
       <div className="flex size-12 items-center justify-center rounded-full bg-card text-muted">
         <Icon icon={icon} width={22} height={22} />
       </div>
-      <p className="mt-3 text-sm font-medium">{title}</p>
+      <p className="mt-3 text-sm font-medium text-muted">{title}</p>
       {description && (
         <p className="mt-1 max-w-[250px] text-xs leading-5 text-muted">{description}</p>
       )}
@@ -91,6 +90,7 @@ export function RecipientSelector({
   readonly onSelect: (address: string, displayName?: string) => void
 }) {
   const contacts = useAddressBookStore(state => state.contacts)
+  const wallets = useWalletStore(state => state.wallets)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const [catalog, setCatalog] = useState<AccountNetworksCatalogView | null>(null)
   const [loading, setLoading] = useState(true)
@@ -166,21 +166,29 @@ export function RecipientSelector({
     [chainId, contacts, excludeAddresses]
   )
   const normalizedQuery = query.trim().toLowerCase()
-  const visibleWalletGroups = buildMyWalletRecipientGroups(accountGroups).flatMap(wallet => {
-    const walletMatches = wallet.walletDisplayName.toLowerCase().includes(normalizedQuery)
+  const walletGroups = useMemo(
+    () =>
+      buildMyWalletRecipientGroups(
+        accountGroups,
+        buildAccountSwitcherGroups({
+          wallets,
+          catalogAccounts: catalog?.accounts ?? [],
+          accountDisplayNames,
+          currentWalletId: null,
+          currentAccountId: null
+        })
+      ),
+    [accountGroups, accountDisplayNames, catalog, wallets]
+  )
+  const visibleWalletGroups = walletGroups.flatMap(wallet => {
+    const walletMatches = wallet.name.toLowerCase().includes(normalizedQuery)
     const accounts = walletMatches
       ? wallet.accounts
-      : wallet.accounts.filter(account => {
-          const displayName = getAccountDisplayName(
-            account.walletId,
-            account.accountId,
-            account.accountDisplayName,
-            accountDisplayNames
-          )
-          return `${displayName} ${account.addresses.map(address => address.value).join(' ')}`
+      : wallet.accounts.filter(account =>
+          `${account.name} ${account.addresses.map(address => address.value).join(' ')}`
             .toLowerCase()
             .includes(normalizedQuery)
-        })
+        )
     return accounts.length > 0 ? [{ ...wallet, accounts }] : []
   })
   const isEvm = chainId.startsWith('eip155:')
@@ -189,38 +197,30 @@ export function RecipientSelector({
   )
 
   return (
-    <Tabs defaultValue="accounts" className="min-h-0 min-w-0 w-full max-w-full gap-0">
-      <div className="px-1 pb-3">
-        <Input
+    <Tabs defaultValue="accounts" className="min-h-0 min-w-0 w-full max-w-full flex-1 gap-0">
+      <div className="shrink-0 px-1 pb-3">
+        <SearchInput
           value={query}
           onChange={event => setQuery(event.target.value)}
           placeholder="Search accounts or addresses"
           aria-label="Search accounts or addresses"
           className="h-[46px] rounded-lg text-sm"
-          startContent={<Icon icon="lucide:search" width={18} height={18} className="text-muted" />}
+          iconSize={18}
         />
       </div>
-      <TabsList className="grid h-10 min-w-0 w-full grid-cols-2 rounded-none border-b border-border bg-transparent p-0">
-        <TabsTrigger value="accounts" className={RECIPIENT_TAB_CLASS}>
-          My Wallets
-        </TabsTrigger>
-        <TabsTrigger value="address-book" className={RECIPIENT_TAB_CLASS}>
-          Address Book
-        </TabsTrigger>
-      </TabsList>
+      <PageTabsList className="w-full shrink-0 border-b border-white/8 px-3">
+        <PageTabsTrigger value="accounts">My Wallets</PageTabsTrigger>
+        <PageTabsTrigger value="address-book">Address Book</PageTabsTrigger>
+      </PageTabsList>
 
       <TabsContent
         value="accounts"
-        className="min-h-0 min-w-0 max-h-[360px] overflow-y-auto px-1 py-4"
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-1 py-4"
       >
         {loading ? (
           <ListSkeleton rows={3} label="Loading wallet accounts" className="px-1 py-1" card />
         ) : error ? (
-          <InlineError
-            className="px-1 py-7"
-            message="Unable to load accounts"
-            onRetry={loadAccounts}
-          />
+          <TransactionNotice message="Unable to load accounts" onRetry={loadAccounts} />
         ) : visibleWalletGroups.length === 0 ? (
           <EmptyState
             icon="lucide:wallet"
@@ -230,32 +230,22 @@ export function RecipientSelector({
           <div className="space-y-5 pb-1">
             {visibleWalletGroups.map(wallet => {
               return (
-                <section key={wallet.walletId}>
+                <section key={wallet.id} aria-label={wallet.name}>
+                  <p className="mb-2 truncate px-1 text-xs text-muted" title={wallet.name}>
+                    {wallet.name}
+                  </p>
                   <div className="space-y-5">
                     {wallet.accounts.map(group => {
-                      const displayName = getAccountDisplayName(
-                        group.walletId,
-                        group.accountId,
-                        group.accountDisplayName,
-                        accountDisplayNames
-                      )
+                      const displayName = group.name
                       return (
                         <div key={group.key} className="space-y-2">
                           <div className="flex min-w-0 items-center gap-2 px-1">
-                            <div className="flex min-w-0 flex-1 items-baseline gap-2">
-                              <p
-                                className="max-w-[45%] shrink-0 truncate text-xs text-muted"
-                                title={wallet.walletDisplayName || 'Wallet'}
-                              >
-                                {wallet.walletDisplayName || 'Wallet'}
-                              </p>
-                              <p
-                                className="min-w-0 flex-1 truncate text-sm font-medium"
-                                title={displayName}
-                              >
-                                {displayName}
-                              </p>
-                            </div>
+                            <p
+                              className="min-w-0 flex-1 truncate text-sm font-medium"
+                              title={displayName}
+                            >
+                              {displayName}
+                            </p>
                             {group.active && (
                               <span className="shrink-0 rounded bg-wallet-selected px-2 py-0.5 text-xs font-medium text-foreground">
                                 Current
@@ -263,7 +253,7 @@ export function RecipientSelector({
                             )}
                           </div>
                           {group.addresses.length === 0 ? (
-                            <div className="rounded-lg bg-card px-3 py-2.5 text-xs text-muted opacity-60">
+                            <div className="rounded-lg bg-card px-3 py-2.5 text-xs text-muted">
                               Unavailable on this network
                             </div>
                           ) : (
@@ -308,7 +298,7 @@ export function RecipientSelector({
                                           className="text-muted"
                                         />
                                       )}
-                                      {address.executionMode === 'private' ? 'Private' : 'Public'}
+                                      {address.executionMode === 'private' ? 'Incognito' : 'Public'}
                                     </span>
                                   )}
                                   <p
@@ -356,7 +346,7 @@ export function RecipientSelector({
 
       <TabsContent
         value="address-book"
-        className="min-h-0 min-w-0 max-h-[360px] overflow-y-auto px-1 py-4"
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-1 py-4"
       >
         {visibleRecipients.length === 0 ? (
           <EmptyState
@@ -452,7 +442,6 @@ export function RecipientSelector({
         onOpenChange={setAddingAddress}
         networks={addressBookNetworks}
         initialChainId={chainId}
-        fullHeight
       />
     </Tabs>
   )

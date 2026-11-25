@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
 import { getAccountDisplayName } from '@/lib/format'
-import { formatSendFiatValue } from '@/popup/components/transaction/send-input-model'
+import { formatSendFiatValue } from '@/popup/services/send-transfer-model'
 import {
   EvmWalletClientError,
   evmWalletClient,
@@ -13,11 +13,12 @@ import {
   formatBaseUnitDecimalAmount,
   parseDisplayUnitAmount
 } from '@/lib/number-format'
-import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
+import { openMultichainHardwareSignTab } from '@/lib/hardware-tab'
 import { openModal } from '@/popup/provider/ModalManager'
 import { useNavigate } from '@/popup/provider/Router'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import { DEFAULT_NETWORK_FEE_TIER } from '@/core/transactions/domain'
+import { getEvmFeeTierPreviews } from '@/popup/services/network-fee-presentation'
 import { areEvmFeeSelectionsEqual, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
 import { useEvmConfirmationEstimate } from '@/popup/hooks/useEvmConfirmationEstimate'
@@ -25,7 +26,7 @@ import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {
   createNativeTransferSource,
   estimateNativeTransferMaximum,
-  resolveNativeRouteMaximum,
+  resolveTransferMaximum,
   fallbackTransferMaximum,
   isTransferAmountSpendable
 } from '@/popup/services/transfer-maximum'
@@ -47,7 +48,7 @@ import {
 import { useEvmSendSupport } from '@/popup/hooks/useEvmSendSupport'
 import { carryQuotePreview } from '@/popup/hooks/useQuoteReview'
 import { rheaQuoteTerms } from '@/popup/services/quote-review'
-import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import {
   isCurrentAccountPrivateEvmAddress,
   resolveEvmAddressRole
@@ -102,6 +103,7 @@ interface PreparedReview {
 
 interface PrivateSendPreview {
   readonly key: string
+  readonly sourceAmountRaw: string
   readonly quote: RheaSwapQuoteView
   readonly routeCost: string | null
   readonly estimatedReceive: string
@@ -109,7 +111,6 @@ interface PrivateSendPreview {
 
 export function useEvmSendTransfer({
   active,
-  walletMode,
   onSelectAsset,
   onSelectShield,
   destinationNetworks,
@@ -135,6 +136,7 @@ export function useEvmSendTransfer({
     chainId: string
     name: string
     icon: string
+    switchesAsset?: boolean
   }[]
   onOpenDestinationNetworks: () => void
   onSelectDestinationNetwork: (
@@ -190,6 +192,7 @@ export function useEvmSendTransfer({
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const networkMode = useWalletStore(state => state.currentNetwork)
   const slippage = useSwapPreferences(state => state.slippage)
+  const quoteMode = useSwapPreferences(state => state.quoteMode)
   const endpoints = useSettingsStore(state =>
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
@@ -205,7 +208,7 @@ export function useEvmSendTransfer({
       ? catalogAccount
       : null
   const shieldSourceAvailable =
-    getPrivateTransferChainIds(activeAccount, networkMode === 'mainnet').length > 0
+    getShieldTransferChainIds(activeAccount, networkMode === 'mainnet').length > 0
   const accountDisplayName =
     activeAccount && walletId && accountId
       ? getAccountDisplayName(
@@ -229,14 +232,17 @@ export function useEvmSendTransfer({
     candidate =>
       candidate.asset.chainId === asset.asset.chainId && candidate.asset.kind === 'native'
   )
-  const nativeSymbol = evmNative?.metadata.symbol ?? 'Native asset'
+  const nativeCurrencySymbol =
+    evmNative?.metadata.symbol ??
+    chain.assets.find(item => item.asset.kind === 'native')?.metadata.symbol
+  const nativeSymbol = nativeCurrencySymbol ?? 'Native asset'
   const nativeDecimals = evmNative?.metadata.decimals ?? 18
   const domainNativeAvailableRaw = resolveEvmSendAvailableRaw(evmNative?.balance, sourceMode)
   const nativeAvailableRaw = domainNativeAvailableRaw ?? '0'
   const tokenFeeBalanceError = getEvmTokenFeeBalanceError(
     asset.asset.kind,
     nativeAvailableRaw,
-    nativeSymbol
+    nativeCurrencySymbol
   )
   const sourceAddress = sourceMode === 'private' ? privateSourceAddress : mainSourceAddress
   const accountContextKey = JSON.stringify([
@@ -253,6 +259,9 @@ export function useEvmSendTransfer({
     () =>
       networkPickerOpen
         ? destinationNetworks.map(option => {
+            if (option.switchesAsset) {
+              return { id: option.chainId, name: option.name, icon: option.icon, priority: 0 }
+            }
             const availability = readEvmSendDestinationSupport({
               sourceAssetId: asset.asset.id,
               destinationChainId: option.chainId
@@ -410,11 +419,13 @@ export function useEvmSendTransfer({
   }, [intentKey, review])
   const confidentialMaximumRaw =
     route === 'confidential' && asset.asset.kind === 'native'
-      ? resolveNativeRouteMaximum({
+      ? resolveTransferMaximum({
+          mode: 'reserve',
           family: 'evm',
           chainId: chain.chain.id,
           availableRaw,
-          decimals: asset.metadata.decimals
+          decimals: asset.metadata.decimals,
+          priceUsd
         })
       : null
   const maximumRequestKey = `${accountContextKey}:${asset.asset.id}:${recipient}:${availableRaw}:${JSON.stringify(feeSelection)}:${route}`
@@ -492,6 +503,7 @@ export function useEvmSendTransfer({
     amountRaw: amountRaw ?? '',
     amount,
     slippage,
+    quoteMode,
     feeSelectionKey: JSON.stringify(feeSelection),
     portfolio,
     chain,
@@ -548,6 +560,7 @@ export function useEvmSendTransfer({
             amount,
             amountRaw,
             slippage,
+            quoteMode,
             feeSelectionKey
           } = latestPrivatePreviewInputs.current
           const descriptor = getEnabledSwapChains([chain.chain])[0]
@@ -589,6 +602,7 @@ export function useEvmSendTransfer({
             amount,
             amountRaw,
             slippage,
+            quoteMode,
             feeSelectionKey,
             sourceToken: pair.sourceToken,
             destinationToken: pair.destinationToken
@@ -611,6 +625,7 @@ export function useEvmSendTransfer({
           heldQuoteHandle = quote.quoteHandle
           setPrivatePreview({
             key: request.key,
+            sourceAmountRaw: request.amountRaw,
             quote,
             routeCost: getPublicPrivateSendRouteCost({
               amountInRaw: request.amountRaw,
@@ -694,6 +709,8 @@ export function useEvmSendTransfer({
     await openModal<string | undefined>({
       title: 'Select Recipient',
       showCloseButton: true,
+      scroll: 'body',
+      fixedHeight: true,
       body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}
@@ -726,25 +743,32 @@ export function useEvmSendTransfer({
     requestMaximum()
   }
 
-  const estimateFee = useCallback(async () => {
-    if (route !== 'onchain' || !amountRaw || !validAmount || !validRecipient) {
-      throw new Error('Incomplete EVM transfer')
-    }
-    const estimate = await evmWalletClient.estimateTransferFee(
-      { assetId: asset.asset.id, recipient, amountRaw },
-      { feeSelection, executionMode: sourceMode }
-    )
-    return { amountRaw: estimate.maximumFeeWei, details: estimate }
-  }, [
-    amountRaw,
-    asset.asset.id,
-    feeSelection,
-    recipient,
-    sourceMode,
-    route,
-    validAmount,
-    validRecipient
-  ])
+  const estimateSelectedFee = useCallback(
+    async (selection: EvmFeeSelection) => {
+      if (route !== 'onchain' || !amountRaw || !validAmount || !validRecipient) {
+        throw new Error('Incomplete EVM transfer')
+      }
+      const estimate = await evmWalletClient.estimateTransferFee(
+        { assetId: asset.asset.id, recipient, amountRaw },
+        { feeSelection: selection, executionMode: sourceMode }
+      )
+      return { amountRaw: estimate.maximumFeeWei, details: estimate }
+    },
+    [amountRaw, asset.asset.id, recipient, sourceMode, route, validAmount, validRecipient]
+  )
+  const estimateFee = useCallback(
+    () => estimateSelectedFee(feeSelection),
+    [estimateSelectedFee, feeSelection]
+  )
+  const loadTierPreviews = useCallback(
+    async () =>
+      getEvmFeeTierPreviews(
+        (await estimateSelectedFee(feeSelection)).details,
+        { decimals: nativeDecimals, symbol: nativeSymbol },
+        feeSelection.kind === 'tier' ? feeSelection.tier : undefined
+      ),
+    [estimateSelectedFee, feeSelection, nativeDecimals, nativeSymbol]
+  )
   const maximumFeeEstimate =
     route === 'onchain' &&
     maxSelected &&
@@ -762,7 +786,6 @@ export function useEvmSendTransfer({
       validAmount &&
       validRecipient &&
       tokenFeeBalanceError === null &&
-      !preparing &&
       !maximum.loading &&
       review === null,
     requestKey: `${intentKey}:${JSON.stringify(feeSelection)}`,
@@ -805,6 +828,9 @@ export function useEvmSendTransfer({
 
   const handleFormFeeSelectionChange = async (nextFeeSelection: EvmFeeSelection) => {
     if (areEvmFeeSelectionsEqual(nextFeeSelection, feeSelection)) return
+    if (nextFeeSelection.kind !== 'tier' && !(asset.asset.kind === 'native' && maxSelected)) {
+      await estimateSelectedFee(nextFeeSelection)
+    }
     setFeeSelection(nextFeeSelection)
     if (asset.asset.kind === 'native' && maxSelected) {
       setAmount('')
@@ -851,7 +877,8 @@ export function useEvmSendTransfer({
               network: networkMode
             }),
             { ...rheaQuoteTerms(privatePreview.quote), sourceAmount: amountRaw }
-          )
+          ),
+          { replace: true }
         )
         return
       }
@@ -897,7 +924,7 @@ export function useEvmSendTransfer({
         maximumFeeRaw: feeRaw,
         assetAvailableRaw: availableRaw,
         nativeAvailableRaw,
-        nativeSymbol
+        nativeSymbol: nativeCurrencySymbol
       })
       if (balanceError) {
         await rejectPrepared(value)
@@ -918,7 +945,7 @@ export function useEvmSendTransfer({
       })
     } catch (prepareError) {
       if (reviewAttempt.current.isCurrent(attempt) && currentIntent.current === intentKey)
-        setError(getEvmSendPrepareError(prepareError, sourceMode))
+        setError(getEvmSendPrepareError(prepareError, nativeCurrencySymbol))
     } finally {
       if (reviewAttempt.current.isCurrent(attempt)) setPreparing(false)
     }
@@ -965,7 +992,8 @@ export function useEvmSendTransfer({
         }
         nextAmountRaw = resolveEvmNativeMaximumAmount(
           availableRaw,
-          probe.review.summary.fields.maximumFeeWei
+          probe.review.summary.fields.maximumFeeWei,
+          nativeCurrencySymbol
         )
       }
 
@@ -986,7 +1014,7 @@ export function useEvmSendTransfer({
         maximumFeeRaw: nextSummary.fields.maximumFeeWei,
         assetAvailableRaw: availableRaw,
         nativeAvailableRaw,
-        nativeSymbol
+        nativeSymbol: nativeCurrencySymbol
       })
       if (balanceError) throw new Error(balanceError)
 
@@ -1027,7 +1055,10 @@ export function useEvmSendTransfer({
         await evmWalletClient.rejectTransfer(replacement.graph.root.id).catch(() => {})
       }
       const message =
-        cause instanceof Error ? cause.message : getEvmSendPrepareError(cause, sourceMode)
+        !(cause instanceof Error) ||
+        (cause instanceof EvmWalletClientError && cause.code === 'insufficient-funds')
+          ? getEvmSendPrepareError(cause, nativeCurrencySymbol)
+          : cause.message
       if (reviewAttempt.current.isCurrent(attempt) && currentIntent.current === current.intentKey) {
         setError(message)
         throw new Error(message)
@@ -1057,7 +1088,7 @@ export function useEvmSendTransfer({
       setReview(null)
       if (submission.status === 'external-signature-required') {
         try {
-          await openHardwareEvmSignTab(submission.transactionId)
+          await openMultichainHardwareSignTab(submission.transactionId, 'evm')
         } catch (handoffError) {
           await evmWalletClient.rejectTransfer(submission.transactionId).catch(() => {})
           throw handoffError
@@ -1080,7 +1111,7 @@ export function useEvmSendTransfer({
         pendingReview.current = null
         setReview(null)
       }
-      setError(getEvmSendPrepareError(approveError, review.sourceMode))
+      setError(getEvmSendPrepareError(approveError, nativeCurrencySymbol))
     } finally {
       setApproving(false)
     }
@@ -1123,7 +1154,12 @@ export function useEvmSendTransfer({
     }
     setError(null)
     setMaxSelected(true)
-    setAmount(transferAvailability.display)
+    const maximumRaw = resolveTransferMaximum({
+      mode: 'reserve',
+      availableRaw,
+      payFeeFromAsset: false
+    })
+    setAmount(formatBaseUnitDecimalAmount(maximumRaw, asset.metadata.decimals))
   }
   const selectShield = (domain: string) => {
     if (domain === 'shield') onSelectShield(validRecipient ? recipient : '', amount)
@@ -1143,7 +1179,6 @@ export function useEvmSendTransfer({
 
   return {
     active,
-    walletMode,
     destinationNetworks,
     priceUsd,
     sourceMode,
@@ -1191,6 +1226,7 @@ export function useEvmSendTransfer({
     privatePreviewError,
     privatePreviewKey,
     feePreview,
+    loadTierPreviews,
     previewFee,
     confirmationTime,
     displayedError,

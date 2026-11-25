@@ -4,6 +4,7 @@ import { Button } from '../components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription
@@ -112,19 +113,19 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
               {state.message}
             </DialogDescription>
           </DialogHeader>
-          <div className="flex gap-2 mt-2">
+          <DialogFooter className="mt-2">
             {showCancel && (
-              <Button variant="outline" className="flex-1 h-11" onClick={handleCancel}>
+              <Button variant="outline" onClick={handleCancel}>
                 {state.cancelText || 'Cancel'}
               </Button>
             )}
             <Button
-              className={`flex-1 h-11 ${isDanger ? 'bg-danger hover:bg-danger/90 text-white' : ''}`}
+              className={isDanger ? 'bg-danger hover:bg-danger/90 text-white' : undefined}
               onClick={handleConfirm}
             >
               {state.confirmText || 'Confirm'}
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </DialogContext.Provider>

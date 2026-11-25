@@ -72,8 +72,8 @@ export function HomeDAppList({
           ))}
         </div>
       )}
-      {dapps === null && failed && (
-        <InlineError message="Unable to load DApps." onRetry={retry} retrying={loading} />
+      {dapps === null && failed && !loading && (
+        <InlineError message="DApps unavailable" tone="muted" onRetry={retry} />
       )}
       {dapps?.map(dapp => {
         const connected =
@@ -90,7 +90,7 @@ export function HomeDAppList({
             target="_blank"
             rel="noopener noreferrer"
             aria-label={`Open ${dapp.name} ${dapp.category}`}
-            className="wallet-interactive -mx-2 flex min-w-0 items-center gap-2 rounded-lg p-2 text-left hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+            className="wallet-interactive -mx-2 flex min-w-0 items-center gap-2 rounded-lg p-2 text-left hover:bg-accent active:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
           >
             <span className="relative flex size-11 shrink-0 items-center justify-center rounded-[13px] border-2 border-wallet-selected bg-wallet-surface">
               <Icon icon="lucide:globe" width={24} height={24} className="text-muted" />

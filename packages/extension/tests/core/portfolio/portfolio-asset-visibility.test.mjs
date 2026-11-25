@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { isAssetVisibleInAssetView } from '../../../src/popup/components/portfolio/portfolio-asset-visibility.ts'
+import { isAssetVisibleInAssetView } from '../../../src/popup/services/portfolio-presentation.ts'
 import { applyTokenDisplayPolicy } from '../../../src/core/portfolio/portfolio-visibility.ts'
 
 function chain(id, family, displayName) {
@@ -114,13 +114,23 @@ test('admits automatically held Tokens only by exact identity while preserving e
       ]
     }
   }
-  const filtered = applyTokenDisplayPolicy(model, {
+  const policy = {
     allowedAssetIds: new Set([id(1), id(2), id(3), id(6)]),
     visibleAssetIds: new Set([id(5), id(6)]),
     hiddenAssetIds: new Set([id(6)])
-  })
+  }
+  const filtered = applyTokenDisplayPolicy(model, policy)
   expect(filtered.assets.map(row => row.asset.id)).toEqual([native, id(2), id(5)])
   expect(filtered.chains[0].assets).toEqual(filtered.assets)
   expect(filtered.confidential.assets.map(row => row.assetId)).toEqual([native, id(2)])
+  expect(applyTokenDisplayPolicy(model, policy, id(1)).assets.map(row => row.asset.id)).toEqual([
+    native,
+    id(1),
+    id(2),
+    id(5)
+  ])
+  for (const unavailableId of [id(4), id(6), id(7)]) {
+    expect(applyTokenDisplayPolicy(model, policy, unavailableId)).toEqual(filtered)
+  }
   expect(model.assets).toHaveLength(7)
 })
