@@ -20,6 +20,7 @@ import type { ChromeConfidentialFundingStore } from './confidential-funding-stor
 import { credentialSession } from './credential-session'
 import type { createBackgroundPortfolioCoordinator } from './portfolio'
 import { handleShieldDAppRequest, resolveShieldDappScope } from './shield-dapp-handler'
+import { broadcastShieldZcashDeposit } from './shield-zcash-deposit-broadcast'
 import type { transactionMonitor } from './transaction-monitor'
 
 type BackgroundPortfolioCoordinator = ReturnType<typeof createBackgroundPortfolioCoordinator>
@@ -71,25 +72,28 @@ export function createBackgroundShieldFundingRuntime(deps: {
       )
     },
     deps.store,
-    () => {
-      const state = useWalletStore.getState()
-      const walletId = state.currentWalletId
-      const accountId = state.currentAccountId
-      const nativeAccount =
-        walletId && accountId ? state.getAccount(walletId, accountId) : undefined
-      const addresses =
-        nativeAccount && isAccountNetworkEnabled(nativeAccount, state.currentNetwork, 'zcash')
-          ? nativeAccount.addresses
-          : undefined
-      return {
-        network: state.currentNetwork,
-        walletId,
-        accountId,
-        refundAddresses: [
-          addresses?.transparent,
-          addresses?.shielded,
-          addresses?.fullUnified
-        ].filter((address): address is string => Boolean(address))
+    {
+      broadcastZcashShieldDeposit: broadcastShieldZcashDeposit,
+      getNativeZecActiveAccount: () => {
+        const state = useWalletStore.getState()
+        const walletId = state.currentWalletId
+        const accountId = state.currentAccountId
+        const nativeAccount =
+          walletId && accountId ? state.getAccount(walletId, accountId) : undefined
+        const addresses =
+          nativeAccount && isAccountNetworkEnabled(nativeAccount, state.currentNetwork, 'zcash')
+            ? nativeAccount.addresses
+            : undefined
+        return {
+          network: state.currentNetwork,
+          walletId,
+          accountId,
+          refundAddresses: [
+            addresses?.transparent,
+            addresses?.shielded,
+            addresses?.fullUnified
+          ].filter((address): address is string => Boolean(address))
+        }
       }
     }
   )

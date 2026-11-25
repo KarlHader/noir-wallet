@@ -30,7 +30,6 @@ import {
 } from './confidential-funding-coordinator'
 import { ConfidentialFundingSigner } from './confidential-funding-signer'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
-import { broadcastShieldZcashDeposit } from './shield-zcash-deposit-broadcast'
 
 export function createBackgroundConfidentialFundingCoordinator(
   evmNetworks: readonly EvmNetworkConfig[],
@@ -41,7 +40,12 @@ export function createBackgroundConfidentialFundingCoordinator(
   endpointSettings: ChainEndpointSettings,
   refreshPortfolio: NonNullable<ConfidentialFundingCoordinatorOptions['refreshPortfolio']>,
   store: ChromeConfidentialFundingStore = new ChromeConfidentialFundingStore(),
-  getNativeZecActiveAccount?: ConfidentialFundingCoordinatorOptions['getNativeZecActiveAccount']
+  nativeZecFunding?: Required<
+    Pick<
+      ConfidentialFundingCoordinatorOptions,
+      'getNativeZecActiveAccount' | 'broadcastZcashShieldDeposit'
+    >
+  >
 ): ConfidentialFundingCoordinator | null {
   const config = getConfidentialFundingNetworkConfig(DEFAULT_NETWORK)
   if (!config) return null
@@ -122,8 +126,7 @@ export function createBackgroundConfidentialFundingCoordinator(
       const cached = getCachedTokens()
       return cached.length > 0 ? cached : protocolTokens
     },
-    getNativeZecActiveAccount,
-    broadcastZcashShieldDeposit: input => broadcastShieldZcashDeposit(input),
+    ...nativeZecFunding,
     assetMappings: Object.freeze([...mappings.values()]),
     scheduleMonitoring: async (delayInMinutes = 0.1) => {
       const alarm = await chrome.alarms.get(CONFIDENTIAL_FUNDING_MONITOR_ALARM)
