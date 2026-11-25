@@ -50,7 +50,12 @@ export default defineConfig({
     port: 5001,
     strictPort: false,
     proxy: {
-      '/api/frost-signups': 'http://127.0.0.1:8788'
+      '/api/frost-signups': 'http://127.0.0.1:8788',
+      '/api/shield-win': {
+        target: 'https://apinoir.refburrow.top',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/api\/shield-win/, '/v1/shield-win')
+      }
     }
   }
 })
