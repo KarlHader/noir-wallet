@@ -122,6 +122,7 @@ import {
   type NativeZecActiveAccountSnapshot
 } from './native-zec-intents-swap'
 import { ShieldDappCoordinator } from './shield-dapp-coordinator'
+import type { ShieldDappOperationReport } from '@/core/services/confidential-funding/shield-dapp-projection'
 import type { PrepareNativeZecIntentsSwapInput } from '@/core/services/native-zec-intents-swap'
 import type { QuoteBinding } from '@/types/wallet'
 
@@ -320,6 +321,13 @@ export interface ConfidentialFundingCoordinatorOptions {
   readonly protocolTokens?: readonly SwapToken[]
   readonly getProtocolTokens?: () => readonly SwapToken[]
   readonly getNativeZecActiveAccount?: () => NativeZecActiveAccountSnapshot
+  readonly broadcastZcashShieldDeposit?: (input: {
+    readonly walletId: string
+    readonly accountId: string
+    readonly depositAddress: string
+    readonly amountRaw: string
+    readonly refundAddress: string
+  }) => Promise<{ txHash: string }>
   readonly scheduleMonitoring?: (delayInMinutes?: number) => Promise<void>
   readonly refreshPortfolio?: (
     target: Readonly<{
@@ -641,6 +649,7 @@ export class ConfidentialFundingCoordinator {
     }>
   >()
   private readonly cancellingPlans = new Set<string>()
+  private readonly zcashDepositSubmissions = new Map<string, Promise<ShieldDappOperationReport>>()
   private readonly refreshingExternalDeposits = new Map<
     string,
     Readonly<{ promise: Promise<ExternalShieldDeposit>; force: boolean }>
@@ -708,8 +717,10 @@ export class ConfidentialFundingCoordinator {
       assetMappings: options.assetMappings,
       protocolTokens: options.protocolTokens,
       getProtocolTokens: options.getProtocolTokens,
+      getNativeZecActiveAccount: options.getNativeZecActiveAccount,
       now: this.now,
       prepare: value => this.prepare(value),
+      createExternalDeposit: value => this.createExternalDeposit(value),
       refreshBalances: (scope, authorize) => this.refreshBalances(scope, authorize),
       requireConfidentialSession: scope => this.requireConfidentialSession(scope, true),
       refreshExternalDeposit: depositId => this.refreshExternalDeposit(depositId),
@@ -886,13 +897,16 @@ export class ConfidentialFundingCoordinator {
     ) {
       throw new Error('External Shield deposit Account changed')
     }
+    // Reuse only the open deposit for this exact request id. That covers a retry
+    // of the same call. A new Receive click uses a new id and creates a new record.
     const existing = input.requestId
       ? (await this.options.store.listExternalDeposits()).find(
           record =>
             record.network === input.network &&
             record.keyDomainId === input.keyDomainId &&
             record.accountId === input.accountId &&
-            record.requestId === input.requestId
+            record.requestId === input.requestId &&
+            (record.phase === 'awaiting-payment' || record.phase === 'processing')
         )
       : undefined
     if (existing) {
@@ -2094,9 +2108,11 @@ export class ConfidentialFundingCoordinator {
         ? sourceIdentity.peaAddress.toLowerCase()
         : sourceIdentity.address
     const isConfidentialTransfer = input.operation === 'confidential-transfer'
+    // Same-chain Shield sends cannot credit the connected account. A different chain can.
     if (
       isConfidentialTransfer &&
-      input.confidentialRecipient?.toLowerCase() === sourceIdentity.address.toLowerCase()
+      input.confidentialRecipient?.toLowerCase() === sourceIdentity.address.toLowerCase() &&
+      input.source.chainId === input.destination.chainId
     ) {
       throw new Error('Shield recipient account is invalid.')
     }
@@ -2989,6 +3005,73 @@ export class ConfidentialFundingCoordinator {
     ...args: Parameters<ShieldDappCoordinator['readShieldDappStatus']>
   ): ReturnType<ShieldDappCoordinator['readShieldDappStatus']> {
     return this.shieldDapp.readShieldDappStatus(...args)
+  }
+
+  /**
+   * Broadcast the confirmed transparent ZEC payment, then keep the deposit in processing
+   * while the provider still reports PENDING_DEPOSIT.
+   */
+  submitShieldDappZcashReceive(input: {
+    readonly scope: Readonly<{ network: Network; keyDomainId: string; accountId: string }>
+    readonly operationId: string
+  }): Promise<ShieldDappOperationReport> {
+    const pending = this.zcashDepositSubmissions.get(input.operationId)
+    if (pending) return pending
+    const operation = this.submitShieldDappZcashReceiveExclusive(input).finally(() => {
+      if (this.zcashDepositSubmissions.get(input.operationId) === operation) {
+        this.zcashDepositSubmissions.delete(input.operationId)
+      }
+    })
+    this.zcashDepositSubmissions.set(input.operationId, operation)
+    return operation
+  }
+
+  private async submitShieldDappZcashReceiveExclusive(input: {
+    readonly scope: Readonly<{ network: Network; keyDomainId: string; accountId: string }>
+    readonly operationId: string
+  }): Promise<ShieldDappOperationReport> {
+    let record = await this.getExternalDeposit(input.operationId)
+    if (
+      record.network !== input.scope.network ||
+      record.keyDomainId !== input.scope.keyDomainId ||
+      record.accountId !== input.scope.accountId
+    ) {
+      throw new Error('External Shield deposit is unavailable')
+    }
+    if (record.phase !== 'awaiting-payment' || record.originTxHash) {
+      return this.readShieldDappStatus(input)
+    }
+    if (isExternalShieldDepositExpired(record, this.now())) {
+      throw new Error('External Shield deposit quote has expired; create a new request')
+    }
+    if (!this.options.broadcastZcashShieldDeposit) {
+      throw new Error('Zcash Shield deposit broadcast is unavailable')
+    }
+    const { txHash } = await this.options.broadcastZcashShieldDeposit({
+      walletId: record.keyDomainId,
+      accountId: record.accountId,
+      depositAddress: record.depositAddress,
+      amountRaw: record.amountRaw,
+      refundAddress: record.refundAddress
+    })
+    if (!/^[0-9a-fA-F]{64}$/.test(txHash)) {
+      throw new Error('ZEC deposit payment did not return a transaction id')
+    }
+    const current = await this.getExternalDeposit(record.depositId)
+    if (current.phase === 'awaiting-payment' && !current.originTxHash) {
+      record = Object.freeze({
+        ...current,
+        phase: 'processing',
+        originTxHash: txHash,
+        fundingObservedAt: current.fundingObservedAt ?? this.now(),
+        updatedAt: this.now()
+      })
+      await this.options.store.putExternalDeposit(record)
+      await this.updateExternalDepositGraph(record)
+      void this.options.onActivityChanged?.(record).catch(() => undefined)
+    }
+    await this.scheduleMonitoring()
+    return this.readShieldDappStatus(input)
   }
 
   private async shieldDepositSourceIsFinal(plan: ConfidentialFundingPlan): Promise<boolean> {
@@ -5204,7 +5287,8 @@ export class ConfidentialFundingCoordinator {
               ? plan.source.address.toLowerCase() !== identity.address.toLowerCase() ||
                 !isAddress(plan.destination.address) ||
                 /^0x0{40}$/i.test(plan.destination.address) ||
-                plan.destination.address.toLowerCase() === identity.address.toLowerCase()
+                (plan.destination.address.toLowerCase() === identity.address.toLowerCase() &&
+                  plan.source.protocolAssetId === plan.destination.protocolAssetId)
               : plan.externalRecipient
                 ? !isValidExternalRecipient(
                     plan.externalRecipient,

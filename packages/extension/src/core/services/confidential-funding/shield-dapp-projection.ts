@@ -253,6 +253,8 @@ export interface ShieldDappOperationDetails {
   readonly source?: ShieldDappOperationAsset
   readonly destination?: ShieldDappOperationAsset
   readonly references?: ShieldDappOperationReferences
+  readonly depositAddress?: string
+  readonly depositMemo?: string
 }
 
 export interface ShieldDappOperationReport {
@@ -506,7 +508,9 @@ export function shieldDappOperationReport(
     ...(projection.providerStatus ? { providerStatus: projection.providerStatus } : {}),
     ...(details?.source ? { source: details.source } : {}),
     ...(details?.destination ? { destination: details.destination } : {}),
-    ...(details?.references ? { references: details.references } : {})
+    ...(details?.references ? { references: details.references } : {}),
+    ...(details?.depositAddress ? { depositAddress: details.depositAddress } : {}),
+    ...(details?.depositMemo ? { depositMemo: details.depositMemo } : {})
   })
 }
 
