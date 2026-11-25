@@ -1,0 +1,41 @@
+.tip-anchor {
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.tip {
+  position: fixed;
+  z-index: 80;
+  pointer-events: none;
+}
+
+.tip[data-side='top'] {
+  transform: translate(-50%, calc(-100% - 10px));
+}
+
+.tip[data-side='bottom'] {
+  transform: translate(-50%, 10px);
+}
+
+.tip-text {
+  width: max-content;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #1c1c1c;
+  border: 1px solid #3a3a3a;
+  color: #fff;
+  font:
+    500 13px/1.45 'DM Sans',
+    system-ui,
+    sans-serif;
+  text-align: center;
+  white-space: normal;
+}
+
+.tip-plain img {
+  display: block;
+  width: min(280px, calc(100vw - 24px));
+  height: auto;
+  filter: drop-shadow(0 16px 32px rgba(0, 0, 0, 0.45));
+}

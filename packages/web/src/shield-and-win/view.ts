@@ -5,7 +5,7 @@ export const ENTRY_POLL_LIMIT = 12
 export const REWARD_POLL_INTERVAL_MS = 4000
 export const REWARD_POLL_LIMIT = 30
 
-export type BoardState = 'live' | 'upcoming' | 'sold-out' | 'ended-won' | 'ended-none' | 'missing'
+export type BoardState = 'live' | 'upcoming' | 'ended-won' | 'ended-none' | 'missing'
 
 export interface BoardView {
   readonly state: BoardState
@@ -16,6 +16,8 @@ export interface BoardView {
   readonly drawsSoFar: number | null
   readonly endsLabel: string
   readonly endsValue: string
+  readonly oddsLabel: string
+  readonly oddsValue: string
   readonly minimumLabel: string
   readonly minimumValue: string
   readonly winnerNote: string
@@ -36,7 +38,9 @@ export interface EntryCopy {
   readonly body: string
 }
 
-const PRIZE_DESTINATION = 'Sent to a Zcash transparent address you confirm'
+const PRIZE_DESTINATION = 'Sent to your Zcash transparent address'
+const ODDS_LABEL = 'Odds per draw'
+const ODDS_VALUE = '1 / 4444'
 const MINIMUM_LABEL = 'Minimum credited'
 
 export function boardView(campaign: ShieldWinCampaign | null, nowMs: number): BoardView {
@@ -50,6 +54,8 @@ export function boardView(campaign: ShieldWinCampaign | null, nowMs: number): Bo
       drawsSoFar: null,
       endsLabel: 'Status',
       endsValue: 'Unavailable',
+      oddsLabel: ODDS_LABEL,
+      oddsValue: ODDS_VALUE,
       minimumLabel: MINIMUM_LABEL,
       minimumValue: '',
       winnerNote: '',
@@ -69,10 +75,26 @@ export function boardView(campaign: ShieldWinCampaign | null, nowMs: number): Bo
       campaign.status === 'ACTIVE'
         ? countdown(campaign.end_time, nowMs)
         : statusWord(campaign.status),
+    oddsLabel: ODDS_LABEL,
+    oddsValue: ODDS_VALUE,
     minimumLabel: MINIMUM_LABEL,
     minimumValue: usdLabel(campaign.min_usd_value),
     winnerNote: winnerNoteOf(campaign),
     canJoin: active
+  }
+}
+
+export function closedCampaignHint(board: BoardView): string {
+  switch (board.state) {
+    case 'upcoming':
+      return 'This campaign has not started.'
+    case 'ended-won':
+      return prizeWonHint(board.prizeAmount, board.prizeAsset)
+    case 'ended-none':
+      return 'No one drew the winning number before the deadline. Thank you for participating!'
+    case 'live':
+    case 'missing':
+      return ''
   }
 }
 
@@ -149,7 +171,7 @@ function stateOf(campaign: ShieldWinCampaign): BoardState {
     case 'UPCOMING':
       return 'upcoming'
     case 'SOLD_OUT':
-      return 'sold-out'
+      return 'ended-won'
     case 'ENDED':
       return campaign.winner_count > 0 ? 'ended-won' : 'ended-none'
   }
@@ -160,7 +182,7 @@ function pillOf(campaign: ShieldWinCampaign): string {
     case 'ACTIVE':
       return 'Live · Prize unclaimed'
     case 'SOLD_OUT':
-      return 'Ended · Prizes sent'
+      return 'Ended · Prize won'
     case 'ENDED':
       return campaign.winner_count > 0 ? 'Ended · Prize won' : 'Ended · No winner'
     case 'UPCOMING':
@@ -191,6 +213,13 @@ function statusWord(status: Exclude<ShieldWinCampaign['status'], 'ACTIVE'>): str
     case 'ENDED':
       return 'Ended'
   }
+}
+
+function prizeWonHint(amount: string, asset: string): string {
+  const prize = [amount, asset].filter(part => part.length > 0).join(' ')
+  return prize
+    ? `The ${prize} prize has been won. Thank you for participating!`
+    : 'The prize has been won. Thank you for participating!'
 }
 
 function winnerNoteOf(campaign: ShieldWinCampaign): string {

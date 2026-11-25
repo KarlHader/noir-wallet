@@ -17,6 +17,7 @@ import {
   REWARD_POLL_LIMIT,
   boardView,
   campaignStatusWord,
+  closedCampaignHint,
   deadlineLabel,
   entryCopy,
   entryView,
@@ -25,15 +26,23 @@ import {
 } from '../src/shield-and-win/view.ts'
 import {
   detectNoirWallet,
+  detectZcashProvider,
   readAccounts,
+  readTransparentAddress,
   requestAccount,
   revokeAccount,
   signClaim,
   subscribeAccounts,
   walletErrorMessage
 } from '../src/shield-and-win/wallet.ts'
+import {
+  clearCachedCampaign,
+  readCachedCampaign,
+  writeCachedCampaign
+} from '../src/shield-and-win/campaign-cache.ts'
 
-const BANNED = ['1 / 4444', '$10', '1 ZEC', 'shielded']
+const BANNED = ['$10', '1 ZEC', 'shielded']
+const ODDS_LITERAL = '1 / 4444'
 
 function campaign(overrides = {}) {
   return {
@@ -97,10 +106,13 @@ test('selectCampaign prefers the first active campaign, then the newest item', (
   assert.equal(selectCampaign([]), null)
 })
 
-test('the board is built from campaign fields and does not hardcode prototype facts', () => {
+test('the board is built from campaign fields and hardcodes only the draw odds', () => {
   for (const name of ['api.ts', 'view.ts', 'claim.ts', 'wallet.ts']) {
     const source = readFileSync(new URL(`../src/shield-and-win/${name}`, import.meta.url), 'utf8')
     for (const phrase of BANNED) assert.equal(source.includes(phrase), false, `${name} includes ${phrase}`)
+    if (name !== 'view.ts') {
+      assert.equal(source.includes(ODDS_LITERAL), false, `${name} includes ${ODDS_LITERAL}`)
+    }
     assert.equal(/\bparseFloat\b|\btoFixed\b|\bNumber\(/.test(source), false, name)
   }
   assert.equal(shieldWinApiBase(), 'https://api.zknoir.com/v1/shield-win')
@@ -111,11 +123,12 @@ test('the board is built from campaign fields and does not hardcode prototype fa
   assert.equal(live.canJoin, true)
   assert.equal(live.prizeAmount, '0.20')
   assert.equal(live.prizeAsset, 'ZEC')
-  assert.equal(live.prizeDestination, 'Sent to a Zcash transparent address you confirm')
+  assert.equal(live.prizeDestination, 'Sent to your Zcash transparent address')
   assert.equal(live.drawsSoFar, 57)
   assert.equal(live.endsLabel, 'Ends in')
   assert.equal(live.endsValue, '01:01:01')
-  assert.equal(live.minimumLabel, 'Minimum credited')
+  assert.equal(live.oddsLabel, 'Odds per draw')
+  assert.equal(live.oddsValue, ODDS_LITERAL)
   assert.equal(live.minimumValue, '$25.50')
   assert.equal(live.winnerNote, 'Up to 100 winners · 3 so far')
   assert.equal(boardView(campaign({ min_usd_value: '$25.50' }), 0).minimumValue, '$25.50')
@@ -135,23 +148,43 @@ test('the board is built from campaign fields and does not hardcode prototype fa
   assert.equal(upcoming.canJoin, false)
   assert.equal(upcoming.endsLabel, 'Status')
   assert.equal(upcoming.endsValue, 'Soon')
+  assert.equal(upcoming.oddsLabel, live.oddsLabel)
+  assert.equal(upcoming.oddsValue, live.oddsValue)
 
   const soldOut = boardView(campaign({ status: 'SOLD_OUT', winner_count: 100 }), 0)
-  assert.equal(soldOut.state, 'sold-out')
-  assert.equal(soldOut.pill, 'Ended · Prizes sent')
+  assert.equal(soldOut.state, 'ended-won')
+  assert.equal(soldOut.pill, 'Ended · Prize won')
+  assert.equal(soldOut.endsLabel, 'Status')
   assert.equal(soldOut.endsValue, 'Ended')
   assert.equal(soldOut.canJoin, false)
+  assert.equal(
+    closedCampaignHint(soldOut),
+    'The 0.20 ZEC prize has been won. Thank you for participating!'
+  )
 
   const endedWon = boardView(campaign({ status: 'ENDED', winner_count: 2 }), 0)
   assert.equal(endedWon.state, 'ended-won')
   assert.equal(endedWon.pill, 'Ended · Prize won')
+  assert.equal(endedWon.endsLabel, 'Status')
   assert.equal(endedWon.endsValue, 'Ended')
   assert.equal(endedWon.canJoin, false)
+  assert.equal(
+    closedCampaignHint(endedWon),
+    'The 0.20 ZEC prize has been won. Thank you for participating!'
+  )
 
   const endedNone = boardView(campaign({ status: 'ENDED', winner_count: 0, max_winners: 1 }), 0)
   assert.equal(endedNone.state, 'ended-none')
   assert.equal(endedNone.pill, 'Ended · No winner')
+  assert.equal(endedNone.endsLabel, 'Status')
+  assert.equal(endedNone.endsValue, 'Ended')
   assert.equal(endedNone.canJoin, false)
+  assert.equal(
+    closedCampaignHint(endedNone),
+    'No one drew the winning number before the deadline. Thank you for participating!'
+  )
+  assert.equal(closedCampaignHint(upcoming), 'This campaign has not started.')
+  assert.equal(closedCampaignHint(live), '')
 
   const missing = boardView(null, 0)
   assert.equal(missing.state, 'missing')
@@ -162,6 +195,8 @@ test('the board is built from campaign fields and does not hardcode prototype fa
   assert.equal(missing.drawsSoFar, null)
   assert.equal(missing.endsLabel, 'Status')
   assert.equal(missing.endsValue, 'Unavailable')
+  assert.equal(missing.oddsLabel, live.oddsLabel)
+  assert.equal(missing.oddsValue, live.oddsValue)
 
   const rendered = JSON.stringify([live, upcoming, soldOut, endedWon, endedNone, missing])
   for (const phrase of BANNED) assert.equal(rendered.includes(phrase), false)
@@ -398,6 +433,77 @@ test('cancellation stays an AbortError', async () => {
   await assert.rejects(pending, { name: 'AbortError' })
 })
 
+test('readTransparentAddress prefers a silent transparent address', async () => {
+  const transparent = address('t1', 35)
+  const calls = []
+  const payout = await readTransparentAddress({
+    async request(args) {
+      calls.push(args.method)
+      if (args.method === 'zcash_getAccounts') return { transparent, shielded: `zs${'1'.repeat(40)}` }
+      throw new Error(`unexpected ${args.method}`)
+    }
+  })
+  assert.equal(payout, transparent)
+  assert.deepEqual(calls, ['zcash_getAccounts'])
+})
+
+test('readTransparentAddress requests access when no Zcash account is connected', async () => {
+  const transparent = `  ${address('tm', 35)}  `
+  const calls = []
+  const payout = await readTransparentAddress({
+    async request(args) {
+      calls.push(args.method)
+      if (args.method === 'zcash_getAccounts') return null
+      if (args.method === 'zcash_requestAccounts') return { transparent }
+      throw new Error(`unexpected ${args.method}`)
+    }
+  })
+  assert.equal(payout, transparent.trim())
+  assert.deepEqual(calls, ['zcash_getAccounts', 'zcash_requestAccounts'])
+})
+
+test('readTransparentAddress rejects an unusable address without asking again', async () => {
+  const calls = []
+  await assert.rejects(
+    () =>
+      readTransparentAddress({
+        async request(args) {
+          calls.push(args.method)
+          return { transparent: `zs${'1'.repeat(40)}` }
+        }
+      }),
+    /transparent address/
+  )
+  assert.deepEqual(calls, ['zcash_getAccounts'])
+
+  await assert.rejects(
+    () =>
+      readTransparentAddress({
+        async request(args) {
+          if (args.method === 'zcash_getAccounts') return null
+          return { transparent: 'not-an-address' }
+        }
+      }),
+    /transparent address/
+  )
+})
+
+test('detectZcashProvider reads the Zcash provider separately from the EVM provider', () => {
+  const ethereum = { request: async () => [] }
+  const zcash = { request: async () => null }
+  const previous = globalThis.noirwallet
+  globalThis.noirwallet = { isNoirWallet: true, ethereum, zcash }
+  try {
+    assert.equal(detectNoirWallet(), ethereum)
+    assert.equal(detectZcashProvider(), zcash)
+    globalThis.noirwallet = { isNoirWallet: true, ethereum }
+    assert.equal(detectZcashProvider(), null)
+  } finally {
+    if (previous === undefined) delete globalThis.noirwallet
+    else globalThis.noirwallet = previous
+  }
+})
+
 test('revokeAccount drops only the eth_accounts permission', async () => {
   const calls = []
   await revokeAccount({
@@ -412,16 +518,38 @@ test('revokeAccount drops only the eth_accounts permission', async () => {
 test('the campaign page reserves a skeleton and keeps rules on the interface', () => {
   const page = readFileSync(new URL('../src/pages/ShieldAndWinPage.tsx', import.meta.url), 'utf8')
   const css = readFileSync(new URL('../src/shield-and-win/shield-and-win.css', import.meta.url), 'utf8')
-  assert.match(page, /sk-title/)
+  assert.match(page, /sk-prize-amt/)
+  assert.match(page, /sk-prize-sub/)
+  assert.match(page, /Connect to see your entry and result on this page\./)
+  assert.match(page, /Open Noir Wallet from the Chrome toolbar\./)
+  assert.match(page, /At least \$\{minimumValue\} must land after fees\./)
+  assert.match(page, /Draws so far/)
+  assert.equal(page.includes('sk-title'), false)
   assert.match(page, /aria-label="Disconnect"/)
+  assert.match(page, /aria-label="Refresh your entry"/)
+  assert.match(page, /const ENTRY_REFRESH_COOLDOWN_MS = 60_000/)
+  const participate = page.slice(page.indexOf('function onParticipate()'))
+  const participateBody = participate.slice(0, participate.indexOf('\n  }'))
+  assert.equal(participateBody.includes('startEntryPoll'), false)
   assert.match(page, /NEAR Confidential/)
-  assert.match(page, /Claim window/)
+  assert.match(page, /Claim\s+window/)
   assert.match(page, /Full terms and eligibility restrictions apply/)
   assert.equal(page.includes('Loading the campaign.'), false)
   assert.equal(page.includes('1 in 4,444'), false)
+  assert.match(
+    page,
+    /Every draw is independent\. More draws don’t make the next one more likely to win\./
+  )
   assert.equal(page.includes('nep141:'), false)
   assert.equal(page.includes('$10'), false)
   assert.equal(page.includes('1 ZEC'), false)
+  assert.equal(page.includes('<input'), false)
+  assert.equal(page.includes('name="zcash-address"'), false)
+  assert.match(page, /readTransparentAddress/)
+  assert.match(page, /Zcash · Transparent/)
+  assert.match(page, /Claim \{rewardText\(claimTarget\)\}/)
+  assert.match(css, /dialog\.rules\.claim/)
+  assert.match(css, /min\(360px, calc\(100% - 32px\)\)/)
   assert.match(css, /dialog\.rules\[open\]/)
   assert.match(css, /\.rules-scroll/)
   assert.match(css, /overflow:\s*hidden/)
@@ -489,4 +617,51 @@ test('wallet helpers use the existing EVM provider and keep rejection text', asy
   assert.equal(walletErrorMessage({ message: signature }).includes(signature), false)
   const seed = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
   assert.equal(walletErrorMessage(new Error(seed)).includes('abandon'), false)
+})
+
+function memoryStorage(initial = {}) {
+  const items = new Map(Object.entries(initial))
+  return {
+    getItem(key) {
+      return items.has(key) ? items.get(key) : null
+    },
+    setItem(key, value) {
+      items.set(key, String(value))
+    },
+    removeItem(key) {
+      items.delete(key)
+    }
+  }
+}
+
+test('campaign cache restores a validated campaign and ignores bad storage', () => {
+  const storage = memoryStorage()
+  assert.equal(readCachedCampaign(storage), null)
+  writeCachedCampaign(campaign(), storage)
+  assert.deepEqual(readCachedCampaign(storage), campaign())
+  clearCachedCampaign(storage)
+  assert.equal(readCachedCampaign(storage), null)
+
+  const corrupt = memoryStorage({ 'shield-win.campaign.v1': '{' })
+  assert.equal(readCachedCampaign(corrupt), null)
+  const invalid = memoryStorage({ 'shield-win.campaign.v1': JSON.stringify({ status: 'ACTIVE' }) })
+  assert.equal(readCachedCampaign(invalid), null)
+
+  const denied = {
+    getItem() {
+      throw new Error('denied')
+    },
+    setItem() {
+      throw new Error('denied')
+    },
+    removeItem() {
+      throw new Error('denied')
+    }
+  }
+  assert.equal(readCachedCampaign(denied), null)
+  assert.doesNotThrow(() => writeCachedCampaign(campaign(), denied))
+  assert.doesNotThrow(() => clearCachedCampaign(denied))
+  assert.equal(readCachedCampaign(null), null)
+  assert.doesNotThrow(() => writeCachedCampaign(campaign(), null))
+  assert.doesNotThrow(() => clearCachedCampaign(null))
 })

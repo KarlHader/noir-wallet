@@ -95,6 +95,14 @@ export function selectCampaign(list: readonly ShieldWinCampaign[]): ShieldWinCam
   return list.find(campaign => campaign.status === 'ACTIVE') ?? list[0] ?? null
 }
 
+export function campaignFromUnknown(value: unknown): ShieldWinCampaign | null {
+  try {
+    return parseCampaign(value)
+  } catch {
+    return null
+  }
+}
+
 export async function getCampaigns(
   signal?: AbortSignal,
   fetcher: typeof fetch = fetch

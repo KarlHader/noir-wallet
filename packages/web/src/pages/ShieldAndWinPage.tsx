@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type FormEvent,
-  type MouseEvent
-} from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import {
   ShieldWinApiError,
   claimReward,
@@ -15,7 +8,12 @@ import {
   type ShieldWinCampaign,
   type ShieldWinEntry
 } from '../shield-and-win/api'
-import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../shield-and-win/claim'
+import {
+  clearCachedCampaign,
+  readCachedCampaign,
+  writeCachedCampaign
+} from '../shield-and-win/campaign-cache'
+import { claimMessage, utf8ToHex } from '../shield-and-win/claim'
 import {
   ENTRY_POLL_INTERVAL_MS,
   ENTRY_POLL_LIMIT,
@@ -23,17 +21,19 @@ import {
   REWARD_POLL_LIMIT,
   boardView,
   campaignStatusWord,
+  closedCampaignHint,
   deadlineLabel,
   entryCopy,
   entryView,
   latestEntry,
   unclaimedWins,
-  type BoardState,
   type EntryViewState
 } from '../shield-and-win/view'
 import {
   detectNoirWallet,
+  detectZcashProvider,
   readAccounts,
+  readTransparentAddress,
   requestAccount,
   revokeAccount,
   signClaim,
@@ -41,6 +41,7 @@ import {
   walletErrorMessage,
   type NoirEthereumProvider
 } from '../shield-and-win/wallet'
+import { Tooltip } from '../components/Tooltip'
 import '../shield-and-win/shield-and-win.css'
 
 const FONT_HREF =
@@ -53,6 +54,10 @@ const DRAW_PENDING_MESSAGE =
 const PHONE_HINT = 'Noir Wallet runs in desktop Chrome.'
 const INSTALL_HINT = 'Installed it just now? Refresh this page.'
 const CAMPAIGN_ERROR = 'The campaign could not be loaded.'
+const CONNECT_HINT = 'Connect to see your entry and result on this page.'
+const TOOLBAR_HINT = 'Open Noir Wallet from the Chrome toolbar.'
+const PUBLIC_TOOLTIP_SRC = '/shield-and-win/select-public-tooltip.png'
+const ENTRY_REFRESH_COOLDOWN_MS = 60_000
 
 type CampaignState = 'loading' | 'ready' | 'error'
 type WalletSnapshot = { entries: readonly ShieldWinEntry[]; wins: readonly ShieldWinEntry[] }
@@ -92,21 +97,6 @@ function claimCodeMessage(code: number): string {
   }
 }
 
-function statusHint(state: BoardState): string {
-  switch (state) {
-    case 'upcoming':
-      return 'This campaign has not started.'
-    case 'sold-out':
-      return 'Prizes for this campaign have been sent.'
-    case 'ended-won':
-      return 'This campaign has ended.'
-    case 'ended-none':
-      return 'This campaign ended with no winner.'
-    default:
-      return ''
-  }
-}
-
 function rewardStatusLabel(status: ShieldWinEntry['reward_status']): string {
   switch (status) {
     case 'UNCLAIMED':
@@ -128,10 +118,13 @@ function rewardText(entry: ShieldWinEntry): string {
   return [entry.reward_amount, entry.reward_asset].filter(part => part && part.length > 0).join(' ')
 }
 
-function transferHint(_campaign: ShieldWinCampaign, _minimumValue: string): string {
-  // const minimum = minimumValue || 'the minimum'
-  //  Only a transfer into ${assetLabel(campaign)} with at least ${minimum} credited after fees qualifies.
-  return `Open Noir Wallet from the Chrome toolbar.`
+function shortPayoutAddress(value: string): string {
+  if (value.length <= 11) return value
+  return `${value.slice(0, 6)}…${value.slice(-5)}`
+}
+
+function qualifyHint(minimumValue: string): string {
+  return `Only transfers into NEAR Confidential count. At least ${minimumValue} must land after fees.`
 }
 
 function isInFlight(entry: ShieldWinEntry): boolean {
@@ -256,6 +249,25 @@ function DisconnectIcon() {
   )
 }
 
+function RefreshIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M3 21v-5h5" />
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+    </svg>
+  )
+}
+
 function Tbc() {
   return <span className="tbc">TBC</span>
 }
@@ -360,10 +372,18 @@ function RulesCopy({
   )
 }
 
+function readInitialCampaign(): { campaign: ShieldWinCampaign | null; reveal: boolean } {
+  const campaign = readCachedCampaign()
+  return { campaign, reveal: campaign === null }
+}
+
 export default function ShieldAndWinPage() {
   const initialProvider = typeof window === 'undefined' ? null : detectNoirWallet()
-  const [campaignState, setCampaignState] = useState<CampaignState>('loading')
-  const [campaign, setCampaign] = useState<ShieldWinCampaign | null>(null)
+  const [campaignStart] = useState(readInitialCampaign)
+  const [campaignState, setCampaignState] = useState<CampaignState>(
+    campaignStart.campaign ? 'ready' : 'loading'
+  )
+  const [campaign, setCampaign] = useState<ShieldWinCampaign | null>(campaignStart.campaign)
   const [provider, setProvider] = useState<NoirEthereumProvider | null>(initialProvider)
   const [walletReady, setWalletReady] = useState(initialProvider !== null)
   const [accountReady, setAccountReady] = useState(false)
@@ -381,12 +401,14 @@ export default function ShieldAndWinPage() {
   const [copied, setCopied] = useState(false)
   const [claimOpen, setClaimOpen] = useState(false)
   const [claimTarget, setClaimTarget] = useState<ShieldWinEntry | null>(null)
-  const [claimDraft, setClaimDraft] = useState('')
-  const [confirmedAddress, setConfirmedAddress] = useState<string | null>(null)
+  const [payoutAddress, setPayoutAddress] = useState<string | null>(null)
   const [claimError, setClaimError] = useState<string | null>(null)
   const [claimBusy, setClaimBusy] = useState(false)
+  const [connectBusy, setConnectBusy] = useState(false)
   const [swap, setSwap] = useState(false)
   const [liveText, setLiveText] = useState('')
+  const [entryRefreshBusy, setEntryRefreshBusy] = useState(false)
+  const [entryRefreshCooling, setEntryRefreshCooling] = useState(false)
 
   const addressRef = useRef(address)
   const campaignRef = useRef(campaign)
@@ -395,6 +417,9 @@ export default function ShieldAndWinPage() {
   const seenView = useRef<EntryViewState | null>(null)
   const claimAbort = useRef<AbortController | null>(null)
   const entryPoll = useRef<{ timer: number; controller: AbortController } | null>(null)
+  const entryRefreshAbort = useRef<AbortController | null>(null)
+  const entryRefreshCooldownTimer = useRef(0)
+  const entryRefreshGate = useRef({ busy: false, cooling: false })
   const rulesRef = useRef<HTMLDialogElement>(null)
   const claimRef = useRef<HTMLDialogElement>(null)
   const clearConnectedRef = useRef<() => void>(() => undefined)
@@ -433,6 +458,8 @@ export default function ShieldAndWinPage() {
   function clearConnectedWallet() {
     stopEntryPoll()
     awaitingDraw.current = false
+    addressRef.current = null
+    entryRefreshAbort.current?.abort()
     claimAbort.current?.abort()
     claimAbort.current = null
     setAddress(null)
@@ -444,8 +471,7 @@ export default function ShieldAndWinPage() {
     setClaimOpen(false)
     setClaimBusy(false)
     setClaimTarget(null)
-    setConfirmedAddress(null)
-    setClaimDraft('')
+    setPayoutAddress(null)
     setClaimError(null)
   }
   clearConnectedRef.current = clearConnectedWallet
@@ -474,7 +500,7 @@ export default function ShieldAndWinPage() {
         signal
       )
     ])
-    if (signal.aborted || !mountedRef.current) return null
+    if (signal.aborted || !mountedRef.current || addressRef.current !== walletAddress) return null
     setEntries(entryPage.list)
     setWins(winPage.list)
     setEntriesError(false)
@@ -565,6 +591,8 @@ export default function ShieldAndWinPage() {
       mountedRef.current = false
       claimAbort.current?.abort()
       stopEntryPoll()
+      entryRefreshAbort.current?.abort()
+      window.clearTimeout(entryRefreshCooldownTimer.current)
     }
   }, [])
 
@@ -617,6 +645,10 @@ export default function ShieldAndWinPage() {
         setAccountReady(true)
         return
       }
+      if (account !== addressRef.current) {
+        addressRef.current = account
+        entryRefreshAbort.current?.abort()
+      }
       setAddress(account)
       setAccountReady(true)
       if (!campaignRef.current) return
@@ -638,10 +670,14 @@ export default function ShieldAndWinPage() {
       try {
         const list = await getCampaigns(controller.signal)
         if (stopped) return
-        setCampaign(selectCampaign(list))
+        const next = selectCampaign(list)
+        setCampaign(next)
         setCampaignState('ready')
+        if (next) writeCachedCampaign(next)
+        else clearCachedCampaign()
       } catch (error) {
         if (stopped || isAbortError(error)) return
+        if (campaignRef.current) return
         setCampaign(null)
         setCampaignState('error')
       }
@@ -692,7 +728,10 @@ export default function ShieldAndWinPage() {
       stopped = true
       controller.abort()
       stopEntryPoll()
-      if (previousAddress && previousAddress !== addressRef.current) awaitingDraw.current = false
+      if (previousAddress && previousAddress !== addressRef.current) {
+        awaitingDraw.current = false
+        entryRefreshAbort.current?.abort()
+      }
     }
     // loadWalletData and startEntryPoll read the latest address and campaign through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -777,7 +816,34 @@ export default function ShieldAndWinPage() {
     setDrawPending(false)
     setNotice(null)
     setNoticeWarn(false)
-    if (addressRef.current && campaignRef.current) startEntryPoll()
+  }
+
+  async function onRefreshEntry() {
+    const gate = entryRefreshGate.current
+    if (gate.busy || gate.cooling) return
+    if (!addressRef.current || !campaignRef.current) return
+    gate.busy = true
+    gate.cooling = true
+    setEntryRefreshBusy(true)
+    setEntryRefreshCooling(true)
+    window.clearTimeout(entryRefreshCooldownTimer.current)
+    entryRefreshCooldownTimer.current = window.setTimeout(() => {
+      entryRefreshGate.current.cooling = false
+      if (mountedRef.current) setEntryRefreshCooling(false)
+    }, ENTRY_REFRESH_COOLDOWN_MS)
+    const controller = new AbortController()
+    entryRefreshAbort.current = controller
+    try {
+      await loadWalletData(controller.signal)
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error) || !mountedRef.current) return
+      setNotice('Your entry could not be loaded.')
+      setNoticeWarn(true)
+    } finally {
+      if (entryRefreshAbort.current === controller) entryRefreshAbort.current = null
+      entryRefreshGate.current.busy = false
+      if (mountedRef.current) setEntryRefreshBusy(false)
+    }
   }
 
   async function onDisconnect() {
@@ -796,9 +862,10 @@ export default function ShieldAndWinPage() {
 
   async function onConnect() {
     const current = detectNoirWallet()
-    if (!current) return
+    if (!current || connectBusy) return
     setNotice(null)
     setNoticeWarn(false)
+    setConnectBusy(true)
     try {
       const next = await requestAccount(current)
       if (!mountedRef.current) return
@@ -808,6 +875,8 @@ export default function ShieldAndWinPage() {
       if (!mountedRef.current || isAbortError(error)) return
       setNotice(walletErrorMessage(error))
       setNoticeWarn(true)
+    } finally {
+      if (mountedRef.current) setConnectBusy(false)
     }
   }
 
@@ -835,13 +904,16 @@ export default function ShieldAndWinPage() {
   }
 
   async function openClaim(entry: ShieldWinEntry) {
-    if (phone) return
+    if (phone || claimBusy) return
     const current = detectNoirWallet()
     if (!current) {
       setNotice('Install Noir Wallet in desktop Chrome, then refresh this page.')
       setNoticeWarn(true)
       return
     }
+    setClaimBusy(true)
+    setNotice(null)
+    setNoticeWarn(false)
     try {
       let walletAddress = addressRef.current
       if (!walletAddress) {
@@ -849,31 +921,25 @@ export default function ShieldAndWinPage() {
         if (!mountedRef.current) return
         setAddress(walletAddress)
       }
+      const zcash = detectZcashProvider()
+      if (!zcash) throw new Error('Noir Wallet did not return a transparent address.')
+      const payout = await readTransparentAddress(zcash)
+      if (!mountedRef.current) return
       setClaimTarget(entry)
-      setClaimDraft('')
-      setConfirmedAddress(null)
+      setPayoutAddress(payout)
       setClaimError(null)
       setClaimOpen(true)
     } catch (error) {
       if (!mountedRef.current || isAbortError(error)) return
       setNotice(walletErrorMessage(error))
       setNoticeWarn(true)
+    } finally {
+      if (mountedRef.current) setClaimBusy(false)
     }
-  }
-
-  function onContinue(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const next = claimDraft.trim()
-    if (!isTransparentZcashAddress(next)) {
-      setClaimError('Check the transparent address.')
-      return
-    }
-    setConfirmedAddress(next)
-    setClaimError(null)
   }
 
   async function onSign() {
-    if (claimBusy || !claimTarget || !confirmedAddress) return
+    if (claimBusy || !claimTarget || !payoutAddress) return
     const currentProvider = detectNoirWallet()
     const walletAddress = addressRef.current
     if (!currentProvider || !walletAddress) {
@@ -889,7 +955,7 @@ export default function ShieldAndWinPage() {
       const message = claimMessage({
         entryId,
         walletAddress,
-        zcashAddress: confirmedAddress
+        zcashAddress: payoutAddress
       })
       if (!utf8ToHex(message).startsWith('0x')) {
         setClaimError('The claim could not be submitted.')
@@ -901,7 +967,7 @@ export default function ShieldAndWinPage() {
         {
           entry_id: entryId,
           wallet_address: walletAddress,
-          zcash_address: confirmedAddress,
+          zcash_address: payoutAddress,
           signature
         },
         controller.signal
@@ -949,9 +1015,7 @@ export default function ShieldAndWinPage() {
           setClaimOpen(false)
           return
         }
-        setClaimError(
-          'The claim could not be confirmed. Check this page again before using a different address.'
-        )
+        setClaimError('The claim could not be confirmed. Check this page again.')
         return
       }
       setClaimError(walletErrorMessage(error))
@@ -978,14 +1042,54 @@ export default function ShieldAndWinPage() {
     hint = DRAW_PENDING_MESSAGE
   } else if (!provider && walletReady && board.canJoin) {
     hint = INSTALL_HINT
-  } else if (provider && accountReady && campaign && board.canJoin && claimable.length === 0) {
-    hint = transferHint(campaign, board.minimumValue)
-  } else if (campaignState === 'ready' && !board.canJoin) {
-    hint = statusHint(board.state)
+  } else if (provider && accountReady && !address && board.canJoin && claimable.length === 0) {
+    hint = CONNECT_HINT
+  } else if (
+    address &&
+    campaign &&
+    board.canJoin &&
+    claimable.length === 0 &&
+    board.minimumValue.length > 0
+  ) {
+    hint = qualifyHint(board.minimumValue)
+  } else if (
+    campaignState === 'ready' &&
+    !board.canJoin &&
+    claimable.length === 0 &&
+    (!address || entriesReady)
+  ) {
+    hint = closedCampaignHint(board)
   }
 
   const actionsReady = phone || (walletReady && (!provider || accountReady))
   const prizeReady = Boolean(board.prizeAmount && board.prizeAsset)
+  const showFixedWin = campaignState === 'loading' || prizeReady
+  const accountPending = !walletReady || Boolean(provider && !accountReady)
+  const connectLoading = accountPending || connectBusy
+  const campaignOpen = campaignState === 'loading' || board.canJoin
+  const showInstall =
+    !phone &&
+    walletReady &&
+    !provider &&
+    claimable.length === 0 &&
+    (campaignState === 'loading' || board.canJoin)
+  const showTry =
+    !phone &&
+    ((claimable.length === 0 && campaignOpen && (accountPending || Boolean(provider))) ||
+      (claimable.length > 0 && Boolean(provider) && board.canJoin))
+  const showConnect =
+    !phone &&
+    !address &&
+    claimable.length === 0 &&
+    campaignOpen &&
+    !showInstall &&
+    (connectLoading || Boolean(provider && accountReady))
+  const showExplore =
+    !phone &&
+    campaignState === 'ready' &&
+    !board.canJoin &&
+    claimable.length === 0 &&
+    (!address || entriesReady)
   const entryClass = ['entry', entryTone(view), swap ? 'swap' : ''].filter(Boolean).join(' ')
   const chipClass = chipTone(view)
 
@@ -1019,47 +1123,46 @@ export default function ShieldAndWinPage() {
       </header>
 
       <main>
-        <section
-          className="stage"
-          aria-labelledby={campaignState === 'loading' ? undefined : 'title'}
-          aria-label={campaignState === 'loading' ? 'Shield & Win' : undefined}
-          aria-busy={campaignState === 'loading'}
-        >
+        <section className="stage" aria-labelledby="title" aria-busy={campaignState === 'loading'}>
           <div className="lead">
             {campaignState === 'loading' ? (
-              <div className="skel" aria-hidden="true">
-                <div className="sk sk-eyebrow" />
-                <div className="sk sk-title" />
-                <div className="sk sk-title short" />
-                <div className="sk sk-sub" />
-              </div>
+              <div className="sk sk-eyebrow" aria-hidden="true" />
             ) : (
-              <>
-                <p className="eyebrow doto">{campaign?.name || 'Shield & Win'}</p>
+              <p className="eyebrow doto">{campaign?.name || 'Shield & Win'}</p>
+            )}
+            {showFixedWin ? (
+              <h1 id="title">
+                Go Private,
+                <br />
+                {'Win'}
                 {prizeReady ? (
-                  <h1 id="title">
-                    Go Private,
-                    <br />
-                    Win{' '}
-                    <span className="hl">
+                  <>
+                    {' '}
+                    <span className={campaignStart.reveal ? 'hl reveal' : 'hl'}>
                       {board.prizeAmount}
                       {'\u00A0'}
                       {board.prizeAsset}
                     </span>
-                  </h1>
-                ) : (
-                  <h1 id="title">Shield & Win</h1>
-                )}
-              </>
-            )}
-            {campaignState === 'loading' ? null : campaignState === 'error' ? (
-              <p className="sub">{CAMPAIGN_ERROR}</p>
-            ) : prizeReady ? (
-              <p className="sub">
-                Try a private transfer (min {board.minimumValue}) and get an instant draw.
-              </p>
+                  </>
+                ) : null}
+              </h1>
             ) : (
+              <h1 id="title">Shield & Win</h1>
+            )}
+            {campaignState === 'error' ? (
+              <p className="sub">{CAMPAIGN_ERROR}</p>
+            ) : campaignState === 'ready' && !prizeReady ? (
               <p className="sub">No campaign is available right now.</p>
+            ) : (
+              <p className="sub">
+                {'Try a private transfer'}
+                {board.minimumValue ? (
+                  <span className={campaignStart.reveal ? 'reveal' : undefined}>
+                    {` (min ${board.minimumValue})`}
+                  </span>
+                ) : null}
+                {' and get an instant draw.'}
+              </p>
             )}
 
             <div className="actions">
@@ -1078,7 +1181,7 @@ export default function ShieldAndWinPage() {
                   Claim
                 </button>
               ) : null}
-              {actionsReady && !phone && claimable.length === 0 && !provider && board.canJoin ? (
+              {showInstall ? (
                 <a
                   className="btn primary"
                   href={CHROME_STORE_URL}
@@ -1089,24 +1192,44 @@ export default function ShieldAndWinPage() {
                   Install Noir Wallet
                 </a>
               ) : null}
-              {actionsReady && !phone && provider && board.canJoin ? (
-                <button
-                  type="button"
-                  className={claimable.length > 0 ? 'btn ghost' : 'btn primary'}
-                  onClick={onParticipate}
-                >
-                  Try a private transfer
-                </button>
+              {showTry ? (
+                <Tooltip content={TOOLBAR_HINT} side="top">
+                  <button
+                    type="button"
+                    className={claimable.length > 0 ? 'btn ghost' : 'btn primary'}
+                    onClick={onParticipate}
+                  >
+                    Try a private transfer
+                  </button>
+                </Tooltip>
               ) : null}
-              {actionsReady &&
-              !phone &&
-              provider &&
-              accountReady &&
-              !address &&
-              campaignState === 'ready' ? (
-                <button type="button" className="btn ghost" onClick={() => void onConnect()}>
-                  Connect Wallet
-                </button>
+              {showExplore ? (
+                <a className="btn ghost" href="/">
+                  Explore Noir Wallet
+                </a>
+              ) : null}
+              {showConnect ? (
+                connectLoading ? (
+                  <button type="button" className="btn ghost" disabled aria-busy="true">
+                    <span className="btn-spin" aria-hidden="true" />
+                    Connect Wallet
+                  </button>
+                ) : (
+                  <Tooltip
+                    content={
+                      <img
+                        src={PUBLIC_TOOLTIP_SRC}
+                        alt="Select the Public account in Noir Wallet"
+                      />
+                    }
+                    side="top"
+                    variant="plain"
+                  >
+                    <button type="button" className="btn ghost" onClick={() => void onConnect()}>
+                      Connect Wallet
+                    </button>
+                  </Tooltip>
+                )
               ) : null}
             </div>
             <p className={hintWarn ? 'hint warn' : 'hint'} aria-live="polite">
@@ -1115,8 +1238,20 @@ export default function ShieldAndWinPage() {
 
             {showEntry ? (
               <div className={entryClass} aria-label="Your entry">
-                <span className="entry-k">Your entry</span>
-                <span className={chipClass ? `chip ${chipClass}` : 'chip'}>{copy.title}</span>
+                <div className="entry-head">
+                  <span className="entry-k">Your entry</span>
+                  <span className={chipClass ? `chip ${chipClass}` : 'chip'}>{copy.title}</span>
+                  <button
+                    type="button"
+                    className={entryRefreshBusy ? 'entry-refresh is-busy' : 'entry-refresh'}
+                    aria-label="Refresh your entry"
+                    aria-busy={entryRefreshBusy}
+                    disabled={entryRefreshBusy || entryRefreshCooling}
+                    onClick={() => void onRefreshEntry()}
+                  >
+                    <RefreshIcon />
+                  </button>
+                </div>
                 <p>{copy.body}</p>
                 {view === 'claiming' || view === 'sending' ? (
                   <span className="dots" aria-hidden="true">
@@ -1171,78 +1306,79 @@ export default function ShieldAndWinPage() {
           </div>
 
           <aside className="board" aria-label="Campaign progress">
-            {campaignState === 'loading' ? (
-              <div className="skel" aria-hidden="true">
-                <div className="board-top">
+            <div className="board-top">
+              {campaignState === 'loading' ? (
+                <>
                   <span className="sk sk-pill" />
                   <span className="sk sk-note muted" />
-                </div>
-                <div className="prize">
-                  <div className="sk sk-coin" />
-                  <div>
-                    <div className="sk sk-prize-amt" />
-                    <div className="sk sk-prize-sub" />
-                  </div>
-                </div>
-                <div className="draws">
-                  <div className="sk sk-draws-k" />
-                  <div className="sk sk-draws-n" />
-                </div>
-                <div className="tiles">
-                  <div className="tile">
-                    <div className="sk sk-tile-k" />
-                    <div className="sk sk-tile-v" />
-                  </div>
-                  <div className="tile">
-                    <div className="sk sk-tile-k" />
-                    <div className="sk sk-tile-v" />
-                  </div>
-                </div>
-                <div className="sk sk-indep" />
-              </div>
-            ) : (
-              <>
-                <div className="board-top">
+                </>
+              ) : (
+                <>
                   <span className={board.state === 'live' ? 'pill' : 'pill ended'}>
                     <i />
                     <span>{board.pill}</span>
                   </span>
                   {board.winnerNote ? <span className="muted">{board.winnerNote}</span> : null}
+                </>
+              )}
+            </div>
+            {campaignState === 'loading' ? (
+              <div className="prize">
+                <div className="sk sk-coin" />
+                <div className="prize-copy">
+                  <div className="sk sk-prize-amt" />
+                  <div className="sk sk-prize-sub" />
                 </div>
-                {prizeReady ? (
-                  <div className="prize">
-                    <img src="/shield-and-win/zec.svg" alt="" />
-                    <div>
-                      <b>
-                        {board.prizeAmount} {board.prizeAsset}
-                      </b>
-                      <span>{board.prizeDestination}</span>
-                    </div>
-                  </div>
-                ) : null}
-                {typeof board.drawsSoFar === 'number' ? (
-                  <div className="draws">
-                    <span className="k">Draws so far</span>
-                    <span className="big doto">{board.drawsSoFar.toLocaleString('en-US')}</span>
-                  </div>
-                ) : null}
-                {campaignState === 'ready' && campaign ? (
-                  <div className="tiles">
-                    <div className="tile">
-                      <span>{board.endsLabel}</span>
-                      <b className="doto">{board.endsValue}</b>
-                    </div>
-                    <div className="tile">
-                      <span>{board.minimumLabel}</span>
-                      <b className="doto">{board.minimumValue}</b>
-                    </div>
-                  </div>
-                ) : null}
-                {campaignState === 'ready' && campaign ? (
-                  <p className="indep">Every qualifying transfer gets its own draw.</p>
-                ) : null}
-              </>
-            )}
+              </div>
+            ) : prizeReady ? (
+              <div className="prize">
+                <img src="/shield-and-win/zec.svg" alt="" />
+                <div>
+                  <b>
+                    {board.prizeAmount} {board.prizeAsset}
+                  </b>
+                  <span>{board.prizeDestination}</span>
+                </div>
+              </div>
+            ) : null}
+            {campaignState === 'loading' || typeof board.drawsSoFar === 'number' ? (
+              <div className="draws">
+                <span className="k">Draws so far</span>
+                <span className="big doto">
+                  {(typeof board.drawsSoFar === 'number' ? board.drawsSoFar : 0).toLocaleString(
+                    'en-US'
+                  )}
+                </span>
+              </div>
+            ) : null}
+            {campaignState === 'loading' ? (
+              <div className="tiles">
+                <div className="tile">
+                  <span>Odds per draw</span>
+                  <span className="sk sk-tile-v" />
+                </div>
+                <div className="tile">
+                  <span>Ends in</span>
+                  <span className="sk sk-tile-v" />
+                </div>
+              </div>
+            ) : campaignState === 'ready' && campaign ? (
+              <div className="tiles">
+                <div className="tile">
+                  <span>{board.oddsLabel}</span>
+                  <b className="doto">{board.oddsValue}</b>
+                </div>
+                <div className="tile">
+                  <span>{board.endsLabel}</span>
+                  <b className="doto">{board.endsValue}</b>
+                </div>
+              </div>
+            ) : null}
+            {campaignState === 'loading' || (campaignState === 'ready' && campaign) ? (
+              <p className="indep">
+                Every draw is independent. More draws don’t make the next one more likely to win.
+              </p>
+            ) : null}
           </aside>
         </section>
       </main>
@@ -1309,100 +1445,61 @@ export default function ShieldAndWinPage() {
           if (!claimBusy) closeOnBackdrop(event, () => setClaimOpen(false))
         }}
       >
-        <div className="rules-head">
-          <h2 id="claim-title">Claim reward</h2>
-          <button
-            type="button"
-            className="x"
-            aria-label="Close"
-            disabled={claimBusy}
-            onClick={() => setClaimOpen(false)}
-          >
-            <CloseIcon />
-          </button>
-        </div>
-        <div className="rules-scroll">
-          {claimTarget ? (
-            <div className="claim-body">
-              {confirmedAddress ? (
-                <>
-                  <p>
-                    Claim {rewardText(claimTarget)} to this address. It cannot be changed after you
-                    submit.
-                  </p>
-                  {address ? <p>Wallet {address}</p> : null}
-                  <p className="addr">{confirmedAddress}</p>
-                  {claimError ? (
-                    <p className="form-error" id="shield-win-claim-error">
-                      {claimError}
-                    </p>
-                  ) : null}
-                  <div className="dialog-actions">
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      disabled={claimBusy}
-                      onClick={() => {
-                        setConfirmedAddress(null)
-                        setClaimError(null)
-                      }}
-                    >
-                      Back
-                    </button>
-                    <button
-                      type="button"
-                      className="btn primary"
-                      disabled={claimBusy || !address}
-                      onClick={() => void onSign()}
-                    >
-                      Confirm and sign
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <form onSubmit={onContinue}>
-                  <p>
-                    Claim {rewardText(claimTarget)} on this page. Use a Zcash transparent address
-                    (t1 on mainnet or tm on testnet). Shielded and unified addresses are rejected.
-                  </p>
-                  <label htmlFor="shield-win-address">Zcash transparent address</label>
-                  <input
-                    id="shield-win-address"
-                    name="zcash-address"
-                    value={claimDraft}
-                    autoComplete="off"
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    disabled={claimBusy}
-                    aria-describedby={claimError ? 'shield-win-claim-error' : undefined}
-                    onChange={event => {
-                      setClaimDraft(event.target.value)
-                      setClaimError(null)
-                    }}
-                  />
-                  {claimError ? (
-                    <p className="form-error" id="shield-win-claim-error">
-                      {claimError}
-                    </p>
-                  ) : null}
-                  <div className="dialog-actions">
-                    <button type="button" className="btn ghost" onClick={() => setClaimOpen(false)}>
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="btn primary"
-                      disabled={claimDraft.trim().length === 0}
-                    >
-                      Continue
-                    </button>
-                  </div>
-                </form>
-              )}
+        {claimTarget && payoutAddress ? (
+          <>
+            <div className="rules-head">
+              <h2 id="claim-title">Claim {rewardText(claimTarget)}</h2>
             </div>
-          ) : null}
-        </div>
+            <div className="rules-scroll">
+              <div className="claim-body">
+                <div className="claim-prize">
+                  <img src="/shield-and-win/zec.svg" alt="" />
+                  <span className="doto">{rewardText(claimTarget)}</span>
+                  <small>
+                    Network fee paid by Noir. You receive the full {rewardText(claimTarget)}.
+                  </small>
+                </div>
+                <p className="claim-label">Send to</p>
+                <div className="claim-addr">
+                  <img src="/shield-and-win/zec.svg" alt="" />
+                  <div>
+                    <b>Zcash · Transparent</b>
+                    <small aria-label={payoutAddress}>{shortPayoutAddress(payoutAddress)}</small>
+                  </div>
+                  <span className="claim-radio" aria-hidden="true" />
+                </div>
+                <p className="claim-fine">
+                  We ask for this address only because you won, and we don&apos;t link it to your
+                  Public or Private accounts.
+                </p>
+                {claimError ? (
+                  <p className="form-error" id="shield-win-claim-error">
+                    {claimError}
+                  </p>
+                ) : null}
+                <div className="claim-actions">
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={claimBusy || !address}
+                    aria-describedby={claimError ? 'shield-win-claim-error' : undefined}
+                    onClick={() => void onSign()}
+                  >
+                    Claim {rewardText(claimTarget)}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    disabled={claimBusy}
+                    onClick={() => setClaimOpen(false)}
+                  >
+                    Later
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : null}
       </dialog>
     </div>
   )
