@@ -18,6 +18,7 @@ import { useQuoteReview, useQuoteReviewTimer } from '@/popup/hooks/useQuoteRevie
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
+import { withConfidentialAssetPrices } from '@/popup/services/portfolio-prices'
 import { findAssetPrice } from '@/core/prices'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { useNavigate } from '@/popup/provider/Router'
@@ -31,6 +32,7 @@ import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { SHIELD_PROVIDERS } from '@/popup/components/portfolio/shield-providers'
 import type { ShieldTokenPickerItem } from '@/popup/services/shield-transfer'
+import { resolveTransferMaximum } from '@/popup/services/transfer-maximum'
 import { sortSendAssetsByBalanceValue, sortSendNetworks } from '@/popup/services/send-asset-order'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import {
@@ -350,6 +352,11 @@ export function ConfidentialSendForm({
     [options, displayBalances]
   )
   const prices = priceSnapshot?.scopeKey === scopeKey ? priceSnapshot.value : null
+  const pickerPrices = useMemo(() => withConfidentialAssetPrices(model, prices), [model, prices])
+  const catalogPrices = useMemo(
+    () => new Map(catalogTokens.map(token => [token.assetId, token.price])),
+    [catalogTokens]
+  )
   const sources = useMemo(() => {
     const fundedAssetIds = new Set(fundedSources.map(item => item.asset.asset.id))
     return [...fundedSources, ...options.filter(item => !fundedAssetIds.has(item.asset.asset.id))]
@@ -363,7 +370,10 @@ export function ConfidentialSendForm({
           shieldFundingAvailableRaw(item, displayBalances),
           item.asset.metadata.decimals
         ),
-        priceUsd: findAssetPrice(prices, item.asset.asset.id)?.priceUsd ?? null,
+        priceUsd:
+          findAssetPrice(pickerPrices, item.asset.asset.id)?.priceUsd ??
+          catalogPrices.get(item.managed.protocolAssetId) ??
+          null,
         item
       }))
     ).map(row => ({
@@ -386,7 +396,7 @@ export function ConfidentialSendForm({
       decimals: row.item.asset.metadata.decimals,
       priceUsd: row.priceUsd
     }))
-  }, [sourceSelectorActive, displayBalances, prices, sources])
+  }, [sourceSelectorActive, displayBalances, pickerPrices, catalogPrices, sources])
   const routedPublicAsset = model?.assets.find(item => item.asset.id === sourceId)
   const routedManaged = routedPublicAsset
     ? resolveShieldManagedAsset(routedPublicAsset, managedAssets, catalogTokens, network)
@@ -1294,7 +1304,12 @@ export function ConfidentialSendForm({
             onClick: () => {
               if (!source) return
               keepSelectedSource()
-              setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))
+              const maximumRaw = resolveTransferMaximum({
+                mode: 'reserve',
+                availableRaw,
+                payFeeFromAsset: false
+              })
+              setAmount(formatBaseUnitDecimalAmount(maximumRaw, source.asset.metadata.decimals))
             }
           }
         }}

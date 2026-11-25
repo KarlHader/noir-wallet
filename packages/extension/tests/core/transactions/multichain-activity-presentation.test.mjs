@@ -128,13 +128,37 @@ test.describe('Multichain Activity presentation', () => {
       }
     }
     expect(getActivityAction(item, { viewedDomain: 'private' })).toEqual({
-      label: 'Receive',
+      label: 'Deposit',
       side: 'destination'
     })
     expect(getActivityAction(item, { viewedDomain: 'shield' })).toEqual({
-      label: 'Withdraw',
+      label: 'Send',
       side: 'source'
     })
+    const sameAssetRoute = {
+      source: { assetId: 'eip155:8453/slip44:60' },
+      destination: { assetId: 'eip155:8453/slip44:60' }
+    }
+    expect(getActivityAction(item, { viewedDomain: 'private' }, sameAssetRoute)).toEqual({
+      label: 'Deposit',
+      side: 'destination'
+    })
+    expect(getActivityAction(item, { viewedDomain: 'shield' }, sameAssetRoute)).toEqual({
+      label: 'Send',
+      side: 'source'
+    })
+    const projectedLegacyMovement = {
+      ...item,
+      snapshot: { ...item.snapshot, direction: 'outgoing' }
+    }
+    expect(
+      getActivityDetailTitle(
+        projectedLegacyMovement,
+        undefined,
+        { viewedDomain: 'shield' },
+        sameAssetRoute
+      )
+    ).toBe('Unshield')
     const zcashWithdrawal = {
       ...item,
       snapshot: {

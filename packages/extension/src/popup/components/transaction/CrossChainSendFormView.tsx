@@ -35,7 +35,6 @@ interface CrossChainSendFormViewProps {
   readonly destinationAssetsLoading: boolean
   readonly destinationNetworksLoading?: boolean
   readonly hasInsufficientFunds: boolean
-  readonly maxLoading: boolean
   readonly maxDisabled: boolean
   readonly maxDisabledReason?: string
   readonly canGetQuote: boolean
@@ -75,7 +74,6 @@ export function CrossChainSendFormView({
   destinationAssetsLoading,
   destinationNetworksLoading = false,
   hasInsufficientFunds,
-  maxLoading,
   maxDisabled,
   maxDisabledReason,
   canGetQuote,
@@ -142,9 +140,8 @@ export function CrossChainSendFormView({
           balance: { value: spendableBalance },
           maximum: {
             onClick: onMaxClick,
-            disabled: initializing || !onMaxClick || maxLoading || maxDisabled,
-            title: maxDisabled ? maxDisabledReason : 'Max',
-            loading: maxLoading
+            disabled: initializing || !onMaxClick || maxDisabled,
+            title: maxDisabled ? maxDisabledReason : 'Max'
           }
         }}
         footer={

@@ -653,17 +653,42 @@ export class RheaSwapTransactionMonitor {
     const orderReference = origins.at(-1)?.evidence?.externalReference
     if (!sourceHash && !orderReference) return false
     if (sourceHash) {
-      await this.service.recordTransactionSubmission(binding.quoteHandle, sourceHash)
       graph = (await this.options.recoverWithdrawActivity?.(graph)) ?? graph
     }
     try {
+      if (sourceHash)
+        await this.service.recordTransactionSubmission(binding.quoteHandle, sourceHash)
       await this.service.reportSubmission(binding.quoteHandle)
     } catch {
       // A persisted submission retries independently of graph finality.
     }
 
-    // Intents can settle with a separate destination transaction on the source chain.
-    if (!binding.isCrossChain && !isSignedOrder && !usesIntents) {
+    const originReceipt = origins[0].evidence
+    const sourceReceiptOutput = originReceipt?.assetEffects?.changes.find(
+      change => change.direction === 'incoming' && change.assetId === binding.destination.assetId
+    )
+    const sourceReceiptSettledSwap =
+      graph.root.kind === 'swap' &&
+      binding.userAction !== 'transfer' &&
+      binding.balanceTransfer === undefined &&
+      binding.origin.chainId.startsWith('eip155:') &&
+      binding.origin.chainId === binding.destination.chainId &&
+      binding.origin.assetId !== binding.destination.assetId &&
+      binding.sender.toLowerCase() === binding.destination.recipient.toLowerCase() &&
+      origins.length === 1 &&
+      origins[0].status === 'final' &&
+      !origins[0].reconfirming &&
+      originReceipt?.blockHash !== undefined &&
+      originReceipt.assetEffects?.source === 'receipt' &&
+      sourceReceiptOutput !== undefined &&
+      !graph.segments.some(
+        segment =>
+          segment.role === 'destination' &&
+          segment.evidence?.transactionHash !== undefined &&
+          segment.evidence.transactionHash.toLowerCase() !== sourceHash?.toLowerCase()
+      )
+    // Intents can settle separately even when both assets use the same chain.
+    if (sourceReceiptSettledSwap || (!binding.isCrossChain && !isSignedOrder && !usesIntents)) {
       if (origins.some(origin => origin.target.kind === 'onchain' && origin.status !== 'final')) {
         return false
       }
@@ -682,7 +707,7 @@ export class RheaSwapTransactionMonitor {
         binding.destination.chainId
       ])
       await this.notifyStatus(graph, 'SUCCESS')
-      await this.service.retireReportedSubmission(binding.quoteHandle)
+      await this.service.retireReportedSubmission(binding.quoteHandle).catch(() => {})
       return true
     }
 

@@ -5,13 +5,13 @@ const getAddressTypeConfig = (t: AddressType) => {
     case 'shielded':
       return {
         label: 'Shield',
-        className: 'bg-[#9500FF]/40 text-[#DEAFFF]'
+        className: 'bg-primary/15 text-foreground'
       }
     case 'transparent':
     default:
       return {
         label: 'Transparent',
-        className: 'bg-white/10 text-white'
+        className: 'bg-accent text-foreground'
       }
   }
 }

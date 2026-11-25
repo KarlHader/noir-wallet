@@ -274,6 +274,14 @@ export function MultichainActivityDetail({
     getConfidentialFundingPlanId(visibleItem.id) !== null &&
     visibleItem.status !== 'final' &&
     visibleItem.status !== 'failed'
+  const protocol = visibleItem.snapshot?.protocol
+  const pendingSameChainSwap =
+    visibleItem.kind === 'swap' &&
+    visibleItem.status !== 'final' &&
+    visibleItem.status !== 'failed' &&
+    protocol?.provider === 'rhea-cross-chain-dex' &&
+    protocol.origin.chainId.startsWith('eip155:') &&
+    protocol.origin.chainId === protocol.destination.chainId
   const pendingZcashReceive =
     visibleItem.source === 'zcash-v1' &&
     visibleItem.kind === 'receive' &&
@@ -281,7 +289,10 @@ export function MultichainActivityDetail({
 
   useEffect(() => {
     if (
-      (!pendingEvmOrigin && !pendingConfidentialActivity && !pendingZcashReceive) ||
+      (!pendingEvmOrigin &&
+        !pendingSameChainSwap &&
+        !pendingConfidentialActivity &&
+        !pendingZcashReceive) ||
       effectiveWalletId !== item.scope.keyDomainId ||
       effectiveAccountId !== item.scope.accountId ||
       currentNetwork !== network
@@ -341,6 +352,7 @@ export function MultichainActivityDetail({
     item.source,
     network,
     pendingEvmOrigin,
+    pendingSameChainSwap,
     pendingConfidentialActivity,
     pendingZcashReceive
   ])
@@ -392,7 +404,7 @@ export function MultichainActivityDetail({
   const interaction = getActivityInteractionPresentation(visibleItem, primaryChainId)
   const approval = getActivityApprovalDetails(visibleItem, assetMetadata)
   const title = swap
-    ? getActivityRouteTitle(visibleItem, swap, perspective)
+    ? getActivityRouteTitle(visibleItem, swap, perspective, true)
     : getActivityDetailTitle(visibleItem, interaction?.title, perspective, {
         sourceAccountMode: senderMode,
         destinationAccountMode: recipientMode,

@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { AccountRef, ConnectedDApp } from '@/core/dapp/dapp-manager'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
-import { presentDAppPermissions } from '@/popup/services/dapp-connection-presentation'
+import {
+  presentDAppPermissions,
+  resolveDAppFooterPalette
+} from '@/popup/services/dapp-connection-presentation'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { ChainIcon } from '../common/ChainIcon'
@@ -40,8 +43,7 @@ export function ConnectedDAppBar({
   const hasEvm = permissions.some(
     permission => permission.chainId === 'evm' || permission.chainId.startsWith('eip155:')
   )
-  const incognito = hasEvm && executionMode === 'private'
-  const walletPalette = incognito || darkPalette ? undefined : 'public'
+  const walletPalette = resolveDAppFooterPalette(darkPalette, hasEvm ? executionMode : null)
   return (
     <footer
       aria-label="Current dApp connection"

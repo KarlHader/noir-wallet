@@ -25,13 +25,16 @@ export function hasTokenPickerBalance(asset: TokenPickerBalance): boolean {
   return parseTokenBalanceDecimal(balanceAmount(asset))?.gt(0) === true
 }
 
+function isDefaultTokenPickerAsset(asset: TokenPickerBalance): boolean {
+  return Boolean(asset.isNative) || ['USDT', 'USDC'].includes(asset.symbol.toUpperCase())
+}
+
 export function isExtraTokenPickerAsset(asset: TokenPickerBalance): boolean {
   return (
     !asset.pinned &&
     asset.pinOrder === undefined &&
-    !asset.isNative &&
-    !hasTokenPickerBalance(asset) &&
-    !['USDT', 'USDC'].includes(asset.symbol.toUpperCase())
+    !isDefaultTokenPickerAsset(asset) &&
+    !hasTokenPickerBalance(asset)
   )
 }
 
@@ -41,6 +44,7 @@ export function sortTokenPickerRows<Row>(
   policy: TokenPickerPolicy
 ): Row[] {
   const fundedOnly = policy === 'funded' || policy === 'withdrawal'
+  const grouped = policy === 'grouped' || policy === 'grouped-source'
   return rows
     .map(row => {
       const asset = getAsset(row)
@@ -55,6 +59,7 @@ export function sortTokenPickerRows<Row>(
         row,
         available,
         value: value?.gt(0) ? value : null,
+        groupOrder: !grouped || asset.isNative ? 0 : isDefaultTokenPickerAsset(asset) ? 1 : 2,
         pinOrder: fundedOnly ? Infinity : (asset.pinOrder ?? (asset.pinned ? 0 : Infinity))
       }
     })
@@ -62,6 +67,7 @@ export function sortTokenPickerRows<Row>(
     .sort((left, right) => {
       if (left.pinOrder !== right.pinOrder) return left.pinOrder - right.pinOrder
       if (left.available !== right.available) return left.available ? -1 : 1
+      if (!left.available) return left.groupOrder - right.groupOrder
       if (left.value && right.value) return right.value.cmp(left.value)
       return Number(Boolean(right.value)) - Number(Boolean(left.value))
     })

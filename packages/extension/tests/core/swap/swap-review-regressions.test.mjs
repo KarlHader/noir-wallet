@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
 import { CombinedEvmSwap } from '../../../src/background/combined-evm-swap.ts'
+import { EvmTransactionError } from '../../../src/infrastructure/chains/evm/evm-transaction-builder.ts'
 import { selectWalletOwnedQuoteAssetExecution } from '../../../src/popup/services/quote-deposit-transfer-client.ts'
 import {
   canContinueCombinedSwap,
@@ -122,6 +123,7 @@ function combinedSwapFixture(t, executionMode) {
   const calls = []
   let allowance = '0'
   let delayedBroadcast = false
+  let preparationError
   const setStatus = (id, kind, status, hash) => {
     const graph = {
       root: { id, scope, kind, status },
@@ -188,6 +190,7 @@ function combinedSwapFixture(t, executionMode) {
       assert.equal(mode, executionMode ?? 'main')
       assert.equal(reviewedBinding.sender, owner)
       calls.push('prepare-swap')
+      if (preparationError) throw preparationError
       return {
         graph: setStatus(swapId, 'swap', 'prepared'),
         review: {
@@ -256,6 +259,9 @@ function combinedSwapFixture(t, executionMode) {
     delayBroadcast: () => {
       delayedBroadcast = true
     },
+    failPreparation: error => {
+      preparationError = error
+    },
     changeUnlock: () => {
       account.unlockEpoch = 'different'
     }
@@ -293,8 +299,14 @@ it('resumes an approved swap from background storage and retries only the same s
   }
 })
 
-it('stops before signing when token approval fails, the quote expires or consent belongs to another unlock', async t => {
-  for (const scenario of ['failed', 'expired', 'locked']) {
+it('stops before signing when authorization, quote or transaction preparation requires another review', async t => {
+  for (const scenario of [
+    'failed',
+    'expired',
+    'locked',
+    'insufficient-funds',
+    'simulation-failed'
+  ]) {
     await t.test(scenario, async subtest => {
       const fixture = combinedSwapFixture(subtest)
       await fixture.create().start(fixture.input)
@@ -304,14 +316,22 @@ it('stops before signing when token approval fails, the quote expires or consent
         fixture.approveOnchain()
         fixture.setAllowance()
         if (scenario === 'expired') subtest.mock.timers.setTime(fixture.input.binding.expiresAt)
-        else fixture.changeUnlock()
+        else if (scenario === 'locked') fixture.changeUnlock()
+        else fixture.failPreparation(new EvmTransactionError(scenario, 'Test preparation error'))
       }
       const resumed = fixture.create()
       await resumed.poll()
       const result = await resumed.get(fixture.input.approvalId)
       assert.equal(result.status, scenario === 'failed' ? 'approval-failed' : 'review-required')
       if (scenario === 'expired') assert.match(result.message, /quote expired/i)
-      assert.deepEqual(fixture.calls, ['approve-token'])
+      if (scenario === 'insufficient-funds') assert.match(result.message, /network fee/i)
+      if (scenario === 'simulation-failed') assert.match(result.message, /failed simulation/i)
+      assert.deepEqual(
+        fixture.calls,
+        ['insufficient-funds', 'simulation-failed'].includes(scenario)
+          ? ['approve-token', 'prepare-swap']
+          : ['approve-token']
+      )
     })
   }
 })

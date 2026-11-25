@@ -94,6 +94,7 @@ import {
   shieldSwapFormBalance,
   shieldSwapPickerChain
 } from '@/popup/services/shield-swap-form'
+import { resolveTransferMaximum } from '@/popup/services/transfer-maximum'
 import {
   buildShieldSwapZecSourceOptions,
   resolveShieldConfidentialFromAssetId,
@@ -328,12 +329,19 @@ function ShieldSwapForm({
   )
   const from = confidentialFromAssetId
     ? (sourceChoices.find(asset => matchesAsset(asset, confidentialFromAssetId)) ?? null)
-    : (sourceChoices.find(
-        asset =>
-          asset.asset.asset.id === defaultSource?.asset.asset.id && asset.asset.asset.id !== toId
-      ) ??
-      sourceChoices.find(asset => asset.asset.asset.id !== toId) ??
-      null)
+    : balanceLoading || (!displayBalances && portfolioLoading)
+      ? null
+      : (sourceChoices.find(
+          asset =>
+            asset.asset.asset.id === defaultSource?.asset.asset.id && asset.asset.asset.id !== toId
+        ) ??
+        sourceChoices.find(asset => asset.asset.asset.id !== toId) ??
+        null)
+  useEffect(() => {
+    if (active && !preferredSourceId && from && displayBalances) {
+      setFromId(from.asset.asset.id)
+    }
+  }, [active, preferredSourceId, from, displayBalances])
   const ethereumUsdcContract = getEvmNetworkConfigs(network)
     .find(config => config.chainId === 'eip155:1')
     ?.usdcContract?.toLowerCase()
@@ -1232,7 +1240,7 @@ function ShieldSwapForm({
           }
           displaySymbol={fromDisplaySymbol}
           tokenBadgeBlockchain={fromPickerChain?.badgeBlockchain}
-          tokenNetworkLabel={fromPickerChain?.sourceLabel ?? fromPickerChain?.chainName}
+          tokenNetworkLabel="NEAR Confidential"
           amount={amount}
           fiatValue={fromToken?.price ? fromFiat : ''}
           balance={hidden ? '••••' : (balance ?? '—')}
@@ -1251,9 +1259,14 @@ function ShieldSwapForm({
           }}
           amountErrorId={visibleAmountError ? amountErrorId : undefined}
           onMaxClick={() => {
-            if (!from || currentBalance === null) return
+            if (!from || !trustedBalances) return
             if (!fromId) setFromId(from.asset.asset.id)
-            setAmount(currentBalance)
+            const maximumRaw = resolveTransferMaximum({
+              mode: 'reserve',
+              availableRaw: shieldFundingAvailableRaw(from, trustedBalances),
+              payFeeFromAsset: false
+            })
+            setAmount(formatBaseUnitDecimalAmount(maximumRaw, from.asset.metadata.decimals))
             setError(null)
           }}
           maxDisabled={busy || connecting || currentBalance === null || currentBalance === '0'}
@@ -1274,9 +1287,7 @@ function ShieldSwapForm({
           tokenBadgeBlockchain={
             nativeDestinationChain?.badgeBlockchain ?? toPickerChain?.badgeBlockchain
           }
-          tokenNetworkLabel={
-            nativeDestinationChain?.chainName ?? (to ? 'NEAR Confidential' : undefined)
-          }
+          tokenNetworkLabel={nativeDestinationChain?.chainName ?? 'NEAR Confidential'}
           zcashFundingSource={nativeZecDestination ?? undefined}
           accountAddress={nativeZecRecipient}
           amount={displayOutput}

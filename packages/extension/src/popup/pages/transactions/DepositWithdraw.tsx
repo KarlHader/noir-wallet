@@ -132,21 +132,14 @@ import {
   shieldQuoteFeeRaw
 } from '@/popup/services/shield-transfer'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
-import {
-  estimateQuickShieldNativeFee,
-  prepareQuickShieldMaximum,
-  quickShieldMaximum,
-  readQuickShieldBalances
-} from '@/popup/services/quick-shield-maximum'
-import type { PrepareConfidentialFundingRequest } from '@/popup/services/confidential-funding-client'
 import { TransactionReviewParty } from '@/popup/components/transaction/TransactionReviewParty'
 import {
   ConfidentialActivityView,
   openConfidentialActivity,
   type ConfidentialActivityDisplay
 } from '@/popup/components/transaction/ConfidentialActivitySheet'
-import { homeActivityPath } from '@/popup/services/home-navigation'
-import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
+import { homeActivityPath, homeAssetDomainPath } from '@/popup/services/home-navigation'
+import { resolveTransferMaximum } from '@/popup/services/transfer-maximum'
 import {
   balanceTransferDomainLabel as domainLabel,
   balanceTransferLabel,
@@ -266,7 +259,7 @@ function TransferBalanceOption({
       onClick={onSelect}
       className={cn(
         'wallet-interactive flex min-h-[65px] w-full items-center justify-between gap-3 rounded-lg border bg-white/5 px-3 py-2 text-left enabled:hover:bg-wallet-selected focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-45',
-        selected ? 'border-primary ring-1 ring-primary' : 'border-white/10'
+        selected ? 'border-primary bg-wallet-selected ring-1 ring-primary' : 'border-white/10'
       )}
     >
       <span className="min-w-0">
@@ -285,16 +278,21 @@ function TransferBalanceOption({
           </span>
         )}
       </span>
-      {balance !== undefined && (
-        <span
-          className={cn(
-            'max-w-[38%] break-words text-right text-base font-medium leading-[21px]',
-            (!balance || balance === '0') && 'text-muted'
-          )}
-        >
-          {balance ?? '—'}
-        </span>
-      )}
+      <span className="flex max-w-[48%] shrink-0 items-center gap-2">
+        {balance !== undefined && (
+          <span
+            className={cn(
+              'min-w-0 break-words text-right text-base font-medium',
+              !balance && 'text-muted'
+            )}
+          >
+            {balance ?? '—'}
+          </span>
+        )}
+        {selected && (
+          <Icon icon="lucide:check" width={16} height={16} className="shrink-0 text-primary" />
+        )}
+      </span>
     </button>
   )
 }
@@ -405,11 +403,11 @@ export function DepositWithdraw({
   )
 }
 
-function QuickShieldReviewSkeleton() {
+function TransferReviewSkeleton({ action }: { action: string }) {
   return (
     <div
       role="status"
-      aria-label="Preparing Shield review"
+      aria-label={`Preparing ${action} review`}
       className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-4 pt-2 pb-4"
     >
       <div className="flex shrink-0 items-center gap-3">
@@ -619,7 +617,6 @@ function DepositWithdrawForm({
   )
   const [assetPrices, setAssetPrices] = useState<AssetPriceReadModel | null>(null)
   const [domainPicker, setDomainPicker] = useState<'from' | 'to' | null>(null)
-  const [shieldPickerLoading, setShieldPickerLoading] = useState(false)
   const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const [receiveExternal, setReceiveExternal] = useState(
     () => shieldDepositSource(routeFrom) === 'external'
@@ -651,8 +648,7 @@ function DepositWithdrawForm({
     model: portfolio,
     status: loadState,
     settled: portfolioSettled,
-    refresh: refreshPortfolio,
-    refreshSource: refreshPortfolioSource
+    refresh: refreshPortfolio
   } = usePortfolioSnapshot(effective?.walletId ?? null, effective?.accountId ?? null, {
     refreshConfidential: usesConfidentialBalances
   })
@@ -667,7 +663,6 @@ function DepositWithdrawForm({
     tier: 'standard'
   })
   const [maxSelected, setMaxSelected] = useState(initialDraft.maxSelected)
-  const [maxRequestRevision, setMaxRequestRevision] = useState(0)
   const maximumShield = fixedDirection === 'shield' && maxSelected
   const [loadedPreference, setLoadedPreference] = useState<{
     key: string
@@ -684,6 +679,8 @@ function DepositWithdrawForm({
   const [catalogTokens, setCatalogTokens] = useState<readonly SwapToken[]>([])
   const canLoadShield =
     getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
+  const shieldPickerOpen =
+    domainPicker !== null && !receiveEntry && pickerAccountId === effective?.accountId
   const shieldBalanceKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}`
   const {
     balances: shieldBalances,
@@ -693,7 +690,7 @@ function DepositWithdrawForm({
     errorCode: shieldBalanceErrorCode,
     refreshBalances: loadShieldBalances
   } = useShieldBalances({
-    active: usesConfidentialBalances,
+    active: usesConfidentialBalances || shieldPickerOpen,
     enabled: canLoadShield,
     scopeKey: shieldBalanceKey,
     scope: effective
@@ -725,7 +722,6 @@ function DepositWithdrawForm({
   const [preparedShield, setPreparedShield] = useState<{
     key: string
     review: ConfidentialFundingReview
-    quickRequest?: PrepareConfidentialFundingRequest
   } | null>(null)
 
   useEffect(() => {
@@ -1340,7 +1336,7 @@ function DepositWithdrawForm({
           : [])
       ]
     : []
-  const providerAssetRows = fixedDirection
+  const providerAssetRows: readonly ShieldTokenPickerItem[] = fixedDirection
     ? [
         ...evmShieldPickerRows,
         ...(fixedZcashNativeAvailable || (fixedDirection === 'shield' && supportsConfidentialZec)
@@ -1351,6 +1347,7 @@ function DepositWithdrawForm({
                 symbol: 'ZEC',
                 ...getZcashTokenPickerChain(currentNetwork),
                 nativeIconChain: 'zcash',
+                zcashFundingSource: fixedZcashSource,
                 availableRaw: parseDisplayUnitAmount(fixedZcashAvailable, ZEC_DECIMALS),
                 decimals: ZEC_DECIMALS,
                 priceUsd: zecPrice,
@@ -1358,7 +1355,7 @@ function DepositWithdrawForm({
                   withdrawalPicker && Number(fixedZcashAvailable) <= 0
                     ? 'No available balance'
                     : undefined
-              }
+              } satisfies ShieldTokenPickerItem
             ]
           : []),
         ...(fixedDirection === 'unshield' && fixedNearZecAsset
@@ -1383,7 +1380,7 @@ function DepositWithdrawForm({
       ? receivePickerRows
       : evmShieldPickerRows
   const groupedAssetPicker = !receiveEntry && Boolean(fixedDirection || intent)
-  const pickerAsset = (item: TransferPickerRow) =>
+  const getTokenPickerBalance = (item: TransferPickerRow) =>
     'key' in item
       ? shieldTokenPickerBalance({ ...item, pinned: item.key === zcashAssetId })
       : {
@@ -1728,53 +1725,19 @@ function DepositWithdrawForm({
   } | null>(null)
   const nearDirectHoldRaw =
     nearDirectNative && nearDirectHold?.key === nearDirectHoldKey ? nearDirectHold.raw : null
-  const nearDirectMaximumRaw =
-    nearDirectHoldRaw !== null && source && /^(?:0|[1-9][0-9]*)$/.test(nearDirectHoldRaw)
-      ? (() => {
-          const available = BigInt(source.availableRaw)
-          const hold = BigInt(nearDirectHoldRaw)
-          return available > hold ? (available - hold).toString() : '0'
-        })()
-      : null
-
-  const nativeShieldMaxEstimate = Boolean(
-    maximumShield &&
-    selected?.chain.chain.family === 'evm' &&
-    selected.asset.asset.kind === 'native'
-  )
-  const maxSender = from === 'private' ? privateAddress : mainAddress
-  const shieldMaxEstimate = useBalanceTransferEstimate({
-    enabled: nativeShieldMaxEstimate && Boolean(maxSender && shieldSourceRaw),
-    requestKey: JSON.stringify([routeKey, shieldSourceRaw, evmMoveFee, maxRequestRevision]),
-    estimate: async () => {
-      const feeRaw = await estimateQuickShieldNativeFee(
-        selected!.asset.asset.id,
-        maxSender,
-        from,
-        evmMoveFee
-      )
-      const balance = BigInt(shieldSourceRaw!)
-      return quickShieldMaximum({ native: true, assetRaw: balance, gasRaw: balance }, feeRaw)
-    }
-  })
+  const maximumBalanceRaw = fundingRoute ? shieldSourceRaw : source?.availableRaw
   const maximumRaw =
-    nearDirectMaximumRaw !== null
-      ? nearDirectMaximumRaw
-      : nativeShieldMaxEstimate
-        ? shieldMaxEstimate.value
-        : selected?.asset.asset.kind === 'native' &&
-            selected.chain.chain.family === 'evm' &&
-            source &&
-            from !== 'shield' &&
-            fixedDirection !== 'shield'
-          ? resolveNativeRouteMaximum({
-              family: 'evm',
-              chainId: selected.chain.chain.id,
-              availableRaw: source.availableRaw,
-              decimals: selected.asset.metadata.decimals,
-              priceUsd: findAssetPrice(assetPrices, selected.asset.asset.id)?.priceUsd
-            })
-          : null
+    selected && maximumBalanceRaw != null
+      ? resolveTransferMaximum({
+          mode: 'reserve',
+          family: selected.chain.chain.family,
+          chainId: selected.chain.chain.id,
+          availableRaw: maximumBalanceRaw,
+          decimals: selected.asset.metadata.decimals,
+          priceUsd: findAssetPrice(assetPrices, selected.asset.asset.id)?.priceUsd,
+          payFeeFromAsset: from !== 'shield' && selected.asset.asset.kind === 'native'
+        })
+      : null
   const available =
     selected && source
       ? resolvePortfolioTransferAvailability({
@@ -1810,9 +1773,7 @@ function DepositWithdrawForm({
   const maxAmount =
     selected && maximumRaw !== null
       ? formatBaseUnitDecimalAmount(maximumRaw, selected.asset.metadata.decimals)
-      : nativeShieldMaxEstimate
-        ? ''
-        : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
+      : ''
   const currentAmount = maxSelected ? maxAmount : amount
   useEffect(() => {
     if (maxSelected) setAmount(maxAmount)
@@ -1921,7 +1882,7 @@ function DepositWithdrawForm({
     )
   }, [directEstimate.value, nearDirectHoldKey, nearDirectNative])
   const selectedEstimate = clusterSelected ? clusterEstimate : directEstimate
-  const maxLoading = maxSelected && (selectedEstimate.loading || shieldMaxEstimate.loading)
+  const maxLoading = maxSelected && selectedEstimate.loading
   const clusterUnavailable = !clusterAvailable || clusterEstimate.error
   const directUnavailable =
     directEstimate.errorMessage === 'Move route unavailable' ||
@@ -1989,24 +1950,21 @@ function DepositWithdrawForm({
     clusterEstimate.error
   ])
   const shieldReviewKeyForFee = (feeSelection: EvmFeeSelection) =>
-    maximumShield
-      ? JSON.stringify([
-          routeKey,
-          fixedProvider,
-          from === 'private' ? privateAddress : mainAddress,
-          managedAsset?.protocolAssetId,
-          sourceRaw,
-          nativeFeeRaw,
-          selected?.asset.balance.availableRaw,
-          nativeFeeAsset?.balance.availableRaw,
-          slippageBps,
-          feeSelection,
-          retry
-        ])
-      : `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${slippageBps}:${JSON.stringify(feeSelection)}`
-  const submittedQuickReview =
-    preparedShield?.quickRequest && confirmAttemptedPlanId.current === preparedShield.review.planId
-  const shieldReviewKey = submittedQuickReview
+    JSON.stringify([
+      routeKey,
+      method,
+      fixedProvider,
+      managedAsset?.protocolAssetId,
+      from === 'private' ? privateAddress : mainAddress,
+      targetAddress,
+      shieldAmountState?.amountRaw,
+      maxSelected,
+      slippageBps,
+      feeSelection
+    ])
+  const submittedShieldReview =
+    preparedShield && confirmAttemptedPlanId.current === preparedShield.review.planId
+  const shieldReviewKey = submittedShieldReview
     ? preparedShield.key
     : shieldReviewKeyForFee(evmMoveFee)
   const latestShieldReviewKey = useRef(shieldReviewKey)
@@ -2070,8 +2028,6 @@ function DepositWithdrawForm({
     (from !== 'shield' || (destination && targetAddress)) &&
     effective &&
     fundingReady &&
-    (!nativeShieldMaxEstimate ||
-      (!shieldMaxEstimate.loading && !shieldMaxEstimate.error && shieldMaxEstimate.value)) &&
     shieldSourceRaw !== null &&
     !tokenFeeBalanceError &&
     (!maxSelected || amount === currentAmount) &&
@@ -2219,40 +2175,39 @@ function DepositWithdrawForm({
     pickerAccount.accountId === effective.accountId &&
     pickerAccountId === effective.accountId
   )
+  const pickerAsset = domainPicker === 'to' ? (targetAsset ?? selected) : selected
   const pickerNetwork = pickerAccount?.networks.find(
     item =>
-      item.chain.id === (receiveZec ? getZcashChainId(currentNetwork) : selected?.chain.chain.id)
+      item.chain.id === (receiveZec ? getZcashChainId(currentNetwork) : pickerAsset?.chain.chain.id)
   )
   const pickerValue = receiveEntry ? receiveSource : domainPicker === 'from' ? from : to
   const oppositeDomain = domainPicker === 'from' ? to : from
   const pickerBalance = (raw: string | null) =>
-    selected && pickerIsActive && raw !== null
-      ? `${formatTokenQuantity(formatBaseUnitAmount(raw, selected.asset.metadata.decimals))} ${symbol}`
+    pickerAsset && pickerIsActive && raw !== null
+      ? balancesHidden
+        ? '••••'
+        : `${formatTokenQuantity(formatBaseUnitAmount(raw, pickerAsset.asset.metadata.decimals))} ${formatSymbol(pickerAsset.asset.metadata.symbol)}`
       : null
+  const pickerManagedAsset =
+    pickerAsset === selected
+      ? managedAsset
+      : pickerAsset &&
+        resolveShieldManagedAsset(pickerAsset.asset, managedAssets, catalogTokens, currentNetwork)
   const nearPickerAvailable =
-    pickerIsActive && canLoadShield && Boolean(managedAsset) && oppositeDomain !== 'shield'
-  const showShieldPickerBalance = domainPicker !== null && !receiveEntry && nearPickerAvailable
-  useEffect(() => {
-    if (!showShieldPickerBalance || usesConfidentialBalances) {
-      setShieldPickerLoading(false)
-      return
-    }
-    let current = true
-    setShieldPickerLoading(true)
-    void refreshPortfolioSource({ source: 'near-confidential', authorize: false })
-      .catch(() => false)
-      .finally(() => {
-        if (current) setShieldPickerLoading(false)
-      })
-    return () => {
-      current = false
-    }
-  }, [showShieldPickerBalance, usesConfidentialBalances, refreshPortfolioSource])
+    pickerIsActive && canLoadShield && Boolean(pickerManagedAsset) && oppositeDomain !== 'shield'
+  const pickerHolding = portfolio?.confidential?.assets.find(
+    holding =>
+      holding.assetId === pickerAsset?.asset.asset.id &&
+      holding.chainId === pickerAsset?.chain.chain.id &&
+      holding.decimals === pickerAsset?.asset.metadata.decimals
+  )
   const shieldPickerRaw =
-    currentShieldBalances && managedAsset
-      ? (getConfidentialAvailableForAsset(currentShieldBalances, managedAsset.protocolAssetId) ??
-        '0')
-      : null
+    currentShieldBalances && pickerManagedAsset
+      ? (getConfidentialAvailableForAsset(
+          currentShieldBalances,
+          pickerManagedAsset.protocolAssetId
+        ) ?? '0')
+      : (pickerHolding?.availableRaw ?? null)
   const addressFor = (domain: TransferDomain) => {
     if (domain === 'shield') return ''
     return domain === 'private' ? privateAddress : mainAddress
@@ -2274,7 +2229,6 @@ function DepositWithdrawForm({
     setSelectedAssetId(selected.asset.asset.id)
     setMaxSelected(true)
     setAmount(maxAmount)
-    setMaxRequestRevision(value => value + 1)
   }
 
   const scopeStillCurrent = () => {
@@ -2372,16 +2326,7 @@ function DepositWithdrawForm({
             method: clusterSelected ? 'cluster' : 'directly',
             ...(from === 'shield' && destination ? { destination } : {})
           })
-      const maximum = maximumShield
-        ? await prepareQuickShieldMaximum(
-            request,
-            addressFor(from),
-            () => scopeStillCurrent() && latestShieldReviewKey.current === expectedKey
-          )
-        : null
-      if (maximumShield && !maximum) return false
-      const reviewedRequest = maximum?.request ?? request
-      const result = maximum?.review ?? (await confidentialFundingClient.prepare(reviewedRequest))
+      const result = await confidentialFundingClient.prepare(request)
       if (!scopeStillCurrent() || latestShieldReviewKey.current !== expectedKey) {
         if (result.phase === 'prepared')
           void confidentialFundingClient.cancel(result.planId).catch(() => {})
@@ -2397,11 +2342,11 @@ function DepositWithdrawForm({
         return false
       }
       if (
-        !matchesShieldReview(result, reviewedRequest) ||
+        !matchesShieldReview(result, request) ||
         (fixedDirection &&
           !matchesFixedShieldFundsRecipient(
             result,
-            reviewedRequest,
+            request,
             fixedDirection === 'unshield' ? targetAddress : addressFor(from)
           ))
       ) {
@@ -2412,7 +2357,7 @@ function DepositWithdrawForm({
       setConfirmUncertain(false)
       reviewAttempt.current = null
       if (replacingReview) setEvmMoveFee(feeSelection)
-      setPreparedShield({ key, review: result, quickRequest: maximum?.request })
+      setPreparedShield({ key, review: result })
       return true
     } catch (error) {
       if (scopeStillCurrent()) {
@@ -2448,7 +2393,7 @@ function DepositWithdrawForm({
       setConfirmUncertain(false)
       reviewAttempt.current = null
       updateFeeRefresh(null)
-      const domain = plan.sourceDomain ?? from
+      const domain = fixedDirection ? 'shield' : (plan.sourceDomain ?? from)
       const display: ConfidentialActivityDisplay | undefined = selected
         ? {
             operation: 'move',
@@ -2550,19 +2495,6 @@ function DepositWithdrawForm({
           setShieldError('Transfer not started. Review and try again.')
         return
       }
-      if (preparedShield?.quickRequest) {
-        const balances = await readQuickShieldBalances(preparedShield.quickRequest)
-        if (!scopeStillCurrent() || latestShieldReviewKey.current !== shieldReviewKey) return
-        if (
-          quickShieldMaximum(balances, pending.sourceNetworkFee!.raw) !== pending.sourceAmountRaw ||
-          pending.expiresAt <= Date.now()
-        ) {
-          await confidentialFundingClient.cancel(pending.planId)
-          setPreparedShield(null)
-          setShieldError('Balance or quote changed. Review the maximum again.')
-          return
-        }
-      }
       confirmAttemptedPlanId.current = pending.planId
       const plan = await confidentialFundingClient.confirm(
         pending.planId,
@@ -2571,14 +2503,6 @@ function DepositWithdrawForm({
       if (hasShieldTransferStarted(plan)) openShieldActivity(plan)
       else await checkShieldPlan(plan.planId)
     } catch (error) {
-      if (preparedShield?.quickRequest && confirmAttemptedPlanId.current !== pending.planId) {
-        if (scopeStillCurrent()) {
-          void confidentialFundingClient.cancel(pending.planId).catch(() => {})
-          setPreparedShield(null)
-          setShieldError(classifyError(error).userMessage)
-        }
-        return
-      }
       const status = await checkShieldPlan(pending.planId)
       if (status === 'prepared' && scopeStillCurrent())
         setShieldError(classifyError(error).userMessage)
@@ -2641,21 +2565,22 @@ function DepositWithdrawForm({
 
   const exitForm = fixedShield?.onBack ?? goBack
   const openShieldReview = () => {
-    if (!canReviewShield) return
+    if (!canReviewShield || preparingShieldRef.current) return
     setShieldAwaitingReview(true)
     void prepareShield()
   }
   if (shieldActivity && draftScope === scopeKey) {
     const { plan, display } = shieldActivity
     return (
-      <div className="page-container">
+      <div className="page-container" data-wallet-mode="shield">
         <ConfidentialActivityView
           plan={plan}
           display={display}
-          onDone={exitForm}
-          onViewActivity={() =>
-            navigate(homeActivityPath(plan.sourceDomain ?? from, plan.transactionId))
-          }
+          onDone={() => {
+            fixedShield?.onBack?.()
+            navigate(homeAssetDomainPath('', 'shield'), { replace: true })
+          }}
+          onViewActivity={() => navigate(homeActivityPath('shield', plan.transactionId))}
         />
       </div>
     )
@@ -2985,21 +2910,21 @@ function DepositWithdrawForm({
   const shieldHasQuote = fixedDirection === 'shield' && fixedProvider === 'near-confidential'
 
   if (
-    fixedDirection &&
     shieldAwaitingReview &&
+    draftScope === scopeKey &&
     !fixedNativeRetryPath &&
     (preparingShield || shieldError)
   ) {
     return (
       <div className="page-container">
         <PageHeader
-          title={`Confirm ${fixedActionLabel}`}
+          title={`Confirm ${actionLabel}`}
           showBack
           onBack={() => setShieldAwaitingReview(false)}
           backDisabled={preparingShield}
         />
         {preparingShield ? (
-          <QuickShieldReviewSkeleton />
+          <TransferReviewSkeleton action={actionLabel} />
         ) : (
           <div className="p-4" aria-live="polite">
             <TransactionNotice message={shieldError!} onRetry={openShieldReview} />
@@ -3178,7 +3103,7 @@ function DepositWithdrawForm({
                           ? undefined
                           : () => openDomainPicker('from')
                     }
-                    provider={fixedDirection && from === 'shield' ? 'near-confidential' : null}
+                    provider={from === 'shield' ? 'near-confidential' : null}
                     disabled={!selected}
                   />
                 }
@@ -3212,7 +3137,7 @@ function DepositWithdrawForm({
                           ? () => openDomainPicker('to')
                           : undefined
                     }
-                    provider={fixedDirection && to === 'shield' ? 'near-confidential' : null}
+                    provider={to === 'shield' ? 'near-confidential' : null}
                     disabled={!selected}
                   />
                 }
@@ -3318,12 +3243,6 @@ function DepositWithdrawForm({
                 message={shieldError ?? 'Shield balance unavailable.'}
                 onRetry={() => void refreshShield(shieldNeedsAuthorization)}
               />
-            ) : shieldMaxEstimate.error ? (
-              <TransactionNotice
-                className="mt-2"
-                message={shieldMaxEstimate.errorMessage ?? 'Could not calculate maximum amount.'}
-                onRetry={handleMax}
-              />
             ) : transferError ? (
               <TransactionNotice className="mt-2" message={transferError} tone="warning" />
             ) : shieldError && !activeShieldReview && shieldConnection !== 'required' ? (
@@ -3353,13 +3272,7 @@ function DepositWithdrawForm({
                   selectedEstimate.loading) ||
                 (crossChainPrivateTransfer && directEstimate.loading)
               }
-              onClick={
-                fundingRoute
-                  ? fixedDirection
-                    ? openShieldReview
-                    : () => void prepareShield()
-                  : review
-              }
+              onClick={fundingRoute ? openShieldReview : review}
             >
               {clusterSelected ? `Review ${actionLabel}` : actionLabel}
             </Button>
@@ -3407,7 +3320,10 @@ function DepositWithdrawForm({
           }
           visibility={
             groupedAssetPicker
-              ? { policy: withdrawalPicker ? 'withdrawal' : 'grouped', balance: pickerAsset }
+              ? {
+                  policy: withdrawalPicker ? 'withdrawal' : 'grouped',
+                  balance: getTokenPickerBalance
+                }
               : undefined
           }
           isDisabled={item =>
@@ -3591,7 +3507,9 @@ function DepositWithdrawForm({
                       nativeRaw !== null
                         ? `${formatTokenQuantity(nativeRaw)} ZEC`
                         : pickerBalance(
-                            selected ? getTransferDomainBalanceRaw(selected.asset, domain) : null
+                            pickerAsset
+                              ? getTransferDomainBalanceRaw(pickerAsset.asset, domain)
+                              : null
                           )
                     }
                     disabled={
@@ -3651,10 +3569,7 @@ function DepositWithdrawForm({
                   selected={pickerIsActive && pickerValue === 'shield'}
                   disabled={!nearPickerAvailable}
                   balance={
-                    nearPickerAvailable
-                      ? (pickerBalance(shieldPickerRaw) ??
-                        (shieldPickerLoading || loadingShieldBalances ? 'Updating…' : null))
-                      : null
+                    pickerBalance(shieldPickerRaw) ?? (loadingShieldBalances ? 'Updating…' : null)
                   }
                   onSelect={() => {
                     if (nearPickerAvailable && domainPicker) selectDomain('shield', domainPicker)

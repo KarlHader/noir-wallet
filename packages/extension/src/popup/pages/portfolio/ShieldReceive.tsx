@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useDeferredValue, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { formatSymbol } from '@/lib/format'
@@ -8,6 +8,7 @@ import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector } from '@/popup/components/common/ChainSelector'
 import type { Network } from '@/types/wallet'
 import { PageHeader } from '@/popup/components/common/PageHeader'
+import { useNavigate } from '@/popup/provider/Router'
 import { ShieldProviderDialog } from '@/popup/components/portfolio/ShieldProviderPicker'
 import {
   ShieldReceiveAddress,
@@ -15,10 +16,10 @@ import {
 } from '@/popup/components/portfolio/ShieldReceiveAddress'
 import { SHIELD_PROVIDERS, ShieldProviderLogo } from '@/popup/components/portfolio/shield-providers'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
-import { ShieldTokenPicker } from '@/popup/components/tokens/ShieldTokenPicker'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
-import { Skeleton } from '@/popup/components/ui/skeleton'
+import { SearchInput } from '@/popup/components/ui/input'
+import { ListSkeleton, Skeleton } from '@/popup/components/ui/skeleton'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useCachedAssetPrices } from '@/popup/hooks/useCachedAssetPrices'
 import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
@@ -29,13 +30,12 @@ import type {
 } from '@/popup/services/account-networks-client'
 import type { ShieldProvider } from '@/popup/services/asset-domains'
 import {
-  buildShieldReceivePickerRows,
   canReceiveNearShield,
   listShieldReceiveTokens,
   resolveShieldReceiveSelection,
+  sortShieldReceiveTokens,
   type ShieldReceiveToken
 } from '@/popup/services/shield-receive'
-import { useSettingsStore } from '@/store/settings-store'
 import { useSwapPreferences } from '@/store/swap-store'
 import { useWalletStore } from '@/store/wallet-store'
 
@@ -49,6 +49,80 @@ function receiveTokenIcon(token: ShieldReceiveToken) {
       icon={token.iconUrl}
       size={32}
     />
+  )
+}
+
+function ShieldReceiveTokenList({
+  tokens,
+  selectedId,
+  loading,
+  status,
+  onSelect
+}: {
+  readonly tokens: readonly ShieldReceiveToken[]
+  readonly selectedId?: string
+  readonly loading: boolean
+  readonly status?: ReactNode
+  readonly onSelect: (token: ShieldReceiveToken) => void
+}) {
+  const [search, setSearch] = useState('')
+  const query = useDeferredValue(search).trim().toLowerCase()
+  const matches = tokens.filter(
+    token =>
+      !query ||
+      [token.symbol, token.name, token.contractAddress].some(value =>
+        value?.toLowerCase().includes(query)
+      ) ||
+      token.routes.some(
+        route =>
+          route.provider === 'near-confidential' &&
+          route.asset.token.contractAddress?.toLowerCase().includes(query)
+      )
+  )
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 px-1 pb-2">
+        <SearchInput
+          value={search}
+          onChange={event => setSearch(event.target.value)}
+          placeholder="Search tokens"
+        />
+        {status}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {loading && matches.length === 0 ? (
+          <ListSkeleton rows={5} label="Loading tokens" className="px-1" />
+        ) : matches.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted">No tokens found</p>
+        ) : (
+          matches.map(token => (
+            <button
+              key={token.id}
+              type="button"
+              aria-pressed={selectedId === token.id}
+              onClick={() => onSelect(token)}
+              className="wallet-interactive flex min-h-14 w-full items-center gap-3 rounded-lg px-3 text-left focus-visible:outline-2 focus-visible:outline-primary aria-pressed:bg-primary/10"
+            >
+              {receiveTokenIcon(token)}
+              <span className="min-w-0 flex-1 text-sm font-medium">
+                {formatSymbol(token.symbol)}
+                {token.subtitle && (
+                  <span
+                    className="block truncate text-xs font-normal text-muted"
+                    title={token.subtitle}
+                  >
+                    {token.subtitle}
+                  </span>
+                )}
+              </span>
+              {selectedId === token.id && (
+                <Icon icon="lucide:check" className="text-primary" aria-hidden="true" />
+              )}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -103,6 +177,7 @@ function ShieldReceiveFormSkeleton() {
 }
 
 export function ShieldReceive() {
+  const { goBack } = useNavigate()
   const [params] = useSearchParams()
   const { key: navigationKey } = useLocation()
   const walletId = params.get('walletId')
@@ -139,6 +214,7 @@ export function ShieldReceive() {
               accountCatalog={catalog}
               network={network}
               entry={entry}
+              onBack={goBack}
             />
           ) : accountChanged ? (
             <TransactionNotice tone="muted" message="Account changed. Reopen Receive." />
@@ -160,12 +236,14 @@ function ShieldReceiveForm({
   account,
   accountCatalog,
   network,
-  entry
+  entry,
+  onBack
 }: {
   readonly account: AccountNetworksView
   readonly accountCatalog: AccountNetworksCatalogView | null
   readonly network: Network
   readonly entry: ShieldReceiveEntry
+  readonly onBack: () => void
 }) {
   const slippageBps = useSwapPreferences(state => Math.round(state.slippage * 100))
   const catalog = useShieldReceiveCatalog(canReceiveNearShield(network, account))
@@ -177,44 +255,25 @@ function ShieldReceiveForm({
     autoRefresh: false
   })
   const prices = useCachedAssetPrices(network)
-  const balancesHidden = useSettingsStore(state => state.balancesHidden)
-  const tokenPickerRows = useMemo(
-    () => buildShieldReceivePickerRows(tokens, model, prices),
+  const orderedTokens = useMemo(
+    () => sortShieldReceiveTokens(tokens, model, prices),
     [tokens, model, prices]
-  )
-  const tokenPickerNetworks = useMemo(
-    () => [
-      ...new Map(
-        tokens.flatMap(item =>
-          item.routes.map(
-            route =>
-              [
-                route.chain.id,
-                {
-                  id: route.chain.id,
-                  label: route.chain.displayName,
-                  iconChain: resolveChainIconAlias(
-                    route.chain.family,
-                    route.chain.displayName,
-                    route.chain.id
-                  )
-                }
-              ] as const
-          )
-        )
-      ).values()
-    ],
-    [tokens]
   )
   const [picker, setPicker] = useState<'token' | 'network' | 'provider' | null>(() =>
     entry.assetId || entry.provider ? null : 'token'
   )
-  const closePicker = () => setPicker(null)
   const [selection, setSelection] = useState<{
     tokenId: string
     routeId: string | null
     provider?: ShieldProvider
   } | null>(null)
+  const closePicker = () => {
+    if (picker === 'token' && !selection && !entry.assetId && !entry.provider) {
+      onBack()
+      return
+    }
+    setPicker(null)
+  }
   const { token, route } = resolveShieldReceiveSelection(tokens, selection, entry, !catalog.loading)
   const networks = [...new Map(token?.routes.map(item => [item.chain.id, item.chain])).values()]
   const chain = route?.chain
@@ -308,18 +367,14 @@ function ShieldReceiveForm({
         />
       )}
       <TokenSelectorDialog open={picker === 'token'} onOpenChange={open => !open && closePicker()}>
-        <ShieldTokenPicker
-          rows={tokenPickerRows}
-          networks={tokenPickerNetworks}
-          policy="grouped"
+        <ShieldReceiveTokenList
+          tokens={orderedTokens}
           loading={catalog.loading}
-          toolbar={catalogError}
-          balancesHidden={balancesHidden}
-          selectedKey={token?.id}
+          status={catalogError}
+          selectedId={token?.id}
           onSelect={item => {
-            const selectedToken = tokens.find(candidate => candidate.id === item.key)
-            const chainIds = new Set(selectedToken?.routes.map(candidate => candidate.chain.id))
-            setSelection({ tokenId: item.key, routeId: null })
+            const chainIds = new Set(item.routes.map(candidate => candidate.chain.id))
+            setSelection({ tokenId: item.id, routeId: null })
             setPicker(chainIds.size > 1 ? 'network' : null)
           }}
         />

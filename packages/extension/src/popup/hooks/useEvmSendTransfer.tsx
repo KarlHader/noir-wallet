@@ -18,7 +18,7 @@ import { openModal } from '@/popup/provider/ModalManager'
 import { useNavigate } from '@/popup/provider/Router'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import { DEFAULT_NETWORK_FEE_TIER } from '@/core/transactions/domain'
-import { estimateNetworkFeeTierPreviews } from '@/popup/services/network-fee-presentation'
+import { getEvmFeeTierPreviews } from '@/popup/services/network-fee-presentation'
 import { areEvmFeeSelectionsEqual, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
 import { useEvmConfirmationEstimate } from '@/popup/hooks/useEvmConfirmationEstimate'
@@ -26,7 +26,7 @@ import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {
   createNativeTransferSource,
   estimateNativeTransferMaximum,
-  resolveNativeRouteMaximum,
+  resolveTransferMaximum,
   fallbackTransferMaximum,
   isTransferAmountSpendable
 } from '@/popup/services/transfer-maximum'
@@ -418,7 +418,8 @@ export function useEvmSendTransfer({
   }, [intentKey, review])
   const confidentialMaximumRaw =
     route === 'confidential' && asset.asset.kind === 'native'
-      ? resolveNativeRouteMaximum({
+      ? resolveTransferMaximum({
+          mode: 'reserve',
           family: 'evm',
           chainId: chain.chain.id,
           availableRaw,
@@ -758,9 +759,9 @@ export function useEvmSendTransfer({
     [estimateSelectedFee, feeSelection]
   )
   const loadTierPreviews = useCallback(
-    () =>
-      estimateNetworkFeeTierPreviews(
-        async tier => (await estimateSelectedFee({ kind: 'tier', tier })).amountRaw,
+    async () =>
+      getEvmFeeTierPreviews(
+        (await estimateSelectedFee(feeSelection)).details,
         { decimals: nativeDecimals, symbol: nativeSymbol },
         feeSelection.kind === 'tier' ? feeSelection.tier : undefined
       ),
@@ -783,7 +784,6 @@ export function useEvmSendTransfer({
       validAmount &&
       validRecipient &&
       tokenFeeBalanceError === null &&
-      !preparing &&
       !maximum.loading &&
       review === null,
     requestKey: `${intentKey}:${JSON.stringify(feeSelection)}`,
@@ -1152,7 +1152,12 @@ export function useEvmSendTransfer({
     }
     setError(null)
     setMaxSelected(true)
-    setAmount(transferAvailability.display)
+    const maximumRaw = resolveTransferMaximum({
+      mode: 'reserve',
+      availableRaw,
+      payFeeFromAsset: false
+    })
+    setAmount(formatBaseUnitDecimalAmount(maximumRaw, asset.metadata.decimals))
   }
   const selectShield = (domain: string) => {
     if (domain === 'shield') onSelectShield(validRecipient ? recipient : '', amount)

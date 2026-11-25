@@ -121,7 +121,7 @@ import { SwapInputView } from '../../components/swap/SwapInputView'
 import { CrossChainSendFormView } from '../../components/transaction/CrossChainSendFormView'
 import { useSharedSendForm } from '../../components/transaction/SendFormLayout'
 import { CrossChainSendReviewView } from '../../components/transaction/CrossChainSendReviewView'
-import { calculateSwapPriceImpact } from '@/popup/services/swap-estimate'
+import { calculateSwapPriceImpact, formatSwapReviewFiat } from '@/popup/services/swap-estimate'
 import { useSwapState } from '../../hooks/useSwapState'
 import {
   buildCrossChainSendNetworkOptions,
@@ -200,11 +200,7 @@ import { createDebugRequestId, logDebugTiming, traceDebugStage } from '@/lib/deb
 import { logger } from '@/lib/logger'
 import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { resolveSelectedSwapMaximum } from '@/popup/services/swap-maximum'
-import {
-  estimateBitcoinRouteMaximum,
-  resolveNativeRouteMaximum
-} from '@/popup/services/transfer-maximum'
-import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
+import { resolveTransferMaximum } from '@/popup/services/transfer-maximum'
 import {
   createRheaSwapBinding,
   listWalletSwapSourceTokens,
@@ -858,6 +854,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         network => network.chain.family === 'evm' && network.privateExecutionAddress
       )?.chain.id)
     : undefined
+  const cachedAssetPrices = useCachedAssetPrices(currentNetwork)
   const swap = useSwapState(
     lockedAssetFlowRequested ||
       crossChainSendRequested ||
@@ -893,7 +890,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 !activeSharedPair
               ? privateSwapChainId
               : defaultSwapChainId
-    }
+    },
+    currentNetwork,
+    cachedAssetPrices
   )
   const sharedSourceMatches =
     !activeSharedPair?.tokenInId ||
@@ -1266,7 +1265,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       currentWallet?.keySource
     ]
   )
-  const cachedAssetPrices = useCachedAssetPrices(currentNetwork)
   const nativeZecAssetId = resolveRheaSwapCanonicalAssetId(ZEC_ZCASH_ASSET, currentNetwork)
   const walletZecPrice = nativeZecAssetId
     ? findAssetPrice(cachedAssetPrices, nativeZecAssetId)?.priceUsd
@@ -3105,51 +3103,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     selectedFeeZats,
     standardFeeZats
   })
-  const bitcoinSource = walletOwnedSource?.family === 'bitcoin' ? walletOwnedSource : null
-  const bitcoinPriceUsd = bitcoinSource
-    ? findAssetPrice(cachedAssetPrices, bitcoinSource.asset.asset.id)?.priceUsd
-    : undefined
-  const bitcoinAvailableRaw = bitcoinSource?.asset.balance.availableRaw ?? '0'
-  const bitcoinMaximum = useTransferMaximum({
-    enabled: bitcoinSource !== null && bitcoinAvailableRaw !== '0',
-    requestKey: JSON.stringify([
-      bitcoinSource?.sourceAssetId,
-      bitcoinSource?.refundAddress,
-      bitcoinSource?.bitcoinAddressType,
-      bitcoinAvailableRaw,
-      networkFeeTier
-    ]),
-    estimate: () => {
-      if (!bitcoinSource) throw new Error('The selected source asset is unavailable')
-      return estimateBitcoinRouteMaximum({
-        source: bitcoinSource,
-        feeTier: networkFeeTier,
-        priceUsd: bitcoinPriceUsd
-      })
-    }
-  })
-  const bitcoinMaximumLoading = maxSelected && bitcoinMaximum.loading
-  const bitcoinMaximumUnavailable =
-    bitcoinSource !== null &&
-    (bitcoinMaximum.error !== null || bitcoinMaximum.value?.amountRaw === '0')
-  useEffect(() => {
-    if (!maxSelected || !bitcoinMaximumUnavailable) return
-    setMaxSelected(false)
-    swap.setQuoteError(
-      bitcoinMaximum.value?.amountRaw === '0'
-        ? formatInsufficientBalance('BTC')
-        : classifyError(bitcoinMaximum.error).userMessage
-    )
-  }, [
-    maxSelected,
-    bitcoinMaximumUnavailable,
-    bitcoinMaximum.value,
-    bitcoinMaximum.error,
-    swap.setQuoteError
-  ])
   const nativeMaximum = swap.isZecSource
     ? formatBaseUnitDecimalAmount(
-        resolveNativeRouteMaximum({
+        resolveTransferMaximum({
+          mode: 'reserve',
           family: 'zcash',
           availableRaw: parseDisplayUnitAmount(zcashFundingBalance.available, ZEC_DECIMALS),
           decimals: ZEC_DECIMALS,
@@ -3157,26 +3114,20 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         }),
         ZEC_DECIMALS
       )
-    : bitcoinSource
-      ? bitcoinMaximum.value && !bitcoinMaximumUnavailable
-        ? formatBaseUnitDecimalAmount(
-            bitcoinMaximum.value.amountRaw,
-            bitcoinSource.asset.metadata.decimals
-          )
-        : null
-      : walletOwnedSource?.asset.asset.kind === 'native'
-        ? formatBaseUnitDecimalAmount(
-            resolveNativeRouteMaximum({
-              family: walletOwnedSource.family,
-              chainId: walletOwnedSource.chain.chain.id,
-              availableRaw: walletOwnedSource.asset.balance.availableRaw,
-              decimals: walletOwnedSource.asset.metadata.decimals,
-              priceUsd: findAssetPrice(cachedAssetPrices, walletOwnedSource.asset.asset.id)
-                ?.priceUsd
-            }),
-            walletOwnedSource.asset.metadata.decimals
-          )
-        : null
+    : walletOwnedSource
+      ? formatBaseUnitDecimalAmount(
+          resolveTransferMaximum({
+            mode: 'reserve',
+            family: walletOwnedSource.family,
+            chainId: walletOwnedSource.chain.chain.id,
+            availableRaw: walletOwnedSource.asset.balance.availableRaw,
+            decimals: walletOwnedSource.asset.metadata.decimals,
+            payFeeFromAsset: walletOwnedSource.asset.asset.kind === 'native',
+            priceUsd: findAssetPrice(cachedAssetPrices, walletOwnedSource.asset.asset.id)?.priceUsd
+          }),
+          walletOwnedSource.asset.metadata.decimals
+        )
+      : null
   const walletAvailability = walletOwnedSource
     ? resolvePortfolioTransferAvailability({
         balanceRaw: walletOwnedSource.asset.balance.availableRaw,
@@ -3186,17 +3137,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       })
     : null
   const walletSpendableBalance = walletAvailability?.display ?? '0'
-  const maximumButtonAmount = bitcoinSource
-    ? walletSpendableBalance
-    : (nativeMaximum ?? walletSpendableBalance)
+  const maximumButtonAmount = nativeMaximum ?? walletSpendableBalance
   const applyMaximum = () => {
-    if (bitcoinSource) {
-      reviewAfterQuoteRefresh.current = null
-      setMaxSelected(true)
-      void bitcoinMaximum.request()
-      return
-    }
-    const maximum = nativeMaximum ?? walletSpendableBalance
+    const maximum = maximumButtonAmount
     if (safeBig(maximum).lte(0)) return
     setMaxSelected(true)
     const amount = resolveSelectedSwapMaximum({
@@ -3759,7 +3702,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         }
         return
       }
-      if (hasInsufficientFunds || bitcoinMaximumLoading || preparingReview.current) return
+      if (hasInsufficientFunds || preparingReview.current) return
       let resultToReview = quoteResult
       const previousQuote = viewStep === 'review' ? quoteResult : null
       let newlyQuoted = false
@@ -3986,39 +3929,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               throw new Error('Bitcoin transaction amount differs from the quote. Get a new quote.')
             }
             const depositAddress = review.execution.target
-            if (maxSelected) {
-              const maximum = await measure('bitcoin-route-maximum', () =>
-                estimateBitcoinRouteMaximum({
-                  source: walletOwnedSource,
-                  depositAddress,
-                  feeTier: feeTierOverride ?? networkFeeTier
-                })
-              )
-              if (requestSequence !== quoteRequestSequence.current) return
-              if (maximum.amountRaw === '0') throw new InsufficientBalanceError('BTC')
-              if (BigInt(review.amountIn) > BigInt(maximum.amountRaw)) {
-                bitcoinMaximum.update(maximum)
-                reviewAfterQuoteRefresh.current = null
-                setQuoteResult(null)
-                setLiveQuoteKey(null)
-                setQuoteReceivedAt(null)
-                setRheaReview(null)
-                swap.setAmountOut('')
-                swap.setDepositAddress('')
-                swap.updateAmountIn(
-                  formatBaseUnitDecimalAmount(
-                    maximum.amountRaw,
-                    walletOwnedSource.asset.metadata.decimals
-                  )
-                )
-                setViewStep('input')
-                void rheaSwapClient.discard(result.quoteHandle).catch(() => {})
-                if (previousQuote && previousQuote.quoteHandle !== result.quoteHandle) {
-                  void rheaSwapClient.discard(previousQuote.quoteHandle).catch(() => {})
-                }
-                return
-              }
-            }
             prepared = await measure('bitcoin-prepare-deposit', () =>
               quoteDepositTransferClient.prepare({
                 source: walletOwnedSource,
@@ -4385,8 +4295,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       quoteReceivedAt,
       viewStep,
       hasInsufficientFunds,
-      bitcoinMaximumLoading,
-      bitcoinMaximum.update,
       maxSelected,
       swap,
       walletOwnedSource,
@@ -5324,7 +5232,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       try {
         const requestSequence = quoteRequestSequence.current
         const reviewedCombined = pendingRheaEvmAfterApproval?.combined
-        if (ordinarySwapRequested && reviewedCombined && preparedQuoteTransfer.family === 'evm') {
+        if (
+          (ordinarySwapRequested || crossChainSendRequested) &&
+          reviewedCombined &&
+          preparedQuoteTransfer.family === 'evm'
+        ) {
           const { graph, review } = preparedQuoteTransfer.review
           const input = {
             approvalId: graph.root.id,
@@ -5568,6 +5480,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     liveQuoteKey,
     liveQuoteRequest,
     ordinarySwapRequested,
+    crossChainSendRequested,
     publicPrivacySendRequested,
     transferPreparationError,
     viewStep,
@@ -6652,6 +6565,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         <SwapStatusDisplay
           network={currentNetwork}
           status={null}
+          actionName={crossChainSendRequested ? 'Send' : 'Swap'}
           tokenInSymbol={swap.tokenIn.symbol}
           tokenOutSymbol={swap.tokenOut.symbol}
           amountIn={swap.amountIn}
@@ -6818,14 +6732,13 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               : ''
           }
           minAmountOut={review?.minimumOutputRaw ?? ''}
-          recipient={review?.destination.recipient ?? ''}
+          recipient=""
           recipientLabel="NEAR Confidential account"
           sourceAccount={{
             address: currentAccount?.addresses[fundingSource],
             badge: fundingSource === 'shielded' ? 'Shield' : 'Transparent'
           }}
           destinationAccount={{
-            address: review?.destination.recipient,
             badge: 'Confidential'
           }}
           destinationDetails={{ network: 'NEAR Confidential', chainIcon: 'near' }}
@@ -6835,8 +6748,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           priceImpact={calculateSwapPriceImpact({
             amountIn: swap.amountIn,
             amountOut: swap.amountOut,
-            tokenInPrice: swap.tokenIn.price,
-            tokenOutPrice: swap.tokenOut.price
+            tokenInPrice: swap.tokenInPrice,
+            tokenOutPrice: swap.tokenOutPrice
           })}
           slippage={swap.slippage}
           provider="near-confidential"
@@ -6879,6 +6792,16 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     }
     const reviewedQuote = quoteResult
     if (viewStep === 'review' && reviewedQuote && rheaReview && swap.tokenIn && swap.tokenOut) {
+      const reviewedAmountIn = formatBaseUnitDecimalAmount(
+        rheaReview.amountIn,
+        swap.tokenIn.decimals
+      )
+      const reviewedAmountOut = formatBaseUnitDecimalAmount(
+        rheaReview.estimatedOut,
+        swap.tokenOut.decimals
+      )
+      const fromFiat = formatSwapReviewFiat(reviewedAmountIn, swap.tokenInPrice)
+      const toFiat = formatSwapReviewFiat(reviewedAmountOut, swap.tokenOutPrice)
       const combinedLimit = pendingRheaEvmAfterApproval?.combined?.limit
       const combinedNetworkFee =
         combinedLimit && preparedQuoteTransfer?.family === 'evm'
@@ -6895,8 +6818,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       const priceImpact = calculateSwapPriceImpact({
         amountIn: swap.amountIn,
         amountOut: swap.amountOut,
-        tokenInPrice: swap.tokenIn.price,
-        tokenOutPrice: swap.tokenOut.price
+        tokenInPrice: swap.tokenInPrice,
+        tokenOutPrice: swap.tokenOutPrice
       })
       const quoteChanges = (
         <QuoteReviewChanges
@@ -7197,12 +7120,12 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           recipient={reviewedQuote.recipient}
           tokenIn={swap.tokenIn}
           tokenOut={swap.tokenOut}
-          amountIn={formatBaseUnitDecimalAmount(rheaReview.amountIn, swap.tokenIn.decimals)}
-          amountOut={formatBaseUnitDecimalAmount(rheaReview.estimatedOut, swap.tokenOut.decimals)}
+          amountIn={reviewedAmountIn}
+          amountOut={reviewedAmountOut}
           minAmountOut={minAmountOut}
           priceImpact={priceImpact}
-          fromFiat={swap.fromFiat}
-          toFiat={swap.toFiat}
+          fromFiat={fromFiat}
+          toFiat={toFiat}
           slippage={swap.slippage}
           onConfirm={handleConfirmSwap}
           isLoading={isSending || isPreparingReview || refreshingMaximumReview}
@@ -7464,7 +7387,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             swap.destinationTokensLoading && swap.destinationTokens.length === 0
           }
           hasInsufficientFunds={hasInsufficientFunds}
-          maxLoading={bitcoinMaximumLoading}
           maxDisabled={
             !resolvedRecipientAddress || !walletOwnedSource || safeBig(maximumButtonAmount).lte(0)
           }
@@ -7475,8 +7397,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 ? 'Enter a destination address to use Max'
                 : 'Max is unavailable for this route'
           }
-          canGetQuote={canGetQuote && !bitcoinMaximumLoading}
-          actionLoading={isPreparingReview || feeLoading || bitcoinMaximumLoading}
+          canGetQuote={canGetQuote}
+          actionLoading={isPreparingReview || feeLoading}
           providerName={activeQuote?.router}
           onAmountChange={value => {
             reviewAfterQuoteRefresh.current = null
@@ -7685,7 +7607,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                 )
             : undefined
         }
-        maxLoading={bitcoinMaximumLoading}
         maxDisabled={safeBig(maximumButtonAmount).lte(0)}
         maxDisabledReason={
           safeBig(maximumButtonAmount).lte(0)
@@ -7707,7 +7628,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         }
         canGetQuote={
           canGetQuote &&
-          !bitcoinMaximumLoading &&
           !(
             isPrivateFunding &&
             quoteResult &&
@@ -7810,16 +7730,14 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           isPrivateFunding
             ? privateFundingRequestId
               ? 'Add Gas'
-              : 'Transfer to Confidential'
+              : 'Transfer to Incognito'
             : privateTransferRequested
               ? 'Send Privately'
               : crossChainSendRequested
                 ? 'Review Send'
                 : 'Swap'
         }
-        actionLoading={
-          isPrivateFundingSubmitting || isPreparingReview || feeLoading || bitcoinMaximumLoading
-        }
+        actionLoading={isPrivateFundingSubmitting || isPreparingReview || feeLoading}
       />
     )
   }
@@ -7897,7 +7815,9 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         sharedSendLayout && crossChainSendMode === 'public' ? 'contents' : 'page-container'
       }
     >
-      {showCombinedSwapProgress && <PageHeader title="Swap" />}
+      {showCombinedSwapProgress && (
+        <PageHeader title={crossChainSendRequested ? 'Cross-chain Send' : 'Swap'} />
+      )}
       {!showCombinedSwapProgress &&
         !shieldReviewing &&
         (viewStep === 'review' || (resumingApprovalReview && viewStep === 'input')) && (

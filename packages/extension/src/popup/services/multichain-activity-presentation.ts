@@ -32,7 +32,11 @@ import type {
 } from '@/core/services/confidential-funding'
 import { getActivityInteractionPresentation } from '@/popup/services/activity-interaction-adapters'
 import { getActivityAddressAlias } from '@/popup/services/activity-address-alias'
-import { getActivityAction, type ActivityPerspective } from '@/popup/services/activity-action-label'
+import {
+  getActivityAction,
+  isPublicSendToShield,
+  type ActivityPerspective
+} from '@/popup/services/activity-action-label'
 import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
 import { isInternalSwapProvider } from '@/popup/services/swap-provider-presentation'
 import {
@@ -173,8 +177,10 @@ export function getActivityAccountRouteLabel(route: ActivitySwapPresentation): s
 export function getActivityRouteTitle(
   item: ActivityItem,
   route: ActivitySwapPresentation,
-  perspective: ActivityPerspective = {}
+  perspective: ActivityPerspective = {},
+  detail = false
 ): string {
+  if (detail && isPublicSendToShield(item, perspective, route)) return 'Send to shield'
   if (
     item.snapshot?.shield ||
     route.sourceFundingSource ||
@@ -343,10 +349,21 @@ export function getActivitySwapPresentation(
     item.status === 'final' && item.completeness === 'complete'
       ? item.segments.find(segment => segment.role === 'destination' && segment.status === 'final')
       : undefined
+  const settlementHash = settledDestination?.evidence?.transactionHash
+  const sameTransactionReceipt = settlementHash
+    ? item.segments.find(
+        segment =>
+          segment.role === 'origin' &&
+          segment.status === 'final' &&
+          !segment.reconfirming &&
+          segment.evidence?.transactionHash === settlementHash &&
+          segment.evidence.assetEffects?.source === 'receipt'
+      )?.evidence?.assetEffects
+    : undefined
   const settledAmount =
     confirmedDestination ??
     settledDestination?.evidence?.settledAmount ??
-    settledDestination?.evidence?.assetEffects?.changes.find(
+    (settledDestination?.evidence?.assetEffects ?? sameTransactionReceipt)?.changes.find(
       change =>
         change.direction === 'incoming' && change.assetId === item.snapshot?.counterAmount?.assetId
     )
@@ -497,8 +514,10 @@ export function getActivityTransferRecipient(item: ActivityItem): string | undef
 export function getActivitySendSubtitle(
   item: ActivityItem,
   route?: ActivitySwapPresentation | null,
-  chainMetadata?: ReadonlyMap<string, ActivityChainMetadata>
+  chainMetadata?: ReadonlyMap<string, ActivityChainMetadata>,
+  perspective: ActivityPerspective = {}
 ): string | undefined {
+  if (isPublicSendToShield(item, perspective, route)) return 'To shield'
   const snapshot = item.snapshot
   const protocol = snapshot?.protocol
   const recipient = getActivityTransferRecipient(item)
@@ -705,6 +724,8 @@ export function getActivityDetailTitle(
   perspective: ActivityPerspective = {},
   route?: ActivitySwapPresentation | null
 ): string {
+  if (isPublicSendToShield(item, perspective, route)) return 'Send to shield'
+  if (item.incognitoDeposit) return 'Deposit'
   if (item.snapshot?.shield) {
     return getActivityAction(item, perspective, route).label
   }
@@ -1195,6 +1216,8 @@ export function getActivityRowTextPresentation(
   const direction = item.snapshot?.direction
   const isIncoming = item.kind === 'receive' || direction === 'incoming'
   const action = getActivityAction(item, perspective, route)
+  if (isPublicSendToShield(item, perspective, route))
+    return { title: 'Send', subtitle: 'To shield' }
 
   if (item.kind === 'shield') {
     return {
@@ -1246,6 +1269,12 @@ export function getActivityRowTextPresentation(
   const defaultSubtitle = counterparty
     ? `${counterpartyLabel}: ${getActivityAddressAlias(counterpartyChainId, counterparty) ?? formatSortAddress(counterparty)}`
     : networkName
+  if (
+    item.incognitoDeposit ||
+    (perspective.viewedDomain === 'shield' && action.label === 'Receive')
+  ) {
+    return { title: action.label, subtitle: defaultSubtitle }
+  }
   return {
     title: symbol
       ? `${item.kind === 'transfer' && perspective.viewedDomain ? action.label : title} ${symbol}`

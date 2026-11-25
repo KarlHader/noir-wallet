@@ -6,6 +6,7 @@ import { sanitizeDiagnosticMessage } from '@/lib/diagnostic-log'
 import { logger } from '@/lib/logger'
 import type { FeeQuote, FeeTier } from '@/config/fee'
 import type { FundingSource } from '@/types'
+import { resolveTransferMaximum } from './transfer-maximum'
 import { zcashWalletRuntimeClient, type MaxTransferEstimate } from './zcash-wallet-runtime-client'
 
 export interface MaxTransferContext {
@@ -151,12 +152,16 @@ export class MaxTransferEstimateCache {
         let quote = await this.getQuote(generation)
         if (!quote || generation !== this.generation) return null
         const estimateWithQuote = (selected: FeeQuote) =>
-          this.client.estimateMaxTransfer({
-            to,
-            memo,
-            fundingSource,
-            marginalFeeZats: marginalFeeForTier(tier, selected.standardMarginalFeeZats),
-            feeQuoteId: selected.id
+          resolveTransferMaximum({
+            mode: 'exact',
+            estimate: () =>
+              this.client.estimateMaxTransfer({
+                to,
+                memo,
+                fundingSource,
+                marginalFeeZats: marginalFeeForTier(tier, selected.standardMarginalFeeZats),
+                feeQuoteId: selected.id
+              })
           })
         let estimate: MaxTransferEstimate
         try {

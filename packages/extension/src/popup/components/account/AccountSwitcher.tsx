@@ -35,7 +35,7 @@ import { cn } from '@/lib/utils'
 import type { ActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { AccountAvatar as AccountAvatarImage } from './AccountAvatar'
 import { PrivateAddressWarningDialog } from './PrivateAddressWarningDialog'
-import { IncognitoSetupButton } from './IncognitoSetupButton'
+import { IncognitoSetupButton, IncognitoSetupDialog } from './IncognitoSetupButton'
 import { useIncognitoSetup } from '@/popup/hooks/useIncognitoSetup'
 
 function SidebarIcon({ kind }: { readonly kind: 'back' | 'accounts' | 'settings' }) {
@@ -209,7 +209,7 @@ function AccountAddressPopover({
   copyScope,
   onViewAll,
   onOpenZcashSettings,
-  onSetupOpen,
+  onRequestSetup,
   className,
   addressesStatus
 }: {
@@ -221,7 +221,7 @@ function AccountAddressPopover({
   readonly copyScope: string
   readonly onViewAll: () => void
   readonly onOpenZcashSettings: () => void
-  readonly onSetupOpen?: () => void
+  readonly onRequestSetup?: () => void
   readonly className?: string
   readonly addressesStatus: 'loading' | 'ready' | 'error'
 }) {
@@ -385,7 +385,7 @@ function AccountAddressPopover({
                   {incognitoSetup.status === 'available' && (
                     <IncognitoSetupButton
                       complete={incognitoSetup.complete}
-                      onOpen={onSetupOpen}
+                      onRequestSetup={onRequestSetup}
                       className="px-2 text-xs"
                     />
                   )}
@@ -530,6 +530,12 @@ export function AccountSwitcher({
   useLayoutEffect(() => setPrivateCopy(null), [currentWalletId, currentAccountId, currentNetwork])
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [addressesOpen, setAddressesOpen] = useState(false)
+  const [setupAccount, setSetupAccount] = useState<{
+    network: typeof currentNetwork
+    walletId: string
+    accountId: string
+  } | null>(null)
+  const addressTrigger = useRef<HTMLButtonElement>(null)
   const catalogAccounts = useMemo(
     () =>
       accountCatalog?.accounts ??
@@ -542,6 +548,22 @@ export function AccountSwitcher({
   const addressesStatus = accountCatalog ? 'ready' : accountCatalogError ? 'error' : 'loading'
   const selectedWalletId = accountIdentity?.walletId ?? null
   const selectedAccountId = accountIdentity?.accountId ?? null
+  const activeSetup =
+    setupAccount?.network === currentNetwork &&
+    setupAccount.walletId === selectedWalletId &&
+    setupAccount.accountId === selectedAccountId
+      ? setupAccount
+      : null
+  const incognitoSetup = useIncognitoSetup(
+    currentNetwork,
+    activeSetup?.walletId ?? null,
+    activeSetup?.accountId ?? null,
+    Boolean(activeSetup)
+  )
+  useLayoutEffect(
+    () => setSetupAccount(null),
+    [currentNetwork, selectedWalletId, selectedAccountId]
+  )
   const [switching, setSwitching] = useState<string | null>(null)
   const [preview, setPreview] = useState<SwitcherAccount | null>(null)
   const [previewTop, setPreviewTop] = useState(72)
@@ -741,6 +763,13 @@ export function AccountSwitcher({
   return (
     <div className={cn('flex min-w-0 items-center gap-[7px]', className)}>
       <CopyToast show={showToast} error={copyFailed} message="Address copied" />
+      {activeSetup && (
+        <IncognitoSetupDialog
+          complete={incognitoSetup.complete}
+          onClose={() => setSetupAccount(null)}
+          returnFocus={() => addressTrigger.current?.focus()}
+        />
+      )}
       <PrivateAddressWarningDialog
         address={privateCopy?.address ?? null}
         onClose={() => setPrivateCopy(null)}
@@ -952,6 +981,7 @@ export function AccountSwitcher({
       >
         <PopoverTrigger asChild>
           <button
+            ref={addressTrigger}
             type="button"
             aria-label={`Choose account, current: ${activeName}`}
             onPointerEnter={event => {
@@ -1012,9 +1042,15 @@ export function AccountSwitcher({
               copyScope="active"
               onViewAll={() => viewAddresses(activeAccount)}
               onOpenZcashSettings={() => openZcashSettings(activeAccount)}
-              onSetupOpen={() => {
+              onRequestSetup={() => {
                 addressesOpenedByHover.current = false
                 cancelAddressesClose()
+                setAddressesOpen(false)
+                setSetupAccount({
+                  network: currentNetwork,
+                  walletId: activeAccount.walletId,
+                  accountId: activeAccount.accountId
+                })
               }}
               className="!w-full"
             />

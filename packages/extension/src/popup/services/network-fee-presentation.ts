@@ -11,6 +11,7 @@ import {
   formatEvmWeiAsGwei,
   parseEvmFeeSelection,
   parseEvmPriorityFeeGwei,
+  type EvmFeeEstimate,
   type EvmFeeSelection
 } from '@/infrastructure/chains/evm'
 import {
@@ -21,6 +22,25 @@ import {
 
 export type NetworkFeePreview = Readonly<{ amount: string; symbol: string; approximate?: boolean }>
 export type NetworkFeePreviews = Partial<Record<NetworkFeeTier, NetworkFeePreview>>
+
+export function getEvmFeeTierPreviews(
+  estimate: EvmFeeEstimate,
+  currency: Readonly<{ symbol: string; decimals: number }>,
+  reviewedTier?: NetworkFeeTier
+): NetworkFeePreviews {
+  const previews: NetworkFeePreviews = {}
+  for (const tier of NETWORK_FEE_TIERS) {
+    const fee = estimate.tierMaximumFeeWei?.[tier]
+    if (tier !== reviewedTier && fee) {
+      previews[tier] = {
+        amount: formatBaseUnitAmount(fee, currency.decimals),
+        symbol: currency.symbol,
+        approximate: true
+      }
+    }
+  }
+  return previews
+}
 
 export async function estimateNetworkFeeTierPreviews(
   estimate: (tier: NetworkFeeTier) => Promise<string | null>,

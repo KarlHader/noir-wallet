@@ -152,7 +152,7 @@ test('marks same-chain signed orders failed for backend terminal outcomes', asyn
   }
 })
 
-async function prepareConfirmedSameChainSource(binding) {
+async function prepareConfirmedSameChainSource(binding, evidence) {
   const repository = new InMemoryTransactionRepository()
   const initial = sameChainGraph(false, binding)
   await repository.create(initial)
@@ -165,7 +165,10 @@ async function prepareConfirmedSameChainSource(binding) {
       id: parseTransactionEventId('event:rhea:same-chain:origin-final'),
       status: 'final',
       cause: 'progress',
-      observedAt: 1_001
+      observedAt: 1_001,
+      ...(evidence === undefined
+        ? {}
+        : { evidence: { ...evidence, transactionHash: origin.evidence.transactionHash } })
     },
     expectedRootRevision: initial.root.revision,
     expectedSegmentRevision: origin.revision
@@ -178,7 +181,9 @@ test('keeps ordinary same-chain onchain completion independent of backend status
   const { repository, graph, origin } = await prepareConfirmedSameChainSource()
   const monitor = new RheaSwapTransactionMonitor(
     {
-      async recordTransactionSubmission() {},
+      async recordTransactionSubmission() {
+        throw new Error('The old quote session is unavailable')
+      },
       async reportSubmission() {},
       async getOrderStatus() {
         throw new Error('same-chain onchain swap must not poll status')
@@ -196,6 +201,49 @@ test('keeps ordinary same-chain onchain completion independent of backend status
     completed.segments.find(segment => segment.role === 'destination').evidence.transactionHash,
     origin.evidence.transactionHash
   )
+})
+
+test('uses receipt-proven output for an owned same-chain swap with an unavailable status session', async () => {
+  const original = sameChainBinding()
+  const binding = {
+    ...original,
+    isCrossChain: true,
+    router: 'preswap-nearintents',
+    destination: { ...original.destination, recipient: original.sender }
+  }
+  for (const hasCredit of [false, true]) {
+    const { repository, graph, origin } = await prepareConfirmedSameChainSource(binding, {
+      blockHeight: 100,
+      blockHash: `0x${'cd'.repeat(32)}`,
+      assetEffects: {
+        source: 'receipt',
+        completeness: 'partial',
+        changes: hasCredit
+          ? [{ assetId: binding.destination.assetId, direction: 'incoming', amountRaw: '995' }]
+          : []
+      }
+    })
+    const monitor = new RheaSwapTransactionMonitor(
+      {
+        async recordTransactionSubmission() {
+          throw new Error('Quote session is unavailable')
+        },
+        async getOrderStatus() {
+          return { status: 'processing', destinationHash: null }
+        },
+        async retireReportedSubmission() {}
+      },
+      { notifyStatus: () => {} }
+    )
+    monitor.repository = repository
+    assert.equal(await monitor.checkGraph(graph), hasCredit)
+    const observed = await repository.get(scope, graph.root.id)
+    assert.equal(observed.root.status, hasCredit ? 'final' : 'confirming')
+    if (hasCredit) {
+      const evidence = observed.segments.find(segment => segment.role === 'destination').evidence
+      assert.equal(evidence.transactionHash, origin.evidence.transactionHash)
+    }
+  }
 })
 
 test('keeps a same-chain Intents transfer open until its separate destination transaction is known', async () => {

@@ -9,7 +9,6 @@ import {
 } from './quote-deposit-transfer-client'
 import { rheaSwapClient } from './rhea-swap-client'
 import { EvmWalletClientError } from './evm-wallet-client'
-import { BitcoinWalletClientError } from './bitcoin-wallet-client'
 import { parseDisplayUnitAmount } from '@/lib/number-format'
 import { InsufficientBalanceError } from '@/lib/errors'
 
@@ -66,13 +65,28 @@ function resolvePricedNativeRouteReserve(
   return (budget + price - 1n) / price
 }
 
-export function resolveNativeRouteMaximum(input: {
-  readonly family: keyof typeof nativeRouteReserves
-  readonly chainId?: string
+type ReserveMaximum = {
+  readonly mode: 'reserve'
   readonly availableRaw: string
-  readonly decimals: number
-  readonly priceUsd?: string | null
-}): string {
+} & (
+  | { readonly payFeeFromAsset: false }
+  | {
+      readonly family: keyof typeof nativeRouteReserves | 'tron'
+      readonly chainId?: string
+      readonly decimals: number
+      readonly priceUsd?: string | null
+      readonly payFeeFromAsset?: boolean
+    }
+)
+
+type ExactMaximum<Result> = { readonly mode: 'exact'; readonly estimate: () => Result }
+
+export function resolveTransferMaximum(input: ReserveMaximum): string
+export function resolveTransferMaximum<Result>(input: ExactMaximum<Result>): Result
+export function resolveTransferMaximum<Result>(input: ReserveMaximum | ExactMaximum<Result>) {
+  if (input.mode === 'exact') return input.estimate()
+  if (input.payFeeFromAsset === false) return input.availableRaw
+  if (input.family === 'tron') return '0'
   const reserve =
     resolvePricedNativeRouteReserve(input.priceUsd, input.decimals, NATIVE_ROUTE_RESERVE_USD) ??
     BigInt(
@@ -84,53 +98,6 @@ export function resolveNativeRouteMaximum(input: {
     )
   const available = BigInt(input.availableRaw)
   return available > reserve ? (available - reserve).toString() : '0'
-}
-
-export async function estimateBitcoinRouteMaximum(
-  input: {
-    readonly source: Extract<WalletOwnedQuoteAsset, { family: 'bitcoin' }>
-    readonly feeTier: 'low' | 'standard' | 'fast'
-    readonly depositAddress?: string
-    readonly priceUsd?: string | null
-  },
-  client: Pick<typeof quoteDepositTransferClient, 'estimateMaximum'> = quoteDepositTransferClient
-): Promise<QuoteDepositMaximum> {
-  const { source, feeTier, depositAddress, priceUsd } = input
-  const available = BigInt(source.asset.balance.availableRaw)
-  const estimate = await client
-    .estimateMaximum({
-      source,
-      // Before the quote exists, use the wallet's address as a size proxy only.
-      depositAddress: depositAddress ?? source.refundAddress,
-      feeTier
-    })
-    .catch(error => {
-      if (
-        depositAddress !== undefined ||
-        !(error instanceof BitcoinWalletClientError) ||
-        error.code !== 'network-unavailable'
-      )
-        throw error
-      return null
-    })
-  if (!estimate) {
-    const decimals = source.asset.metadata.decimals
-    const reserve =
-      resolvePricedNativeRouteReserve(priceUsd, decimals, 2n) ??
-      BigInt(parseDisplayUnitAmount(nativeRouteReserves.bitcoin, decimals))
-    return {
-      amountRaw: (available > reserve ? available - reserve : 0n).toString(),
-      networkFeeRaw: reserve.toString(),
-      networkFeeSymbol: source.networkFeeAsset.metadata.symbol,
-      networkFeeDecimals: source.networkFeeAsset.metadata.decimals
-    }
-  }
-  const fee = BigInt(estimate.networkFeeRaw)
-  const spendableWithFee = BigInt(estimate.amountRaw)
-  // The estimator already deducted one fee; subtract the remaining half in whole sats.
-  const spendable = spendableWithFee < available - fee ? spendableWithFee : available - fee
-  const amount = spendable - (fee + 1n) / 2n
-  return { ...estimate, amountRaw: (amount > 0n ? amount : 0n).toString() }
 }
 
 export function createNativeTransferSource(input: {
@@ -217,12 +184,16 @@ export async function estimateNativeTransferMaximum(
   },
   client: Pick<typeof quoteDepositTransferClient, 'estimateMaximum'> = quoteDepositTransferClient
 ) {
-  return client.estimateMaximum({
-    source: input.source,
-    depositAddress: input.recipient,
-    feeSelection: input.feeSelection,
-    feeTier: input.feeTier,
-    executionMode: input.executionMode
+  return resolveTransferMaximum({
+    mode: 'exact',
+    estimate: () =>
+      client.estimateMaximum({
+        source: input.source,
+        depositAddress: input.recipient,
+        feeSelection: input.feeSelection,
+        feeTier: input.feeTier,
+        executionMode: input.executionMode
+      })
   })
 }
 
