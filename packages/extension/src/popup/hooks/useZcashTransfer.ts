@@ -756,10 +756,6 @@ export function useZcashTransfer({
     ) {
       if (isConfidentialMove) beginMoveReview()
       setReviewedUnshieldMax(nativeUnshieldMax ? { amount, fee: selectedFeeZec } : null)
-      if (shieldReceive?.actionLabel) {
-        if (isMaxFeeMode) void maxTransfer.request(true)
-        else feeEstimate.retry()
-      }
       setShowReview(true)
     }
   }

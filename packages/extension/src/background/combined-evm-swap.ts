@@ -24,6 +24,8 @@ export const COMBINED_EVM_SWAP_ALARM = 'combined-evm-swap'
 const PREFIX = 'combined_evm_swap:'
 const RETAIN_MS = 24 * 60 * 60_000
 const ALLOWANCE_WAIT_MS = 60_000
+const SWAP_FEE_REVIEW_MESSAGE =
+  'Token approved. The Swap fee changed. Review the Swap again to continue.'
 
 export type CombinedEvmSwapProgress = {
   readonly approvalId: string
@@ -402,6 +404,7 @@ export class CombinedEvmSwap {
       }
       return record
     }
+    const { feeLimit } = record
     let prepared: Awaited<ReturnType<BackgroundEvmTransferRouter['prepareContractCall']>>
     try {
       prepared = await router.prepareContractCall(
@@ -413,10 +416,15 @@ export class CombinedEvmSwap {
         },
         input.feeSelection,
         input.binding,
-        input.executionMode ?? 'main'
+        input.executionMode ?? 'main',
+        undefined,
+        BigInt(feeLimit.maxFeePerGasWei)
       )
     } catch (error) {
       if (error instanceof EvmTransactionError) {
+        if (error.code === 'reviewed-fee-cap-too-low') {
+          return review(SWAP_FEE_REVIEW_MESSAGE)
+        }
         if (error.code === 'insufficient-funds') {
           return review('Token approved. Add funds for the network fee, then review again.')
         }
@@ -426,7 +434,6 @@ export class CombinedEvmSwap {
       }
       throw error
     }
-    const { feeLimit } = record
     const summary = prepared.review.summary
     if (
       summary.schema !== 'evm.transaction.v1' ||
@@ -444,7 +451,7 @@ export class CombinedEvmSwap {
       )
     ) {
       await router.reject(prepared.graph.root.id).catch(() => {})
-      return review('Token approved. The Swap fee changed. Review the Swap again to continue.')
+      return review(SWAP_FEE_REVIEW_MESSAGE)
     }
     const reserved = await this.write({
       ...record,

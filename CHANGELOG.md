@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Noir Wallet are documented in this file.
 
+## [2.1.1] - 2026-11-26
+
+- Prepare Shield quotes and native Zcash fees before showing the confirmation screen.
+- Continue eligible EVM swaps after token approval when gas estimates rise within the already reviewed budget.
+
 ## [2.1.0] - 2026-11-26
 
 - Open Home on Shield and keep Public and Incognito balances easy to reach.

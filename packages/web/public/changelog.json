@@ -1,6 +1,13 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "2.1.1": {
+      "notifyUpdate": true,
+      "changes": [
+        "Shield prepares the quote before opening confirmation.",
+        "Eligible swaps continue after token approval when gas still fits the fee limits you confirmed."
+      ]
+    },
     "2.1.0": {
       "notifyUpdate": true,
       "changes": [

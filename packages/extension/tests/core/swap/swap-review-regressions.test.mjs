@@ -132,7 +132,7 @@ function combinedSwapFixture(t, executionMode) {
     return graph
   }
   setStatus(approvalId, 'approve', 'prepared')
-  const summary = (call, maximumFeeWei) => ({
+  const summary = (call, maximumFeeWei, maxFeePerGasWei = '1') => ({
     schema: 'evm.transaction.v1',
     chainId: 'eip155:42161',
     fields: {
@@ -141,7 +141,7 @@ function combinedSwapFixture(t, executionMode) {
       valueWei: call.value,
       calldata: { encoding: 'hex', value: call.data },
       maximumFeeWei,
-      maxFeePerGasWei: '1',
+      maxFeePerGasWei,
       gasPriceWei: null
     }
   })
@@ -185,7 +185,7 @@ function combinedSwapFixture(t, executionMode) {
         ? { status: 'signed-pending-broadcast', graph: setStatus(id, 'swap', 'signed', swapHash) }
         : { status: 'broadcast', graph: setStatus(id, 'swap', 'broadcast', swapHash) }
     },
-    prepareContractCall: async (_intent, _fee, reviewedBinding, mode) => {
+    prepareContractCall: async (_intent, _fee, reviewedBinding, mode, _debugId, reviewedCap) => {
       assert.equal(mode, executionMode ?? 'main')
       assert.equal(reviewedBinding.sender, owner)
       calls.push('prepare-swap')
@@ -194,7 +194,7 @@ function combinedSwapFixture(t, executionMode) {
         graph: setStatus(swapId, 'swap', 'prepared'),
         review: {
           payloadFingerprint: { digestHex: 'b'.repeat(64) },
-          summary: summary(transaction, '450000')
+          summary: summary(transaction, '450000', reviewedCap?.toString() ?? '2')
         }
       }
     },
@@ -304,7 +304,8 @@ it('stops before signing when authorization, quote or transaction preparation re
     'expired',
     'locked',
     'insufficient-funds',
-    'simulation-failed'
+    'simulation-failed',
+    'reviewed-fee-cap-too-low'
   ]) {
     await t.test(scenario, async subtest => {
       const fixture = combinedSwapFixture(subtest)
@@ -325,9 +326,10 @@ it('stops before signing when authorization, quote or transaction preparation re
       if (scenario === 'expired') assert.match(result.message, /quote expired/i)
       if (scenario === 'insufficient-funds') assert.match(result.message, /network fee/i)
       if (scenario === 'simulation-failed') assert.match(result.message, /failed simulation/i)
+      if (scenario === 'reviewed-fee-cap-too-low') assert.match(result.message, /fee changed/i)
       assert.deepEqual(
         fixture.calls,
-        ['insufficient-funds', 'simulation-failed'].includes(scenario)
+        ['insufficient-funds', 'simulation-failed', 'reviewed-fee-cap-too-low'].includes(scenario)
           ? ['approve-token', 'prepare-swap']
           : ['approve-token']
       )

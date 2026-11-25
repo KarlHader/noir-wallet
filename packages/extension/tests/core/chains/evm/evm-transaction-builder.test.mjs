@@ -726,6 +726,40 @@ test.describe('EVM transfer builder', () => {
     expect(approvalGraph.root.kind).toBe('approve')
   })
 
+  test('keeps a reviewed fee cap when the automatic estimate rises and the cap still covers fees', async () => {
+    const polygon = parseChainId('eip155:137').id
+    const reviewedMaxFeePerGas = 527_926_228_682n
+    const prepare = baseFeePerGas =>
+      buildEvmContractCall({
+        chainId: polygon,
+        chainAccount: { ...account, scope: { ...account.scope, chainId: polygon } },
+        assets,
+        intent: {
+          chainId: polygon,
+          contractAddress: recipient,
+          valueRaw: '0',
+          calldata: '0x12345678'
+        },
+        reviewedMaxFeePerGas,
+        rpc: transactionRpc({
+          estimateGas: async () => '273625',
+          getLatestBlockFee: async () => ({ blockNumber: '100', baseFeePerGas }),
+          getMaximumPriorityFeePerGas: async () => '30000000000'
+        })
+      })
+
+    const prepared = await prepare('249275567411')
+    expect(prepared.transaction).toMatchObject({
+      gasLimit: '328350',
+      maxFeePerGas: reviewedMaxFeePerGas.toString(),
+      maxPriorityFeePerGas: '30000000000'
+    })
+    expect((await prepare('240000000000')).transaction.maxFeePerGas).toBe('510000000000')
+    await expect(prepare('500000000000')).rejects.toMatchObject({
+      code: 'reviewed-fee-cap-too-low'
+    })
+  })
+
   test('rejects a reverting contract call before signing', async () => {
     const error = await captureError(
       buildEvmContractCall({

@@ -391,32 +391,6 @@ export function DepositWithdraw({
   )
 }
 
-function TransferReviewSkeleton({ action }: { action: string }) {
-  return (
-    <div
-      role="status"
-      aria-label={`Preparing ${action} review`}
-      className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-4 pt-2 pb-4"
-    >
-      <div className="flex shrink-0 items-center gap-3">
-        <Skeleton className="size-9 rounded-full" />
-        <Skeleton className="h-7 w-28" />
-      </div>
-      <div className="space-y-3 rounded-xl bg-card px-3 py-3">
-        <div className="flex justify-between gap-4">
-          <Skeleton className="h-3 w-12" />
-          <Skeleton className="h-3 w-24" />
-        </div>
-        <div className="flex justify-between gap-4">
-          <Skeleton className="h-3 w-16" />
-          <Skeleton className="h-3 w-20" />
-        </div>
-      </div>
-      <Skeleton className="mt-auto h-11 w-full shrink-0 rounded-lg" />
-    </div>
-  )
-}
-
 function NativeZcashMoveForm({
   destination,
   fundingSource,
@@ -598,7 +572,6 @@ function DepositWithdrawForm({
   }, [])
   const [retry, setRetry] = useState(0)
   const [assetPickerOpen, setAssetPickerOpen] = useState(startsWithPicker)
-  const [shieldAwaitingReview, setShieldAwaitingReview] = useState(false)
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const [destinationAssetId, setDestinationAssetId] = useState<string | null>(
     initialDraft.destinationAssetId ?? null
@@ -841,7 +814,6 @@ function DepositWithdrawForm({
     setDestinationAssetId(draft.destinationAssetId ?? null)
     setAmount(draft.amount)
     setShieldSlippageBps(1)
-    setShieldAwaitingReview(false)
     setMethod(draft.method)
     setEvmMoveFee({ kind: 'tier', tier: 'standard' })
     setMaxSelected(draft.maxSelected)
@@ -1854,9 +1826,7 @@ function DepositWithdrawForm({
   }, [fixedDirection, scopeKey])
   const stateChange = useRef(fixedShield?.onStateChange)
   stateChange.current = fixedShield?.onStateChange
-  const reviewing = Boolean(
-    shieldAwaitingReview || activeShieldReview || shieldActivity || nativeReceiveState.reviewing
-  )
+  const reviewing = Boolean(activeShieldReview || shieldActivity || nativeReceiveState.reviewing)
   const busy = preparingShield || confirmingShield || cancellingShield || nativeReceiveState.busy
   const submittingShield =
     confirmingShield && confirmAttemptedPlanId.current === activeShieldReview?.planId
@@ -2174,13 +2144,18 @@ function DepositWithdrawForm({
         return false
       }
       if (result.phase !== 'prepared') {
-        const status = await checkShieldPlan(result.planId)
-        if (replacingReview && scopeStillCurrent()) {
+        const status = await checkShieldPlan(result.planId, expectedKey)
+        if (replacingReview && scopeStillCurrent() && latestShieldReviewKey.current === expectedKey) {
           if (status !== 'started')
             throw new Error('Transfer review could not be prepared. Try again.')
         }
         if (status === 'started') reviewAttempt.current = null
         return false
+      }
+      if (result.expiresAt <= Date.now()) {
+        void confidentialFundingClient.cancel(result.planId).catch(() => {})
+        reviewAttempt.current = null
+        throw new Error('Shield review expired. Try again.')
       }
       if (
         !matchesShieldReview(result, request) ||
@@ -2201,7 +2176,7 @@ function DepositWithdrawForm({
       setPreparedShield({ key, review: result })
       return true
     } catch (error) {
-      if (scopeStillCurrent()) {
+      if (scopeStillCurrent() && latestShieldReviewKey.current === expectedKey) {
         const message = error instanceof Error ? error.message : ''
         const classifiedMessage = classifyError(error, {
           source: selected.asset.metadata.symbol,
@@ -2259,11 +2234,15 @@ function DepositWithdrawForm({
     }
   }
   const checkShieldPlan = async (
-    planId: string
+    planId: string,
+    expectedReviewKey?: string
   ): Promise<'prepared' | 'started' | 'pending' | 'failed' | null> => {
+    const stillCurrent = () =>
+      scopeStillCurrent() &&
+      (expectedReviewKey === undefined || latestShieldReviewKey.current === expectedReviewKey)
     try {
       const plan = await confidentialFundingClient.get(planId)
-      if (!scopeStillCurrent()) return null
+      if (!stillCurrent()) return null
       if (canOpenShieldActivity(plan)) {
         openShieldActivity(plan)
         return 'started'
@@ -2284,7 +2263,7 @@ function DepositWithdrawForm({
       setConfirmUncertain(false)
       return 'prepared'
     } catch {
-      if (!scopeStillCurrent()) return null
+      if (!stillCurrent()) return null
       setConfirmUncertain(true)
       setShieldError('Transfer status unavailable. Check status before trying again.')
       return null
@@ -2406,8 +2385,6 @@ function DepositWithdrawForm({
 
   const exitForm = fixedShield?.onBack ?? goBack
   const openShieldReview = () => {
-    if (!canReviewShield || preparingShieldRef.current) return
-    setShieldAwaitingReview(true)
     void prepareShield()
   }
   if (shieldActivity && draftScope === scopeKey) {
@@ -2623,10 +2600,7 @@ function DepositWithdrawForm({
             feeRefresh !== null ||
             (!confirmUncertain && activeShieldReview.expiresAt <= Date.now())
           }
-          onCancel={() => {
-            setShieldAwaitingReview(false)
-            void cancelShieldReview()
-          }}
+          onCancel={() => void cancelShieldReview()}
           onConfirm={() => void confirmShield()}
         />
       </div>
@@ -2767,31 +2741,6 @@ function DepositWithdrawForm({
       <div className="page-container" data-wallet-mode="shield">
         <PageHeader title={actionLabel} showBack onBack={fixedShield?.onBack ?? goBack} />
         <ShieldHardwareTabNotice path={`${pathname}?${nextParams}`} />
-      </div>
-    )
-  }
-
-  if (
-    shieldAwaitingReview &&
-    draftScope === scopeKey &&
-    !fixedNativeRetryPath &&
-    (preparingShield || shieldError)
-  ) {
-    return (
-      <div className="page-container">
-        <PageHeader
-          title={`Confirm ${actionLabel}`}
-          showBack
-          onBack={() => setShieldAwaitingReview(false)}
-          backDisabled={preparingShield}
-        />
-        {preparingShield ? (
-          <TransferReviewSkeleton action={actionLabel} />
-        ) : (
-          <div className="p-4" aria-live="polite">
-            <TransactionNotice message={shieldError!} onRetry={openShieldReview} />
-          </div>
-        )}
       </div>
     )
   }

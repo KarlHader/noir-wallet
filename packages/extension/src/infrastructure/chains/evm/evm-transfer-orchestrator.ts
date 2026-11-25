@@ -139,6 +139,7 @@ export interface PrepareEvmTransferInput {
   readonly nearIntentsBinding?: NearIntentsTransactionBinding
   readonly rheaSwapBinding?: RheaSwapTransactionBinding
   readonly feeSelection?: EvmFeeSelection
+  readonly reviewedMaxFeePerGas?: bigint
   readonly feeTier?: NetworkFeeTier
   readonly signingMode?: 'internal' | 'keystone' | 'ledger'
   readonly externalSigner?: Omit<EvmExternalSignerBinding, 'requestId'>
@@ -781,7 +782,11 @@ export class EvmTransferOrchestrator {
               now: this.now
             })
           : isContractCall
-            ? await buildEvmContractCall({ ...sharedBuildInput, intent: input.intent })
+            ? await buildEvmContractCall({
+                ...sharedBuildInput,
+                intent: input.intent,
+                reviewedMaxFeePerGas: input.reviewedMaxFeePerGas
+              })
             : await buildEvmTransfer({ ...sharedBuildInput, intent: input.intent })
     const expectedFingerprint = await computeEvmSigningPayloadFingerprint(prepared.transaction)
     let externalSigner: EvmExternalSignerBinding | null = null
