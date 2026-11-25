@@ -62,7 +62,7 @@ const TESTNET = 'testnet'
 
 export const RPC_REGISTRY: RpcRegistryDocument = {
   version: RPC_REGISTRY_SCHEMA_VERSION,
-  updatedAt: '2026-11-18T00:00:00.000Z',
+  updatedAt: '2026-11-25T00:00:00.000Z',
   chains: [
     {
       id: 'zcash-mainnet',
@@ -140,6 +140,8 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
       ['blockpi', 'BlockPI', 'https://ethereum.public.blockpi.network/v1/rpc/public']
     ]),
     chain('eip155:56', MAINNET, 'BNB Chain', 'bnb', EVM, [
+      ['pancakeswap', 'PancakeSwap', 'https://bscrpc.pancakeswap.finance'],
+      ['48-club', '48 Club', 'https://rpc.48.club'],
       ['official', 'BNB Chain', 'https://bsc-dataseed.bnbchain.org'],
       ['publicnode', 'PublicNode', 'https://bsc-rpc.publicnode.com'],
       ['official-2', 'BNB Chain 2', 'https://bsc-dataseed2.bnbchain.org']
