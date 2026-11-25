@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { verifyWriteIntent } from '../../../../../scripts/extension-store-release.mjs'
 
 import {
   loadReleaseJournal,
@@ -32,6 +33,31 @@ const binding = {
 }
 const run = (id, attempt = 1) => ({ id: String(id), attempt: String(attempt), sha: sha('f') })
 const result = (status = 'succeeded') => ({ status, retryable: false })
+
+it('waits for a fresh intent artifact and rejects an unrelated artifact', async () => {
+  const intent = fixtureReceipt('upload', 'intent', 12345)
+  const artifact = fixtureArtifact(intent, 54321)
+  const lookups = []
+  const delays = []
+  const input = {
+    artifactId: String(artifact.id),
+    binding,
+    stage: intent.stage,
+    run: intent.run,
+    request: async route => {
+      lookups.push(route)
+      return lookups.length === 1 ? null : artifact
+    },
+    wait: async duration => delays.push(duration)
+  }
+  await verifyWriteIntent(input)
+  assert.deepEqual(lookups, ['actions/artifacts/54321', 'actions/artifacts/54321'])
+  assert.deepEqual(delays, [1000])
+  await assert.rejects(
+    verifyWriteIntent({ ...input, request: async () => ({ ...artifact, name: 'unrelated' }) }),
+    /does not match this workflow/
+  )
+})
 
 function crc32(bytes) {
   let crc = 0xffffffff
