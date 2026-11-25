@@ -15,7 +15,8 @@ export const ALL_CHAIN_FEATURE_FLAGS = Object.freeze([
 
 export const DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS = Object.freeze([
   ZCASH_CHAIN_FEATURE_FLAG,
-  EVM_CHAIN_FEATURE_FLAG
+  EVM_CHAIN_FEATURE_FLAG,
+  NEAR_CHAIN_FEATURE_FLAG
 ] as const)
 
 const CHAIN_FEATURE_FLAG_PATTERN = /^chain\.[a-z0-9][a-z0-9.-]*$/

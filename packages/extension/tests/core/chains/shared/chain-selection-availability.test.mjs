@@ -44,11 +44,11 @@ describe('Chain selection availability', () => {
     ]
     assert.deepEqual(
       selectableChainOptions(options, DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS).map(option => option.id),
-      ['zcash:mainnet', 'eip155:1']
+      ['zcash:mainnet', 'eip155:1', 'near:mainnet']
     )
     assert.deepEqual(
       deferredChainChoices(DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS).map(option => option.family),
-      ['bitcoin', 'solana', 'near']
+      ['bitcoin', 'solana']
     )
     assert.deepEqual(selectableChainOptions(options, ALL_CHAIN_FEATURE_FLAGS), options)
     assert.deepEqual(deferredChainChoices(ALL_CHAIN_FEATURE_FLAGS), [])
@@ -64,13 +64,13 @@ describe('Chain selection availability', () => {
     assert.equal(isSelectableSwapBlockchain('zec', DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS), true)
     assert.equal(isSelectableSwapBlockchain('btc', DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS), false)
     assert.equal(isSelectableSwapBlockchain('sol', DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS), false)
-    assert.equal(isSelectableSwapBlockchain('near', DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS), false)
+    assert.equal(isSelectableSwapBlockchain('near', DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS), true)
     assert.equal(isSelectableSwapBlockchain('btc', ALL_CHAIN_FEATURE_FLAGS), true)
     assert.deepEqual(
       privateKeyImportFamilyOptions(DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS)
         .filter(option => option.enabled)
         .map(option => option.family),
-      ['eip155']
+      ['eip155', 'near']
     )
     assert.deepEqual(
       buildAddTokenNetworks('mainnet', [], DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS).map(network => ({
@@ -78,9 +78,9 @@ describe('Chain selection availability', () => {
         disabled: network.disabled ?? false
       })),
       [
+        { family: 'near', disabled: false },
         { family: 'bitcoin', disabled: true },
-        { family: 'solana', disabled: true },
-        { family: 'near', disabled: true }
+        { family: 'solana', disabled: true }
       ]
     )
   })
@@ -102,8 +102,7 @@ describe('Chain selection availability', () => {
       [
         { id: 'zcash', disabled: false },
         { id: 'coming-soon:bitcoin', disabled: true },
-        { id: 'coming-soon:solana', disabled: true },
-        { id: 'coming-soon:near', disabled: true }
+        { id: 'coming-soon:solana', disabled: true }
       ]
     )
     assert.deepEqual(
@@ -112,10 +111,13 @@ describe('Chain selection availability', () => {
     )
   })
 
-  it('keeps Zcash firmware usable and narrows Keystone multi-coin exports to EVM', () => {
+  it('keeps Zcash firmware usable and requests EVM and NEAR from Keystone multi-coin firmware', () => {
     const bundles = buildKeystoneNetworkBundles(DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS)
     assert.deepEqual(bundles.find(bundle => bundle.id === 'zcash').requestedNetworks, ['zcash'])
-    assert.deepEqual(bundles.find(bundle => bundle.id === 'multi-chain').requestedNetworks, ['evm'])
+    assert.deepEqual(bundles.find(bundle => bundle.id === 'multi-chain').requestedNetworks, [
+      'evm',
+      'near'
+    ])
     assert.equal(bundles.find(bundle => bundle.id === 'bitcoin-only').disabled, true)
 
     const payload = {

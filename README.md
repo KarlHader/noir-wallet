@@ -38,7 +38,7 @@ The documentation site's source is `packages/docs/content/docs/`. The top-level 
 - **Privacy-First**: Zero-knowledge proofs for private transactions with shielded addresses
 - **Private Broadcast**: Optional ZeroIndexer broadcasting with managed or custom nodes, independent of the synchronization RPC
 - **Worker-Based WASM**: Offscreen worker architecture for non-blocking cryptographic operations
-- **Multichain Accounts**: Zcash and EVM networks follow the wallet's global Mainnet/Testnet Mode; deferred chains remain feature-gated
+- **Multichain Accounts**: Zcash, EVM, and NEAR networks follow the wallet's global Mainnet/Testnet Mode; deferred chains remain feature-gated
 - **dApp Integration**: TypeScript SDK for seamless wallet connection and transaction signing
 - **Optimistic UI**: Instant interface response with background computation for better UX
 
