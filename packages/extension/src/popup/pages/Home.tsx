@@ -627,35 +627,6 @@ export function Home() {
     navigate.navigate(`/dapp-connections?mode=${privateDAppMode ? 'private' : 'public'}`)
   }
 
-  const returnToDAppSite = async (origin: string) => {
-    try {
-      const url = new URL(origin)
-      if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.origin !== origin) {
-        throw new Error('Unable to open this site')
-      }
-      const tabs = await chrome.tabs.query({})
-      const siteTab = tabs.find(tab => {
-        if (!tab.url) return false
-        try {
-          return new URL(tab.url).origin === origin
-        } catch {
-          return false
-        }
-      })
-      if (siteTab?.id !== undefined) {
-        await chrome.tabs.update(siteTab.id, { active: true })
-        if (siteTab.windowId !== undefined) {
-          await chrome.windows.update(siteTab.windowId, { focused: true })
-        }
-      } else {
-        await chrome.tabs.create({ url: origin })
-      }
-      window.close()
-    } catch {
-      toast.error('Unable to open this site')
-    }
-  }
-
   const handleDAppExecutionModeChange = (mode: DAppExecutionMode) => {
     if (modeSelectionDisabled) return
     const current = dappExecutionMode.state
@@ -1239,12 +1210,11 @@ export function Home() {
           onDisconnect={disconnectDApp}
         />
       )}
-      {connectedDApp && !currentAccountAuthorized && (
+      {connectedDApp && !currentAccountAuthorized && canConnectCurrentAccount && (
         <DAppConnectPrompt
           host={connectedDApp.host}
           favicon={connectedDApp.favicon}
           accountName={accountDisplayName}
-          canConnect={canConnectCurrentAccount}
           executionMode={
             hardwareWallet || !currentDAppUsesEvm || !supportsEvmDAppExecutionMode
               ? 'main'
@@ -1253,7 +1223,6 @@ export function Home() {
           darkPalette={darkDAppBar}
           modeControl={currentDAppUsesEvm ? dappModeControl : undefined}
           onConnect={() => connectCurrentAccount(connectedDApp.origin)}
-          onReturnToSite={() => void returnToDAppSite(connectedDApp.origin)}
         />
       )}
 

@@ -358,9 +358,21 @@ test.describe('Background EVM dApp handler', () => {
     ])
   })
 
-  test('wallet-side Connect adds the active account to an existing EVM grant and broadcasts it', async () => {
+  test('suspends EVM account exposure until the newly active account connects', async () => {
     let activeContext = account
-    const state = harness({ loadActiveContext: async () => activeContext })
+    const previousAddress = account.chainAccount.identity.value
+    const activeAddress = '0x2222222222222222222222222222222222222222'
+    const state = harness({
+      loadActiveContext: async () => activeContext,
+      listAccounts: async () => [
+        {
+          id: JSON.stringify(['wallet-1', 'account-1']),
+          label: 'Account 1',
+          reference: { walletId: 'wallet-1', accountId: 'account-1' },
+          address: previousAddress
+        }
+      ]
+    })
     const origin = 'https://dapp.example'
     await state.handler.request({ method: 'eth_requestAccounts' }, origin, {})
     activeContext = {
@@ -370,10 +382,32 @@ test.describe('Background EVM dApp handler', () => {
         scope: { ...account.chainAccount.scope, accountId: 'account-2' },
         identity: {
           kind: 'account-identifier',
-          value: '0x2222222222222222222222222222222222222222'
+          value: activeAddress
         }
       }
     }
+    await state.handler.notifyAccountsChanged()
+    expect(state.events.at(-1)).toEqual({
+      origin,
+      chainId: 'evm',
+      eventName: 'accountsChanged',
+      data: []
+    })
+    await expect(state.handler.request({ method: 'eth_accounts' }, origin, {})).resolves.toEqual([])
+    await expect(
+      state.handler.request({ method: 'wallet_getPermissions' }, origin, {})
+    ).resolves.toEqual([])
+    const sendFromPreviousAccount = () =>
+      state.handler.request(
+        {
+          method: 'eth_sendTransaction',
+          params: [{ from: previousAddress, to: activeAddress, value: '0x1' }]
+        },
+        origin,
+        {}
+      )
+    await expect(sendFromPreviousAccount()).rejects.toMatchObject({ code: 4100 })
+
     await state.handler.connectCurrentAccountToDApp(origin)
     expect(state.getAuthorization()).toEqual({
       accounts: [
@@ -386,8 +420,9 @@ test.describe('Background EVM dApp handler', () => {
       origin,
       chainId: 'evm',
       eventName: 'accountsChanged',
-      data: ['0x2222222222222222222222222222222222222222']
+      data: [activeAddress, previousAddress]
     })
+    await expect(sendFromPreviousAccount()).rejects.toMatchObject({ code: 4100 })
 
     const locked = harness({ hasUnlockSession: async () => false })
     await expect(locked.handler.connectCurrentAccountToDApp(origin)).rejects.toMatchObject({
@@ -399,6 +434,45 @@ test.describe('Background EVM dApp handler', () => {
     await expect(unconnected.handler.connectCurrentAccountToDApp(origin)).rejects.toThrow(
       'Reconnect from the site to update this network permission'
     )
+  })
+
+  test('enables a disabled EVM network only after a valid connection approval', async () => {
+    const origin = 'https://dapp.example'
+    const reference = { walletId: 'wallet-1', accountId: 'account-1' }
+    let enabled = false
+    let approved = false
+    let revokeBeforeCommit = false
+    let state
+    state = harness({
+      loadActiveContext: async () => (enabled ? account : null),
+      readDisabledNetworkAccount: async () => account,
+      enableAccountNetwork: async selected => {
+        expect(selected).toEqual(reference)
+        enabled = true
+      },
+      approval: {
+        requestExternalApproval: async (_origin, action, data) => {
+          expect(action).toBe('evmConnect')
+          expect(data.enableNetwork).toMatchObject({ label: EVM_NETWORKS.mainnet.displayName })
+          expect(enabled).toBe(false)
+          expect(state.getAuthorization()).toBeNull()
+          if (revokeBeforeCommit) await state.manager.removeEvmAuthorization(origin)
+          return { approved, requestId: 'connect-disabled-evm' }
+        }
+      }
+    })
+    const connect = () => state.handler.request({ method: 'eth_requestAccounts' }, origin, {})
+
+    await expect(connect()).rejects.toMatchObject({ code: 4001 })
+    expect(enabled).toBe(false)
+    approved = true
+    revokeBeforeCommit = true
+    await expect(connect()).rejects.toMatchObject({ code: 4100 })
+    expect(enabled).toBe(false)
+    revokeBeforeCommit = false
+    await expect(connect()).resolves.toEqual([account.chainAccount.identity.value])
+    expect(enabled).toBe(true)
+    expect(state.getAuthorization()).toEqual({ accounts: [reference], binding: reference })
   })
 
   test('grants one shared EVM account after explicit approval', async () => {

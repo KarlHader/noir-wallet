@@ -19,7 +19,9 @@ import {
   type EvmDAppSendQueueBlock,
   type EvmDAppTabInfo
 } from './evm-dapp-handler'
-import type { ParsedEip1193ChainRequest } from '@/core/dapp/eip1193'
+import { Eip1193ProviderError, type ParsedEip1193ChainRequest } from '@/core/dapp/eip1193'
+import { readWalletMetadata, setAccountNetworkSelection } from '@/lib/wallet-metadata-storage'
+import { rehydrateWalletStore } from '@/store/wallet-store'
 import { parseChainId } from '@/core/chains/registry'
 import {
   filterEnabledDAppContext,
@@ -124,6 +126,38 @@ export function createBackgroundEvmDAppHandler(
         await loadActiveEvmPortfolioContext(storageRepository, network.chainId),
         'evm'
       ),
+    readDisabledNetworkAccount: async () => {
+      const context = await loadActiveEvmPortfolioContext(storageRepository, network.chainId)
+      return context?.keyDomainSource.kind === 'software' ? context : null
+    },
+    enableAccountNetwork: async ({ walletId, accountId }) => {
+      const snapshot = await readWalletMetadata()
+      const state = snapshot?.state
+      const wallet = state?.wallets.find(item => item.id === walletId)
+      const account = wallet?.accounts.find(item => item.id === accountId)
+      if (
+        state?.currentWalletId !== walletId ||
+        state.currentAccountId !== accountId ||
+        state.currentNetwork !== network.networkMode ||
+        !account ||
+        (wallet?.keySource !== undefined && wallet.keySource !== 'software')
+      ) {
+        throw new Eip1193ProviderError(4100, 'Wallet account changed. Connect again.')
+      }
+      const families = account.networkSelections?.[network.networkMode]
+      if (!families || families.includes('evm')) return
+      const chainIds = account.networkChainSelections?.[network.networkMode]
+      await setAccountNetworkSelection(
+        walletId,
+        accountId,
+        network.networkMode,
+        [...families, 'evm'],
+        undefined,
+        chainIds ? [...new Set([...chainIds, network.chainId])] : undefined
+      )
+      await rehydrateWalletStore()
+      void chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
+    },
     listAccounts: () =>
       listDAppChainAccounts({
         repository: storageRepository,

@@ -10,30 +10,25 @@ interface DAppConnectPromptProps {
   host: string
   favicon: string
   accountName: string
-  canConnect: boolean
   executionMode: DAppExecutionMode | null
   darkPalette?: boolean
   modeControl?: DAppAddressModeControl
   onConnect: () => Promise<void>
-  onReturnToSite: () => void
 }
 
 export function DAppConnectPrompt({
   host,
   favicon,
   accountName,
-  canConnect,
   executionMode,
   darkPalette = false,
   modeControl,
-  onConnect,
-  onReturnToSite
+  onConnect
 }: DAppConnectPromptProps) {
   const [connecting, setConnecting] = useState(false)
   const incognito = executionMode === 'private'
   const palette = resolveDAppFooterPalette(darkPalette, executionMode)
-  const connectionBusy =
-    connecting || (canConnect && Boolean(modeControl?.busy || (modeControl && !executionMode)))
+  const connectionBusy = connecting || Boolean(modeControl?.busy || (modeControl && !executionMode))
 
   const handleConnect = async () => {
     if (connectionBusy) return
@@ -70,7 +65,7 @@ export function DAppConnectPrompt({
       <div className="flex-1 min-w-0">
         <div className="truncate text-base leading-5 font-medium">{host}</div>
         <div className="text-xs text-muted truncate">
-          {`${formatAccountName(accountName, 14)} · ${canConnect ? 'Not connected' : 'Reconnect from site'}`}
+          {`${formatAccountName(accountName, 14)} · Not connected`}
         </div>
       </div>
       {modeControl ? (
@@ -98,14 +93,14 @@ export function DAppConnectPrompt({
       )}
       <button
         type="button"
-        onClick={canConnect ? handleConnect : onReturnToSite}
+        onClick={handleConnect}
         disabled={connectionBusy}
         className="wallet-interactive shrink-0 h-8 px-4 rounded-lg bg-primary text-black text-xs font-semibold hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60 inline-flex items-center gap-1.5"
       >
         {connecting && (
           <Icon icon="lucide:loader-2" width={12} height={12} className="animate-spin" />
         )}
-        {canConnect ? 'Connect' : 'Return to site'}
+        Connect
       </button>
     </footer>
   )
