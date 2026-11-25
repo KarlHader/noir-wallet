@@ -315,6 +315,19 @@
   cursor: default;
 }
 
+.shield-win .btn-spin {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: shield-win-spin 0.7s linear infinite;
+}
+
+.shield-win .reveal {
+  animation: shield-win-fade 0.45s ease;
+}
+
 .shield-win .hint {
   font-size: 14px;
   line-height: 1.5;
@@ -348,9 +361,54 @@
   animation: shield-win-in 0.3s ease-out;
 }
 
+.shield-win .entry-head {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+}
+
 .shield-win .entry-k {
   font-size: 13px;
   color: var(--mute);
+}
+
+.shield-win .entry-refresh {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mute);
+  cursor: pointer;
+}
+
+.shield-win .entry-refresh:hover:not(:disabled) {
+  color: #fff;
+}
+
+.shield-win .entry-refresh:disabled:not(.is-busy) {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.shield-win .entry-refresh.is-busy {
+  cursor: default;
+}
+
+.shield-win .entry-refresh svg {
+  width: 16px;
+  height: 16px;
+}
+
+.shield-win .entry-refresh.is-busy svg {
+  animation: shield-win-spin 0.7s linear infinite;
 }
 
 .shield-win .chip {
@@ -485,6 +543,7 @@
 
 .shield-win .board {
   position: relative;
+  min-width: 0;
   padding: clamp(22px, 2.4vw, 32px);
   border-radius: 24px;
   background: linear-gradient(180deg, rgba(20, 22, 30, 0.94), rgba(13, 14, 20, 0.97));
@@ -552,6 +611,12 @@
   aspect-ratio: 1;
 }
 
+.shield-win .prize-copy {
+  flex: none;
+  width: 240px;
+  max-width: calc(100% - clamp(78px, 8vw, 118px));
+}
+
 .shield-win .prize b {
   display: block;
   font-size: clamp(44px, 5vw, 72px);
@@ -589,12 +654,14 @@
 
 .shield-win .tiles {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
   margin-top: clamp(16px, 2.6vh, 24px);
 }
 
 .shield-win .tile {
+  min-width: 0;
+  container-type: inline-size;
   padding: 16px 18px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.03);
@@ -609,7 +676,8 @@
 
 .shield-win .tile b {
   display: block;
-  font-size: clamp(24px, 2.3vw, 36px);
+  max-width: 100%;
+  font-size: clamp(15px, 12.5cqi, 36px);
   line-height: 1.1;
   margin-top: 8px;
   font-weight: 700;
@@ -636,24 +704,6 @@
   height: 18px;
 }
 
-.shield-win .sk-title {
-  width: min(100%, 520px);
-  height: calc(clamp(48px, min(6vw, 10vh), 96px) * 1.02);
-  margin-top: clamp(18px, 3vh, 28px);
-  border-radius: 12px;
-}
-
-.shield-win .sk-title.short {
-  width: min(78%, 380px);
-  margin-top: 0;
-}
-
-.shield-win .sk-sub {
-  width: min(100%, 31em);
-  height: calc(clamp(17px, 1.4vw, 21px) * 1.55);
-  margin-top: clamp(18px, 3vh, 28px);
-}
-
 .shield-win .sk-pill {
   width: 196px;
   height: 34px;
@@ -673,44 +723,24 @@
 }
 
 .shield-win .sk-prize-amt {
-  width: min(100%, 180px);
+  width: 180px;
+  max-width: 100%;
   height: clamp(44px, 5vw, 72px);
   border-radius: 12px;
 }
 
 .shield-win .sk-prize-sub {
-  width: min(100%, 240px);
+  width: 240px;
+  max-width: 100%;
   height: calc(clamp(15px, 1.2vw, 18px) * 1.55);
   margin-top: 10px;
 }
 
-.shield-win .sk-draws-k {
-  width: 110px;
-  height: calc(15px * 1.55);
-}
-
-.shield-win .sk-draws-n {
-  width: min(100%, 280px);
-  height: clamp(56px, min(6.4vw, 11vh), 104px);
-  margin-top: 10px;
-  border-radius: 12px;
-}
-
-.shield-win .sk-tile-k {
-  width: 88px;
-  height: calc(14px * 1.55);
-}
-
 .shield-win .sk-tile-v {
-  width: min(100%, 120px);
+  width: 120px;
+  max-width: 100%;
   height: clamp(24px, 2.3vw, 36px);
   margin-top: 8px;
-}
-
-.shield-win .sk-indep {
-  width: 92%;
-  height: calc(13px * 1.5);
-  margin-top: 14px;
 }
 
 .shield-win .foot {
@@ -759,6 +789,11 @@
   background-color: #141414;
   color: #fff;
   overflow: hidden;
+}
+
+.shield-win dialog.rules.claim {
+  width: min(360px, calc(100% - 32px));
+  border-radius: 24px;
 }
 
 .shield-win dialog.rules[open] {
@@ -860,72 +895,143 @@
   border-top: 1px solid #232323;
 }
 
+.shield-win dialog.claim .rules-head {
+  padding: 22px 20px 4px;
+}
+
 .shield-win .claim-body {
-  padding: 0 22px 22px;
+  padding: 8px 20px 20px;
 }
 
-.shield-win .claim-body p {
-  color: var(--sub);
-  font-size: 15px;
-  line-height: 1.55;
+.shield-win .claim-prize {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 14px;
+  text-align: center;
 }
 
-.shield-win .claim-body label {
-  display: block;
-  margin-top: 16px;
-  font-size: 14px;
+.shield-win .claim-prize img {
+  width: 44px;
+  height: 44px;
+}
+
+.shield-win .claim-prize .doto {
+  font-size: 34px;
+  line-height: 1;
+  color: var(--gold);
+}
+
+.shield-win .claim-prize small {
+  font-size: 12px;
+  line-height: 1.45;
   color: var(--mute-2);
 }
 
-.shield-win input {
-  appearance: none;
-  -webkit-appearance: none;
-  display: block;
-  width: 100%;
-  height: 48px;
-  margin-top: 8px;
-  padding: 0 14px;
-  border: 1px solid #3a3a3a;
-  border-radius: 4px;
-  background: #0b0b0b;
-  background-color: #0b0b0b;
-  color: #fff;
-  font-family: 'DM Sans', system-ui, sans-serif;
-  font-size: 15px;
-  font-weight: 400;
+.shield-win .claim-label {
+  margin: 0 2px 6px;
+  font-size: 12px;
   line-height: 1.4;
+  color: var(--mute);
 }
 
-.shield-win input:focus-visible {
-  outline: 2px solid var(--mint);
-  outline-offset: 3px;
-}
-
-.shield-win .addr {
-  margin-top: 12px;
-  padding: 12px 14px;
+.shield-win .claim-addr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
   border-radius: 12px;
-  border: 1px solid #2c2c2c;
-  background: rgba(255, 255, 255, 0.04);
+  background: #1c1c22;
+  border: 1px solid rgba(61, 255, 190, 0.45);
+}
+
+.shield-win .claim-addr img {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  flex: none;
+}
+
+.shield-win .claim-addr div {
+  flex: 1;
+  min-width: 0;
+}
+
+.shield-win .claim-addr b {
+  display: block;
+  font-weight: 500;
   color: #fff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 14px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
+}
+
+.shield-win .claim-addr small {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--mute);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shield-win .claim-radio {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--mint);
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+.shield-win .claim-radio::after {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--mint);
+}
+
+.shield-win .claim-fine {
+  margin: 12px 2px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--mute-2);
+}
+
+.shield-win .claim-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shield-win dialog.claim .claim-actions .btn {
+  width: 100%;
+  height: 46px;
+  border-radius: 10px;
+  font-size: 15px;
+}
+
+.shield-win dialog.claim .claim-actions .btn.ghost {
+  background: #2a2a32;
+  background-color: #2a2a32;
+  border-color: transparent;
+  color: #fff;
+}
+
+.shield-win dialog.claim .claim-actions .btn.ghost:hover {
+  background: #34343d;
+  background-color: #34343d;
+  border-color: transparent;
+  color: #fff;
 }
 
 .shield-win .form-error {
-  margin-top: 10px;
+  margin: 0 2px 14px;
   color: #ffc04d;
   font-size: 14px;
   line-height: 1.5;
-}
-
-.shield-win .dialog-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 18px;
 }
 
 @media (max-width: 1040px) {
@@ -974,6 +1080,11 @@
     flex-direction: column;
   }
 
+  .shield-win .actions .tip-anchor {
+    display: flex;
+    width: 100%;
+  }
+
   .shield-win .actions .btn,
   .shield-win .dialog-actions .btn,
   .shield-win .win .btn {
@@ -1017,14 +1128,17 @@
 
   .shield-win .tile b {
     margin-top: 0;
-    font-size: 26px;
+    font-size: clamp(14px, 11cqi, 26px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .shield-win .entry .dots i,
   .shield-win .entry.swap,
-  .shield-win .sk {
+  .shield-win .sk,
+  .shield-win .reveal,
+  .shield-win .btn-spin,
+  .shield-win .entry-refresh.is-busy svg {
     animation: none;
   }
 }
@@ -1038,6 +1152,22 @@
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+@keyframes shield-win-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes shield-win-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

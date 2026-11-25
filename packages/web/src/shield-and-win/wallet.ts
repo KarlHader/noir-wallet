@@ -1,4 +1,4 @@
-import { utf8ToHex } from './claim'
+import { isTransparentZcashAddress, utf8ToHex } from './claim'
 
 export interface NoirEthereumProvider {
   request(args: { readonly method: string; readonly params?: readonly unknown[] }): Promise<unknown>
@@ -9,6 +9,7 @@ export interface NoirEthereumProvider {
 export interface NoirWallet {
   readonly isNoirWallet?: boolean
   readonly ethereum?: NoirEthereumProvider
+  readonly zcash?: NoirEthereumProvider
 }
 
 declare global {
@@ -18,10 +19,31 @@ declare global {
 }
 
 const REJECTION_MESSAGE = 'The request was rejected in Noir Wallet.'
+const MISSING_TRANSPARENT_ADDRESS = 'Noir Wallet did not return a transparent address.'
 const SECRET_MATERIAL = /0x[0-9a-fA-F]{64,}|[0-9a-fA-F]{128,}/
 
 export function detectNoirWallet(): NoirEthereumProvider | null {
   return installedWallet()?.ethereum ?? null
+}
+
+export function detectZcashProvider(): NoirEthereumProvider | null {
+  const provider = installedWallet()?.zcash
+  if (typeof provider?.request !== 'function') return null
+  return provider
+}
+
+/**
+ * Read the connected account's transparent payout address.
+ * A silent lookup stays quiet when this site is already authorized.
+ * No account prompts once; an unusable address does not prompt again.
+ */
+export async function readTransparentAddress(provider: NoirEthereumProvider): Promise<string> {
+  const silent = transparentFrom(await provider.request({ method: 'zcash_getAccounts' }))
+  if (silent.status === 'ok') return silent.address
+  if (silent.status === 'invalid') throw new Error(MISSING_TRANSPARENT_ADDRESS)
+  const connected = transparentFrom(await provider.request({ method: 'zcash_requestAccounts' }))
+  if (connected.status === 'ok') return connected.address
+  throw new Error(MISSING_TRANSPARENT_ADDRESS)
 }
 
 export async function readAccounts(provider: NoirEthereumProvider): Promise<string | null> {
@@ -98,6 +120,22 @@ function installedWallet(): NoirWallet | null {
 function firstAccount(value: unknown): string | null {
   if (!Array.isArray(value) || typeof value[0] !== 'string') return null
   return value[0]
+}
+
+type TransparentRead =
+  | { readonly status: 'missing' }
+  | { readonly status: 'invalid' }
+  | { readonly status: 'ok'; readonly address: string }
+
+function transparentFrom(value: unknown): TransparentRead {
+  if (typeof value !== 'object' || value === null || !('transparent' in value)) {
+    return { status: 'missing' }
+  }
+  const transparent = value.transparent
+  if (typeof transparent !== 'string') return { status: 'missing' }
+  const address = transparent.trim()
+  if (!isTransparentZcashAddress(address)) return { status: 'invalid' }
+  return { status: 'ok', address }
 }
 
 function readCode(error: unknown): number | null {
