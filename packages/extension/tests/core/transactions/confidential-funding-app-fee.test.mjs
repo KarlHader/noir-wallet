@@ -182,6 +182,7 @@ function clusterHarness() {
       state.legs.set(depositAddress, input.amountRaw)
       return {
         correlationId: `quote-${state.quoteCalls.length}`,
+        ...(!input.dry ? { oneClickOrder: { depositAddress, viewer: input.viewer } } : {}),
         quoteRequest: {
           swapType: 'EXACT_INPUT',
           confidentiality: 'basic',

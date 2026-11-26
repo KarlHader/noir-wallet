@@ -1801,7 +1801,11 @@ test.describe('confidential funding safety rules', () => {
       return Response.json({
         correlationId: 'cluster-quote',
         quoteRequest: { ...request, ...(!echoCharges ? { appFees: [] } : {}) },
-        quote: { amountIn: request.amount, amountOut: '900' }
+        quote: {
+          amountIn: request.amount,
+          amountOut: '900',
+          ...(!request.dry ? { depositAddress: 'deposit.near' } : {})
+        }
       })
     }
     try {
@@ -1836,6 +1840,26 @@ test.describe('confidential funding safety rules', () => {
       echoCharges = true
       await api.quote({ ...cluster, dry: false })
       expect(requests.at(-1)).not.toHaveProperty('appFees')
+
+      for (const viewer of [
+        { chainFamily: 'near', walletAddress: 'ab'.repeat(32) },
+        { chainFamily: 'evm', walletAddress: cluster.signerId, signingMode: 'public' }
+      ]) {
+        const quote = await api.quote({
+          ...cluster,
+          originAsset: 'nep141:wrap.near',
+          destinationAsset: 'nep141:wrap.near',
+          signerId: viewer.walletAddress,
+          recipient: 'cd'.repeat(32),
+          dry: false,
+          viewer
+        })
+        expect(requests.at(-1)).toMatchObject({
+          user: viewer.walletAddress,
+          userChainFamily: viewer.chainFamily
+        })
+        expect(quote.oneClickOrder).toEqual({ depositAddress: 'deposit.near', viewer })
+      }
     } finally {
       globalThis.fetch = originalFetch
     }

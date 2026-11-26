@@ -205,6 +205,7 @@ async function harness(
     refreshes: 0,
     refreshTargets: [],
     statusRequests: [],
+    statusOrders: [],
     originStatus: 'FAILED',
     statuses: withdraws.map(() => (phase === 'processing' ? 'PROCESSING' : 'PENDING_DEPOSIT')),
     settledOutputs: new Map(),
@@ -408,8 +409,10 @@ async function harness(
     new ConfidentialFundingCoordinator({
       network: 'mainnet',
       api,
-      queryOneClickOrderStatus: async ({ order }) =>
-        ownerStatus(await api.getStatus(order.depositAddress)),
+      queryOneClickOrderStatus: async ({ order }) => {
+        state.statusOrders.push(order)
+        return ownerStatus(await api.getStatus(order.depositAddress))
+      },
       store,
       signer,
       repository,
@@ -425,7 +428,7 @@ async function harness(
         state.refreshTargets.push(target ?? null)
       }
     })
-  return { initial, state, store, repository, restart }
+  return { initial, state, store, repository, api, restart }
 }
 
 function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
@@ -4134,6 +4137,51 @@ test.describe('confidential funding persisted recovery', () => {
       graph.segments.filter(row => row.role === 'destination').every(row => row.status === 'final')
     ).toBe(true)
   })
+
+  test('keeps a legacy NEAR cluster pending without an owner-scoped quote', async () => {
+    const h = await harness('processing', false, true, false, true)
+    const legacy = {
+      ...h.initial,
+      withdraws: h.initial.withdraws.map(({ oneClickOrder: _order, ...row }) => row)
+    }
+    await h.store.putPlan(legacy)
+    h.state.statuses = ['SUCCESS', 'SUCCESS', 'SUCCESS']
+    const plan = await h.restart().continuePlan(legacy.planId)
+    expect(plan.phase).toBe('processing')
+    expect(h.state.statusOrders).toEqual([])
+    const graph = await h.repository.get(scope, legacy.transactionId)
+    expect(graph.segments.find(row => row.role === 'relay').status).toBe('confirming')
+    expect(graph.segments.filter(row => row.role === 'destination').map(row => row.status)).toEqual(
+      ['confirming', 'confirming', 'confirming']
+    )
+    expect(h.state.batchSubmissions).toBe(0)
+  })
+
+  for (const near of [false, true]) {
+    test(`requires owner-scoped ${near ? 'NEAR' : 'EVM'} Cluster quotes before freezing`, async () => {
+      const h = await harness('submitting', false, true, false, near)
+      const requests = []
+      h.api.quote = async input => {
+        requests.push(input)
+        return { quote: { depositAddress: `unowned-${requests.length}.near` } }
+      }
+      await expect(
+        h.restart().signAndFreezeCluster({ ...h.initial, frozenRequest: undefined })
+      ).rejects.toThrow('Cluster withdraw quote is missing its owner-scoped status order')
+      expect(requests.map(input => input.viewer)).toEqual(
+        Array.from({ length: 3 }, () =>
+          near
+            ? { chainFamily: 'near', walletAddress: h.initial.signerId }
+            : {
+                chainFamily: 'evm',
+                walletAddress: h.initial.signerId,
+                signingMode: 'public'
+              }
+        )
+      )
+      expect(h.state.batchSubmissions).toBe(0)
+    })
+  }
 
   test('polls order status for an attempted NEAR cluster without submitting it again', async () => {
     const h = await harness('submitting', false, true, false, true)

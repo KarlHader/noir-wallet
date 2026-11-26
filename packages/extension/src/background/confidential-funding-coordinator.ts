@@ -4850,6 +4850,9 @@ export class ConfidentialFundingCoordinator {
     approvalExpiresAt?: number
   ): Promise<ConfidentialFundingPlan> {
     if (plan.frozenRequest) return plan
+    const viewer: OneClickViewer = isConfidentialEvmSigner(plan.signerId)
+      ? { chainFamily: 'evm', walletAddress: plan.signerId, signingMode: 'public' }
+      : { chainFamily: 'near', walletAddress: plan.signerId }
     const quotes = await Promise.all(
       plan.splitSourceAmounts.map(sourceAmountRaw =>
         this.quoteBound({
@@ -4864,12 +4867,21 @@ export class ConfidentialFundingCoordinator {
           recipientType: 'DESTINATION_CHAIN',
           slippageBps: plan.slippageBps,
           settlement: 'cluster',
-          dry: false
+          dry: false,
+          viewer
         })
       )
     )
     const depositAddresses = new Set<string>()
     quotes.forEach((quote, sequence) => {
+      if (
+        quote.oneClickOrder?.depositAddress !== quote.quote.depositAddress ||
+        quote.oneClickOrder.viewer?.chainFamily !== viewer.chainFamily ||
+        quote.oneClickOrder.viewer.walletAddress !== viewer.walletAddress ||
+        quote.oneClickOrder.viewer.signingMode !== viewer.signingMode
+      ) {
+        throw new Error('Cluster withdraw quote is missing its owner-scoped status order')
+      }
       this.assertQuoteBinding(
         quote,
         {
