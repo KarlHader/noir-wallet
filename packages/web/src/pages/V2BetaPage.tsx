@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Footer } from '../landing-components/Footer'
 import { MobileWarning, useMobileWarning } from '../landing-components/MobileWarning'
 import { getV2BetaRelease } from '../lib/v2-beta-release'
+import '../tailwind.css'
 
 const EXTENSIONS_URL = 'chrome://extensions'
 

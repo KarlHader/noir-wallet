@@ -4,11 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Noir Wallet is the privacy-first multichain wallet. Send funds and use DeFi without exposing your balance, positions, or on-chain identity."
+    />
     <title>Noir Wallet - The Privacy DeFi Entryway</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,100;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,900&family=Doto:wght@400&display=swap"
       rel="stylesheet"
     />
     <script>
@@ -18,6 +22,20 @@
         )
       }
     </script>
+    <script>
+      // Only the home page uses the page-wide rules in src/home/site.css. /frost and /v2/beta (see
+      // App.tsx) keep the Tailwind theme, which loads with them. Mark the page before the first paint.
+      document.documentElement.dataset.page = /^\/(frost|v2\/beta)\/?$/.test(
+        window.location.pathname
+      )
+        ? 'app'
+        : 'home'
+    </script>
+    <style>
+      :root[data-page='app'] {
+        background: #12121c;
+      }
+    </style>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-QZZD28T937"></script>
     <script>

@@ -1,0 +1,1515 @@
+/* Noir Wallet home page. Layout and motion come from Demo Day direction 1, "1 in 4,444"; the
+   colors are taken from the previous site. */
+:root {
+  --bg: #000;
+  --card: #191919;
+  --card-line: #696969;
+  --panel: #12121c;
+  --line: #363636;
+  --hair: #1f1f1f;
+  --tile: rgba(255, 255, 255, 0.06);
+  --sub: #bcbcc8;
+  --mute: #8b8e93;
+  --mute-2: #a7a9ad;
+  --green: #00d18a;
+  --mint: #3dffbe;
+  --gold: #ffcc00;
+  --amber: #ffa100;
+  --gutter: clamp(16px, 5vw, 80px);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+/* /frost and /v2/beta load this stylesheet too but keep their Tailwind look, so page-wide rules
+   only apply when index.html marks the page as the home page. */
+:where(:root[data-page='home']) {
+  background: #000;
+  color-scheme: dark;
+  scroll-behavior: smooth;
+}
+:where(:root[data-page='home']) body {
+  margin: 0;
+  background: #000;
+  color: #fff;
+  font:
+    400 16px/1.55 'DM Sans',
+    system-ui,
+    sans-serif;
+  /* The design mock (Figma) always uses optical size 14 for DM Sans, so large text comes out
+     wider than the browser's automatic choice. */
+  font-variation-settings: 'opsz' 14;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+:where(:root[data-page='home']) img {
+  display: block;
+  max-width: 100%;
+}
+:where(:root[data-page='home']) a {
+  color: inherit;
+}
+:where(:root[data-page='home']) :is(h1, h2, h3, p, dl, dd, ol, ul) {
+  margin: 0;
+}
+:where(:root[data-page='home']) :is(ol, ul) {
+  padding: 0;
+  list-style: none;
+}
+.doto {
+  font-family: 'Doto', ui-monospace, monospace;
+  font-weight: 400;
+}
+.wrap {
+  width: calc(100% - 2 * var(--gutter));
+  max-width: 1280px;
+  margin: 0 auto;
+}
+/* The extension demo uses the real extension's letterforms, not the design mock's optical size. */
+.xd {
+  font-variation-settings: normal;
+}
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+:where(:root[data-page='home']) [id] {
+  scroll-margin-top: 88px;
+}
+
+/* ---------- header ---------- */
+.site-head {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.86);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid #111;
+}
+.site-head .wrap {
+  display: flex;
+  align-items: center;
+  height: 72px;
+  gap: 24px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  font-size: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.brand img {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+}
+.brand span {
+  background: linear-gradient(90deg, #fff 0%, #999 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.brand:hover span {
+  background-image: linear-gradient(90deg, #fff 0%, var(--mint) 100%);
+}
+.site-nav {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: clamp(20px, 3vw, 48px);
+}
+.site-nav a {
+  font-family: 'Doto', ui-monospace, monospace;
+  font-size: 16px;
+  text-decoration: none;
+  color: #fff;
+  padding: 10px 0;
+  transition: color 0.16s;
+}
+.site-nav a:hover {
+  color: var(--mint);
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 4px;
+  background: var(--green);
+  color: #000;
+  font:
+    500 15px/1 'DM Sans',
+    system-ui,
+    sans-serif;
+  text-decoration: none;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.btn:hover {
+  background: var(--mint);
+}
+.btn:focus-visible,
+.site-nav a:focus-visible,
+.brand:focus-visible,
+.pt-tab:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+.btn svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.btn-ghost {
+  background: #0b0b0b;
+  color: #fff;
+  border: 1px solid #3a3a3a;
+}
+.btn-ghost:hover {
+  background: #191919;
+  border-color: #555;
+}
+.btn-sm {
+  min-height: 40px;
+  font-size: 14px;
+  padding: 0 14px;
+}
+/* Hero "Try the extension": mint-green outline + soft glow; more prominent than Docs without
+   competing with "Get Noir Wallet". */
+.btn-try {
+  position: relative;
+  background: rgba(0, 209, 138, 0.1);
+  color: #fff;
+  border: 1px solid rgba(0, 209, 138, 0.62);
+  box-shadow: 0 0 26px rgba(0, 209, 138, 0.16);
+}
+.btn-try:hover {
+  background: rgba(0, 209, 138, 0.18);
+  border-color: var(--mint);
+}
+.btn-try svg {
+  color: var(--mint);
+}
+/* Hint for phones that the wallet has to be installed in desktop Chrome */
+.desk-note {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid #2c2c2c;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--sub);
+}
+.desk-note .btn {
+  flex: none;
+}
+
+/* ---------- hero: per the design mock, dot grid + copy + new wallet UI on the right ---------- */
+.hero {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+}
+/* The dot grid and the wallet share one grid cell, so the hero is as tall as the taller of the
+   two (the wallet is longer than the grid and fades out toward the bottom). */
+.hero-stage,
+.hero-phone-layer {
+  grid-area: 1 / 1;
+}
+/* Hero content column: narrower than the page's content width; the copy and the wallet both
+   align to it. */
+.hero-wrap {
+  width: calc(100% - 2 * var(--gutter));
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.hero-stage {
+  position: relative;
+}
+.field {
+  display: block;
+  width: 100%;
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.hero-copy {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.hero-copy .inner {
+  max-width: 520px;
+  padding-top: 48px;
+}
+.hero-copy .inner > * {
+  pointer-events: auto;
+}
+.hero h1 {
+  font-size: clamp(36px, 4.15vw, 60px);
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.lede {
+  max-width: 462px;
+  margin: 18px 0 44px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #d9d9d9;
+  text-transform: capitalize;
+}
+.cta-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.hero .cta-row .btn {
+  min-width: 168px;
+  min-height: 40px;
+  font-size: 16px;
+}
+.hero .desk-note {
+  margin-top: 20px;
+}
+
+/* Chains on the dot grid: solid dot + thin ring + same-color name, dimmed overall as a
+   background. While shielding, each mark the scan wave reaches turns into a dashed shield. */
+.chain-mark {
+  --c: #5b7cff;
+  --ring: rgba(120, 150, 255, 0.6);
+  position: absolute;
+  z-index: 1;
+  width: 0;
+  height: 0;
+  opacity: 0.5;
+  pointer-events: none;
+}
+.chain-mark.tone-gold {
+  --c: #ffcc00;
+  --ring: rgba(255, 204, 0, 0.55);
+}
+.chain-mark.tone-base {
+  --c: #2f55ff;
+  --ring: rgba(90, 120, 255, 0.7);
+}
+.chain-mark::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c);
+  transition: background 0.45s ease var(--wave, 0ms);
+}
+.chain-mark::after {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: -10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--ring);
+  transition: border-color 0.45s ease var(--wave, 0ms);
+}
+.chain-mark > span {
+  position: absolute;
+  left: 17px;
+  top: -10px;
+  font:
+    400 14px/1.35 'DM Sans',
+    system-ui,
+    sans-serif;
+  color: var(--c);
+  white-space: nowrap;
+  transition: color 0.45s ease var(--wave, 0ms);
+}
+.chain-mark[data-flip] > span {
+  left: auto;
+  right: 17px;
+}
+.is-shield .chain-mark {
+  --c: var(--mint);
+  --ring: rgba(61, 255, 190, 0.75);
+}
+.is-shield .chain-mark::after {
+  border-style: dashed;
+  animation: spin 10s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tip {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  font-size: 14px;
+  padding: 5px 9px;
+  border-radius: 4px;
+  background: #0b0b0b;
+  border: 1px solid #333;
+  color: #b8b8b8;
+  transform: translate(-50%, -150%);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.tip.on {
+  opacity: 1;
+}
+
+/* Wallet home screenshot (exported from the design mock, with the blurred fade-out at the
+   bottom already baked into the image): layered over the dot grid. The container width is the
+   phone frame width; frameStyle scales the image up and shifts it to cut off the padding. */
+.hero-phone-layer {
+  position: relative;
+  z-index: 3;
+  padding-top: 250px;
+  pointer-events: none;
+}
+.hero-phone {
+  position: relative;
+  display: flow-root;
+  width: 375px;
+  max-width: 100%;
+  margin-left: auto;
+  pointer-events: auto;
+}
+.hero-phone img {
+  height: auto;
+  transition: filter 0.2s;
+}
+/* Clicking the wallet image opens the demo: the wallet brightens on hover and a hint appears in
+   the middle. */
+.hero-phone-hit {
+  position: absolute;
+  inset: 0 0 35%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.hero-phone:hover img {
+  filter: brightness(1.08);
+}
+.hero-phone-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(61, 255, 190, 0.55);
+  background: rgba(10, 12, 14, 0.82);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font:
+    500 15px/1 'DM Sans',
+    system-ui,
+    sans-serif;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.18s,
+    transform 0.18s;
+}
+.hero-phone-hint svg {
+  width: 16px;
+  height: 16px;
+  color: var(--mint);
+}
+.hero-phone-hit:hover .hero-phone-hint {
+  opacity: 1;
+  transform: none;
+}
+/* Placeholder while the demo chunk is still loading */
+.xo-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(3, 3, 6, 0.84);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  color: var(--mute-2);
+  font-size: 14px;
+}
+
+/* Below 1000: the copy overlays the dot grid and the wallet sits centered below it */
+@media (max-width: 999px) {
+  .hero {
+    display: flex;
+    flex-direction: column;
+  }
+  .hero-phone-layer {
+    order: 2;
+    padding-top: 0;
+  }
+  .hero-phone {
+    margin: -64px auto 0;
+  }
+}
+
+/* ---------- Section titles ---------- */
+.sec {
+  padding: clamp(80px, 9vw, 136px) 0 0;
+}
+.sec-title {
+  font-size: clamp(36px, 4.4vw, 60px);
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+}
+.feat-title {
+  font-size: clamp(36px, 4vw, 60px);
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ---------- Three feature sections: padding 104 left, 44 right, like the design mock ---------- */
+.feat {
+  padding-top: clamp(96px, 13vw, 200px);
+  /* The screenshots' transparent padding and callouts can stick out past the screen edge; clip
+     them horizontally so the page cannot be dragged sideways */
+  overflow-x: clip;
+}
+#features {
+  padding-top: clamp(56px, 8.5vw, 128px);
+}
+.feat-row,
+.pt-card {
+  width: min(1200px, 100% - 2 * var(--gutter));
+  margin: 0 auto;
+  padding-left: clamp(0px, 9vw - 32px, 104px);
+  padding-right: clamp(0px, 4vw - 16px, 44px);
+}
+
+/* Private Transfers: wallet screenshot + two tabs */
+.pt-card {
+  display: grid;
+  grid-template-columns: 375px minmax(0, 1fr);
+  column-gap: clamp(40px, 5.5vw, 82px);
+  padding-top: 76px;
+  padding-left: clamp(32px, 9vw - 32px, 104px);
+  padding-right: clamp(28px, 4vw - 16px, 44px);
+  background: #16161e;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 32px;
+  overflow: hidden;
+}
+/* The two screenshots are stacked in one cell, as wide as the phone frame; the Send
+   screenshot's callout extends left past the phone frame into the card's padding. */
+.pt-shot {
+  display: grid;
+  align-self: end;
+  /* Extend 48px further down (12.8% of the phone frame width) so the card's bottom edge cuts off
+     the phone's rounded bottom corners, as in the design mock, making it look like the phone
+     extends out of the card. */
+  margin-bottom: -48px;
+}
+.pt-shot img {
+  grid-area: 1 / 1;
+  height: auto;
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 0.45s ease,
+    transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.pt-shot img.on {
+  opacity: 1;
+  transform: none;
+}
+.pt-side {
+  align-self: center;
+  padding-bottom: 76px;
+}
+.pt-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 44px;
+}
+.pt-tab {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 143px;
+  padding: 26px 32px;
+  border: 0;
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.25s;
+}
+.pt-tab.on {
+  background: #111117;
+}
+.pt-tab:not(.on):hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.pt-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(61, 255, 190, 0.16);
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.pt-tab.on .pt-bar {
+  opacity: 1;
+}
+.pt-bar i {
+  position: absolute;
+  inset: 0;
+  background: var(--mint);
+  box-shadow: 0 0 10px rgba(61, 255, 190, 0.55);
+  transform-origin: top;
+}
+.is-auto .pt-bar i {
+  animation: pt-fill var(--rotate, 6s) linear forwards;
+}
+.is-held .pt-bar i {
+  animation-play-state: paused;
+}
+@keyframes pt-fill {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+.pt-tab b {
+  display: block;
+  font-size: 26px;
+  line-height: 1.2;
+  color: #5d5d68;
+  transition: color 0.25s;
+}
+.pt-tab.on b {
+  color: var(--mint);
+}
+.pt-body {
+  display: block;
+  max-width: 30em;
+  margin-top: 14px;
+  font-size: 17px;
+  line-height: 1.45;
+  color: #4f4f59;
+  transition: color 0.25s;
+}
+.pt-tab.on .pt-body {
+  color: #e4e4ea;
+}
+.pt-tab:not(.on):hover b {
+  color: #8d8d99;
+}
+.pt-tab:not(.on):hover .pt-body {
+  color: #74747f;
+}
+
+/* Shield & Unshield: key points on the left, Quick Shield on the right */
+.su {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 375px;
+  column-gap: 48px;
+  align-items: start;
+}
+.su-copy {
+  padding-top: 34px;
+}
+.su-points {
+  display: grid;
+  gap: 36px;
+  margin-top: clamp(48px, 9vw, 136px);
+  padding-left: 12px;
+}
+.su-points li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 20px;
+  line-height: 1.2;
+  color: #e6e6eb;
+}
+.su-points li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.6em;
+  width: 4px;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* As wide as the phone frame; the ZEC row's callout extends past both sides of it. */
+.su-shot {
+  display: flow-root;
+  width: 375px;
+  margin-right: clamp(0px, 4vw - 16px, 45px);
+}
+.su-shot img {
+  height: auto;
+}
+
+/* Fade in on scroll: the text arrives first, the screenshot floats up from below a moment later */
+.su-copy,
+.su-shot,
+.da-copy,
+.da-art {
+  transition:
+    opacity 0.7s ease,
+    transform 0.8s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.feat-row:not(.is-in) .su-copy,
+.feat-row:not(.is-in) .da-copy {
+  opacity: 0;
+  transform: translateY(18px);
+}
+.feat-row:not(.is-in) .su-shot,
+.feat-row:not(.is-in) .da-art {
+  opacity: 0;
+  transform: translateY(36px);
+}
+.su-shot,
+.da-art {
+  transition-delay: 0.12s;
+}
+
+/* Private Defi Access: one full diagram, with the title over the DApp page at the top right */
+.da {
+  display: grid;
+}
+.da-copy,
+.da-art {
+  grid-area: 1 / 1;
+}
+.da-copy {
+  position: relative;
+  z-index: 1;
+  align-self: start;
+  margin-left: 43.2%;
+  padding-top: 2px;
+}
+.da-copy p {
+  margin-top: clamp(14px, 2vw, 28px);
+  font-size: clamp(16px, 1.4vw, 20px);
+  line-height: 1.35;
+  color: #e6e6eb;
+}
+.da-art {
+  position: relative;
+}
+.da-art img {
+  width: 100%;
+  height: auto;
+}
+.da-wire {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.da-wire path {
+  fill: none;
+  stroke: var(--mint);
+  stroke-width: 3;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 9 91;
+  stroke-dashoffset: 100;
+  filter: drop-shadow(0 0 4px var(--mint));
+  opacity: 0;
+}
+.da.is-in .da-wire path {
+  opacity: 1;
+  animation: da-run 3.2s linear infinite;
+}
+@keyframes da-run {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+/* The account on the DApp (the 0x5b…fed7 pill in the image): a ring lights up when the
+   highlight reaches it */
+.da-ping {
+  position: absolute;
+  left: 80.85%;
+  top: 26.87%;
+  width: 16.55%;
+  height: 6.91%;
+  /* The pill in the image has a corner radius of about 23px (331 × 99 in the source image) */
+  border-radius: 6.9% / 23.2%;
+  border: 1px solid transparent;
+  pointer-events: none;
+}
+.da.is-in .da-ping {
+  animation: da-ping 3.2s linear infinite;
+}
+@keyframes da-ping {
+  0%,
+  87% {
+    border-color: rgba(61, 255, 190, 0);
+    box-shadow: 0 0 0 0 rgba(61, 255, 190, 0);
+  }
+  90% {
+    border-color: rgba(61, 255, 190, 0.95);
+    box-shadow: 0 0 0 0 rgba(61, 255, 190, 0.45);
+  }
+  100% {
+    border-color: rgba(61, 255, 190, 0);
+    box-shadow: 0 0 0 12px rgba(61, 255, 190, 0);
+  }
+}
+
+/* ---------- How Noir Wallet Works: the design mock's 1154 × 440 canvas, scaled down as a whole
+   when narrow ---------- */
+.works-sec {
+  padding-top: clamp(120px, 20vw, 330px);
+}
+.works-fit {
+  margin-top: 72px;
+  height: calc(440px * var(--k, 1));
+}
+.works {
+  position: relative;
+  left: 50%;
+  width: 1154px;
+  height: 440px;
+  transform: translateX(-50%) scale(var(--k, 1));
+  transform-origin: top center;
+}
+.works > * {
+  position: absolute;
+}
+.wk-box,
+.wk-core,
+.wk-chip,
+.wk-defi li {
+  background: #191919;
+  border: 1px solid #696969;
+}
+.wk-box {
+  top: 176px;
+  width: 257px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.wk-pub {
+  left: 0;
+}
+.wk-priv {
+  left: 684px;
+  background: linear-gradient(180deg, #ffa100, #996100);
+  border-color: #997f49;
+}
+.wk-wire {
+  top: 223px;
+  left: 260px;
+  width: 64px;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, rgba(0, 209, 138, 0.12), rgba(61, 255, 190, 0.95));
+}
+.wk-wire.is-late {
+  left: 623px;
+  width: 60px;
+}
+.wk-wire i {
+  position: absolute;
+  left: 0;
+  top: -1px;
+  width: 16px;
+  height: 4px;
+  border-radius: 2px;
+  background: #e9fff7;
+  box-shadow:
+    0 0 6px var(--mint),
+    0 0 12px rgba(61, 255, 190, 0.6);
+  opacity: 0;
+  animation: wk-run 2.4s linear infinite;
+}
+.wk-wire.is-late i {
+  animation-delay: 0.45s;
+}
+@keyframes wk-run {
+  0% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  26% {
+    opacity: 1;
+  }
+  30% {
+    transform: translateX(46px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(46px);
+    opacity: 0;
+  }
+}
+.wk-shield {
+  left: 325px;
+  top: 73px;
+  width: 297px;
+  height: 301px;
+}
+.wk-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px dashed var(--green);
+  border-radius: 36px;
+}
+.wk-core {
+  position: absolute;
+  inset: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 42px;
+  gap: 4px;
+  border-radius: 30px;
+}
+.wk-core img {
+  width: 123px;
+  height: 133px;
+  margin-bottom: -20px;
+}
+.wk-core b {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.wk-chip {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding-top: 18px;
+  border-radius: 20px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+}
+.wk-chip svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.2;
+}
+.wk-chip span {
+  width: 5.2em;
+}
+.wk-send {
+  left: -52px;
+  top: -73px;
+  width: 106px;
+  height: 106px;
+}
+.wk-recv {
+  left: 229px;
+  top: 254px;
+  width: 112px;
+  height: 112px;
+  padding-top: 22px;
+}
+.wk-fan {
+  left: 941px;
+  top: 138px;
+  width: 52px;
+  height: 172px;
+  overflow: visible;
+}
+.wk-fan path {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.wk-fan-line {
+  stroke: rgba(255, 162, 0, 0.55);
+}
+.wk-fan-spark {
+  stroke: #ffc44d;
+  stroke-dasharray: 18 82;
+  stroke-dashoffset: 100;
+  filter: drop-shadow(0 0 4px #ffa200);
+  animation: wk-fan 2.4s linear infinite 0.9s;
+}
+@keyframes wk-fan {
+  0% {
+    stroke-dashoffset: 100;
+    opacity: 1;
+  }
+  40% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  41%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+.wk-defi {
+  left: 992px;
+  top: 0;
+  width: 162px;
+  height: 440px;
+}
+.wk-defi b {
+  position: absolute;
+  left: 0;
+  top: 70px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.wk-defi ul {
+  position: absolute;
+  left: 0;
+  top: 106px;
+  display: grid;
+  gap: 20px;
+  width: 100%;
+}
+.wk-defi li {
+  height: 65px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  font-size: 20px;
+  line-height: 1.2;
+}
+.wk-more {
+  position: absolute;
+  left: 50%;
+  top: 372px;
+  display: flex;
+  gap: 5px;
+  transform: translateX(-50%);
+}
+.wk-more i {
+  width: 3.5px;
+  height: 3.5px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* ---------- Supported Shield Tools: the title takes the first cell, then 2 + 3 cards ---------- */
+.tools-sec {
+  padding-top: clamp(96px, 10vw, 156px);
+}
+.tools {
+  width: min(1066px, 100% - 2 * var(--gutter));
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 29px 31px;
+}
+.tools-list {
+  display: contents;
+}
+.tools-title {
+  align-self: center;
+  font-size: clamp(30px, 2.8vw, 42px);
+  line-height: 1.5;
+  font-weight: 600;
+}
+.tool {
+  position: relative;
+  height: 192px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid #424242;
+}
+.tool img {
+  width: 60px;
+  height: 60px;
+  border-radius: 6px;
+}
+.tool b {
+  padding: 0 12px;
+  font-size: clamp(20px, 1.8vw, 26px);
+  line-height: 1.3;
+  font-weight: 600;
+  text-align: center;
+}
+.tool.is-soon {
+  background: rgba(255, 255, 255, 0.035);
+  border-color: #2c2c2c;
+}
+.tool.is-soon img {
+  opacity: 0.55;
+}
+.tool.is-soon b {
+  color: #707070;
+}
+.tool em {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  background: #2b2b2b;
+  font-style: normal;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #8e8e8e;
+}
+
+/* ---------- Closing: big heading + buttons, with the statue and the large "Noir Wallet"
+   wordmark below ---------- */
+.end {
+  position: relative;
+  z-index: 1;
+  padding-top: clamp(120px, 19vw, 300px);
+  text-align: center;
+}
+.end h2 {
+  font-size: clamp(36px, 4.4vw, 60px);
+  line-height: 1.2;
+  font-weight: 600;
+}
+.end .cta-row {
+  justify-content: center;
+  margin-top: 40px;
+}
+.end .btn {
+  min-height: 50px;
+  font-size: 16px;
+  padding: 0 24px;
+}
+.end .desk-note {
+  max-width: 460px;
+  margin: 24px auto 0;
+  text-align: left;
+}
+.site-foot {
+  position: relative;
+  margin-top: -62px;
+  padding-bottom: clamp(48px, 10vw, 150px);
+  text-align: center;
+  overflow: hidden;
+}
+.statue {
+  position: relative;
+  /* Its own stacking context: the gradients inside paint over the particle canvas but never
+     cover the buttons in .end above. */
+  isolation: isolate;
+  height: clamp(320px, 48.2vw, 729px);
+}
+.statue img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 0;
+  transition: opacity 0.8s ease;
+}
+/* Particle canvas (Statue.tsx / particles.ts): fades in once ready, with the original image still
+   underneath as usual (as in ReactBits' Image Opacity 1). */
+.statue canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+}
+.statue.is-live canvas {
+  opacity: 1;
+}
+
+.statue::before,
+.statue::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  height: 150px;
+  pointer-events: none;
+}
+.statue::before {
+  top: 0;
+  background: linear-gradient(#000, transparent);
+}
+.statue::after {
+  bottom: 0;
+  background: linear-gradient(transparent, #000);
+}
+.foot-copy {
+  position: relative;
+  margin-top: -78px;
+  font-size: 16px;
+  font-weight: 100;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.75);
+}
+.wordmark {
+  margin-top: 6px;
+  font-size: clamp(64px, 13.3vw, 200px);
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  opacity: 0.3;
+  background: linear-gradient(180deg, #fff 17%, #000 103%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---------- Narrow screens ---------- */
+/* Below 1100: the feature sections stack vertically and the wallet screenshot is centered */
+@media (max-width: 1099px) {
+  .pt-card {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 44px clamp(16px, 4vw, 44px) 0;
+  }
+  .pt-side {
+    padding-bottom: 36px;
+  }
+  .pt-tabs {
+    margin-top: 28px;
+  }
+  /* Phone frame shrinks to 80%: the Send screenshot's callout is not cut off by the card edge */
+  .pt-shot {
+    grid-row: 2;
+    width: min(375px, 80%);
+    justify-self: center;
+    margin-bottom: calc(min(375px, 80%) * -0.128);
+  }
+  .su {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 48px;
+  }
+  .su-copy {
+    padding-top: 0;
+  }
+  .su-points {
+    margin-top: 32px;
+    gap: 20px;
+  }
+  /* Phone frame shrinks to 74%: the ZEC row's callout stays on screen on both sides */
+  .su-shot {
+    justify-self: center;
+    width: min(375px, 74%);
+    margin-right: 0;
+  }
+}
+
+/* Below 760: the flow diagram goes vertical, tool cards use two columns, and the large closing
+   wordmark scales with the screen width */
+@media (max-width: 759px) {
+  .site-nav {
+    display: none;
+  }
+  .site-head .wrap {
+    height: 64px;
+    justify-content: space-between;
+  }
+  .desk-note {
+    display: flex;
+  }
+  .hero-copy .inner {
+    padding-top: 28px;
+  }
+  .lede {
+    font-size: 16px;
+    margin-bottom: 32px;
+  }
+  .hero .cta-row .btn {
+    flex: 1;
+    min-width: 0;
+  }
+  /* Phones cannot install the extension, so the demo button gets its own full-width row, below the
+     primary button row and above the hint bar. */
+  .hero .cta-row .btn-try {
+    flex-basis: 100%;
+    order: 1;
+  }
+  .chain-mark > span {
+    font-size: 13px;
+  }
+
+  .pt-tab {
+    min-height: 0;
+    padding: 18px 18px 18px 20px;
+  }
+  .pt-tab b {
+    font-size: 21px;
+  }
+  .pt-body {
+    font-size: 15px;
+    margin-top: 8px;
+  }
+  .su-points li {
+    font-size: 17px;
+  }
+
+  .da-copy,
+  .da-art {
+    grid-area: auto;
+  }
+  .da-copy {
+    margin: 0 0 28px;
+  }
+
+  .works-fit {
+    height: auto;
+    margin-top: 48px;
+  }
+  .works {
+    left: auto;
+    width: auto;
+    height: auto;
+    max-width: 320px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: none;
+  }
+  .works > * {
+    position: relative;
+    left: auto;
+    top: auto;
+  }
+  .wk-box {
+    width: 100%;
+    height: 72px;
+    font-size: 22px;
+  }
+  .wk-wire,
+  .wk-wire.is-late {
+    left: auto;
+    top: auto;
+    width: 2px;
+    height: 44px;
+    background: linear-gradient(180deg, rgba(0, 209, 138, 0.12), rgba(61, 255, 190, 0.95));
+  }
+  .wk-wire i {
+    left: -1px;
+    top: 0;
+    width: 4px;
+    height: 14px;
+    animation-name: wk-drop;
+  }
+  .wk-shield {
+    width: 250px;
+    height: 250px;
+    margin: 58px 0 54px;
+  }
+  .wk-core {
+    padding-top: 30px;
+  }
+  .wk-core img {
+    width: 100px;
+    height: 108px;
+    margin-bottom: -16px;
+  }
+  .wk-core b {
+    font-size: 22px;
+  }
+  .wk-send {
+    left: -26px;
+    top: -52px;
+    width: 92px;
+    height: 92px;
+    padding-top: 14px;
+    font-size: 15px;
+  }
+  .wk-recv {
+    left: auto;
+    right: -26px;
+    top: auto;
+    bottom: -48px;
+    width: 96px;
+    height: 96px;
+    padding-top: 16px;
+    font-size: 15px;
+  }
+  .wk-fan {
+    display: none;
+  }
+  .wk-priv {
+    margin-bottom: 44px;
+  }
+  .wk-defi {
+    width: 100%;
+    height: auto;
+    text-align: center;
+  }
+  .wk-defi b,
+  .wk-defi ul,
+  .wk-more {
+    position: static;
+    transform: none;
+  }
+  .wk-defi ul {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .wk-defi li {
+    height: 52px;
+    border-radius: 14px;
+    font-size: 16px;
+  }
+  .wk-more {
+    justify-content: center;
+    margin-top: 16px;
+  }
+
+  .tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .tools-title {
+    grid-column: 1 / -1;
+    margin-bottom: 8px;
+  }
+  .tool {
+    height: 148px;
+    gap: 14px;
+  }
+  .tool img {
+    width: 48px;
+    height: 48px;
+  }
+  .tool b {
+    font-size: 17px;
+  }
+
+  .end .cta-row {
+    margin-top: 28px;
+  }
+  .site-foot {
+    margin-top: -24px;
+  }
+  .statue img {
+    object-position: 30% 0;
+  }
+  .foot-copy {
+    margin-top: -40px;
+    font-size: 13px;
+    font-weight: 300;
+  }
+}
+@keyframes wk-drop {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  26% {
+    opacity: 1;
+  }
+  30% {
+    transform: translateY(30px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(30px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(:root[data-page='home']) {
+    scroll-behavior: auto;
+  }
+  .is-shield .chain-mark::after,
+  .wk-wire i,
+  .wk-fan-spark,
+  .da.is-in .da-wire path,
+  .da.is-in .da-ping {
+    animation: none;
+  }
+  .wk-wire i,
+  .wk-fan-spark,
+  .da-wire,
+  .da-ping {
+    display: none;
+  }
+  .chain-mark::before,
+  .chain-mark::after,
+  .chain-mark > span,
+  .pt-shot img,
+  .su-copy,
+  .su-shot,
+  .da-copy,
+  .da-art {
+    transition: none;
+  }
+  .feat-row:not(.is-in) .su-copy,
+  .feat-row:not(.is-in) .su-shot,
+  .feat-row:not(.is-in) .da-copy,
+  .feat-row:not(.is-in) .da-art {
+    opacity: 1;
+    transform: none;
+  }
+}

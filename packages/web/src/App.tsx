@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react'
-import { LandingPage } from './pages/LandingPage'
+import { Site } from './home/Site'
 
 const FrostVotePage = lazy(() => import('./pages/FrostVotePage'))
 const V2BetaPage = lazy(() => import('./pages/V2BetaPage'))
@@ -46,5 +46,5 @@ export default function App() {
     )
   }
 
-  return <LandingPage />
+  return <Site />
 }
