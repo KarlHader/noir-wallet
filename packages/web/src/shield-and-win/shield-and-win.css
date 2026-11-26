@@ -166,7 +166,8 @@
   height: 18px;
 }
 
-.shield-win button.rules-btn {
+.shield-win button.rules-btn,
+.shield-win a.home-btn {
   height: 40px;
   padding: 0 16px;
   border-radius: 4px;
@@ -178,8 +179,15 @@
   font-weight: 500;
 }
 
-.shield-win button.rules-btn:hover {
+.shield-win button.rules-btn:hover,
+.shield-win a.home-btn:hover {
   border-color: #666;
+}
+
+.shield-win a.home-btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .shield-win main {

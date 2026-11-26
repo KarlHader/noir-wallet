@@ -6,6 +6,7 @@ const PATHS = {
   receive: <path d="M17 7 7 17M15 17H7V9" />,
   download: <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />,
   external: <path d="M8 16 16 8M9.5 8H16v6.5" />,
+  arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
   // Lucide mouse-pointer-click: "click to try"
   pointer: (
     <>

@@ -1103,6 +1103,9 @@ export default function ShieldAndWinPage() {
           <span>Noir Wallet</span>
         </a>
         <div className="top-actions">
+          <a className="home-btn" href="/">
+            Home
+          </a>
           <button type="button" className="rules-btn" onClick={() => setRulesOpen(true)}>
             Rules
           </button>

@@ -17,6 +17,24 @@ import { Workflow } from './Workflow'
 
 const ExtensionDemo = lazy(loadDemo)
 
+/** Entry to the Shield & Win campaign page, above the header. Remove it when the campaign ends. */
+function CampaignBar({ inert }: { inert: boolean }) {
+  return (
+    <a className="promo" href="/shield-and-win" inert={inert}>
+      <span className="promo-live" aria-hidden="true" />
+      <span className="promo-name">Shield &amp; Win</span>
+      <span className="promo-text">
+        Go private, win ZEC
+        <span className="promo-more">. Try a private transfer for an instant draw.</span>
+      </span>
+      <span className="promo-go">
+        <span className="promo-go-label">Join now</span>
+        <Icon name="arrow" />
+      </span>
+    </a>
+  )
+}
+
 function SiteHeader({ inert }: { inert: boolean }) {
   return (
     <header className="site-head" inert={inert}>
@@ -124,6 +142,7 @@ export function Site() {
   // screen readers only read the overlay.
   return (
     <>
+      <CampaignBar inert={demo} />
       <SiteHeader inert={demo} />
       <main id="top" inert={demo}>
         <Hero onTry={openDemo} />
