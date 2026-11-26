@@ -1,6 +1,6 @@
 import { isTransparentZcashAddress } from './claim'
 
-const PRODUCTION_BASE = 'https://api.zknoir.com/v1/shield-win'
+const PRODUCTION_BASE = 'https://apinoir.refburrow.top/v1/shield-win'
 const DEVELOPMENT_BASE = '/api/shield-win'
 
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
