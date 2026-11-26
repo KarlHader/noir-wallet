@@ -485,6 +485,23 @@
   font-size: 13px;
 }
 
+.shield-win .entry-tx {
+  flex: none;
+  align-self: flex-start;
+  color: var(--mint);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 28px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.shield-win .entry-tx:hover {
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .shield-win .entry-empty {
   padding: 12px 16px;
   color: var(--sub);

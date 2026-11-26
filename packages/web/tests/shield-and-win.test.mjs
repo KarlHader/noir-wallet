@@ -24,6 +24,7 @@ import {
   entryCopy,
   entryView,
   latestEntry,
+  rewardTransactionUrl,
   sortedEntries,
   unclaimedWins
 } from '../src/shield-and-win/view.ts'
@@ -236,6 +237,17 @@ test('entry views describe the latest result without a draw number or confirmati
   assert.equal(entryView(entry({ reward_status: 'SENDING' })), 'sending')
   assert.equal(entryView(entry({ reward_status: 'COMPLETED' })), 'claimed')
   assert.equal(entryView(entry({ reward_status: 'FAILED' })), 'failed')
+  const txHash = 'ab'.repeat(32)
+  assert.equal(
+    rewardTransactionUrl(entry({ reward_status: 'COMPLETED', transfer_hash: txHash })),
+    `https://blockchair.com/zcash/transaction/${txHash}`
+  )
+  assert.equal(
+    rewardTransactionUrl(entry({ reward_status: 'CLAIMING', transfer_hash: txHash })),
+    null
+  )
+  assert.equal(rewardTransactionUrl(entry({ reward_status: 'COMPLETED' })), null)
+  assert.equal(rewardTransactionUrl(entry({ draw_result: 'NOT_WON', transfer_hash: txHash })), null)
 
   const wins = unclaimedWins([
     entry({ id: 2 }),
@@ -416,12 +428,13 @@ test('entries are queried by wallet address and malformed payloads are rejected'
       code: 0,
       data: {
         list: [
-          entry(),
+          entry({ reward_status: 'COMPLETED', transfer_hash: `0x${'ab'.repeat(32)}` }),
           {
             ...entry({ id: 4, draw_result: 'NOT_WON' }),
             reward_amount: undefined,
             reward_asset: undefined,
-            reward_status: undefined
+            reward_status: undefined,
+            transfer_hash: ''
           }
         ],
         total: 2,
@@ -435,7 +448,23 @@ test('entries are queried by wallet address and malformed payloads are rejected'
   assert.equal('credited_amount' in won.list[0], false)
   assert.equal(typeof won.list[0].usd_value, 'string')
   assert.equal(won.list[0].operation_id, 98765)
+  assert.equal(won.list[0].transfer_hash, 'ab'.repeat(32))
   assert.equal(won.list[1].reward_status, undefined)
+  assert.equal(won.list[1].transfer_hash, undefined)
+
+  const invalidHash = await getEntries({}, undefined, async () =>
+    jsonResponse({
+      code: 0,
+      data: {
+        list: [entry({ reward_status: 'COMPLETED', transfer_hash: 'javascript:alert(1)' })],
+        total: 1,
+        page_size: 20,
+        page_number: 1,
+        has_next_page: false
+      }
+    })
+  )
+  assert.equal(invalidHash.list[0].transfer_hash, undefined)
 
   const failures = [
     async () => new Response('not-json', { status: 200 }),
@@ -657,6 +686,11 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.equal(entryRow.includes('<RefreshIcon'), false)
   assert.match(entryRow, /<span>USD value<\/span>[\s\S]*<span>Completed<\/span>/)
   assert.match(entryRow, /view === 'notwon' \? 'Draw result' : 'Reward status'/)
+  assert.match(entryRow, /const transactionUrl = rewardTransactionUrl\(entry\)/)
+  assert.match(
+    entryRow,
+    /className="entry-tx"[\s\S]*target="_blank"[\s\S]*rel="noopener noreferrer"/
+  )
   assert.equal((page.match(/<EntriesRefreshButton/g) ?? []).length, 2)
   assert.match(page, /const ENTRY_REFRESH_COOLDOWN_MS = 60_000/)
   const participate = page.slice(page.indexOf('function onParticipate()'))

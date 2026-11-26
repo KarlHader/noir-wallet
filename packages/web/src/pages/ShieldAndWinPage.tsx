@@ -28,6 +28,7 @@ import {
   entryCopy,
   entryView,
   latestEntry,
+  rewardTransactionUrl,
   sortedEntries,
   unclaimedWins,
   type EntryViewState
@@ -187,6 +188,7 @@ function EntryRow({
   const view = entryView(entry)
   const copy = entryCopy(view, entry)
   const chipClass = chipTone(view)
+  const transactionUrl = rewardTransactionUrl(entry)
   return (
     <li className={`entry-row ${entryTone(view)}`}>
       <div className="entry-details">
@@ -223,6 +225,16 @@ function EntryRow({
           </button>
         ) : view === 'failed' ? (
           <SupportLink />
+        ) : transactionUrl ? (
+          <a
+            className="entry-tx"
+            href={transactionUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="View payout transaction on Blockchair"
+          >
+            Tx <span aria-hidden="true">↗</span>
+          </a>
         ) : null}
       </div>
       {view === 'claiming' || view === 'sending' ? (

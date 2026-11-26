@@ -6,6 +6,7 @@ const DEVELOPMENT_BASE = '/api/shield-win'
 const DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/
 const SIGNATURE = /^0x[0-9a-fA-F]{130}$/
+const ZCASH_TX_HASH = /^(?:0x)?[0-9a-fA-F]{64}$/
 const CAMPAIGN_STATUSES = ['UPCOMING', 'ACTIVE', 'SOLD_OUT', 'ENDED'] as const
 const DRAW_RESULTS = ['WON', 'NOT_WON'] as const
 const REWARD_STATUSES = ['UNCLAIMED', 'CLAIMING', 'SENDING', 'COMPLETED', 'FAILED'] as const
@@ -44,6 +45,7 @@ export interface ShieldWinEntry {
   readonly reward_amount?: string
   readonly reward_asset?: string
   readonly reward_status?: RewardStatus
+  readonly transfer_hash?: string
   readonly shield_completed_at: number
 }
 
@@ -307,6 +309,7 @@ function parseEntry(value: unknown): ShieldWinEntry {
     reward_amount?: string
     reward_asset?: string
     reward_status?: RewardStatus
+    transfer_hash?: string
   } = {
     id: integerField(value.id, 0),
     operation_id: integerField(value.operation_id, 0),
@@ -322,6 +325,9 @@ function parseEntry(value: unknown): ShieldWinEntry {
     entry.reward_asset = textField(value.reward_asset, 64)
     if (!isRewardStatus(value.reward_status)) invalidResponse()
     entry.reward_status = value.reward_status
+  }
+  if (typeof value.transfer_hash === 'string' && ZCASH_TX_HASH.test(value.transfer_hash)) {
+    entry.transfer_hash = value.transfer_hash.replace(/^0x/, '')
   }
   return entry
 }

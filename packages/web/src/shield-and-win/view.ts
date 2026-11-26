@@ -133,6 +133,12 @@ export function unclaimedWins(entries: readonly ShieldWinEntry[]): ShieldWinEntr
     .sort((left, right) => right.id - left.id)
 }
 
+export function rewardTransactionUrl(entry: ShieldWinEntry): string | null {
+  return entry.draw_result === 'WON' && entry.reward_status === 'COMPLETED' && entry.transfer_hash
+    ? `https://blockchair.com/zcash/transaction/${entry.transfer_hash}`
+    : null
+}
+
 export function entryCopy(view: EntryViewState, entry: ShieldWinEntry | null): EntryCopy {
   if (view !== 'none' && entry === null) throw new Error('This result needs an entry.')
   switch (view) {
