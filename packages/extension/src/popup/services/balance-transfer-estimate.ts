@@ -285,8 +285,8 @@ async function estimateNearDirectTransfer(
 export function formatBalanceTransferFee(
   estimate: BalanceTransferEstimate | null,
   asset: PortfolioAssetView | null
-): { value: string; detail: string | null } {
-  if (!estimate || !asset || estimate.routeFeeRaw === null) return { value: '—', detail: null }
+): { value: string; detail: string | null; networkFee: string | null } {
+  if (!estimate || !asset) return { value: '—', detail: null, networkFee: null }
   const gas = estimate.sourceNetworkFee
   const format = (raw: string, decimals: number, native = false) => {
     const value = BigInt(raw)
@@ -296,11 +296,16 @@ export function formatBalanceTransferFee(
       : formatFeeAmount(amount)
     return `${display.startsWith('<') ? '' : '~'}${value < 0n ? '-' : ''}${display}`
   }
-  if (gas && asset.asset.kind === 'native') {
+  const networkFee = gas ? `${format(gas.raw, gas.decimals, true)} ${gas.symbol}` : null
+  if (estimate.routeFeeRaw === null) {
+    return { value: '—', detail: networkFee, networkFee }
+  }
+  if (gas && asset.asset.kind === 'native' && gas.symbol === asset.metadata.symbol) {
     const total = BigInt(estimate.routeFeeRaw) + BigInt(gas.raw)
     return {
       value: `${format(total.toString(), asset.metadata.decimals, true)} ${asset.metadata.symbol}`,
-      detail: null
+      detail: null,
+      networkFee
     }
   }
   return {
@@ -308,6 +313,7 @@ export function formatBalanceTransferFee(
       asset.asset.kind === 'native'
         ? `${format(estimate.routeFeeRaw, asset.metadata.decimals, true)} ${asset.metadata.symbol}`
         : format(estimate.routeFeeRaw, asset.metadata.decimals),
-    detail: gas ? `${format(gas.raw, gas.decimals, true)} ${gas.symbol}` : null
+    detail: networkFee,
+    networkFee
   }
 }

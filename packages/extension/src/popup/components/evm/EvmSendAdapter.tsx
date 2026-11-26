@@ -1,3 +1,4 @@
+import { QuoteFeeAmount } from '@/popup/components/transaction/QuoteFeeAmount'
 import { Icon } from '@iconify/react'
 import { useEffect, useRef, type ComponentProps } from 'react'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
@@ -380,7 +381,15 @@ function EvmSendRouteDetails({
           }
           fee={
             privatePreviewReady && privatePreview ? (
-              privateRouteCostFiat ? (
+              privatePreview.quote.appFeeBps ? (
+                <QuoteFeeAmount
+                  sourceAmountRaw={privatePreview.sourceAmountRaw}
+                  decimals={asset.metadata.decimals}
+                  symbol={asset.metadata.symbol}
+                  bps={privatePreview.quote.appFeeBps}
+                  fallbackAmount={privatePreview.routeCost}
+                />
+              ) : privateRouteCostFiat ? (
                 `~${privateRouteCostFiat}`
               ) : privatePreview.routeCost === null ? (
                 '—'
@@ -404,7 +413,7 @@ function EvmSendRouteDetails({
       )}
       {route === 'onchain' && (
         <SendRouteInfoCard
-          fee={
+          networkFee={
             <NetworkFeeTierPicker
               chainFamily="evm"
               tier={feeSelection.kind === 'tier' ? feeSelection.tier : 'standard'}

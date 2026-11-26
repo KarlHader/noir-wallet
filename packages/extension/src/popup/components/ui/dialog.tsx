@@ -47,7 +47,7 @@ function DialogContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   overlayClassName?: string
   showCloseButton?: boolean
-  position?: 'center' | 'bottom'
+  position?: 'center' | 'bottom' | 'fullscreen'
   scroll?: 'content' | 'body'
   fixedHeight?: boolean
 }) {
@@ -55,7 +55,8 @@ function DialogContent({
     center:
       'top-[50%] left-[50%] translate-x-[-50%] translate-y-[-50%] data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 max-w-[calc(100%-2rem)] sm:max-w-lg rounded-lg',
     bottom:
-      'bottom-0 left-0 right-0 translate-x-0 translate-y-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom max-w-full rounded-t-2xl rounded-b-none border-t border-foreground/10 shadow-[0_-14px_36px_rgba(0,0,0,0.48)]'
+      'bottom-0 left-0 right-0 translate-x-0 translate-y-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom max-w-full rounded-t-2xl rounded-b-none border-t border-foreground/10 shadow-[0_-14px_36px_rgba(0,0,0,0.48)]',
+    fullscreen: 'inset-0'
   }
   const closeButton = showCloseButton ? (
     <DialogPrimitive.Close
@@ -88,8 +89,8 @@ function DialogContent({
           'flex flex-col gap-4 overflow-hidden p-6',
           positionClasses[position],
           className,
-          dialogHeightClassName,
-          fixedHeight && 'h-[80dvh]'
+          position !== 'fullscreen' && dialogHeightClassName,
+          position !== 'fullscreen' && fixedHeight && 'h-[80dvh]'
         )}
         {...props}
       >

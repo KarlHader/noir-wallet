@@ -435,11 +435,6 @@ export function classifyError(
   error: unknown,
   balanceSymbols?: ErrorBalanceSymbols
 ): ClassifiedError {
-  console.log(
-    '%c classifyError balanceSymbols: %o',
-    'background: red; color: #fff;',
-    balanceSymbols
-  )
   const raw = rawErrorMessage(error)
 
   if (error instanceof InsufficientBalanceError) {

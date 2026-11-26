@@ -20,7 +20,9 @@ import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-act
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { withConfidentialAssetPrices } from '@/popup/services/portfolio-prices'
 import { findAssetPrice } from '@/core/prices'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import { formatSendFiatValue } from '@/popup/services/send-transfer-model'
 import { useNavigate } from '@/popup/provider/Router'
 import { useSwapPreferences } from '@/store/swap-store'
 import {
@@ -29,6 +31,7 @@ import {
   SendRouteInfoCard
 } from '@/popup/components/transaction/SendInputCards'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import { QuoteFeeAmount } from '@/popup/components/transaction/QuoteFeeAmount'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { SHIELD_PROVIDERS } from '@/popup/components/portfolio/shield-providers'
 import type { ShieldTokenPickerItem } from '@/popup/services/shield-transfer'
@@ -43,6 +46,9 @@ import { TransactionReviewParty } from '@/popup/components/transaction/Transacti
 import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
+import { ShieldHardwareTabNotice } from '@/popup/components/transaction/ShieldHardwareTabNotice'
+import { needsShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
+import { buildShieldActionPath } from '@/popup/services/shield-action-selection'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import {
@@ -54,7 +60,7 @@ import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-man
 import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
 import {
   buildExternalShieldWithdrawRequest,
-  hasShieldTransferStarted,
+  canOpenShieldActivity,
   isUnsignedShieldTerminal,
   matchesExternalShieldWithdrawReview,
   listShieldFundingAssets,
@@ -143,7 +149,9 @@ export function ConfidentialSendForm({
     nativeAccount: activeAccount
   })
   const canManageNear =
-    providerIsNear && getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0
+    providerIsNear &&
+    (getShieldTransferChainIds(activeAccount, network === 'mainnet').length > 0 ||
+      getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0)
   const scopeKey = `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
   const latestScope = useRef(scopeKey)
   latestScope.current = scopeKey
@@ -211,13 +219,13 @@ export function ConfidentialSendForm({
   const cancelledPlanId = useRef<string | null>(null)
   const reviewRequestId = useRef(0)
   const {
-    balances: currentBalances,
     spendableBalances,
     loading: loadingBalances,
     connecting,
     errorCode: balanceErrorCode,
     refreshBalances: loadBalances
   } = useShieldBalances({
+    hardware: activeAccount?.walletSource.kind === 'hardware',
     active,
     enabled: canManageNear,
     scopeKey,
@@ -345,8 +353,8 @@ export function ConfidentialSendForm({
     () => listShieldFundingAssets(model, managedAssets, catalogTokens, network),
     [model, managedAssets, catalogTokens, network]
   )
-  const portfolioBalances = useMemo(() => shieldPortfolioBalances(model), [model])
-  const displayBalances = currentBalances ?? portfolioBalances
+  const portfolioBalances = useMemo(() => shieldPortfolioBalances(model, 'spendableRaw'), [model])
+  const displayBalances = spendableBalances ?? portfolioBalances
   const fundedSources = useMemo(
     () => shieldFundingSources(options, displayBalances),
     [options, displayBalances]
@@ -552,7 +560,7 @@ export function ConfidentialSendForm({
     if (
       !account ||
       !canManageNear ||
-      !currentBalances ||
+      !spendableBalances ||
       !source ||
       !destination ||
       !previewAmountRaw ||
@@ -574,7 +582,7 @@ export function ConfidentialSendForm({
     account?.walletId,
     account?.accountId,
     canManageNear,
-    currentBalances,
+    spendableBalances,
     source,
     destination,
     previewAmountRaw,
@@ -747,7 +755,7 @@ export function ConfidentialSendForm({
   const inspectPlan = async (planId: string) => {
     const plan = await confidentialFundingClient.get(planId)
     if (!scopeStillCurrent()) return 'changed'
-    if (hasShieldTransferStarted(plan)) {
+    if (canOpenShieldActivity(plan)) {
       openActivity(plan.transactionId)
       return 'started'
     }
@@ -928,7 +936,7 @@ export function ConfidentialSendForm({
         prepared.review.planId,
         prepared.review.payloadFingerprint
       )
-      if (hasShieldTransferStarted(plan)) openActivity(plan.transactionId)
+      if (canOpenShieldActivity(plan)) openActivity(plan.transactionId)
       else await inspectPlan(plan.planId)
     } catch (cause) {
       if (!scopeStillCurrent()) return
@@ -964,6 +972,21 @@ export function ConfidentialSendForm({
         />
       </div>
     )
+  }
+
+  if (
+    active &&
+    canManageNear &&
+    needsShieldHardwareTab(activeAccount?.walletSource.kind === 'hardware')
+  ) {
+    const path = buildShieldActionPath('send', {
+      account,
+      assetId: entry.assetId,
+      provider: 'near-confidential'
+    })
+    const query = new URLSearchParams(path.split('?')[1])
+    if (entry.networkId) query.set('networkId', entry.networkId)
+    return <ShieldHardwareTabNotice path={`/send?${query}`} />
   }
 
   if (prepared) {
@@ -1009,6 +1032,12 @@ export function ConfidentialSendForm({
             blockchain: withdrawChainIconAlias(prepared.source.chain.chain)
           }}
           amount={prepared.amount}
+          amountPrefix="-"
+          fiatValue={formatSendFiatValue(
+            prepared.amount,
+            findAssetPrice(pickerPrices, prepared.source.asset.asset.id)?.priceUsd ??
+              catalogPrices.get(prepared.source.managed.protocolAssetId)
+          )}
           network={prepared.destination.chain.chain.displayName}
           summary={
             <TransactionReviewExchangeSummary
@@ -1103,7 +1132,7 @@ export function ConfidentialSendForm({
                 ]
               : []),
             {
-              label: 'Fee (est.)',
+              label: 'Fee',
               content: (() => {
                 const fee = estimateShieldSendRouteFee(
                   prepared.source,
@@ -1111,11 +1140,13 @@ export function ConfidentialSendForm({
                   prepared.request.source.amountRaw,
                   prepared.review.expectedOutputRaw
                 )
-                return fee ? (
-                  <AmountDisplay
-                    value={formatBaseUnitDecimalAmount(fee.raw, fee.decimals)}
-                    symbol={formatShieldSymbol(prepared.source.asset.metadata.symbol)}
-                    profile="fee"
+                return fee || prepared.review.quoteAppFeeBps ? (
+                  <QuoteFeeAmount
+                    sourceAmountRaw={prepared.review.sourceAmountRaw}
+                    decimals={prepared.source.asset.metadata.decimals}
+                    symbol={prepared.source.asset.metadata.symbol}
+                    bps={prepared.review.quoteAppFeeBps}
+                    fallbackAmount={fee && formatBaseUnitDecimalAmount(fee.raw, fee.decimals)}
                   />
                 ) : (
                   'Unavailable'
@@ -1157,14 +1188,17 @@ export function ConfidentialSendForm({
     <>
       <div>
         <SendRouteInfoCard
-          feeLabel="Fee (est.)"
           fee={
             preview && previewRequest && !previewLoading && !previewError ? (
-              previewFee ? (
-                <AmountDisplay
-                  value={formatBaseUnitDecimalAmount(previewFee.raw, previewFee.decimals)}
-                  symbol={formatShieldSymbol(source?.asset.metadata.symbol)}
-                  profile="fee"
+              source && previewRequest && (previewFee || preview.appFeeBps) ? (
+                <QuoteFeeAmount
+                  sourceAmountRaw={previewRequest.source.amountRaw}
+                  decimals={source.asset.metadata.decimals}
+                  symbol={source.asset.metadata.symbol}
+                  bps={preview.appFeeBps}
+                  fallbackAmount={
+                    previewFee && formatBaseUnitDecimalAmount(previewFee.raw, previewFee.decimals)
+                  }
                 />
               ) : (
                 'Unavailable'
@@ -1318,7 +1352,7 @@ export function ConfidentialSendForm({
             loading={busy || previewLoading}
             disabled={
               !canManageNear ||
-              !currentBalances ||
+              !spendableBalances ||
               !source ||
               !destination ||
               !amountState?.amountRaw ||

@@ -1,4 +1,5 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/config/extension'
+import { ONE_CLICK_TOKEN_CATALOG_URL } from '@/config/intents'
 import Big from 'big.js'
 import { readBoundedResponseText } from '@/lib/fetch-utils'
 import { parseAssetId } from '@/core/chains/registry'
@@ -17,7 +18,6 @@ import type { AssetPriceSourceMapping } from '@/core/prices/asset-market-mapping
 import type { OneClickContractAssetPriceSourceMapping } from '@/core/prices/user-asset-price-mappings'
 import { DedupPromise } from '@/lib/async-utils'
 
-export const ONE_CLICK_ASSET_PRICE_URL = 'https://1click.chaindefuser.com/v0/tokens'
 const PRICE_CACHE_VERSION = 1
 const NETWORK_REFRESH_INTERVAL_MS = 60 * 1000
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000
@@ -316,7 +316,7 @@ export class OneClickAssetPriceService {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs)
     try {
-      const response = await this.options.fetch(ONE_CLICK_ASSET_PRICE_URL, {
+      const response = await this.options.fetch(ONE_CLICK_TOKEN_CATALOG_URL, {
         method: 'GET',
         cache: 'no-store',
         credentials: 'omit',

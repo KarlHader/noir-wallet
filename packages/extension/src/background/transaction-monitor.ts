@@ -1,6 +1,6 @@
 import {
-  fetchSwapStatus,
   getCachedTokens,
+  parseSwapStatusResponse,
   refreshSwapTokenCatalog,
   evaluateIntentsStatusQuoteBinding,
   type SwapStatus
@@ -30,9 +30,11 @@ import {
 } from '@/lib/intents-progress'
 import {
   markNativeZecIntentsSwapTerminal,
+  readNativeZecIntentsStatusViewer,
   readNativeZecIntentsSwapMetadata,
   readNativeZecIntentsSwapStatus
 } from './native-zec-intents-swap'
+import { queryOneClickOrderStatus } from './one-click-status'
 
 export type PendingTransaction = IntentsProgressEntry &
   Partial<Pick<AccountScope, 'walletId' | 'accountId'>>
@@ -135,9 +137,14 @@ export class TransactionMonitor {
           if (
             !needsRelayStatusRecovery({ ...transaction, depositAddress }) ||
             !depositAddress ||
-            (!needsConfidentialSettlement &&
-              Date.now() - transaction.timestamp >= INTENTS_PROGRESS_STALE_MS) ||
             alreadyMonitored.has(depositAddress)
+          ) {
+            continue
+          }
+          if (
+            !needsConfidentialSettlement &&
+            Date.now() - transaction.timestamp >= INTENTS_PROGRESS_STALE_MS &&
+            !this.canRecoverStaleOrder(transaction, accountScope, depositAddress)
           ) {
             continue
           }
@@ -206,6 +213,34 @@ export class TransactionMonitor {
       await this.saveToStorage()
       this.scheduleNextCheck()
       console.log('[TransactionMonitor]', `Restored ${added} pending withdraw monitor(s)`)
+    }
+  }
+
+  private canRecoverStaleOrder(
+    transaction: Transaction,
+    scope: AccountScope,
+    depositAddress: string
+  ): boolean {
+    const binding = transaction.quoteBinding
+    if (!binding || binding.depositAddress !== depositAddress) return false
+    const wallet = useWalletStore
+      .getState()
+      .wallets.find(candidate => candidate.id === scope.walletId)
+    if (!wallet || wallet.keySource === 'ledger' || wallet.keySource === 'keystone') return false
+    if (binding.provider !== 'near-intents' || !binding.refundTo) {
+      return (
+        binding.oneClickOrder?.depositAddress === depositAddress && !!binding.oneClickOrder.viewer
+      )
+    }
+    try {
+      const viewer = readNativeZecIntentsStatusViewer(binding, transaction.network)
+      if (!viewer) return false
+      if (viewer.signingMode === 'derived') return true
+      const account = wallet.accounts.find(candidate => candidate.id === scope.accountId)
+      const addresses = account?.networkAddresses?.[transaction.network] ?? account?.addresses
+      return addresses?.transparent === viewer.walletAddress
+    } catch {
+      return false
     }
   }
 
@@ -307,10 +342,20 @@ export class TransactionMonitor {
       ) {
         throw new Error('Native ZEC Intents monitor deposit address changed')
       }
-      const status =
-        binding?.provider === 'near-intents' && binding.quoteHandle
-          ? await readNativeZecIntentsSwapStatus(binding)
-          : await fetchSwapStatus(tx.depositAddress)
+      const scope = resolveAccountScope(tx, useWalletStore.getState().wallets)
+      let status: SwapStatus | null = null
+      if (scope && transaction && binding) {
+        const identity = { ...scope, network: transaction.network }
+        if (binding.provider === 'near-intents' && binding.refundTo) {
+          status = await readNativeZecIntentsSwapStatus(binding, identity)
+        } else if (binding.oneClickOrder?.depositAddress === tx.depositAddress) {
+          const response = await queryOneClickOrderStatus({
+            ...identity,
+            order: binding.oneClickOrder
+          })
+          if (response !== null) status = parseSwapStatusResponse(response)
+        }
+      }
 
       if (!status) {
         if (isIntentsProgressStale(tx)) await this.handleStale(tx)

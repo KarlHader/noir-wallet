@@ -292,7 +292,7 @@ export function buildActivityTransactionView(input: {
     fee = {
       value: formatBaseUnitAmount(feeLimit.amountRaw, feeMetadata.decimals),
       symbol: feeMetadata.symbol,
-      label: item.snapshot?.evm ? 'Max fee' : 'Network fee'
+      label: item.snapshot?.evm ? 'Max network fee' : 'Network fee'
     }
   } else if (fallback?.fee) {
     fee = { ...fallback.fee, label: fallback.fee.label ?? 'Network fee' }

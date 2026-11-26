@@ -7,17 +7,21 @@ import { getUtcDayStartTimestamp } from '@/lib/zcash-birthday'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import dayjs from '@/lib/dayjs'
 
-type SyncType = 'height' | 'date'
+export type SyncStart =
+  | { readonly type: 'height'; readonly height?: number }
+  | { readonly type: 'date'; readonly height?: number; readonly date: dayjs.Dayjs | null }
 
 interface SyncOptionsModalProps {
-  onConfirm: (height?: number) => void
-  initialHeight?: number
+  onConfirm: (selection: SyncStart) => void
+  initialSelection?: SyncStart
 }
 
-export function SyncOptionsModal({ onConfirm, initialHeight }: SyncOptionsModalProps) {
-  const [syncType, setSyncType] = useState<SyncType>('date')
-  const [syncDate, setSyncDate] = useState<dayjs.Dayjs | null>(dayjs().startOf('day'))
-  const [syncHeight, setSyncHeight] = useState(initialHeight ? initialHeight.toString() : '')
+export function SyncOptionsModal({ onConfirm, initialSelection }: SyncOptionsModalProps) {
+  const [syncType, setSyncType] = useState<SyncStart['type']>(initialSelection?.type ?? 'date')
+  const [syncDate, setSyncDate] = useState<dayjs.Dayjs | null>(() =>
+    initialSelection?.type === 'date' ? initialSelection.date : dayjs().startOf('day')
+  )
+  const [syncHeight, setSyncHeight] = useState(initialSelection?.height?.toString() ?? '')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const activeRequest = useRef<AbortController | null>(null)
@@ -53,7 +57,13 @@ export function SyncOptionsModal({ onConfirm, initialHeight }: SyncOptionsModalP
         }
       }
 
-      if (activeRequest.current === controller && !controller.signal.aborted) onConfirm(height)
+      if (activeRequest.current === controller && !controller.signal.aborted) {
+        onConfirm(
+          syncType === 'date'
+            ? { type: 'date', height, date: syncDate }
+            : { type: 'height', height }
+        )
+      }
     } catch (err) {
       if (activeRequest.current === controller && !controller.signal.aborted) {
         console.error('Failed to get block height:', err)

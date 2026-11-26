@@ -13,6 +13,7 @@ import {
 import nearLogo from '@/images/figma-near-confidential.svg'
 import zcashShieldLogo from '@/images/figma-zcash-shield.svg'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
+import { QuoteFeeAmount } from '@/popup/components/transaction/QuoteFeeAmount'
 import { ZEC_DECIMALS } from '@/config/wallet'
 
 import type { ZcashTransferState } from '@/popup/hooks/useZcashTransfer'
@@ -39,7 +40,7 @@ export function ZcashTransferRoute({
               {route.confidential ? 'NEAR Confidential Intents' : 'Zcash'}
             </span>
           }
-          fee={
+          networkFee={
             route.feeControl ? (
               <NetworkFeeTierPicker
                 chainFamily="zcash"
@@ -47,11 +48,19 @@ export function ZcashTransferRoute({
                 allowFallback={route.allowFeeFallback}
                 hideLabel
               />
-            ) : route.routeCost ? (
-              <AmountDisplay value={route.routeCost} symbol="ZEC" />
-            ) : (
-              '—'
-            )
+            ) : undefined
+          }
+          fee={
+            route.appFee ? (
+              <QuoteFeeAmount
+                {...route.appFee}
+                decimals={ZEC_DECIMALS}
+                symbol="ZEC"
+                fallbackAmount={route.routeCost}
+              />
+            ) : route.confidential && !route.feeControl ? (
+              <AmountDisplay value={route.routeCost} symbol="ZEC" profile="fee" />
+            ) : undefined
           }
           time={route.time}
           estimatedReceive={route.estimatedReceive}
@@ -151,6 +160,21 @@ export function ZcashTransferReview({ transfer }: { readonly transfer: ZcashTran
               ]
             : []),
           ...(review.memo ? [{ label: 'Memo', content: review.memo }] : []),
+          ...(review.confidential && quote?.appFeeBps
+            ? [
+                {
+                  label: 'Fee',
+                  content: (
+                    <QuoteFeeAmount
+                      sourceAmountRaw={quote.amountZats}
+                      decimals={ZEC_DECIMALS}
+                      symbol="ZEC"
+                      bps={quote.appFeeBps}
+                    />
+                  )
+                }
+              ]
+            : []),
           {
             label: 'Network fee',
             content: (

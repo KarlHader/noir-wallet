@@ -40,6 +40,7 @@ import { ShieldFundsBanner } from '@/popup/components/zcash/ShieldFundsBanner'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import { ShieldTokenPicker } from '@/popup/components/tokens/ShieldTokenPicker'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import {
   ConfidentialSendForm,
   type ShieldWithdrawEntry,
@@ -682,7 +683,8 @@ function SendAssetFlow() {
     (storageV2Account?.networks.some(network => network.chain.family === 'zcash') ??
       Boolean(currentAccount?.addresses.transparent || currentAccount?.addresses.shielded))
   const confidentialEnabled =
-    getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
+    getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0 ||
+    getShieldTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
   const effectiveAccount = contextChanging
     ? null
     : resolveEffectiveActiveAccountIdentity({

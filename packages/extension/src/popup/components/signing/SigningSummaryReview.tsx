@@ -91,6 +91,7 @@ function ReviewValue({
 }
 
 function ReviewLabel({ label }: { label: string }) {
+  if (label === 'Maximum fee' || label === 'RPC total fee' || label === 'Fee') return 'Network fee'
   const separatorIndex = label.indexOf('.')
   if (separatorIndex < 0) return label
 

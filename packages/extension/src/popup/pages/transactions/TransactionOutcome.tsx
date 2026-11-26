@@ -6,7 +6,6 @@ import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useWalletStore } from '@/store/wallet-store'
 import { useLocation, useNavigate } from '../../provider/Router'
-import { pollingSwapStatus } from '@/core/services/intents-api'
 import {
   getConfirmationFailureResultCopy,
   getConfirmedTransactionResultCopy,
@@ -34,6 +33,7 @@ import { offerSaveRecipient } from '@/popup/services/save-recipient-prompt'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { resolveSwapStatusPollingProvider } from '@/popup/services/swap-page-model'
 import { homeActivityPath } from '@/popup/services/home-navigation'
+import { needsShieldHardwareTab, openShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 import {
   confidentialFundingClient,
   getConfidentialFundingResult
@@ -354,31 +354,6 @@ export function TransactionOutcome() {
       if (timer !== undefined) clearTimeout(timer)
     }
   }, [confidentialFundingPlanId, updateConfidentialFunding])
-
-  useEffect(() => {
-    if (
-      nativeIntentsInternalDestination ||
-      swapStatusPollingProvider !== 'near-intents' ||
-      !swapDepositAddress
-    )
-      return
-
-    const controller = new AbortController()
-    void pollingSwapStatus(swapDepositAddress, status => updateSwapStatus(status), {
-      interval: 5_000,
-      signal: controller.signal
-    }).catch(error => {
-      if (error instanceof DOMException && error.name === 'AbortError') return
-      console.error('[TransactionOutcome] Status polling failed:', error)
-    })
-
-    return () => controller.abort()
-  }, [
-    nativeIntentsInternalDestination,
-    swapDepositAddress,
-    swapStatusPollingProvider,
-    updateSwapStatus
-  ])
 
   useEffect(() => {
     if (!nativeIntentsInternalDestination || !nativeIntentsQuoteHandle) return
@@ -734,6 +709,17 @@ export function TransactionOutcome() {
     setResumingConfidentialFunding(true)
     try {
       const current = await confidentialFundingClient.get(confidentialFundingPlanId)
+      if (
+        current.phase !== 'needs-auth' ||
+        current.network !== currentNetwork ||
+        current.keyDomainId !== activeAccount?.walletId ||
+        current.accountId !== activeAccount.accountId
+      )
+        return
+      if (needsShieldHardwareTab(activeAccount?.walletSource.kind === 'hardware')) {
+        await openShieldHardwareTab(homeActivityPath('shield', current.transactionId))
+        return
+      }
       const plan = await confidentialFundingClient.confirm(
         current.planId,
         current.approvalFingerprint

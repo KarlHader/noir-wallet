@@ -72,122 +72,130 @@ function graph(id, sender, recipient, options = {}) {
   }
 }
 
-test('recovers a submitted cross-chain Withdraw from its exact saved quote for Incognito Activity', async () => {
-  const source = graph('transaction:withdraw', privateAddress, `0x${'3'.repeat(40)}`)
-  const destinationChain = 'eip155:42161'
-  const transactionHash = `0x${'a'.repeat(64)}`
-  const binding = {
-    schemaVersion: 1,
-    provider: 'rhea-cross-chain-dex',
-    kind: 'swap',
-    userAction: 'transfer',
-    quoteHandle: 'rhea-quote:withdraw',
-    executionId: 'execution:withdraw',
-    router: 'near-intents',
-    sourceTarget: source.root.intent.recipient.address,
-    sender: privateAddress,
-    originAmountRaw: '100',
-    expiresAt: 2_000,
-    isCrossChain: true,
-    origin: {
-      chainId,
-      assetId: `${chainId}/slip44:60`,
-      protocolChainId: '1',
-      protocolAssetId: 'nep141:eth.omft.near'
-    },
-    destination: {
-      chainId: destinationChain,
-      assetId: `${destinationChain}/slip44:60`,
-      protocolChainId: '42161',
-      protocolAssetId: 'nep141:arb.omft.near',
-      recipient: main,
-      expectedAmountRaw: '90',
-      minimumAmountRaw: '80'
-    }
-  }
-  const prepared = bindRheaSwapTransactionGraph({
-    graph: source,
-    binding,
-    segmentIds: {
-      relay: 'segment:withdraw:relay',
-      destination: 'segment:withdraw:destination',
-      refund: 'segment:withdraw:refund'
-    },
-    now: 1_000
-  })
-  const submitted = {
-    root: { ...prepared.root, status: 'broadcast' },
-    segments: [
-      { ...prepared.segments[0], status: 'broadcast', evidence: { transactionHash } },
-      ...prepared.segments.slice(1)
-    ]
-  }
-  const quoteScope = {
-    walletId: scope.keyDomainId,
-    accountId: scope.accountId,
-    purpose: 'private-cross-chain-withdraw'
-  }
-  const quote = {
-    quoteHandle: binding.quoteHandle,
-    privateSwapScope: quoteScope,
-    build: { executionId: binding.executionId },
-    submission: { sourceHash: transactionHash },
-    request: {
-      confidentiality: 'basic',
-      fromChain: '1',
-      toChain: '42161',
-      tokenIn: { chain: '1', address: binding.origin.protocolAssetId, isNative: true },
-      tokenOut: { chain: '42161', address: `0x${'0'.repeat(40)}`, isNative: true },
+for (const isCrossChain of [false, true]) {
+  test(`recovers a submitted ${isCrossChain ? 'cross-chain' : 'same-chain'} Withdraw from its exact saved quote for Incognito Activity`, async () => {
+    const source = graph('transaction:withdraw', privateAddress, `0x${'3'.repeat(40)}`)
+    const destinationChain = isCrossChain ? 'eip155:42161' : chainId
+    const destinationProtocolChain = isCrossChain ? '42161' : '1'
+    const transactionHash = `0x${'a'.repeat(64)}`
+    const binding = {
+      schemaVersion: 1,
+      provider: 'rhea-cross-chain-dex',
+      kind: 'swap',
+      userAction: 'transfer',
+      quoteHandle: 'rhea-quote:withdraw',
+      executionId: 'execution:withdraw',
+      router: 'near-intents',
+      sourceTarget: source.root.intent.recipient.address,
       sender: privateAddress,
-      recipient: main,
-      amountIn: '100'
+      originAmountRaw: '100',
+      expiresAt: 2_000,
+      isCrossChain: true,
+      origin: {
+        chainId,
+        assetId: `${chainId}/slip44:60`,
+        protocolChainId: '1',
+        protocolAssetId: 'nep141:eth.omft.near'
+      },
+      destination: {
+        chainId: destinationChain,
+        assetId: `${destinationChain}/slip44:60`,
+        protocolChainId: destinationProtocolChain,
+        protocolAssetId: isCrossChain ? 'nep141:arb.omft.near' : 'nep141:eth.omft.near',
+        recipient: main,
+        expectedAmountRaw: '90',
+        minimumAmountRaw: '80'
+      }
     }
-  }
-  const marked = {
-    ...submitted,
-    root: {
-      ...submitted.root,
-      intent: { ...submitted.root.intent, protocol: { ...binding, balanceTransfer: 'withdraw' } }
+    const prepared = bindRheaSwapTransactionGraph({
+      graph: source,
+      binding,
+      segmentIds: {
+        relay: 'segment:withdraw:relay',
+        destination: 'segment:withdraw:destination',
+        refund: 'segment:withdraw:refund'
+      },
+      now: 1_000
+    })
+    const submitted = {
+      root: { ...prepared.root, status: 'broadcast' },
+      segments: [
+        { ...prepared.segments[0], status: 'broadcast', evidence: { transactionHash } },
+        ...prepared.segments.slice(1)
+      ]
     }
-  }
-  const repository = {
-    async backfillRheaWithdrawActivity(storedScope, id, handle, execution, hash) {
-      assert.deepEqual(
-        [storedScope, id, handle, execution, hash],
-        [scope, submitted.root.id, binding.quoteHandle, binding.executionId, transactionHash]
+    const quoteScope = {
+      walletId: scope.keyDomainId,
+      accountId: scope.accountId,
+      purpose: isCrossChain ? 'private-cross-chain-withdraw' : 'private-transfer'
+    }
+    const quote = {
+      quoteHandle: binding.quoteHandle,
+      privateSwapScope: quoteScope,
+      build: { executionId: binding.executionId },
+      submission: { sourceHash: transactionHash },
+      request: {
+        confidentiality: 'basic',
+        fromChain: '1',
+        toChain: destinationProtocolChain,
+        tokenIn: { chain: '1', address: binding.origin.protocolAssetId, isNative: true },
+        tokenOut: {
+          chain: destinationProtocolChain,
+          address: isCrossChain ? `0x${'0'.repeat(40)}` : binding.origin.protocolAssetId,
+          isNative: true
+        },
+        sender: privateAddress,
+        recipient: main,
+        amountIn: '100'
+      }
+    }
+    const marked = {
+      ...submitted,
+      root: {
+        ...submitted.root,
+        intent: { ...submitted.root.intent, protocol: { ...binding, balanceTransfer: 'withdraw' } }
+      }
+    }
+    const repository = {
+      async backfillRheaWithdrawActivity(storedScope, id, handle, execution, hash) {
+        assert.deepEqual(
+          [storedScope, id, handle, execution, hash],
+          [scope, submitted.root.id, binding.quoteHandle, binding.executionId, transactionHash]
+        )
+        return marked
+      }
+    }
+    for (const mismatch of [
+      null,
+      { ...quote, privateSwapScope: { ...quoteScope, purpose: 'private-cross-chain-send' } },
+      { ...quote, privateSwapScope: { ...quoteScope, purpose: 'private-dapp-transfer' } },
+      { ...quote, privateSwapScope: { ...quoteScope, accountId: otherScope.accountId } },
+      { ...quote, request: { ...quote.request, recipient: privateAddress } },
+      { ...quote, submission: { sourceHash: `0x${'b'.repeat(64)}` } }
+    ]) {
+      assert.equal(
+        await recoverRheaWithdrawActivity(submitted, { get: async () => mismatch }, repository),
+        submitted
       )
-      return marked
     }
-  }
-  for (const mismatch of [
-    null,
-    { ...quote, privateSwapScope: { ...quoteScope, purpose: 'private-cross-chain-send' } },
-    { ...quote, privateSwapScope: { ...quoteScope, accountId: otherScope.accountId } },
-    { ...quote, request: { ...quote.request, recipient: privateAddress } },
-    { ...quote, submission: { sourceHash: `0x${'b'.repeat(64)}` } }
-  ]) {
-    assert.equal(
-      await recoverRheaWithdrawActivity(submitted, { get: async () => mismatch }, repository),
-      submitted
+    const recovered = await recoverRheaWithdrawActivity(
+      submitted,
+      { get: async () => quote },
+      repository
     )
-  }
-  const recovered = await recoverRheaWithdrawActivity(
-    submitted,
-    { get: async () => quote },
-    repository
-  )
-  const { items } = buildActivityReadModel({ scope, localGraphs: [recovered] })
-  const filter = { items, selectedChainIds: [chainId, destinationChain] }
-  assert.deepEqual(filterActivityItems({ ...filter, domain: 'public' }), [])
-  const [item] = filterActivityItems({ ...filter, domain: 'private' })
-  assert.equal(item.accountMode, 'private')
-  assert.equal(item.status, 'broadcast')
-  const route = getActivitySwapPresentation(item, new Map(), new Map())
-  assert.equal(route.sourceAccountMode, 'Confidential')
-  assert.equal(route.destinationAccountMode, 'Public')
-  assert.equal(getActivityRouteTitle(item, route, { viewedDomain: 'private' }), 'Withdraw')
-  assert.equal(getActivityDetailTitle(item), 'Withdraw')
-})
+    const { items } = buildActivityReadModel({ scope, localGraphs: [recovered] })
+    const filter = { items, selectedChainIds: [chainId, destinationChain] }
+    assert.deepEqual(filterActivityItems({ ...filter, domain: 'public' }), [])
+    const [item] = filterActivityItems({ ...filter, domain: 'private' })
+    assert.equal(item.accountMode, 'private')
+    assert.equal(item.status, 'broadcast')
+    const route = getActivitySwapPresentation(item, new Map(), new Map())
+    assert.equal(route.sourceAccountMode, 'Confidential')
+    assert.equal(route.destinationAccountMode, 'Public')
+    assert.equal(getActivityRouteTitle(item, route, { viewedDomain: 'private' }), 'Withdraw')
+    assert.equal(getActivityDetailTitle(item), 'Withdraw')
+  })
+}
 
 test('recovers only a scoped EVM signer from persisted local transaction intent', () => {
   const privateGraph = graph('transaction:private', privateAddress, main)

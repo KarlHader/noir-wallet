@@ -5,6 +5,7 @@
 export type Network = 'mainnet' | 'testnet'
 
 import type { AccountNetworkFamily } from '@/core/wallet/account-network-selection'
+import type { OneClickOrder } from '@/core/services/near-intents/one-click-order'
 
 export type AddressType = 'transparent' | 'shielded'
 export type FundingSource = AddressType
@@ -158,6 +159,7 @@ export interface QuoteBinding {
   isCrossChain?: boolean
   destinationChain?: string
   depositAddress?: string
+  oneClickOrder?: OneClickOrder
   originAsset?: string
   destinationAsset?: string
   expectedAmountOut?: string

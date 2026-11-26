@@ -6,6 +6,7 @@ import { PageHeader } from '../../components/common/PageHeader'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle
@@ -19,7 +20,6 @@ import {
   DropdownMenuTrigger
 } from '../../components/ui/dropdown-menu'
 import { RemoveWalletContent } from '../../components/account/RemoveWalletContent'
-import { openModal } from '../../provider/ModalManager'
 import { useNavigate } from '../../provider/Router'
 import { useDialog } from '../../hooks/useDialog'
 import { useWalletStore } from '@/store/wallet-store'
@@ -44,6 +44,7 @@ export function AccountDetail() {
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [renaming, setRenaming] = useState(false)
+  const [removeWalletOpen, setRemoveWalletOpen] = useState(false)
 
   const wallet = walletId ? wallets.find(w => w.id === walletId) : null
   const account = wallet && accountId ? wallet.accounts.find(a => a.id === accountId) : null
@@ -176,24 +177,7 @@ export function AccountDetail() {
           }
         }
         if (wallet.accounts.length === 1 && !isHardwareWallet) {
-          const removed = await openModal<boolean | undefined>({
-            title: 'Remove wallet',
-            body: resolve => (
-              <RemoveWalletContent
-                walletId={wallet.id}
-                onRemove={async verification => {
-                  await zcashWalletRuntimeClient.removeAccount(wallet.id, account.id, verification)
-                  resolve(true)
-                }}
-                onCancel={() => resolve(false)}
-                onViewBackup={() => {
-                  resolve(false)
-                  navigate(`/view-seed-phrase?walletId=${encodeURIComponent(wallet.id)}`)
-                }}
-              />
-            )
-          })
-          if (removed) goBack()
+          setRemoveWalletOpen(true)
           return
         }
         const ok = await confirm({
@@ -353,6 +337,25 @@ export function AccountDetail() {
           </div>
         </div>
       </div>
+      <Dialog open={removeWalletOpen} onOpenChange={setRemoveWalletOpen}>
+        <DialogContent position="bottom">
+          <DialogHeader>
+            <DialogTitle>Remove wallet</DialogTitle>
+            <DialogDescription className="sr-only">Verify your secret phrase</DialogDescription>
+          </DialogHeader>
+          <RemoveWalletContent
+            walletId={wallet.id}
+            onRemove={async verification => {
+              await zcashWalletRuntimeClient.removeAccount(wallet.id, account.id, verification)
+              goBack()
+            }}
+            onCancel={() => setRemoveWalletOpen(false)}
+            onViewBackup={() =>
+              navigate(`/view-seed-phrase?walletId=${encodeURIComponent(wallet.id)}`)
+            }
+          />
+        </DialogContent>
+      </Dialog>
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent position="bottom" className="gap-4 p-5">
           <DialogHeader>

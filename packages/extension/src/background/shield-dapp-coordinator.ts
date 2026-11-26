@@ -4,7 +4,7 @@ import { isAddress } from 'viem'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
 import { resolveManagedIntentsAssets } from '@/core/services/intents-managed-assets'
-import { getCrossChainSendAssetGroup } from '@/core/chains/cross-chain-asset-group'
+import { getPrivateCrossChainTransferAssetGroup } from '@/core/chains/cross-chain-asset-group'
 import { getAssetMarketMappings } from '@/core/prices/asset-market-mappings'
 import {
   createInitialProductChainRegistry,
@@ -15,10 +15,12 @@ import {
 } from '@/core/chains/registry'
 import {
   assertConfidentialQuoteBinding,
+  confidentialQuoteAppFeeBps,
   fingerprintConfidentialValue,
   type ConfidentialFundingPlan,
   type ConfidentialFundingReview,
   type ConfidentialQuote,
+  type CreateExternalShieldDepositInput,
   type ExternalShieldDeposit
 } from '@/core/services/confidential-funding'
 import {
@@ -72,9 +74,13 @@ export interface ShieldDappCoordinatorOptions extends Pick<
   | 'assetMappings'
   | 'protocolTokens'
   | 'getProtocolTokens'
+  | 'getNativeZecActiveAccount'
 > {
   readonly now: () => number
   readonly prepare: (value: PrepareConfidentialFundingInput) => Promise<ConfidentialFundingReview>
+  readonly createExternalDeposit: (
+    value: CreateExternalShieldDepositInput
+  ) => Promise<ExternalShieldDeposit>
   readonly refreshBalances: (
     scope: ShieldAccountScope,
     authorize: boolean
@@ -102,6 +108,37 @@ function quoteDeadline(quote: ConfidentialQuote): number {
   const value = Date.parse(quote.quote.deadline)
   if (!Number.isSafeInteger(value)) throw new Error('Confidential quote deadline is invalid')
   return value
+}
+
+/**
+ * A Zcash origin-chain deposit refunds to a transparent address.
+ * The confidential signer is an EVM account, which the quote service rejects as refundTo.
+ */
+export function selectOwnedTransparentZcashRefundAddress(input: {
+  readonly network: Network
+  readonly scope: ShieldAccountScope
+  readonly account:
+    | ReturnType<NonNullable<ShieldDappCoordinatorOptions['getNativeZecActiveAccount']>>
+    | undefined
+}): string {
+  const refundTo = input.account?.refundAddresses.find(address => {
+    try {
+      return parseZcashAddress(address, input.network).scheme.startsWith('zcash-transparent-')
+    } catch {
+      return false
+    }
+  })
+  if (
+    !input.account ||
+    input.account.network !== input.network ||
+    input.account.network !== input.scope.network ||
+    input.account.walletId !== input.scope.keyDomainId ||
+    input.account.accountId !== input.scope.accountId ||
+    !refundTo
+  ) {
+    throw new Error('Shield quote refund address is invalid.')
+  }
+  return refundTo
 }
 
 export class ShieldDappCoordinator {
@@ -232,7 +269,8 @@ export class ShieldDappCoordinator {
   private shieldTokenIdentity(assetId: string): string | null {
     if (this.options.network === 'mainnet') {
       try {
-        const group = getCrossChainSendAssetGroup(parseAssetId(assetId))
+        // BNB USDC shares the private USDC group. Public send does not map that contract.
+        const group = getPrivateCrossChainTransferAssetGroup(parseAssetId(assetId))
         if (group) return group
       } catch {
         return null
@@ -310,23 +348,33 @@ export class ShieldDappCoordinator {
     }
     const confidentialDestination =
       input.destination?.kind === 'confidential' ? input.destination : undefined
-    if (
-      confidentialDestination &&
-      confidentialDestination.accountId.toLowerCase() === identity.address.toLowerCase()
-    ) {
-      throw new Error('Shield recipient account is invalid.')
-    }
     const publicDestination = input.destination?.kind === 'public' ? input.destination : undefined
     const destination = publicDestination
       ? this.resolveTransferDestinationToken(source, publicDestination.chainId)
       : confidentialDestination
         ? this.resolveTransferDestinationToken(source, confidentialDestination.chainId)
         : source
+    // A different destination chain may credit the connected account. The same chain cannot.
+    if (
+      confidentialDestination &&
+      confidentialDestination.accountId.toLowerCase() === identity.address.toLowerCase() &&
+      destination.chainId === source.chainId
+    ) {
+      throw new Error('Shield recipient account is invalid.')
+    }
     const recipient = confidentialDestination
       ? confidentialDestination.accountId
       : publicDestination
         ? this.shieldQuoteRecipient(publicDestination.chainId, publicDestination.address)
         : identity.address
+    const zcashReceiveRefundTo =
+      input.action === 'receive' && source.chainId === getZcashChainId(this.options.network)
+        ? selectOwnedTransparentZcashRefundAddress({
+            network: this.options.network,
+            scope: input.scope,
+            account: this.options.getNativeZecActiveAccount?.()
+          })
+        : undefined
     const binding = Object.freeze(
       input.action === 'receive'
         ? {
@@ -334,6 +382,7 @@ export class ShieldDappCoordinator {
             destinationAsset: source.protocolAssetId,
             amountRaw,
             signerId: identity.address,
+            ...(zcashReceiveRefundTo ? { refundTo: zcashReceiveRefundTo } : {}),
             recipient: identity.address,
             depositType: 'ORIGIN_CHAIN' as const,
             refundType: 'ORIGIN_CHAIN' as const,
@@ -400,7 +449,7 @@ export class ShieldDappCoordinator {
     readonly amount: string
   }): Promise<{
     readonly planId: string
-    readonly phase: ConfidentialFundingPlan['phase']
+    readonly phase: ConfidentialFundingPlan['phase'] | 'awaiting-payment'
     readonly payloadFingerprint: string
     readonly amount: string
     readonly symbol: string
@@ -416,8 +465,11 @@ export class ShieldDappCoordinator {
     if (input.scope.network !== this.options.network)
       throw new Error('Active Wallet Account changed')
     const source = this.resolveShieldCatalogToken(input.source.chainId, input.source.assetId)
-    if (!source.chainId.startsWith('eip155:')) throw new Error('Shield chain is invalid.')
     const amountRaw = parseDisplayUnitAmount(input.amount, source.decimals)
+    if (source.chainId === getZcashChainId(this.options.network)) {
+      return this.prepareShieldDappZcashReceive(input, source, amountRaw)
+    }
+    if (!source.chainId.startsWith('eip155:')) throw new Error('Shield chain is invalid.')
     if (!/^[1-9]\d*$/.test(amountRaw)) throw new Error('Shield amount is invalid.')
     const chainName = this.shieldProductChains().resolve(source.chainId).displayName
     const review = await this.options.prepare({
@@ -452,6 +504,68 @@ export class ShieldDappCoordinator {
       chainName,
       assetId: source.assetId,
       ...this.shieldApprovalQuoteFields(review, source, source)
+    })
+  }
+
+  /**
+   * ZEC receive quotes an external deposit. The connected account's transparent address is the refund
+   * target and the account that pays it. Confirmation broadcasts that transparent payment.
+   */
+  private async prepareShieldDappZcashReceive(
+    input: {
+      readonly origin: string
+      readonly scope: ShieldAccountScope
+    },
+    source: ShieldCatalogToken,
+    amountRaw: string
+  ) {
+    if (!/^[1-9]\d*$/.test(amountRaw)) throw new Error('Shield amount is invalid.')
+    const refundTo = selectOwnedTransparentZcashRefundAddress({
+      network: this.options.network,
+      scope: input.scope,
+      account: this.options.getNativeZecActiveAccount?.()
+    })
+    const chainName = this.shieldProductChains().resolve(source.chainId).displayName
+    // Each Receive click is its own deposit. A stable fingerprint would return an
+    // earlier quote for the same amount, including one that is still unpaid.
+    const requestId = crypto.randomUUID()
+    const deposit = await this.options.createExternalDeposit({
+      network: input.scope.network,
+      keyDomainId: input.scope.keyDomainId,
+      accountId: input.scope.accountId,
+      source: {
+        chainId: source.chainId,
+        chainName,
+        assetId: source.assetId,
+        protocolAssetId: source.protocolAssetId,
+        amountRaw
+      },
+      refundAddress: refundTo,
+      slippageBps: 50,
+      requestId
+    })
+    const differenceRaw = shieldSameDecimalsQuoteDifferenceRaw(
+      amountRaw,
+      deposit.expectedOutputRaw,
+      true
+    )
+    return Object.freeze({
+      planId: deposit.depositId,
+      phase: deposit.phase,
+      payloadFingerprint: requestId,
+      amount: formatBaseUnitDecimalAmount(amountRaw, source.decimals),
+      symbol: source.symbol,
+      chainName,
+      assetId: source.assetId,
+      sourceAddress: refundTo,
+      expectedReceive: formatBaseUnitDecimalAmount(deposit.expectedOutputRaw, source.decimals),
+      expectedSymbol: source.symbol,
+      feeSourceAmountRaw: amountRaw,
+      feeSourceDecimals: String(source.decimals),
+      feeBps: String(confidentialQuoteAppFeeBps(deposit.quote)),
+      ...(differenceRaw
+        ? { quoteDifference: formatBaseUnitDecimalAmount(differenceRaw, source.decimals) }
+        : {})
     })
   }
 
@@ -535,7 +649,10 @@ export class ShieldDappCoordinator {
       })
     }
     const destination = this.resolveTransferDestinationToken(source, input.destination.chainId)
-    if (!destination.chainId.startsWith('eip155:')) {
+    const zcashChainId = getZcashChainId(this.options.network)
+    // Same-chain public ZEC, including this account's transparent address, is a withdraw.
+    // Same-chain confidential sends back to this account are rejected earlier.
+    if (!destination.chainId.startsWith('eip155:') && destination.chainId !== zcashChainId) {
       throw new Error('Shield destination chain is invalid.')
     }
     const recipient = this.shieldQuoteRecipient(destination.chainId, input.destination.address)
@@ -661,6 +778,9 @@ export class ShieldDappCoordinator {
     expectedReceive: string
     expectedSymbol: string
     quoteDifference?: string
+    feeSourceAmountRaw: string
+    feeSourceDecimals: string
+    feeBps: string
     networkFee?: string
     networkFeeSymbol?: string
   }> {
@@ -674,6 +794,9 @@ export class ShieldDappCoordinator {
       sourceAddress: review.sourceAddress,
       expectedReceive: formatBaseUnitDecimalAmount(review.expectedOutputRaw, destination.decimals),
       expectedSymbol: destination.symbol,
+      feeSourceAmountRaw: review.sourceAmountRaw,
+      feeSourceDecimals: String(source.decimals),
+      feeBps: String(review.quoteAppFeeBps ?? 0),
       ...(differenceRaw
         ? { quoteDifference: formatBaseUnitDecimalAmount(differenceRaw, source.decimals) }
         : {}),
@@ -738,16 +861,39 @@ export class ShieldDappCoordinator {
     readonly amountRaw?: string
     readonly sourceSymbol?: string
     readonly sourceDecimals?: number
+    readonly depositAddress?: string
+    readonly depositMemo?: string
   }): ShieldDappOperationDetails {
-    if (!record.source) return Object.freeze({})
-    return projectShieldDappOperationDetails({
-      source: {
-        chainId: record.source.chainId,
-        assetId: record.source.assetId,
-        amountRaw: record.amountRaw ?? record.source.amountRaw,
-        ...(typeof record.sourceSymbol === 'string' ? { symbol: record.sourceSymbol } : {}),
-        ...(typeof record.sourceDecimals === 'number' ? { decimals: record.sourceDecimals } : {})
-      }
+    const depositAddress =
+      typeof record.depositAddress === 'string' &&
+      record.depositAddress.length > 0 &&
+      record.depositAddress.length <= 256
+        ? record.depositAddress
+        : undefined
+    const depositMemo =
+      typeof record.depositMemo === 'string' &&
+      record.depositMemo.length > 0 &&
+      record.depositMemo.length <= 256
+        ? record.depositMemo
+        : undefined
+    if (!record.source) {
+      return Object.freeze({
+        ...(depositAddress ? { depositAddress } : {}),
+        ...(depositMemo ? { depositMemo } : {})
+      })
+    }
+    return Object.freeze({
+      ...projectShieldDappOperationDetails({
+        source: {
+          chainId: record.source.chainId,
+          assetId: record.source.assetId,
+          amountRaw: record.amountRaw ?? record.source.amountRaw,
+          ...(typeof record.sourceSymbol === 'string' ? { symbol: record.sourceSymbol } : {}),
+          ...(typeof record.sourceDecimals === 'number' ? { decimals: record.sourceDecimals } : {})
+        }
+      }),
+      ...(depositAddress ? { depositAddress } : {}),
+      ...(depositMemo ? { depositMemo } : {})
     })
   }
 

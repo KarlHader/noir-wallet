@@ -452,10 +452,16 @@ export async function recoverRheaWithdrawActivity(
     binding?.provider !== 'rhea-cross-chain-dex' ||
     binding.balanceTransfer !== undefined ||
     binding.userAction !== 'transfer' ||
-    !binding.isCrossChain ||
     !binding.origin.chainId.startsWith('eip155:') ||
-    !binding.destination.chainId.startsWith('eip155:') ||
-    binding.origin.chainId === binding.destination.chainId
+    !binding.destination.chainId.startsWith('eip155:')
+  ) {
+    return graph
+  }
+  const isCrossChainWithdraw = binding.origin.chainId !== binding.destination.chainId
+  if (
+    isCrossChainWithdraw
+      ? !binding.isCrossChain
+      : binding.origin.assetId !== binding.destination.assetId
   ) {
     return graph
   }
@@ -468,9 +474,10 @@ export async function recoverRheaWithdrawActivity(
   if (!sourceHash || !/^0x[0-9a-f]{64}$/i.test(sourceHash)) return graph
   const quote = await quotes.get(binding.quoteHandle)
   const quoteScope = quote?.privateSwapScope
+  const expectedPurpose = isCrossChainWithdraw ? 'private-cross-chain-withdraw' : 'private-transfer'
   if (
     !quote ||
-    quoteScope?.purpose !== 'private-cross-chain-withdraw' ||
+    quoteScope?.purpose !== expectedPurpose ||
     quoteScope.walletId !== scope.keyDomainId ||
     quoteScope.accountId !== scope.accountId ||
     quote.quoteHandle !== binding.quoteHandle ||
@@ -488,8 +495,13 @@ export async function recoverRheaWithdrawActivity(
     request.sender.toLowerCase() !== intent?.sender?.address.toLowerCase() ||
     request.recipient?.toLowerCase() !== binding.destination.recipient.toLowerCase() ||
     request.amountIn !== binding.originAmountRaw ||
-    getPrivateWithdrawAsset(request.fromChain, request.tokenIn)?.id !== binding.origin.assetId ||
-    getPrivateWithdrawAsset(request.toChain, request.tokenOut)?.id !== binding.destination.assetId
+    (isCrossChainWithdraw
+      ? getPrivateWithdrawAsset(request.fromChain, request.tokenIn)?.id !==
+          binding.origin.assetId ||
+        getPrivateWithdrawAsset(request.toChain, request.tokenOut)?.id !==
+          binding.destination.assetId
+      : request.tokenIn.address.toLowerCase() !== request.tokenOut.address.toLowerCase() ||
+        request.sender.toLowerCase() === binding.destination.recipient.toLowerCase())
   ) {
     return graph
   }
@@ -524,7 +536,11 @@ export function createBackgroundRheaSwapService(): RheaSwapService | null {
     ...(confidentialConfig
       ? {
           publicConfidentialTransfer: new PublicConfidentialTransfer(
-            new ConfidentialFundingApi(confidentialConfig, '', accessToken)
+            new ConfidentialFundingApi(confidentialConfig, '', accessToken),
+            async input => (await import('./one-click-status')).queryOneClickOrderStatus(input),
+            undefined,
+            async (...input) =>
+              (await import('./one-click-status')).resolveZcashOneClickViewer(...input)
           )
         }
       : {})

@@ -109,6 +109,8 @@ export interface BackgroundEvmDAppHandlerOptions {
   >
   readonly approval: EvmDAppApprovalPort
   readonly loadActiveContext: () => Promise<ActiveEvmPortfolioContext | null>
+  readonly readDisabledNetworkAccount?: () => Promise<ActiveEvmPortfolioContext | null>
+  readonly enableAccountNetwork?: (account: AccountRef) => Promise<void>
   readonly listAccounts?: () => Promise<readonly DAppChainAccountDescriptor[]>
   readonly hasUnlockSession: () => Promise<boolean>
   readonly runActiveOperation: <T>(operation: () => Promise<T>) => Promise<T>
@@ -212,6 +214,7 @@ interface ActiveEvmDAppAccount {
   readonly address: string
   readonly addressIndex: number
   readonly executionMode: DAppExecutionMode
+  readonly networkEnabled: boolean
 }
 
 function directTransactionAnalytics(
@@ -609,8 +612,10 @@ export class BackgroundEvmDAppHandler {
     return this.chainId
   }
 
-  private async loadActiveAccount(): Promise<ActiveEvmDAppAccount> {
-    const context = await this.options.loadActiveContext()
+  private async loadActiveAccount(allowDisabled = false): Promise<ActiveEvmDAppAccount> {
+    const enabledContext = await this.options.loadActiveContext()
+    const context =
+      enabledContext ?? (allowDisabled ? await this.options.readDisabledNetworkAccount?.() : null)
     if (!context) throw new Eip1193ProviderError(4100, 'The active wallet has no EVM account.')
     const binding = parseEvmAccountBinding(context.chainAccount, this.chainId)
     const reference = Object.freeze({
@@ -640,7 +645,8 @@ export class BackgroundEvmDAppHandler {
       reference,
       address,
       addressIndex: binding.addressIndex,
-      executionMode: executionIdentity.mode
+      executionMode: executionIdentity.mode,
+      networkEnabled: enabledContext !== null
     })
   }
 
@@ -653,11 +659,11 @@ export class BackgroundEvmDAppHandler {
     }
   }
 
-  private async requireUnlockedActiveAccount(): Promise<ActiveEvmDAppAccount> {
+  private async requireUnlockedActiveAccount(allowDisabled = false): Promise<ActiveEvmDAppAccount> {
     if (!(await this.options.hasUnlockSession())) {
       throw new Eip1193ProviderError(4100, 'Unlock Noir Wallet before connecting this site.')
     }
-    return this.loadActiveAccount()
+    return this.loadActiveAccount(allowDisabled)
   }
 
   private async listAvailableAccounts(
@@ -722,7 +728,9 @@ export class BackgroundEvmDAppHandler {
     try {
       const active = await this.requireUnlockedActiveAccount()
       const authorization = await this.options.manager.getChainAuthorization(origin, this.chainId)
-      if (!authorization) return Object.freeze([])
+      if (!authorization?.accounts.some(account => accountRefsEqual(account, active.reference))) {
+        return Object.freeze([])
+      }
       const available = await this.listAvailableAccounts(active)
       return Object.freeze([
         ...new Set(
@@ -744,10 +752,13 @@ export class BackgroundEvmDAppHandler {
     forceReview = false
   ): Promise<readonly string[]> {
     const authorizationRevision = await this.options.manager.getAuthorizationRevision(origin)
-    const active = await this.requireUnlockedActiveAccount()
+    const enableAccountNetwork = this.options.enableAccountNetwork
+    const active = await this.requireUnlockedActiveAccount(enableAccountNetwork !== undefined)
+    const enableNetwork = !active.networkEnabled
     const existing = await this.options.manager.getChainAuthorization(origin, this.chainId)
     if (
       !forceReview &&
+      !enableNetwork &&
       existing?.accounts.some(account => accountRefsEqual(account, active.reference))
     ) {
       return this.getAccounts(origin)
@@ -765,6 +776,14 @@ export class BackgroundEvmDAppHandler {
       chainName: 'EVM',
       address: active.address,
       executionMode: active.executionMode,
+      ...(enableNetwork
+        ? {
+            enableNetwork: {
+              label: this.options.network.displayName,
+              icon: this.options.network.iconChain
+            }
+          }
+        : {}),
       accounts: available.map(item => ({
         id: item.id,
         label: item.label,
@@ -780,7 +799,7 @@ export class BackgroundEvmDAppHandler {
     }
     return this.options.runActiveOperation(async () => {
       this.assertActiveRuntime()
-      const current = await this.requireUnlockedActiveAccount()
+      const current = await this.requireUnlockedActiveAccount(enableNetwork)
       if (!activeAccountsEqual(current, active)) {
         throw new Eip1193ProviderError(
           4100,
@@ -791,6 +810,17 @@ export class BackgroundEvmDAppHandler {
       const chosen = available.filter(item => selectedIds.includes(item.id))
       if (!chosen.some(item => accountRefsEqual(item.reference, current.reference))) {
         throw new Eip1193ProviderError(4100, 'The active EVM account must remain authorized.')
+      }
+      if (!current.networkEnabled && enableAccountNetwork) {
+        if (
+          authorizationRevision !== (await this.options.manager.getAuthorizationRevision(origin))
+        ) {
+          throw new Eip1193ProviderError(4100, 'Site authorization changed. Connect again.')
+        }
+        await enableAccountNetwork(current.reference)
+        if (!activeAccountsEqual(await this.requireUnlockedActiveAccount(), active)) {
+          throw new Eip1193ProviderError(4100, 'Wallet account changed. Connect again.')
+        }
       }
       await this.options.manager.setEvmAuthorizedAccounts(
         origin,

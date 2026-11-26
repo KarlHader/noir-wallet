@@ -1,6 +1,9 @@
 import { describe, test as it } from 'node:test'
 import assert from 'node:assert/strict'
-import { needsWriteIntent } from '../../../../../scripts/extension-store-release.mjs'
+import {
+  confirmManualUpload,
+  needsWriteIntent
+} from '../../../../../scripts/extension-store-release.mjs'
 
 import {
   createChromeWebStoreClient,
@@ -493,6 +496,58 @@ describe('Chrome Web Store v2 release operations', () => {
       unknown.calls.map(call => call.method),
       ['GET']
     )
+  })
+
+  it('resumes an attested manual upload without reuploading the CRX', async () => {
+    const binding = { crxSha256: 'a'.repeat(64) }
+    const journal = { upload: { status: 'unknown', retryable: false } }
+    assert.equal(confirmManualUpload('', binding, journal), false)
+    assert.throws(() => confirmManualUpload('b'.repeat(64), binding, journal), /does not match/)
+    assert.throws(() => confirmManualUpload(binding.crxSha256, binding, {}), /unresolved upload/)
+    const manualUpload = confirmManualUpload(binding.crxSha256, binding, journal)
+
+    const { client, calls } = fixture([
+      { body: status({ lastAsyncUploadState: 'SUCCEEDED' }) },
+      { body: status({ lastAsyncUploadState: 'SUCCEEDED' }) },
+      { body: publish() },
+      { body: status({ submittedItemRevisionStatus: submission() }) }
+    ])
+    const uploadReceipt = await uploadPackage({
+      client,
+      version: VERSION,
+      previousUpload: journal.upload,
+      manualUpload
+    })
+    assert.equal(uploadReceipt.reason, 'operator_confirmed_manual_upload')
+    const submitted = await submitPackage({ client, version: VERSION, uploadReceipt })
+    assert.equal(submitted.state, 'PENDING_REVIEW')
+    const writes = calls.filter(call => call.method === 'POST')
+    assert.deepEqual(
+      writes.map(call => call.url),
+      [`https://chromewebstore.googleapis.com/v2/${NAME}:publish`]
+    )
+    assert.equal(JSON.parse(writes[0].body).publishType, 'STAGED_PUBLISH')
+  })
+
+  it('blocks manual recovery when the store has an active submission or upload', async () => {
+    for (const [storeStatus, expected] of [
+      [{ submittedItemRevisionStatus: submission('1.9.0', 'STAGED') }, 'STAGED'],
+      [{ lastAsyncUploadState: 'IN_PROGRESS' }, 'UNATTRIBUTED_UPLOAD']
+    ]) {
+      const { client, calls } = fixture([{ body: status(storeStatus) }])
+      const receipt = await uploadPackage({
+        client,
+        version: VERSION,
+        previousUpload: { status: 'unknown', retryable: false },
+        manualUpload: true
+      })
+      assert.notEqual(receipt.status, 'succeeded')
+      assert.equal(receipt.state, expected)
+      assert.deepEqual(
+        calls.map(call => call.method),
+        ['GET']
+      )
+    }
   })
 
   it('retries bounded GET failures but never exposes response bodies', async () => {

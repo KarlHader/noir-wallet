@@ -11,7 +11,7 @@ import {
 export interface OpenModalOptions<T = any> {
   title?: string
   body: (resolve: (value: T) => void, close: () => void) => React.ReactNode
-  position?: 'center' | 'bottom'
+  position?: React.ComponentProps<typeof DialogContent>['position']
   showCloseButton?: boolean
   className?: string
   scroll?: React.ComponentProps<typeof DialogContent>['scroll']

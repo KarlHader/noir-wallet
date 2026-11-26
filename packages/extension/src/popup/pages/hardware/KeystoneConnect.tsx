@@ -8,7 +8,7 @@ import { useNavigate } from '../../provider/Router'
 import { PasswordInput } from '../../components/auth/PasswordInput'
 import { PasswordStrength } from '../../components/auth/PasswordStrength'
 import { QRScanner } from '../../components/hardware/QRScanner'
-import { SyncOptionsModal } from '../../components/zcash/SyncOptionsModal'
+import { SyncOptionsModal, type SyncStart } from '../../components/zcash/SyncOptionsModal'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import { openModal } from '../../provider/ModalManager'
 import {
@@ -82,7 +82,8 @@ export function KeystoneConnect() {
 
   const [walletName, setWalletName] = useState('Keystone Wallet 1')
   const walletNameEdited = useRef(false)
-  const [birthdayHeight, setBirthdayHeight] = useState<number | undefined>(undefined)
+  const [syncStart, setSyncStart] = useState<SyncStart>()
+  const birthdayHeight = syncStart?.height
   const [isExistingWallet, setIsExistingWallet] = useState(false)
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -198,21 +199,21 @@ export function KeystoneConnect() {
   }
 
   const handlePickBirthday = async () => {
-    const result = await openModal<{ height?: number; confirmed: boolean } | undefined>({
+    const result = await openModal<SyncStart | undefined>({
       title: 'Sync Optimization',
       body: (resolve, close) => (
         <SyncOptionsModal
-          initialHeight={birthdayHeight}
-          onConfirm={height => {
-            resolve({ height, confirmed: true })
+          initialSelection={syncStart}
+          onConfirm={selection => {
+            resolve(selection)
             close()
           }}
         />
       )
     })
-    if (result?.confirmed) {
+    if (result) {
       setIsExistingWallet(true)
-      setBirthdayHeight(result.height)
+      setSyncStart(result)
     }
   }
 
@@ -440,7 +441,7 @@ export function KeystoneConnect() {
                     description="No previous transactions — sync from the current block"
                     onClick={() => {
                       setIsExistingWallet(false)
-                      setBirthdayHeight(undefined)
+                      setSyncStart(undefined)
                     }}
                   />
                   <OptionCard

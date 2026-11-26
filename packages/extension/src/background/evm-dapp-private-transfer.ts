@@ -4,7 +4,14 @@ import type { EvmNetworkConfig } from '@/config/networks'
 import { Eip1193ProviderError } from '@/core/dapp/eip1193'
 import { getConfidentialFundingNetworkConfig } from '@/config/intents'
 import { parseNearIntentsTransactionBinding, parseTransactionId } from '@/core/transactions/domain'
-import { ConfidentialFundingApi } from './confidential-funding-api'
+import {
+  parseOneClickDepositMemo,
+  parseOneClickViewer,
+  type OneClickOrder,
+  type OneClickViewer
+} from '@/core/services/near-intents/one-click-order'
+import { ConfidentialFundingApi, parseConfidentialOneClickStatus } from './confidential-funding-api'
+import type { queryOneClickOrderStatus } from './one-click-status'
 import {
   RHEA_SWAP_CHAIN_CATALOG,
   resolveRheaPrivateTransferToken,
@@ -57,10 +64,9 @@ export interface EvmDAppPrivateTransferPreparation {
   cancel(): Promise<void>
 }
 
-interface ExactOutputSubmission {
+interface ExactOutputSubmission extends OneClickOrder {
   readonly schemaVersion: 2
   readonly fingerprint: string
-  readonly depositAddress: string
   readonly destinationAmountRaw: string
   readonly sourceAmountRaw: string
   readonly destinationHash: string | null
@@ -80,14 +86,32 @@ export interface ExactOutputSubmissionStore {
 
 const EXACT_OUTPUT_PREFIX = 'evm_dapp_exact_output:'
 
+function privateRefundViewer(walletAddress: string): OneClickViewer {
+  return { chainFamily: 'evm', walletAddress, signingMode: 'private' }
+}
+
 function parseExactOutputSubmission(value: unknown): ExactOutputSubmission {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Stored exact-output transfer is invalid')
   }
   const record = value as Record<string, unknown>
+  const requiredKeys = [
+    'accountId',
+    'chainId',
+    'depositAddress',
+    'destinationAmountRaw',
+    'destinationHash',
+    'expiresAt',
+    'fingerprint',
+    'networkMode',
+    'schemaVersion',
+    'sourceAmountRaw',
+    'transactionId',
+    'walletId'
+  ]
+  const optionalKeys = ['depositMemo', 'viewer'].filter(key => record[key] !== undefined)
   if (
-    Object.keys(record).sort().join(',') !==
-      'accountId,chainId,depositAddress,destinationAmountRaw,destinationHash,expiresAt,fingerprint,networkMode,schemaVersion,sourceAmountRaw,transactionId,walletId' ||
+    Object.keys(record).sort().join(',') !== [...requiredKeys, ...optionalKeys].sort().join(',') ||
     record.schemaVersion !== 2 ||
     typeof record.fingerprint !== 'string' ||
     !/^[0-9a-f]{64}$/.test(record.fingerprint) ||
@@ -117,6 +141,16 @@ function parseExactOutputSubmission(value: unknown): ExactOutputSubmission {
   ) {
     throw new Error('Stored exact-output transfer fields are invalid')
   }
+  const viewer = record.viewer === undefined ? undefined : parseOneClickViewer(record.viewer)
+  if (
+    viewer &&
+    (viewer.chainFamily !== 'evm' ||
+      viewer.signingMode !== 'private' ||
+      !/^0x[0-9a-fA-F]{40}$/.test(viewer.walletAddress))
+  ) {
+    throw new Error('Stored exact-output transfer viewer is invalid')
+  }
+  if (record.depositMemo !== undefined) parseOneClickDepositMemo(record.depositMemo)
   return record as unknown as ExactOutputSubmission
 }
 
@@ -318,10 +352,8 @@ export interface EvmDAppPrivateTransferCoordinatorOptions {
   readonly store?: PrivateTransferSubmissionStore
   readonly exactOutputStore?: ExactOutputSubmissionStore
   readonly pendingSourceStore?: Pick<EvmPendingTransferStore, 'get' | 'getReviewGraph'>
-  readonly exactOutputApi?: Pick<
-    ConfidentialFundingApi,
-    'quoteExactOutput' | 'getOneClickStatus' | 'getStatus'
-  >
+  readonly exactOutputApi?: Pick<ConfidentialFundingApi, 'quoteExactOutput' | 'getStatus'>
+  readonly queryStatus?: typeof queryOneClickOrderStatus
   readonly readSlippageBps?: () => Promise<number>
   readonly onExactOutputSubmitted?: () => Promise<void>
   readonly now?: () => number
@@ -356,10 +388,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
   private readonly store: PrivateTransferSubmissionStore
   private readonly exactOutputStore: ExactOutputSubmissionStore
   private pendingSourceStore?: Pick<EvmPendingTransferStore, 'get' | 'getReviewGraph'>
-  private exactOutputApi?: Pick<
-    ConfidentialFundingApi,
-    'quoteExactOutput' | 'getOneClickStatus' | 'getStatus'
-  >
+  private exactOutputApi?: Pick<ConfidentialFundingApi, 'quoteExactOutput' | 'getStatus'>
   private readonly now: () => number
   private readonly waitMs: number
   private readonly pollMs: number
@@ -402,7 +431,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
     this.assertExactOutputScope(stored, input)
     if (stored.destinationHash) return stored.destinationHash
     if (await this.clearDefinitelyUnsentExactOutput(stored)) return null
-    return this.waitForExactOutput(stored)
+    return this.waitForExactOutput(stored, input.account.address)
   }
 
   private async clearDefinitelyUnsentExactOutput(stored: ExactOutputSubmission): Promise<boolean> {
@@ -432,10 +461,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
     return true
   }
 
-  private requireExactOutputApi(): Pick<
-    ConfidentialFundingApi,
-    'quoteExactOutput' | 'getOneClickStatus' | 'getStatus'
-  > {
+  private requireExactOutputApi(): Pick<ConfidentialFundingApi, 'quoteExactOutput' | 'getStatus'> {
     if (this.exactOutputApi) return this.exactOutputApi
     const config = getConfidentialFundingNetworkConfig(this.options.network.networkMode)
     if (!config) throw new Error('Confidential exact-output transfers require mainnet')
@@ -533,13 +559,20 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
       requestedSlippage! <= 5_000
         ? requestedSlippage!
         : DEFAULT_SLIPPAGE_BPS
+    const viewer = privateRefundViewer(input.account.address)
     const quote = await this.requireExactOutputApi().quoteExactOutput({
       asset: token.assetId,
       amountOutRaw: input.intent.amountRaw,
       sender: input.account.address,
       recipient: input.intent.recipient,
-      slippageBps
+      slippageBps,
+      viewer
     })
+    const order: OneClickOrder = {
+      depositAddress: quote.quote.depositAddress,
+      ...(quote.quote.depositMemo === undefined ? {} : { depositMemo: quote.quote.depositMemo }),
+      viewer
+    }
     const amountIn = BigInt(quote.quote.amountIn)
     const amountOut = BigInt(input.intent.amountRaw)
     if (
@@ -559,7 +592,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
       provider: 'near-intents',
       kind: 'swap',
       userAction: 'transfer',
-      depositAddress: quote.quote.depositAddress,
+      ...order,
       refundAddress: input.account.address,
       expiresAt,
       origin: {
@@ -640,7 +673,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
           const stored = parseExactOutputSubmission({
             schemaVersion: 2,
             fingerprint,
-            depositAddress: quote.quote.depositAddress,
+            ...order,
             destinationAmountRaw: input.intent.amountRaw,
             sourceAmountRaw: quote.quote.amountIn,
             destinationHash: null,
@@ -676,7 +709,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
             ?.evidence?.transactionHash
           if (!sourceHash) throw new Error('Confidential transfer source hash is unavailable')
           await this.options.onExactOutputSubmitted?.().catch(() => {})
-          return this.waitForExactOutput(stored)
+          return this.waitForExactOutput(stored, input.account.address)
         })().finally(() => {
           this.exactPreparations.delete(fingerprint)
           this.exactExecutions.delete(fingerprint)
@@ -706,17 +739,38 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
       stored.accountId !== input.account.accountId ||
       stored.networkMode !== this.options.network.networkMode ||
       stored.chainId !== input.chainId ||
-      stored.destinationAmountRaw !== input.intent.amountRaw
+      stored.destinationAmountRaw !== input.intent.amountRaw ||
+      (stored.viewer !== undefined &&
+        stored.viewer.walletAddress.toLowerCase() !== input.account.address.toLowerCase())
     ) {
       throw new Error('Confidential exact-output transfer account changed')
     }
   }
 
-  private async waitForExactOutput(stored: ExactOutputSubmission): Promise<string> {
+  private async waitForExactOutput(
+    stored: ExactOutputSubmission,
+    refundAddress: string
+  ): Promise<string> {
     const deadline = this.now() + this.waitMs
+    const order: OneClickOrder = {
+      depositAddress: stored.depositAddress,
+      ...(stored.depositMemo === undefined ? {} : { depositMemo: stored.depositMemo }),
+      viewer: stored.viewer ?? privateRefundViewer(refundAddress)
+    }
+    const queryStatus =
+      this.options.queryStatus ?? (await import('./one-click-status')).queryOneClickOrderStatus
     while (this.now() < deadline) {
-      const status = await this.requireExactOutputApi()
-        .getOneClickStatus(stored.depositAddress)
+      const status = await queryStatus({
+        network: stored.networkMode,
+        walletId: stored.walletId,
+        accountId: stored.accountId,
+        order
+      })
+        .then(value =>
+          value === null
+            ? null
+            : parseConfidentialOneClickStatus(value, stored.depositAddress, stored.depositMemo)
+        )
         .catch(() => null)
       const normalized = status?.status.trim().toUpperCase()
       if (normalized === 'SUCCESS' || normalized === 'COMPLETED') {
@@ -810,7 +864,10 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
           'The prior Incognito transfer was not sent. Review a new request.'
         )
       }
-      return exactSubmission.destinationHash ?? this.waitForExactOutput(exactSubmission)
+      return (
+        exactSubmission.destinationHash ??
+        this.waitForExactOutput(exactSubmission, input.account.address)
+      )
     }
 
     const descriptor = RHEA_SWAP_CHAIN_CATALOG.find(

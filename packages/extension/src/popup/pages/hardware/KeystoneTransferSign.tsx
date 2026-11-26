@@ -4,7 +4,9 @@ import type { UR } from '@/lib/keystone'
 import { base64ToBytes } from '@/lib/bytes'
 import { parseTransactionId, type TransactionId } from '@/core/transactions/domain'
 import {
+  keystoneEvmDeviceSigningAdapter,
   keystoneTransferAdapters,
+  type KeystoneTransferAdapter,
   type KeystoneTransferFamily
 } from '@/popup/services/keystone-transfer-adapters'
 import { Button } from '@/popup/components/ui/button'
@@ -18,8 +20,9 @@ import { useLocation } from '@/popup/provider/Router'
 import { ListSkeleton, Skeleton } from '@/popup/components/ui/skeleton'
 import { formatHardwareSigningError } from '@/lib/hardware-signing-error'
 import { logger } from '@/lib/logger'
+import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 
-type Step = 'loading' | 'show-qr' | 'scan' | 'broadcasting' | 'success' | 'failed' | 'invalid'
+type Step = 'loading' | 'show-qr' | 'scan' | 'verifying' | 'success' | 'failed' | 'invalid'
 
 function readTransactionId(value: string | null): TransactionId | null {
   if (!value) return null
@@ -32,24 +35,38 @@ function readTransactionId(value: string | null): TransactionId | null {
 
 export function KeystoneTransferSign({ family }: { family: KeystoneTransferFamily }) {
   const location = useLocation()
-  const transactionId = readTransactionId(new URLSearchParams(location.search).get('tx'))
+  const params = new URLSearchParams(location.search)
+  const requestId = params.get('requestId')
+  if (family === 'evm' && requestId !== null) {
+    return (
+      <KeystoneTransferSigning
+        key={`device:${requestId}`}
+        family={family}
+        adapter={keystoneEvmDeviceSigningAdapter}
+        signingId={requestId}
+      />
+    )
+  }
+  const transactionId = readTransactionId(params.get('tx'))
   return (
     <KeystoneTransferSigning
       key={`${family}:${transactionId}`}
       family={family}
-      transactionId={transactionId}
+      adapter={keystoneTransferAdapters[family]}
+      signingId={transactionId}
     />
   )
 }
 
-function KeystoneTransferSigning({
+function KeystoneTransferSigning<SigningId extends string>({
   family,
-  transactionId
+  adapter,
+  signingId
 }: {
   family: KeystoneTransferFamily
-  transactionId: TransactionId | null
+  adapter: KeystoneTransferAdapter<SigningId>
+  signingId: SigningId | null
 }) {
-  const adapter = keystoneTransferAdapters[family]
   const { client } = adapter
   const [step, setStep] = useState<Step>('loading')
   const [request, setRequest] =
@@ -69,13 +86,43 @@ function KeystoneTransferSigning({
     [requestBase64]
   )
   const networkName = request ? adapter.networkName(request.chainId) : ''
+  const personalSign = request?.kind === 'personal-sign'
 
   const expire = useCallback(() => {
     if (terminal.current || submitting.current) return
     terminal.current = true
     setStep('invalid')
-    if (transactionId) void client.rejectTransfer(transactionId).catch(() => {})
-  }, [client, transactionId])
+    if (signingId) void client.rejectTransfer(signingId).catch(() => {})
+  }, [client, signingId])
+
+  useEffect(() => {
+    if (!adapter.signatureOnly || !signingId) return
+    const cancel = () => {
+      if (terminal.current) return
+      terminal.current = true
+      void client.rejectTransfer(signingId).catch(() => {})
+    }
+    const onMessage = (
+      message: { type?: string; requestId?: string },
+      sender: chrome.runtime.MessageSender
+    ) => {
+      if (
+        !terminal.current &&
+        message?.type === 'KEYSTONE_EVM_SIGNING_CANCELLED' &&
+        message.requestId === signingId &&
+        getOwnExtensionSenderContext(sender, chrome.runtime.id) === 'service-worker'
+      ) {
+        terminal.current = true
+        setStep('invalid')
+      }
+    }
+    window.addEventListener('pagehide', cancel)
+    chrome.runtime.onMessage.addListener(onMessage)
+    return () => {
+      window.removeEventListener('pagehide', cancel)
+      chrome.runtime.onMessage.removeListener(onMessage)
+    }
+  }, [adapter.signatureOnly, client, signingId])
 
   useEffect(() => {
     if (!request || (step !== 'show-qr' && step !== 'scan')) return
@@ -86,12 +133,12 @@ function KeystoneTransferSigning({
   useEffect(() => {
     if (started.current) return
     started.current = true
-    if (!transactionId) {
+    if (!signingId) {
       setStep('invalid')
       return
     }
     void client
-      .getExternalSigningRequest(transactionId)
+      .getExternalSigningRequest(signingId)
       .then(value => {
         if (terminal.current) return
         if (!value || value.expiresAt <= Date.now()) {
@@ -111,11 +158,11 @@ function KeystoneTransferSigning({
           setStep('invalid')
         }
       })
-  }, [adapter.name, client, transactionId])
+  }, [adapter.name, client, signingId])
 
   const handleScan = useCallback(
     async (ur: UR) => {
-      if (!transactionId || !request || terminal.current || submitting.current) return
+      if (!signingId || !request || terminal.current || submitting.current) return
       if (Date.now() >= request.expiresAt) {
         expire()
         return
@@ -137,17 +184,19 @@ function KeystoneTransferSigning({
       }
       setScanError(null)
       submitting.current = true
-      setStep('broadcasting')
+      setStep('verifying')
       try {
         const value = await client.submitExternalSignature(
-          transactionId,
+          signingId,
           request.payloadFingerprint,
           responseBase64
         )
+        if (terminal.current) return
         setSubmission(value)
         terminal.current = true
         setStep('success')
       } catch (cause) {
+        if (terminal.current) return
         const message = formatHardwareSigningError(cause)
         logger.error(`[Hardware signing] Keystone ${adapter.name} submission failed: ${message}`)
         setError(message)
@@ -156,14 +205,14 @@ function KeystoneTransferSigning({
         submitting.current = false
       }
     },
-    [adapter, client, request, transactionId, expire]
+    [adapter, client, request, signingId, expire]
   )
 
   const close = async () => {
     const shouldReject = !terminal.current
     terminal.current = true
-    if (transactionId && shouldReject) {
-      await client.rejectTransfer(transactionId).catch(() => {})
+    if (signingId && shouldReject) {
+      await client.rejectTransfer(signingId).catch(() => {})
     }
     window.close()
   }
@@ -193,7 +242,9 @@ function KeystoneTransferSigning({
           title="Request unavailable"
           description={
             error ??
-            `This ${adapter.name} signing request expired, was cancelled, or belongs to another Wallet. Start a new send from Noir Wallet.`
+            (adapter.signatureOnly
+              ? 'This signing request expired or was cancelled. Review the action again in Noir Wallet.'
+              : `This ${adapter.name} signing request expired, was cancelled, or belongs to another Wallet. Start a new send from Noir Wallet.`)
           }
           actionText="Close"
           onAction={() => void close()}
@@ -210,10 +261,14 @@ function KeystoneTransferSigning({
                 </div>
                 <div>
                   <p className="text-sm font-medium">Approved in Noir Wallet</p>
-                  {adapter.showNetworkInReview && (
+                  {adapter.showNetworkInReview && !personalSign && (
                     <p className="mt-1 text-xs font-medium text-foreground">{networkName}</p>
                   )}
-                  <p className="mt-1 text-xs leading-5 text-muted">{adapter.reviewPrompt}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted">
+                    {personalSign
+                      ? 'Scan this request and verify the message on Keystone before signing.'
+                      : adapter.reviewPrompt}
+                  </p>
                 </div>
               </div>
             </div>
@@ -255,16 +310,20 @@ function KeystoneTransferSigning({
         </>
       )}
 
-      {step === 'broadcasting' && request && (
+      {step === 'verifying' && request && (
         <div className="page-content space-y-5 pt-5">
-          <HardwareSigningProgress title="Verifying signed transaction">
+          <HardwareSigningProgress
+            title={personalSign ? 'Verifying signature' : 'Verifying signed transaction'}
+          >
             <div className="space-y-3 rounded-lg bg-card p-4">
               <DetailRow label="Signature">
                 <span className="text-sm">Received from Keystone</span>
               </DetailRow>
-              <DetailRow label={adapter.detailLabel}>
-                <span className="text-sm">{networkName}</span>
-              </DetailRow>
+              {!personalSign && (
+                <DetailRow label={adapter.detailLabel}>
+                  <span className="text-sm">{networkName}</span>
+                </DetailRow>
+              )}
             </div>
           </HardwareSigningProgress>
         </div>
@@ -272,13 +331,25 @@ function KeystoneTransferSigning({
 
       {step === 'success' && submission && (
         <CenteredNotice
-          icon={submission.status === 'broadcast' ? 'lucide:check-circle-2' : 'lucide:clock-3'}
+          icon={
+            submission.status === 'signed-pending-broadcast'
+              ? 'lucide:clock-3'
+              : 'lucide:check-circle-2'
+          }
           iconClass="text-primary"
-          title={submission.status === 'broadcast' ? adapter.sentTitle : 'Transaction signed'}
+          title={
+            submission.status === 'broadcast'
+              ? adapter.sentTitle
+              : personalSign
+                ? 'Message signed'
+                : 'Transaction signed'
+          }
           description={
             submission.status === 'broadcast'
               ? adapter.sentDescription(networkName)
-              : 'The signed transaction is saved. Noir Wallet will retry broadcast when the network is available.'
+              : submission.status === 'signed'
+                ? 'Return to Noir Wallet to continue.'
+                : 'The signed transaction is saved. Noir Wallet will retry broadcast when the network is available.'
           }
           actionText="Done"
           onAction={() => void close()}

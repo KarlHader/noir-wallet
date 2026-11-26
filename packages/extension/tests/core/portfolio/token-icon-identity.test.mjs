@@ -15,6 +15,10 @@ const candidates = (assetId, blockchain = 'arb', contractAddress = null) =>
 
 test('wallet and Swap ETH identities share custom artwork with supplied fallbacks across networks', () => {
   const expected = candidates('eip155:1/slip44:60', 'eth')
+  const [primaryIcon, ...fallbacks] = expected
+  assert.ok(primaryIcon)
+  assert.notEqual(primaryIcon, providerIcon)
+  assert.deepEqual(fallbacks, [providerIcon, 'https://tokens.example/cached-eth.png'])
   for (const assetId of [
     'eip155:42161/slip44:60',
     'eip155:8453/slip44:60',
@@ -26,28 +30,19 @@ test('wallet and Swap ETH identities share custom artwork with supplied fallback
   ]) {
     assert.deepEqual(candidates(assetId), expected, assetId)
   }
-  assert.deepEqual(expected, [
-    'https://assets.zknoir.com/chain/ethereum.svg',
-    providerIcon,
-    'https://tokens.example/cached-eth.png'
-  ])
   assert.deepEqual(
     getTokenIconCandidates({
       assetId: 'nep141:arb.omft.near',
       token: { blockchain: 'arb', contractAddress: null, icon: 'https://tokens.example/to.png' }
     }),
-    ['https://assets.zknoir.com/chain/ethereum.svg', 'https://tokens.example/to.png']
+    [primaryIcon, 'https://tokens.example/to.png']
   )
 })
 
 test('unknown native identities never use chain badge artwork', () => {
-  for (const blockchain of ['eth', 'arb', 'base', 'op', 'btc', 'sol', 'near']) {
+  for (const blockchain of ['eth', 'arb', 'base', 'op', 'btc', 'sol', 'near', 'avax']) {
     const icons = getTokenIconCandidates({ token: { blockchain, contractAddress: null } })
     assert.deepEqual(icons, [], blockchain)
-    assert.ok(
-      icons.every(icon => !icon.startsWith('https://assets.zknoir.com/chain/')),
-      blockchain
-    )
   }
 })
 

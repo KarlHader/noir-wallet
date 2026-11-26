@@ -254,7 +254,8 @@ export async function uploadPackage({
   crxBytes,
   filename,
   previousUpload,
-  previousSubmission
+  previousSubmission,
+  manualUpload = false
 }) {
   validString(version, VERSION, 'version')
   const mayStartAttempt = canStartUploadAttempt(previousUpload)
@@ -274,6 +275,7 @@ export async function uploadPackage({
       return result('succeeded', version, {
         retryable: false,
         state: 'SUCCEEDED',
+        reason: previousUpload.reason,
         ...(previousUpload.uploadState ? { uploadState: previousUpload.uploadState } : {}),
         ...(previousUpload.priorAsyncUploadState
           ? { priorAsyncUploadState: previousUpload.priorAsyncUploadState }
@@ -289,10 +291,21 @@ export async function uploadPackage({
     return result('succeeded', version, {
       retryable: false,
       state: 'SUCCEEDED',
+      reason: previousUpload.reason,
       ...(previousUpload.uploadState ? { uploadState: previousUpload.uploadState } : {}),
       ...(previousUpload.priorAsyncUploadState
         ? { priorAsyncUploadState: previousUpload.priorAsyncUploadState }
         : {})
+    })
+  }
+  if (manualUpload) {
+    if (preflight.lastAsyncUploadState === 'IN_PROGRESS') {
+      return result('unknown', version, { retryable: false, state: 'UNATTRIBUTED_UPLOAD' })
+    }
+    return result('succeeded', version, {
+      state: 'SUCCEEDED',
+      reason: 'operator_confirmed_manual_upload',
+      priorAsyncUploadState: preflight.lastAsyncUploadState ?? undefined
     })
   }
   if (!mayStartAttempt) {

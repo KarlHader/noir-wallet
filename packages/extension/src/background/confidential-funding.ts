@@ -31,7 +31,9 @@ import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/
 import { NearMultichainSigningClient } from '@/infrastructure/keyring/multichain/near-signing-client'
 import { parseChainId } from '@/core/chains/registry'
 import { parseSigningCommandId } from '@/core/keyring/ports/signing'
+import { HardwareEvmSigningContextResolver } from '@/infrastructure/keyring/hardware-evm-signing-context'
 import {
+  IndexedDbCredentialRepository,
   IndexedDbStorageV2Repository,
   IndexedDbTransactionRepository
 } from '@/infrastructure/persistence/repositories'
@@ -56,6 +58,12 @@ import {
 } from './confidential-near-quote'
 import { loadActiveNearTransferContext } from './near-transfer'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
+import { requestLedgerSignature } from './ledger-signing-coordinator'
+import {
+  requestKeystoneEvmPersonalSignature,
+  requestKeystoneEvmTransactionSignature
+} from './keystone-evm-message-signing'
+import { queryOneClickOrderStatus } from './one-click-status'
 
 function createNearShieldDeposit(
   storage: IndexedDbStorageV2Repository,
@@ -237,7 +245,12 @@ export function createBackgroundConfidentialFundingCoordinator(
   endpointSettings: ChainEndpointSettings,
   refreshPortfolio: NonNullable<ConfidentialFundingCoordinatorOptions['refreshPortfolio']>,
   store: ChromeConfidentialFundingStore = new ChromeConfidentialFundingStore(),
-  getNativeZecActiveAccount?: ConfidentialFundingCoordinatorOptions['getNativeZecActiveAccount']
+  nativeZecFunding?: Required<
+    Pick<
+      ConfidentialFundingCoordinatorOptions,
+      'getNativeZecActiveAccount' | 'broadcastZcashShieldDeposit'
+    >
+  >
 ): ConfidentialFundingCoordinator | null {
   const config = getConfidentialFundingNetworkConfig(DEFAULT_NETWORK)
   if (!config) return null
@@ -293,6 +306,12 @@ export function createBackgroundConfidentialFundingCoordinator(
   ])
   const storage = new IndexedDbStorageV2Repository()
   const signerClient = new EvmMultichainSigningClient({ credentials: credentialSession })
+  const hardware = new HardwareEvmSigningContextResolver({
+    storageRepository: storage,
+    credentialRepository: new IndexedDbCredentialRepository(),
+    credentials: credentialSession,
+    network: DEFAULT_NETWORK
+  })
   const near = resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK, endpointSettings)
   const mappings = new Map(
     [
@@ -340,6 +359,7 @@ export function createBackgroundConfidentialFundingCoordinator(
   return new ConfidentialFundingCoordinator({
     network: DEFAULT_NETWORK,
     api: new ConfidentialFundingApi(config, near.rpcUrl, __RHEA_SWAP_ACCESS_TOKEN__),
+    queryOneClickOrderStatus,
     store,
     signer: new ConfidentialFundingSigner(
       signerClient,
@@ -361,7 +381,26 @@ export function createBackgroundConfidentialFundingCoordinator(
             publicKey: context.publicKey
           })
         }
-      }
+      },
+      DEFAULT_NETWORK === 'mainnet'
+        ? {
+            resolve: chainAccount => hardware.resolve(chainAccount),
+            request: (vendor, request, binding, masterFingerprintHex) => {
+              if (vendor === 'ledger') return requestLedgerSignature(request, binding)
+              if (!masterFingerprintHex) throw new Error('Keystone account fingerprint unavailable')
+              if (request.kind === 'personal-sign') {
+                return requestKeystoneEvmPersonalSignature(
+                  { ...request, address: request.expectedAddress, masterFingerprintHex },
+                  binding
+                )
+              }
+              return requestKeystoneEvmTransactionSignature(
+                { ...request, address: request.expectedAddress, masterFingerprintHex },
+                binding
+              )
+            }
+          }
+        : undefined
     ),
     repository: new IndexedDbTransactionRepository(),
     assets,
@@ -371,7 +410,7 @@ export function createBackgroundConfidentialFundingCoordinator(
       const cached = getCachedTokens()
       return cached.length > 0 ? cached : protocolTokens
     },
-    getNativeZecActiveAccount,
+    ...nativeZecFunding,
     assetMappings: Object.freeze([...mappings.values()]),
     ...(nearShieldEnabled ? { nearDeposit: createNearShieldDeposit(storage, near.rpcUrl) } : {}),
     scheduleMonitoring: async (delayInMinutes = 0.1) => {

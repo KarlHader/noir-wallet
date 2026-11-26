@@ -52,6 +52,7 @@ import { TimeoutError } from '../../lib/async-utils'
 import { proveHardwarePczt, toHardwarePcztError } from '../zcash/hardware-pczt'
 import { parseZeroIndexerRuntimeOptions, type ZeroIndexerOptions } from '../zcash/zero-indexer'
 import { serializeDiagnosticArgs } from '../../lib/diagnostic-log'
+import { developmentConsoleErrors } from '../../lib/development-console'
 import { traceDebugStage } from '../../lib/debug-performance'
 import { loadVotingState, saveVotingState } from '../../lib/indexed-db'
 import { validateVotingDecisions } from '../../lib/voting'
@@ -570,7 +571,11 @@ function forwardLog(level: 'log' | 'warn' | 'error' | 'info', ...args: any[]) {
   const walletId = activeWalletId
 
   const message = serializeDiagnosticArgs(args)
-  if (!walletId) originalConsole[level].call(console, message)
+  if (developmentConsoleErrors && (level === 'error' || level === 'warn')) {
+    originalConsole[level].apply(console, args)
+  } else if (!walletId) {
+    originalConsole[level].call(console, message)
+  }
 
   if (typeof self !== 'undefined' && typeof postMessage !== 'undefined') {
     try {

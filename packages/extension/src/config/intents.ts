@@ -1,5 +1,6 @@
 import type { Network } from '@/types'
 
+export const ONE_CLICK_TOKEN_CATALOG_URL = 'https://api.zknoir.com/v1/1click/v0/tokens'
 export const RHEA_TOKEN_ICONS_API = 'https://api.rhea.finance/get_multichain_lending_tokens_data'
 
 export interface ConfidentialFundingNetworkConfig {
@@ -53,8 +54,8 @@ export interface IntentsAppFee {
 }
 
 const NOIR_APP_FEE_RECIPIENT = 'noir_swap.near'
-/** Swap app fee: 0.35% (35 bps), collected to noir's swap account. */
-export const NOIR_SWAP_APP_FEES: IntentsAppFee[] = [{ recipient: NOIR_APP_FEE_RECIPIENT, fee: 35 }]
+/** Swap app fee: 0.2% (20 bps), collected to noir's swap account. */
+export const NOIR_SWAP_APP_FEES: IntentsAppFee[] = [{ recipient: NOIR_APP_FEE_RECIPIENT, fee: 20 }]
 export const NOIR_SWAP_REFERRAL = 'noir_swap'
 export const NOIR_SEND_REFERRAL = 'noir_send'
 export const NOIR_RECEIVE_REFERRAL = 'noir_receive'

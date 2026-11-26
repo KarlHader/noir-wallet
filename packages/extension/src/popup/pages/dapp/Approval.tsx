@@ -188,6 +188,13 @@ export function Approval() {
   const isSend = action === 'sendTransaction'
   const isShield = action === 'shieldFunds'
   const isEvmConnect = action === 'evmConnect'
+  const evmNetworkToEnable =
+    isEvmConnect &&
+    typeof data.enableNetwork?.label === 'string' &&
+    typeof data.enableNetwork?.icon === 'string'
+      ? { label: data.enableNetwork.label, icon: data.enableNetwork.icon }
+      : null
+  const connectLabel = evmNetworkToEnable ? 'Enable EVM & Connect' : 'Connect'
   const isEvmNetwork = action === 'evmNetwork'
   const evmAddNetwork =
     isEvmNetwork && data.action === 'add' ? parseEvmAddNetworkApproval(data) : null
@@ -883,6 +890,9 @@ export function Approval() {
         return (
           <div className="space-y-4">
             <DAppConnectionHeader domain={dappDomain} pageUrl={dappPageUrl} />
+            {evmNetworkToEnable && (
+              <DAppNetworkCard chain={evmNetworkToEnable.icon} network={evmNetworkToEnable.label} />
+            )}
             {accounts.length === 0 && (
               <div className="rounded-xl border border-border bg-card/35 p-3">
                 <div className="min-w-0 flex-1">
@@ -1802,7 +1812,7 @@ export function Approval() {
             {isMultichainConnect
               ? 'Connect'
               : MULTI_ACCOUNT_CONNECT_ACTIONS.has(action)
-                ? 'Connect'
+                ? connectLabel
                 : action === 'connect'
                   ? 'Connect'
                   : isEvmConnect

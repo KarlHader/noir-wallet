@@ -104,7 +104,7 @@ export function toShieldProviderErrorShape(
   if (/software evm account/i.test(error.message)) {
     return Object.freeze({ code: 4100, message: SOFTWARE_ACCOUNT_MESSAGE })
   }
-  if (/^Shield (amount|token|chain|destination|quote) /i.test(error.message)) {
+  if (/^Shield (amount|token|chain|destination|quote|recipient) /i.test(error.message)) {
     return Object.freeze({ code: -32602, message })
   }
   if (/authorization is required|active account|account changed/i.test(error.message)) {

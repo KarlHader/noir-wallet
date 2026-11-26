@@ -46,6 +46,7 @@ export const EVM_TRANSACTION_ERROR_CODES = Object.freeze([
   'stale-nonce',
   'nonce-recovery-required',
   'nonce-queue-unavailable',
+  'reviewed-fee-cap-too-low',
   'fee-overflow'
 ] as const)
 
@@ -171,6 +172,7 @@ export interface BuildEvmContractCallInput {
   readonly intent: EvmContractCallIntent
   readonly rpc: EvmTransactionRpc
   readonly feeSelection?: EvmFeeSelection
+  readonly reviewedMaxFeePerGas?: bigint
   readonly feeTier?: NetworkFeeTier
   readonly nonceFloor?: string
   readonly signal?: AbortSignal
@@ -878,8 +880,14 @@ function createContractCall(input: BuildEvmContractCallInput, from: string): Pre
 
 async function estimatePreparedCallFee(
   input: Pick<
-    BuildEvmTransferInput,
-    'chainId' | 'executionAccount' | 'rpc' | 'feeSelection' | 'feeTier' | 'signal'
+    BuildEvmContractCallInput,
+    | 'chainId'
+    | 'executionAccount'
+    | 'rpc'
+    | 'feeSelection'
+    | 'feeTier'
+    | 'signal'
+    | 'reviewedMaxFeePerGas'
   >,
   transactionCall: PreparedEvmCall,
   includeTiers = false
@@ -965,13 +973,29 @@ async function estimatePreparedCallFee(
       suggestedPriorityRaw,
       'EVM maximum priority fee per gas'
     )
-    quoteFee = selection =>
-      deriveEvmFeeTierQuote({
+    quoteFee = selection => {
+      const quote = deriveEvmFeeTierQuote({
         ...selection,
         baseFeePerGas,
         suggestedPriorityFeePerGas,
         ...(minimumPriority === undefined ? {} : { minimumPriorityFeePerGas: minimumPriority })
       })
+      const reviewedCap = input.reviewedMaxFeePerGas
+      if (
+        quote.selection.kind !== 'tier' ||
+        reviewedCap === undefined ||
+        quote.maxFeePerGas <= reviewedCap
+      ) {
+        return quote
+      }
+      if (reviewedCap < baseFeePerGas + quote.maxPriorityFeePerGas) {
+        throw new EvmTransactionError(
+          'reviewed-fee-cap-too-low',
+          'The reviewed EVM fee cap is too low'
+        )
+      }
+      return { ...quote, maxFeePerGas: reviewedCap }
+    }
   }
   const feeQuote = quoteFee({ selection: input.feeSelection, tier: input.feeTier })
   const maximumFee = feeQuote.maxFeePerGas
@@ -1063,12 +1087,13 @@ export function estimateEvmContractCallFee(
 
 async function buildPreparedEvmTransaction(
   input: Pick<
-    BuildEvmTransferInput,
+    BuildEvmContractCallInput,
     | 'chainId'
     | 'chainAccount'
     | 'executionAccount'
     | 'rpc'
     | 'feeSelection'
+    | 'reviewedMaxFeePerGas'
     | 'feeTier'
     | 'nonceFloor'
     | 'signal'

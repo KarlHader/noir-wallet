@@ -26,6 +26,7 @@ import {
   summarizeNearConfidentialHoldings
 } from '@/popup/services/near-confidential-holdings'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import { buildShieldProviderGroups, type ShieldProvider } from '@/popup/services/asset-domains'
 import { NearConfidentialHoldingRow } from '@/popup/components/portfolio/NearConfidentialHoldingRow'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
@@ -136,13 +137,16 @@ function ShieldProviderContent() {
     [directoryTokens]
   )
   const canManageNear =
-    getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
+    getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0 ||
+    getShieldTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
   const {
     connecting,
     loading: loadingShieldBalances,
     error: connectionError,
+    errorCode: connectionErrorCode,
     refreshBalances: refreshShieldBalances
   } = useShieldBalances({
+    hardware: activeAccount?.walletSource.kind === 'hardware',
     active: provider === 'near-confidential',
     enabled: canManageNear,
     scopeKey,
@@ -327,7 +331,7 @@ function ShieldProviderContent() {
             {SHIELD_ACTIONS.map(({ action, label }) => (
               <WalletActionButton
                 key={action}
-                icon={<WalletActionIcon action={action} />}
+                icon={<WalletActionIcon action={action} shielded />}
                 label={label}
                 disabled={
                   !account ||
@@ -404,7 +408,7 @@ function ShieldProviderContent() {
                       disabled={connecting}
                       className="wallet-interactive mt-2 rounded-md text-sm font-medium text-primary enabled:hover:bg-primary/10 enabled:active:bg-primary/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
                     >
-                      Retry
+                      {connectionErrorCode === 'authorization_required' ? 'Connect' : 'Retry'}
                     </button>
                   )}
                 {connectionError && (

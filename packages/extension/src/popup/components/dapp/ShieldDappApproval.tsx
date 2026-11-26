@@ -3,6 +3,8 @@ import { Button } from '../ui/button'
 import { WarningBox } from '../ui/WarningBox'
 import { ApprovalWindowLayout } from './ApprovalWindowLayout'
 import { ShieldProviderLogo } from '../portfolio/shield-providers'
+import { QuoteFeeAmount } from '../transaction/QuoteFeeAmount'
+import { AmountDisplay } from '../common/AmountDisplay'
 import {
   ApprovalDetailCard,
   ConnectionPermissionSummary,
@@ -88,6 +90,7 @@ export function ShieldDappApproval(props: ShieldDappApprovalProps) {
   const expectedSymbolText = readText(record, 'expectedSymbol')
   const expectedSymbol = expectedSymbolText.length > 0 ? expectedSymbolText : symbol
   const quoteDifference = readText(record, 'quoteDifference')
+  const feeBps = Number(readText(record, 'feeBps'))
   const networkFee = readText(record, 'networkFee')
   const networkFeeSymbol = readText(record, 'networkFeeSymbol')
   const destinationSymbolValue = record.destinationSymbol
@@ -196,20 +199,24 @@ export function ShieldDappApproval(props: ShieldDappApprovalProps) {
                   {expectedReceive} {expectedSymbol}
                 </span>
               </div>
-              {quoteDifference.length > 0 ? (
+              {quoteDifference.length > 0 || feeBps > 0 ? (
                 <div className="flex justify-between gap-3">
-                  <span className="text-muted">Quote difference</span>
-                  <span className="font-sans tabular-nums">
-                    {quoteDifference} {symbol}
+                  <span className="text-muted">Fee</span>
+                  <span className="text-right">
+                    <QuoteFeeAmount
+                      sourceAmountRaw={readText(record, 'feeSourceAmountRaw')}
+                      decimals={Number(readText(record, 'feeSourceDecimals'))}
+                      symbol={symbol}
+                      bps={feeBps}
+                      fallbackAmount={quoteDifference || null}
+                    />
                   </span>
                 </div>
               ) : null}
               {networkFee.length > 0 && networkFeeSymbol.length > 0 ? (
                 <div className="flex justify-between gap-3">
-                  <span className="text-muted">Max network fee</span>
-                  <span className="font-sans tabular-nums">
-                    {networkFee} {networkFeeSymbol}
-                  </span>
+                  <span className="text-muted">Network fee</span>
+                  <AmountDisplay value={networkFee} symbol={networkFeeSymbol} profile="fee" />
                 </div>
               ) : null}
             </div>

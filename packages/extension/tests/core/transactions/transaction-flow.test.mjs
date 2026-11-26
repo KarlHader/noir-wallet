@@ -157,10 +157,15 @@ describe('Cross-chain transaction lifecycle regressions', () => {
     )
   })
 
-  it('polls an open cross-chain result every five seconds with cancellation', () => {
+  it('refreshes an open cross-chain result and cancels RHEA rechecks on cleanup', () => {
     assert.match(resultStoreSource, /depositAddress:\s*string/)
     assert.match(swapSource, /type:\s*'swap',[\s\S]*?depositAddress:\s*swap\.depositAddress/)
-    assert.match(resultPageSource, /pollingSwapStatus\([\s\S]*?interval:\s*5_000/)
+    assert.match(resultPageSource, /setInterval\(refresh,\s*10_000\)/)
+    assert.match(resultPageSource, /RHEA_STATUS_RECHECK_INTERVAL_MS = 15_000/)
+    assert.match(resultPageSource, /if \(timer !== undefined\) clearTimeout\(timer\)/)
+  })
+
+  it('tracks Zcash destination confirmations to spendability and cancels on cleanup', () => {
     assert.match(
       resultPageSource,
       /pollingTransactionConfirmations\([\s\S]*?SPENDABILITY_CONFIRMATIONS/

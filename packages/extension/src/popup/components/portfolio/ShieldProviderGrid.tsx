@@ -53,7 +53,10 @@ export function HomeShieldProviders({
     error,
     refreshBalances
   } = useShieldBalances({
+    hardware: account?.walletSource.kind === 'hardware',
+    authorizationPath: '/shield-provider?provider=near-confidential',
     active: true,
+    authorizeOnMount: false,
     enabled: canManageNear && near.status !== 'ready',
     scopeKey: `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`,
     scope: account ? { network, keyDomainId: account.walletId, accountId: account.accountId } : null
@@ -95,6 +98,9 @@ export function HomeShieldProviders({
           .filter(chain => chain.id === getZcashChainId(network)) ?? []
     }
   ] as const
+  const visibleCards = cards.filter(
+    card => card.provider !== 'zcash-shield' || zcashEntry.showVaultCard
+  )
 
   return (
     <div className="px-4 pt-5 pb-5">
@@ -108,7 +114,7 @@ export function HomeShieldProviders({
         </button>
       )}
       <div className="grid grid-cols-2 gap-3">
-        {cards.map(card => {
+        {visibleCards.map(card => {
           const { provider } = card
           const { name, tint } = SHIELD_PROVIDERS[provider]
           const needsZcash = provider === 'zcash-shield' && !zcashEntry.hasActiveZcash

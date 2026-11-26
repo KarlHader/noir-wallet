@@ -18,6 +18,7 @@ import { confidentialDestinationFormToken } from '@/popup/services/swap-page-mod
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { classifyError } from '@/lib/errors'
 import { formatShieldSymbol } from '@/lib/format'
+import { formatSymbol } from '@/lib/format'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useSwapPreferences, type SavedSwapTokenSelection } from '@/store/swap-store'
@@ -26,7 +27,7 @@ import { useConfidentialFundingPreview } from '@/popup/hooks/useConfidentialFund
 import { useQuoteReview, useQuoteReviewTimer } from '@/popup/hooks/useQuoteReview'
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
-import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import { useNavigate } from '@/popup/provider/Router'
 import {
@@ -37,6 +38,9 @@ import {
 import { estimateSwapOutputFromPrices, getSwapAmountValues } from '@/popup/services/swap-estimate'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
+import { QuoteFeeAmount } from '@/popup/components/transaction/QuoteFeeAmount'
+import { ShieldHardwareTabNotice } from '@/popup/components/transaction/ShieldHardwareTabNotice'
+import { needsShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 import { getSwapQuoteNotice } from '@/popup/services/swap-quote-error-message'
 import { ShieldTokenPicker } from '@/popup/components/tokens/ShieldTokenPicker'
 import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
@@ -68,7 +72,7 @@ import {
   SWAP_QUOTE_DISPLAY_ERROR
 } from '@/popup/services/swap-quote-error-message'
 import {
-  hasShieldTransferStarted,
+  canOpenShieldActivity,
   formatShieldQuoteTime,
   isUnsignedShieldTerminal,
   getZcashTokenPickerChain,
@@ -104,7 +108,11 @@ import {
 } from '@/popup/services/shield-swap-zec-sources'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
-import { confidentialQuoteTerms, quoteReviewPrimaryAction } from '@/popup/services/quote-review'
+import {
+  confidentialQuoteTerms,
+  quoteReviewPrimaryAction,
+  shieldSwapPreviewTerms
+} from '@/popup/services/quote-review'
 
 function shieldSwapQuoteErrorMessage(cause: unknown): string {
   const quoteMessage = getSwapQuoteFailureMessage(cause)
@@ -184,7 +192,7 @@ function ShieldSwapForm({
     nativeAccount: activeAccount
   })
   const canManageNear =
-    providerIsNear && getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0
+    providerIsNear && getShieldTransferChainIds(activeAccount, network === 'mainnet').length > 0
   const zcashAccountEnabled =
     activeAccount?.networks.some(item => item.chain.family === 'zcash') ?? false
   const scopeKey = `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
@@ -230,6 +238,7 @@ function ShieldSwapForm({
     error: balanceError,
     refreshBalances: loadBalances
   } = useShieldBalances({
+    hardware: activeAccount?.walletSource.kind === 'hardware',
     active,
     enabled: canManageNear,
     scopeKey,
@@ -313,8 +322,8 @@ function ShieldSwapForm({
       }),
     [network, sourceChoices, displayBalances, model, zcashAccountEnabled]
   )
-  const preferredSourceId = sharedPair?.tokenInId ?? fromId
-  const preferredDestinationId = sharedPair?.tokenOutId ?? toId
+  const preferredSourceId = fromId ?? sharedPair?.tokenInId ?? null
+  const preferredDestinationId = toId ?? sharedPair?.tokenOutId ?? null
   const confidentialFromAssetId = preferredSourceId
     ? resolveShieldConfidentialFromAssetId(preferredSourceId, zecSourceOptions)
     : null
@@ -716,7 +725,6 @@ function ShieldSwapForm({
     setBusy(true)
     setError(null)
     quoteReview.reset()
-    quoteReview.begin(draftKey, confidentialQuoteTerms(preview))
     try {
       const request = buildShieldSwapRequest({
         network,
@@ -730,6 +738,7 @@ function ShieldSwapForm({
         nativeZecFundingSource: nativeZecDestination ?? undefined,
         slippageBps
       })
+      quoteReview.begin(draftKey, shieldSwapPreviewTerms(preview, request.operation))
       const review = await confidentialFundingClient.prepare(request)
       if (!draftStillCurrent()) {
         if (review.phase === 'prepared')
@@ -770,7 +779,7 @@ function ShieldSwapForm({
   const inspectPlan = async (planId: string) => {
     const plan = await confidentialFundingClient.get(planId)
     if (!scopeStillCurrent()) return 'changed'
-    if (hasShieldTransferStarted(plan)) {
+    if (canOpenShieldActivity(plan)) {
       openActivity(plan.transactionId)
       return 'started'
     }
@@ -938,7 +947,7 @@ function ShieldSwapForm({
         prepared.review.planId,
         prepared.review.payloadFingerprint
       )
-      if (hasShieldTransferStarted(plan)) openActivity(plan.transactionId)
+      if (canOpenShieldActivity(plan)) openActivity(plan.transactionId)
       else await inspectPlan(plan.planId)
     } catch (cause) {
       try {
@@ -964,10 +973,10 @@ function ShieldSwapForm({
 
   const finishActivity = useCallback(() => {
     setActiveActivity(null)
-    void loadBalances().then(success => {
+    void loadBalances(true, activeAccount?.walletSource.kind !== 'hardware').then(success => {
       if (success && latestScope.current === scopeKey) setBalanceRefreshRequired(false)
     })
-  }, [loadBalances, scopeKey])
+  }, [activeAccount?.walletSource.kind, loadBalances, scopeKey])
   const viewActivity = useCallback(() => {
     const transactionId = activeActivity?.plan.transactionId
     setActiveActivity(null)
@@ -998,6 +1007,26 @@ function ShieldSwapForm({
         />
       </div>
     )
+  }
+
+  if (
+    active &&
+    canManageNear &&
+    needsShieldHardwareTab(activeAccount?.walletSource.kind === 'hardware')
+  ) {
+    const query = new URLSearchParams({
+      balanceDomain: 'shield',
+      provider: 'near-confidential',
+      shieldZecSource: 'intents'
+    })
+    if (account) {
+      query.set('sourceWalletId', account.walletId)
+      query.set('sourceAccountId', account.accountId)
+    }
+    if (preferredSourceId) query.set('source', preferredSourceId)
+    if (preferredDestinationId) query.set('destination', preferredDestinationId)
+    if (nativeZecDestination) query.set('nativeZecDestination', nativeZecDestination)
+    return <ShieldHardwareTabNotice path={`/swap?${query}`} />
   }
 
   if (prepared) {
@@ -1032,11 +1061,11 @@ function ShieldSwapForm({
     const feeAmount =
       !prepared.review.quoteWithdrawFeeRaw || prepared.review.quoteWithdrawFeeRaw === '0'
         ? null
-        : formatBaseUnitAmount(
+        : formatBaseUnitDecimalAmount(
             prepared.review.quoteWithdrawFeeRaw,
             prepared.to.asset.metadata.decimals
           )
-    const feePercent = (prepared.review.quoteAppFeeBps ?? 0) / 100
+    const appFeeBps = prepared.review.quoteAppFeeBps ?? 0
     const currentRate = formatShieldSwapPreviewRate(
       prepared.amount,
       prepared.review.expectedOutputRaw,
@@ -1139,18 +1168,25 @@ function ShieldSwapForm({
             },
             ...(showReviewMore
               ? [
-                  ...(feePercent > 0 || feeAmount !== null
+                  ...(appFeeBps > 0 || feeAmount !== null
                     ? [
                         {
                           label: 'Fee',
                           content: (
                             <>
-                              {feePercent > 0 && `${feePercent}%`}
-                              {feePercent > 0 && feeAmount !== null && ' + '}
+                              {appFeeBps > 0 && (
+                                <QuoteFeeAmount
+                                  sourceAmountRaw={prepared.review.sourceAmountRaw}
+                                  decimals={prepared.from.asset.metadata.decimals}
+                                  symbol={prepared.from.asset.metadata.symbol}
+                                  bps={appFeeBps}
+                                />
+                              )}
+                              {appFeeBps > 0 && feeAmount !== null && ' + '}
                               {feeAmount !== null && (
                                 <AmountDisplay
                                   value={feeAmount}
-                                  symbol={formatShieldSymbol(prepared.to.asset.metadata.symbol)}
+                                  symbol={formatSymbol(prepared.to.asset.metadata.symbol)}
                                   profile="fee"
                                 />
                               )}
@@ -1307,10 +1343,17 @@ function ShieldSwapForm({
             details={
               preview.appFeeBps !== undefined || preview.timeEstimateSeconds !== undefined ? (
                 <div className="mt-1.5 space-y-1.5 text-muted">
-                  {preview.appFeeBps !== undefined && (
+                  {preview.appFeeBps !== undefined && previewRequest && (
                     <div className="flex items-center justify-between gap-2">
                       <span>Fee</span>
-                      <span className="text-foreground">{preview.appFeeBps / 100}%</span>
+                      <span className="text-right text-foreground">
+                        <QuoteFeeAmount
+                          sourceAmountRaw={previewRequest.source.amountRaw}
+                          decimals={from.asset.metadata.decimals}
+                          symbol={from.asset.metadata.symbol}
+                          bps={preview.appFeeBps}
+                        />
+                      </span>
                     </div>
                   )}
                   {preview.timeEstimateSeconds !== undefined && (

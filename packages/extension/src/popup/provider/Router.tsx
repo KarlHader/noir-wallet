@@ -26,6 +26,7 @@ import type { NavigateOptions } from 'react-router-dom'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import { sendAnalyticsPageView } from '@/lib/analytics'
 import { useAnalyticsEngagement } from '@/popup/hooks/useAnalyticsEngagement'
+import { isShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 
 export { useLocation }
 
@@ -172,8 +173,11 @@ interface RouterProviderProps {
 }
 
 export function RouterProvider({ children, initialPath = '/' }: RouterProviderProps) {
+  const initialEntries = isShieldHardwareTab(window.location.search)
+    ? ['/?domain=shield', initialPath]
+    : [initialPath]
   return (
-    <MemoryRouter initialEntries={[initialPath]}>
+    <MemoryRouter initialEntries={initialEntries}>
       <RouteHistory>
         <RouteActivityTracker />
         {children}

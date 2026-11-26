@@ -48,7 +48,7 @@ import {
 import { useEvmSendSupport } from '@/popup/hooks/useEvmSendSupport'
 import { carryQuotePreview } from '@/popup/hooks/useQuoteReview'
 import { rheaQuoteTerms } from '@/popup/services/quote-review'
-import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import {
   isCurrentAccountPrivateEvmAddress,
   resolveEvmAddressRole
@@ -103,6 +103,7 @@ interface PreparedReview {
 
 interface PrivateSendPreview {
   readonly key: string
+  readonly sourceAmountRaw: string
   readonly quote: RheaSwapQuoteView
   readonly routeCost: string | null
   readonly estimatedReceive: string
@@ -207,7 +208,7 @@ export function useEvmSendTransfer({
       ? catalogAccount
       : null
   const shieldSourceAvailable =
-    getPrivateTransferChainIds(activeAccount, networkMode === 'mainnet').length > 0
+    getShieldTransferChainIds(activeAccount, networkMode === 'mainnet').length > 0
   const accountDisplayName =
     activeAccount && walletId && accountId
       ? getAccountDisplayName(
@@ -624,6 +625,7 @@ export function useEvmSendTransfer({
           heldQuoteHandle = quote.quoteHandle
           setPrivatePreview({
             key: request.key,
+            sourceAmountRaw: request.amountRaw,
             quote,
             routeCost: getPublicPrivateSendRouteCost({
               amountInRaw: request.amountRaw,

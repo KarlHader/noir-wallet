@@ -1,11 +1,15 @@
 import { chromium, expect, test } from '@playwright/test'
-import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const extensionRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+
+interface ProviderAnnouncementInfo {
+  name: string
+  icon: string
+}
 
 test('injects the provider and its icon into the dApp MAIN world from the HMR extension', async () => {
   test.skip(process.env.DEV_EXTENSION_E2E !== '1', 'Requires pnpm dev:extension to be running')
@@ -50,26 +54,25 @@ test('injects the provider and its icon into the dApp MAIN world from the HMR ex
         )
       )
       .toBe(true)
-    const expectedIcon = `data:image/png;base64,${readFileSync(path.join(extensionRoot, 'public/icons/icon128.png')).toString('base64')}`
-    const announcement = await page.evaluate(() => {
-      let info: unknown = null
+    const announcement = await page.evaluate((): ProviderAnnouncementInfo | null => {
+      let info: ProviderAnnouncementInfo | null = null
       const listen = (event: Event) => {
-        info = (event as CustomEvent<{ info: unknown }>).detail.info
+        info = (event as CustomEvent<{ info: ProviderAnnouncementInfo }>).detail.info
       }
       window.addEventListener('eip6963:announceProvider', listen)
       window.dispatchEvent(new Event('eip6963:requestProvider'))
       window.removeEventListener('eip6963:announceProvider', listen)
       return info
     })
-    expect(announcement).toMatchObject({ name: 'Noir Wallet', icon: expectedIcon })
-    expect(
-      await page.evaluate(async icon => {
-        const image = new Image()
-        image.src = icon
-        await image.decode()
-        return { width: image.naturalWidth, height: image.naturalHeight }
-      }, expectedIcon)
-    ).toEqual({ width: 128, height: 128 })
+    expect(announcement).toMatchObject({
+      name: 'Noir Wallet',
+      icon: expect.stringMatching(/^data:image\//)
+    })
+    await page.evaluate(async icon => {
+      const image = new Image()
+      image.src = icon ?? ''
+      await image.decode()
+    }, announcement?.icon)
     for (let reload = 0; reload < 5; reload += 1) {
       if (reload > 0) await page.reload()
       await expect

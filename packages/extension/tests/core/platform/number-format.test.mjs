@@ -9,6 +9,7 @@ import {
   formatBaseUnitDecimalAmount,
   parseDisplayUnitAmount,
   formatDecimalAmount,
+  estimateBpsFeeAmount,
   formatFeeAmount,
   formatFiatAmount,
   formatPercentage,
@@ -115,6 +116,14 @@ test('fee display rounds up without losing whole units or rendering nonzero as z
   for (const value of ['0.000012345678', '0.00000000312345', '999.999999', '1234567.1']) {
     assert.ok(new Big(formatFeeAmount(value).replace(/,/g, '')).gte(value))
   }
+})
+
+test('fee estimates preserve source asset precision when applying basis points', () => {
+  const input = '610000000000000'
+  assert.equal(estimateBpsFeeAmount(input, 18, 2), '0.000000122')
+  assert.equal(estimateBpsFeeAmount(input, 18, 20), '0.00000122')
+  assert.equal(estimateBpsFeeAmount('9007199254740993123123', 0, 2), '1801439850948198624')
+  assert.equal(estimateBpsFeeAmount('invalid', 18, 2), null)
 })
 
 test('percentage thresholds preserve direction and decimal scaling without floats', () => {

@@ -1,16 +1,15 @@
 import { isAddress } from 'viem'
-import Big from 'big.js'
 import type { AssetRegistry } from '@/core/chains/registry'
 import { getZcashChainId, parseAssetId, parseChainId } from '@/core/chains/registry'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
-import { ZEC_ZCASH_ASSET, getConfidentialFundingNetworkConfig } from '@/config/intents'
+import { NOIR_RECEIVE_REFERRAL, NOIR_SWAP_REFERRAL, ZEC_ZCASH_ASSET } from '@/config/intents'
 import type { EvmNetworkConfig } from '@/config/networks'
 import { getNearNetworkConfig, getSolanaNetworkConfig } from '@/config/networks'
 import {
   fetchQuote,
-  fetchSwapStatus,
+  parseSwapStatusResponse,
   refreshSwapTokenCatalog,
   type SwapStatus
 } from '@/core/services/intents-api'
@@ -22,6 +21,12 @@ import { resolveManagedIntentsAsset } from '@/core/services/intents-managed-asse
 import { resolveIntentsEvmChainId } from '@/core/services/intents-evm-assets'
 import { resolveIntentsWalletAsset } from '@/core/services/intents-wallet-assets'
 import {
+  createOneClickOrder,
+  parseOneClickDepositMemo,
+  type OneClickOrder,
+  type OneClickViewer
+} from '@/core/services/near-intents/one-click-order'
+import {
   sameNativeZecQuoteBinding,
   zatsToZec,
   zecToZats,
@@ -32,9 +37,10 @@ import {
 import { SerialTaskQueue } from '@/lib/async-utils'
 import { withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
 import { withMetadataLock } from '@/lib/wallet-metadata-storage'
+import { readConfidentialQuoteAppFees } from './confidential-funding-api'
 import { credentialSession } from './credential-session'
-import { ConfidentialFundingApi } from './confidential-funding-api'
-import type { Network, QuoteBinding } from '@/types/wallet'
+import { queryOneClickOrderStatus, resolveZcashOneClickViewer } from './one-click-status'
+import type { FundingSource, Network, QuoteBinding } from '@/types/wallet'
 
 const PREFIX = 'native_zec_intents_swap:'
 const INDEX_KEY = `${PREFIX}index`
@@ -48,6 +54,43 @@ export interface NativeZecActiveAccountSnapshot {
   readonly walletId: string | null
   readonly accountId: string | null
   readonly refundAddresses: readonly string[]
+  readonly shieldedRefundAddressHistory?: readonly string[]
+}
+
+interface NativeZecAccountScope {
+  readonly network: Network
+  readonly walletId: string
+  readonly accountId: string
+}
+
+function isShieldedRefund(scheme: string): boolean {
+  return scheme === 'zcash-full-unified' || scheme === 'zcash-sapling'
+}
+
+function assertNativeZecOrder(
+  order: OneClickOrder,
+  depositAddress: string,
+  refundAddress: string,
+  network: Network
+): void {
+  const refund = parseZcashAddress(refundAddress, network)
+  if (!order || typeof order !== 'object' || Array.isArray(order)) {
+    throw new Error('Native ZEC 1Click order binding is invalid')
+  }
+  const viewer = order.viewer
+  if (order.depositMemo !== undefined) parseOneClickDepositMemo(order.depositMemo)
+  if (
+    order.depositAddress !== depositAddress ||
+    (viewer !== undefined &&
+      (!viewer ||
+        viewer.chainFamily !== 'zcash' ||
+        parseZcashAddress(viewer.walletAddress, network).scheme !== 'zcash-transparent-p2pkh' ||
+        (isShieldedRefund(refund.scheme)
+          ? viewer.signingMode !== 'derived'
+          : viewer.walletAddress !== refund.address || viewer.signingMode !== 'transparent')))
+  ) {
+    throw new Error('Native ZEC 1Click order binding is invalid')
+  }
 }
 
 function recordKey(quoteId: string): string {
@@ -94,6 +137,10 @@ function parseRecord(value: unknown): NativeZecIntentsSwapRecord {
     !AMOUNT_PATTERN.test(record.expectedOutputRaw) ||
     !AMOUNT_PATTERN.test(record.minimumOutputRaw) ||
     BigInt(record.minimumOutputRaw) > BigInt(record.expectedOutputRaw) ||
+    (record.appFeeBps !== undefined &&
+      (!Number.isSafeInteger(record.appFeeBps) ||
+        record.appFeeBps < 0 ||
+        record.appFeeBps > 10_000)) ||
     !record.quoteBinding ||
     record.quoteBinding.provider !== 'near-intents' ||
     record.quoteBinding.isCrossChain !== true ||
@@ -111,7 +158,15 @@ function parseRecord(value: unknown): NativeZecIntentsSwapRecord {
     throw new Error('Stored native ZEC Intents quote bindings are invalid')
   }
   parseZcashAddress(record.depositAddress, record.network)
-  parseZcashAddress(record.refundAddress, record.network)
+  const refund = parseZcashAddress(record.refundAddress, record.network)
+  if (record.quoteBinding.oneClickOrder !== undefined) {
+    assertNativeZecOrder(
+      record.quoteBinding.oneClickOrder,
+      record.depositAddress,
+      record.refundAddress,
+      record.network
+    )
+  }
   parseAssetId(record.destination.assetId)
   parseChainId(record.destination.chainId)
   if (record.schemaVersion === 1) {
@@ -132,9 +187,7 @@ function parseRecord(value: unknown): NativeZecIntentsSwapRecord {
     record.quoteBinding.recipientType !== record.recipientType ||
     record.quoteBinding.fundingSource !== record.fundingSource ||
     (record.quoteBinding.userAction !== undefined && record.quoteBinding.userAction !== 'swap') ||
-    !parseZcashAddress(record.refundAddress, record.network).scheme.startsWith(
-      'zcash-transparent-'
-    ) ||
+    (record.fundingSource === 'transparent' && isShieldedRefund(refund.scheme)) ||
     !record.destination.recipient ||
     !isAddress(record.destination.recipient)
   ) {
@@ -183,63 +236,49 @@ export async function markNativeZecIntentsSwapTerminal(
   })
 }
 
+export function readNativeZecIntentsStatusViewer(
+  binding: QuoteBinding,
+  network: Network
+): OneClickViewer | undefined {
+  if (binding.provider !== 'near-intents' || !binding.depositAddress || !binding.refundTo) return
+  if (binding.oneClickOrder !== undefined) {
+    assertNativeZecOrder(binding.oneClickOrder, binding.depositAddress, binding.refundTo, network)
+    if (binding.oneClickOrder.viewer) return binding.oneClickOrder.viewer
+  }
+  const refund = parseZcashAddress(binding.refundTo, network)
+  if (refund.scheme === 'zcash-transparent-p2pkh') {
+    return { chainFamily: 'zcash', walletAddress: refund.address, signingMode: 'transparent' }
+  }
+}
+
 export async function readNativeZecIntentsSwapStatus(
-  binding: QuoteBinding
+  binding: QuoteBinding,
+  scope: NativeZecAccountScope & { readonly signal?: AbortSignal }
 ): Promise<SwapStatus | null> {
-  if (binding.provider !== 'near-intents' || !binding.depositAddress) return null
-  const record =
-    binding.quoteHandle && ID_PATTERN.test(binding.quoteHandle)
-      ? await (async () => {
-          const key = recordKey(binding.quoteHandle!)
-          const value = (await chrome.storage.local.get(key))[key]
-          return value === undefined ? null : parseRecord(value)
-        })()
-      : null
-  if (record && !sameNativeZecQuoteBinding(binding, record.quoteBinding)) {
+  if (binding.provider !== 'near-intents' || !binding.depositAddress || !binding.refundTo) {
+    return null
+  }
+  const key = binding.quoteHandle ? recordKey(binding.quoteHandle) : undefined
+  const value = key ? (await chrome.storage.local.get(key))[key] : undefined
+  const record = value === undefined ? undefined : parseRecord(value)
+  if (
+    record &&
+    (record.network !== scope.network ||
+      record.walletId !== scope.walletId ||
+      record.accountId !== scope.accountId ||
+      !sameNativeZecQuoteBinding(binding, record.quoteBinding))
+  ) {
     throw new Error('Native ZEC Intents status quote binding changed')
   }
-  if (binding.recipientType !== 'CONFIDENTIAL_INTENTS' && record?.schemaVersion !== 2) {
-    return fetchSwapStatus(binding.depositAddress)
-  }
-  if (!record || record.schemaVersion !== 2) {
-    throw new Error('Native ZEC Confidential quote binding is unavailable')
-  }
-  const config = getConfidentialFundingNetworkConfig(record.network)
-  if (!config) throw new Error('Native ZEC Confidential status is unavailable')
-  const status = await new ConfidentialFundingApi(config, '', '').getOneClickStatus(
-    record.depositAddress
+  const viewer = readNativeZecIntentsStatusViewer(binding, scope.network)
+  if (!viewer) return null
+  const order = createOneClickOrder(
+    binding.depositAddress,
+    binding.oneClickOrder?.depositMemo,
+    viewer
   )
-  const normalized = status.status.toUpperCase()
-  const mappedStatus: SwapStatus['status'] =
-    normalized === 'SUCCESS' || normalized === 'COMPLETED'
-      ? 'SUCCESS'
-      : normalized === 'REFUNDED'
-        ? 'REFUNDED'
-        : normalized === 'FAILED'
-          ? 'FAILED'
-          : normalized === 'KNOWN_DEPOSIT_TX'
-            ? 'KNOWN_DEPOSIT_TX'
-            : normalized === 'INCOMPLETE_DEPOSIT'
-              ? 'INCOMPLETE_DEPOSIT'
-              : normalized === 'PENDING_DEPOSIT'
-                ? 'PENDING_DEPOSIT'
-                : 'PROCESSING'
-  return {
-    status: mappedStatus,
-    originAsset: record.quoteBinding.originAsset,
-    destinationAsset: record.quoteBinding.destinationAsset,
-    ...(status.settledAmountOutRaw
-      ? {
-          swapDetails: {
-            amountOutFormatted: new Big(status.settledAmountOutRaw)
-              .div(new Big(10).pow(record.destinationDecimals))
-              .toString(),
-            originChainTxHashes: [],
-            destinationChainTxHashes: []
-          }
-        }
-      : {})
-  }
+  const status = await queryOneClickOrderStatus({ ...scope, order })
+  return status === null ? null : parseSwapStatusResponse(status, record?.destinationDecimals)
 }
 
 function assertRecipient(recipient: string, chainId: string, network: Network): void {
@@ -269,6 +308,7 @@ export class NativeZecIntentsSwapCoordinator {
       assetMappings: readonly Readonly<{ assetId: string; protocolAssetId: string }>[]
       isUnlocked?: () => Promise<boolean>
       getActiveAccount?: () => NativeZecActiveAccountSnapshot
+      resolveOneClickViewer?: typeof resolveZcashOneClickViewer
       resolveConfidentialIdentity?: (
         scope: Readonly<{ walletId: string; accountId: string }>
       ) => Promise<string>
@@ -277,12 +317,14 @@ export class NativeZecIntentsSwapCoordinator {
       ) => Promise<void>
       quoteConfidential?: (
         input: Readonly<{
+          referral: typeof NOIR_SWAP_REFERRAL | typeof NOIR_RECEIVE_REFERRAL
           originAsset: string
           destinationAsset: string
           amountRaw: string
           signerId: string
           refundTo: string
           slippageBps: number
+          viewer?: OneClickViewer
         }>
       ) => Promise<ConfidentialQuote>
     }>
@@ -363,7 +405,13 @@ export class NativeZecIntentsSwapCoordinator {
     ) {
       throw new Error('Native ZEC Intents Swap account changed')
     }
-    if (!state.refundAddresses.includes(refundAddress)) {
+    if (
+      !state.refundAddresses.includes(refundAddress) &&
+      !(
+        isShieldedRefund(parseZcashAddress(refundAddress, state.network).scheme) &&
+        state.shieldedRefundAddressHistory?.includes(refundAddress)
+      )
+    ) {
       throw new Error('Native ZEC Intents refund address is not owned by this account')
     }
   }
@@ -383,7 +431,8 @@ export class NativeZecIntentsSwapCoordinator {
       ) {
         throw new Error('Native ZEC Intents Swap request is invalid')
       }
-      parseZcashAddress(input.refundAddress, input.network)
+      const refund = parseZcashAddress(input.refundAddress, input.network)
+      const shieldedRefund = isShieldedRefund(refund.scheme)
       const confidential = input.recipientType === 'CONFIDENTIAL_INTENTS'
       if (
         (input.userAction !== undefined && (!confidential || input.userAction !== 'swap')) ||
@@ -393,9 +442,7 @@ export class NativeZecIntentsSwapCoordinator {
         (confidential &&
           (input.destination.recipient !== undefined ||
             (input.fundingSource !== 'transparent' && input.fundingSource !== 'shielded') ||
-            !parseZcashAddress(input.refundAddress, input.network).scheme.startsWith(
-              'zcash-transparent-'
-            ))) ||
+            (input.fundingSource === 'transparent' && shieldedRefund))) ||
         (!confidential && input.fundingSource !== undefined && input.fundingSource !== 'shielded')
       )
         throw new Error('Native ZEC Intents Swap route is invalid')
@@ -514,14 +561,25 @@ export class NativeZecIntentsSwapCoordinator {
       ) {
         throw new Error('Native ZEC Intents asset catalog changed')
       }
+      const refundSource: FundingSource = shieldedRefund ? 'shielded' : 'transparent'
+      const resolveViewer = this.options.resolveOneClickViewer ?? resolveZcashOneClickViewer
+      const viewer = await resolveViewer(
+        { network: input.network, walletId: input.walletId, accountId: input.accountId },
+        input.refundAddress,
+        refundSource
+      )
+      const quoteViewer = shieldedRefund ? viewer : undefined
+      this.assertActiveAccount(input.walletId, input.accountId, input.refundAddress)
       const confidentialQuote = confidential
         ? await this.options.quoteConfidential?.({
+            referral: input.userAction === 'swap' ? NOIR_SWAP_REFERRAL : NOIR_RECEIVE_REFERRAL,
             originAsset: ZEC_ZCASH_ASSET,
             destinationAsset: input.destination.protocolAssetId,
             amountRaw: input.amountZats,
             signerId: recipient,
             refundTo: input.refundAddress,
-            slippageBps: input.slippageBps
+            slippageBps: input.slippageBps,
+            viewer: quoteViewer
           })
         : undefined
       if (confidential && !confidentialQuote)
@@ -548,12 +606,16 @@ export class NativeZecIntentsSwapCoordinator {
             refundTo: input.refundAddress,
             recipient,
             slippageTolerance: input.slippageBps,
-            validateQuoteRequest: true
+            validateQuoteRequest: true,
+            viewer: quoteViewer
           })
       const quote = confidentialQuote?.quote ?? result?.quoteSuccessResult?.quote
       if (!quote || (!confidential && result?.quoteStatus !== 'success')) {
         throw new Error(result?.message ?? 'Native ZEC Intents quote is unavailable')
       }
+      const appFeeBps = confidentialQuote
+        ? readConfidentialQuoteAppFees(confidentialQuote).reduce((total, fee) => total + fee.fee, 0)
+        : undefined
       const expiresAt = Date.parse(quote.deadline)
       if (
         quote.amountIn !== input.amountZats ||
@@ -597,6 +659,8 @@ export class NativeZecIntentsSwapCoordinator {
         throw new Error('Native ZEC Confidential account changed after quoting')
       }
       const quoteId = crypto.randomUUID()
+      const oneClickOrder = createOneClickOrder(quote.depositAddress, quote.depositMemo, viewer)
+      assertNativeZecOrder(oneClickOrder, quote.depositAddress, input.refundAddress, input.network)
       const quoteBinding: QuoteBinding = Object.freeze({
         provider: 'near-intents',
         ...(input.userAction ? { userAction: input.userAction } : {}),
@@ -604,6 +668,7 @@ export class NativeZecIntentsSwapCoordinator {
         isCrossChain: true,
         destinationChain: input.destination.chainId,
         depositAddress: quote.depositAddress,
+        oneClickOrder,
         originAsset: ZEC_ZCASH_ASSET,
         destinationAsset: input.destination.protocolAssetId,
         expectedAmountOut: quote.amountOut,
@@ -634,6 +699,7 @@ export class NativeZecIntentsSwapCoordinator {
           : {}),
         expectedOutputRaw: quote.amountOut,
         minimumOutputRaw: quote.minAmountOut,
+        ...(appFeeBps === undefined ? {} : { appFeeBps }),
         expiresAt,
         quoteBinding,
         slippageBps: input.slippageBps,

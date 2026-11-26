@@ -34,9 +34,8 @@ export function TokenSelectorDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        position="bottom"
+        position="fullscreen"
         scroll="body"
-        fixedHeight
         showCloseButton={false}
         className="gap-0 p-0"
       >

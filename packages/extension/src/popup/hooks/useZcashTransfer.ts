@@ -1209,6 +1209,11 @@ export function useZcashTransfer({
       confidential: isConfidentialMove || sendPrivately,
       feeControl: sendPrivately ? null : feeControl,
       allowFeeFallback: !feeRequired,
+      appFee: privateRoute?.quote.appFeeBps
+        ? { sourceAmountRaw: privateRoute.amountRaw, bps: privateRoute.quote.appFeeBps }
+        : isConfidentialMove && moveQuoteReady && moveQuote?.review.appFeeBps
+          ? { sourceAmountRaw: moveQuote.review.amountZats, bps: moveQuote.review.appFeeBps }
+          : null,
       routeCost: privateRoute
         ? getPublicPrivateSendRouteCost({
             amountInRaw: privateRoute.amountRaw,

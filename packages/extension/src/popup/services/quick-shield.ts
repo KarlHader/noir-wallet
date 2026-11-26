@@ -8,9 +8,9 @@ import type { SwapToken } from '@/core/services/intents-api'
 import type { Network } from '@/types'
 import { getAssetDomainRaw, type ShieldProvider } from './asset-domains'
 import { resolveManagedIntentsCatalog } from './intents-asset-manager-client'
-import { getPrivateTransferChainIds } from './private-balance-transfer'
+import { getNearMoveChainIds } from './private-balance-transfer'
 import { getPortfolioAssetUsdValue } from './portfolio-prices'
-import { listShieldFundingAssets } from './shield-transfer'
+import { getShieldTransferChainIds, listShieldFundingAssets } from './shield-transfer'
 import { getConfidentialZcashTransferRecipients } from './zcash-self-transfer'
 import { hasNativeZecConfidentialSwapRoute } from './shield-swap-zec-sources'
 import type { AccountNetworksView } from './account-networks-client'
@@ -47,12 +47,13 @@ export function getQuickShieldAssets({
   readonly prices: AssetPriceReadModel | null
   readonly enabledFlags: readonly ChainFeatureFlagValue[]
 }): QuickShieldAsset[] {
-  const nearChains = new Set(
-    getPrivateTransferChainIds(
+  const nearChains = new Set([
+    ...getShieldTransferChainIds(
       account,
       network === 'mainnet' && isNewWalletFamilyEnabled('evm', enabledFlags)
-    )
-  )
+    ),
+    ...getNearMoveChainIds({ account, mainnet: network === 'mainnet', enabledFlags })
+  ])
   const nativeZcashChain = getZcashChainId(network)
   const { walletSource } = account
   const nativeZcashEnabled =
@@ -120,4 +121,8 @@ export function summarizeQuickShieldAssets(assets: readonly QuickShieldAsset[]) 
     pricedCount++
   }
   return { totalUsd: pricedCount ? total.toFixed() : null, partial: pricedCount < assets.length }
+}
+
+export function getQuickShieldTotalUsd(assets: readonly QuickShieldAsset[]): string | null {
+  return summarizeQuickShieldAssets(assets).totalUsd
 }

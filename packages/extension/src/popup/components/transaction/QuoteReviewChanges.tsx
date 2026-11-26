@@ -18,7 +18,7 @@ const labels = {
   expected: 'Expected receive',
   minimum: 'Minimum receive',
   route: 'Route',
-  appFeeBps: 'Service fee',
+  appFeeBps: 'Fee rate',
   withdrawFee: 'Withdrawal fee'
 } as const
 

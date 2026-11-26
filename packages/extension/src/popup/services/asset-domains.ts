@@ -80,7 +80,7 @@ function projectDisplayAsset(asset: PortfolioAssetView, totalRaw: string): Portf
 export function projectPortfolioForDomain(
   model: PortfolioReadModel,
   domain: AssetDomain,
-  options: Readonly<{ evmPrivateAvailable?: boolean }> = {}
+  options: Readonly<{ evmPrivateAvailable?: boolean; evmShieldAvailable?: boolean }> = {}
 ): PortfolioReadModel {
   // Display-only: projected totals must never be passed to transaction preparation.
   if (domain === 'all') return model
@@ -90,7 +90,9 @@ export function projectPortfolioForDomain(
     if (raw === null) continue
     if (
       raw === '0' &&
-      options.evmPrivateAvailable === false &&
+      (domain === 'shield'
+        ? (options.evmShieldAvailable ?? options.evmPrivateAvailable)
+        : options.evmPrivateAvailable) === false &&
       domainBalanceFamily(asset) === 'evm' &&
       domain !== 'public'
     )

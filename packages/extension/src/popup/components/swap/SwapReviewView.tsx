@@ -19,6 +19,7 @@ import {
 import type { FeeTier } from '@/config/fee'
 import { quoteReviewPrimaryAction } from '@/popup/services/quote-review'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
+import { QuoteFeeAmount } from '../transaction/QuoteFeeAmount'
 import { RouteProviderLabel } from '../transaction/RouteProviderLabel'
 import { ReviewDownTriangle } from '../transaction/TransactionReviewView'
 import { TransactionReviewParty } from '../transaction/TransactionReviewParty'
@@ -66,6 +67,7 @@ interface SwapReviewViewProps {
   arrivalEstimate?: string
   isLoading?: boolean
   submitting?: boolean
+  appFee?: { readonly sourceAmountRaw: string; readonly bps: number }
   preparationError?: string | null
   onRetryPreparation?: () => void
   /** Selected fee tier (read-only display on review). */
@@ -135,6 +137,7 @@ export function SwapReviewView({
   onConfirm,
   isLoading,
   submitting,
+  appFee,
   preparationError,
   onRetryPreparation,
   feeTier,
@@ -295,8 +298,18 @@ export function SwapReviewView({
               />
             )}
           </DetailItem>
+          {appFee && appFee.bps > 0 && (
+            <DetailItem label="Fee">
+              <QuoteFeeAmount
+                sourceAmountRaw={appFee.sourceAmountRaw}
+                decimals={tokenIn.decimals}
+                symbol={tokenIn.symbol}
+                bps={appFee.bps}
+              />
+            </DetailItem>
+          )}
           {combinedNetworkFee && (
-            <DetailItem label="Max network fee">
+            <DetailItem label="Network fee">
               <AmountDisplay
                 value={combinedNetworkFee.amount}
                 symbol={combinedNetworkFee.symbol}
@@ -335,7 +348,7 @@ export function SwapReviewView({
                   />
                 </DetailItem>
               )}
-              <DetailItem label={combinedNetworkFee ? 'Approval fee' : 'Network fee'}>
+              <DetailItem label={combinedNetworkFee ? 'Approval network fee' : 'Network fee'}>
                 {quoteRefreshing ? (
                   <span className="inline-block h-4 w-24 animate-pulse rounded bg-card" />
                 ) : sourceFeeControl ? (

@@ -7,23 +7,23 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { bitcoinWalletClient } from './bitcoin-wallet-client'
 import { evmWalletClient } from './evm-wallet-client'
 import type { OnchainTransferSubmission } from './onchain-result-adapters'
+import type { KeystoneEvmSigningView } from '@/background/keystone-evm-message-signing'
 
 type KeystoneSigningRequest = Pick<
   NonNullable<Awaited<ReturnType<typeof bitcoinWalletClient.getExternalSigningRequest>>>,
   'chainId' | 'expiresAt' | 'payloadFingerprint' | 'request'
->
+> &
+  Partial<Pick<KeystoneEvmSigningView, 'kind'>>
 
-interface KeystoneTransferAdapter {
+export interface KeystoneTransferAdapter<SigningId extends string = TransactionId> {
   readonly client: {
-    readonly getExternalSigningRequest: (
-      id: TransactionId
-    ) => Promise<KeystoneSigningRequest | null>
-    readonly rejectTransfer: (id: TransactionId) => Promise<unknown>
+    readonly getExternalSigningRequest: (id: SigningId) => Promise<KeystoneSigningRequest | null>
+    readonly rejectTransfer: (id: SigningId) => Promise<unknown>
     readonly submitExternalSignature: (
-      id: TransactionId,
+      id: SigningId,
       payloadFingerprint: string,
       responseBase64: string
-    ) => Promise<OnchainTransferSubmission>
+    ) => Promise<Pick<OnchainTransferSubmission, 'status'> | { readonly status: 'signed' }>
   }
   readonly name: string
   readonly title: string
@@ -34,10 +34,24 @@ interface KeystoneTransferAdapter {
   readonly networkName: (chainId: string) => string
   readonly detailLabel: string
   readonly showNetworkInReview?: boolean
+  readonly signatureOnly?: boolean
   readonly sentTitle: string
   readonly sentDescription: (networkName: string) => string
   readonly failureTitle: string
   readonly failureDescription: string
+}
+
+async function sendKeystoneDeviceMessage<Result>(message: {
+  readonly type: string
+  readonly requestId: string
+  readonly signatureCborBase64?: string
+}): Promise<Result> {
+  const response: { result?: Result; error?: string } | undefined =
+    await chrome.runtime.sendMessage(message)
+  if (response?.result === undefined) {
+    throw new Error(response?.error ?? 'Keystone signing is unavailable. Review this action again.')
+  }
+  return response.result
 }
 
 export type KeystoneTransferFamily = 'bitcoin' | 'evm'
@@ -87,4 +101,32 @@ export const keystoneTransferAdapters: Readonly<
     failureDescription:
       'The signature did not match the approved request or active Keystone Account. Start a new send.'
   }
+}
+
+export const keystoneEvmDeviceSigningAdapter: KeystoneTransferAdapter<string> = {
+  ...keystoneTransferAdapters.evm,
+  signatureOnly: true,
+  client: {
+    getExternalSigningRequest: requestId =>
+      sendKeystoneDeviceMessage<KeystoneEvmSigningView>({
+        type: 'GET_KEYSTONE_EVM_DEVICE_SIGNING_REQUEST',
+        requestId
+      }),
+    rejectTransfer: requestId =>
+      sendKeystoneDeviceMessage({ type: 'CANCEL_KEYSTONE_EVM_DEVICE_SIGNING_REQUEST', requestId }),
+    submitExternalSignature: async (requestId, _payloadFingerprint, signatureCborBase64) => {
+      await sendKeystoneDeviceMessage({
+        type: 'SUBMIT_KEYSTONE_EVM_DEVICE_SIGNING_RESPONSE',
+        requestId,
+        signatureCborBase64
+      })
+      return { status: 'signed' }
+    }
+  },
+  encodeResponse: ur => {
+    if (ur.type !== 'eth-signature')
+      throw new Error('Scan the Ethereum signature shown by Keystone.')
+    return bytesToBase64(ur.cbor)
+  },
+  failureDescription: 'The signature did not match the approved request. Review this action again.'
 }

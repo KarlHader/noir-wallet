@@ -158,6 +158,7 @@ import {
   getPrivateTransferChainIds,
   resolveCrossChainPrivateWithdrawRoute
 } from '@/popup/services/private-balance-transfer'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { NEAR_INCOGNITO_UNFUNDED_ERROR } from '@/core/services/rhea-swap/rhea-swap-near-private-route'
 import { nearPrivateSwapExecutionAvailable } from '@/popup/services/near-quote-asset-execution'
@@ -165,6 +166,7 @@ import { TransactionNotice } from '../../components/transaction/TransactionNotic
 import { ZcashSyncProgress } from '../../components/zcash/ZcashSyncProgress'
 import { useZcashSyncReadStatus } from '@/popup/hooks/usePersistedExtensionContextSync'
 import { AmountDisplay } from '../../components/common/AmountDisplay'
+import { QuoteFeeAmount } from '../../components/transaction/QuoteFeeAmount'
 import { Button } from '../../components/ui/button'
 import { Skeleton } from '../../components/ui/skeleton'
 import { SwapApprovalSubmittedView } from '@/popup/components/transaction/SwapApprovalSubmittedView'
@@ -676,7 +678,8 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       )
     )
   const confidentialShieldAvailable =
-    getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
+    getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0 ||
+    getShieldTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
   const nativeZecConfidentialAvailable = hasNativeZecConfidentialSwapRoute(
     storageV2Account,
     currentNetwork,
@@ -3499,7 +3502,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
     currentQuote: quoteResult,
     currentKey: liveQuoteKey,
     outputDecimals: swap.tokenOut?.decimals,
-    maxSelected,
+    immediate: maxSelected || (isPrivateFunding && autoReviewRequested),
     walletId: effectiveWalletId,
     accountId: effectiveAccountId,
     sequence: quoteRequestSequence,
@@ -4450,12 +4453,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           signedOrder,
           sourceExecutionMode: executionSourceMode,
           rheaQuoteHandle: quoteResult?.quoteHandle,
-          ...(shieldNativeZecSwap &&
-          swap.isZecSource &&
-          nativeIntentsQuote?.review.recipientType === 'CONFIDENTIAL_INTENTS'
+          ...(nativeIntentsQuote && swap.isZecSource
             ? {
                 nativeIntentsQuoteHandle: nativeIntentsQuote.review.quoteId,
-                nativeIntentsInternalDestination: true
+                nativeIntentsInternalDestination:
+                  nativeIntentsQuote.review.recipientType === 'CONFIDENTIAL_INTENTS'
               }
             : {}),
           router:
@@ -4489,7 +4491,6 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       swap,
       quoteResult?.quoteHandle,
       nativeIntentsQuote,
-      shieldNativeZecSwap,
       swap.isZecSource,
       navigate,
       setResult,
@@ -6753,6 +6754,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           })}
           slippage={swap.slippage}
           provider="near-confidential"
+          appFee={
+            review?.appFeeBps
+              ? { sourceAmountRaw: review.amountZats, bps: review.appFeeBps }
+              : undefined
+          }
           preparationError={
             transferPreparationError ?? (!review && !swap.isQuoting ? swap.quoteError : null)
           }
@@ -6872,6 +6878,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         ) : undefined
 
       if (privateBalanceTransferRequested && walletOwnedSource) {
+        const sourceToken = swap.tokenIn
         const transferReview =
           privateBalanceTransferReview?.quoteHandle === rheaReview.quoteHandle &&
           privateBalanceTransferReview.executionId === rheaReview.executionId
@@ -6909,6 +6916,27 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               />
             )
           },
+          ...(rheaReview.appFeeBps
+            ? [
+                {
+                  label: 'Fee',
+                  content: (
+                    <QuoteFeeAmount
+                      sourceAmountRaw={rheaReview.amountIn}
+                      decimals={sourceToken.decimals}
+                      symbol={sourceToken.symbol}
+                      bps={rheaReview.appFeeBps}
+                      fallbackAmount={getCrossChainSendRouteCost({
+                        source: sourceToken,
+                        destination: swap.tokenOut,
+                        amountInRaw: rheaReview.amountIn,
+                        estimatedOutRaw: rheaReview.estimatedOut
+                      })}
+                    />
+                  )
+                }
+              ]
+            : []),
           ...(sourceNetworkFee
             ? [
                 {
@@ -7122,6 +7150,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
           tokenOut={swap.tokenOut}
           amountIn={reviewedAmountIn}
           amountOut={reviewedAmountOut}
+          appFee={
+            rheaReview.appFeeBps
+              ? { sourceAmountRaw: rheaReview.amountIn, bps: rheaReview.appFeeBps }
+              : undefined
+          }
           minAmountOut={minAmountOut}
           priceImpact={priceImpact}
           fromFiat={fromFiat}
@@ -7351,6 +7384,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
               : ''
           }
           routeCost={routeCost}
+          appFee={
+            activeQuote?.appFeeBps && liveQuoteRequest
+              ? { sourceAmountRaw: liveQuoteRequest.amount, bps: activeQuote.appFeeBps }
+              : undefined
+          }
           recipient={
             crossChainDraftPending
               ? (crossChainSendDraft?.recipient ?? resolvedRecipientAddress)
@@ -7501,6 +7539,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         hideAccountDetails={ordinarySwapRequested}
         sourceZcashFundingSource={fundingSource}
         addressType={zecDestinationType}
+        destinationIsConfidential={shieldNativeZecSwap && swap.isZecSource}
         destinationAddress={resolvedRecipientAddress}
         spendableBalance={spendableBalance}
         availableBalance={zcashFundingBalance.available}
@@ -7508,6 +7547,27 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         recipientError={recipientError}
         slippage={swap.slippage}
         networkFee={networkFee}
+        quoteFee={
+          swap.tokenIn && nativeReview?.appFeeBps ? (
+            <QuoteFeeAmount
+              sourceAmountRaw={nativeReview.amountZats}
+              decimals={swap.tokenIn.decimals}
+              symbol={swap.tokenIn.symbol}
+              bps={nativeReview.appFeeBps}
+            />
+          ) : swap.tokenIn &&
+            liveQuoteRequest &&
+            liveQuoteKey === liveQuoteRequest.key &&
+            quoteResult?.appFeeBps &&
+            isRheaSwapQuoteFresh(quoteResult) ? (
+            <QuoteFeeAmount
+              sourceAmountRaw={liveQuoteRequest.amount}
+              decimals={swap.tokenIn.decimals}
+              symbol={swap.tokenIn.symbol}
+              bps={quoteResult.appFeeBps}
+            />
+          ) : undefined
+        }
         isQuoting={swap.isQuoting}
         quoteError={
           nearIncognitoFundingError

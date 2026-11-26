@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { ONE_CLICK_TOKEN_CATALOG_URL } from '../../../src/config/intents.ts'
 import {
   DexScreenerMarketChangeService,
   OneClickAssetPriceService
@@ -63,7 +64,7 @@ test.describe('live 1Click protocol asset catalog', () => {
 
   test('contains every exact mainnet wallet quote identity with matching precision', async () => {
     const { assets, mappings } = createProtocolMappings('mainnet')
-    const response = await fetch('https://1click.chaindefuser.com/v0/tokens', {
+    const response = await fetch(ONE_CLICK_TOKEN_CATALOG_URL, {
       cache: 'no-store',
       credentials: 'omit',
       redirect: 'error',

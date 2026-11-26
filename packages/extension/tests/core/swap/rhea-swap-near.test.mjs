@@ -258,6 +258,10 @@ function createHarness(overrides = {}) {
         status: { SuccessValue: '' }
       }
     },
+    async broadcastSignedTransaction(transaction) {
+      const result = await this.broadcastSignedTransactionAndWait(transaction)
+      return result.transaction.hash
+    },
     async getTransactionStatus() {
       calls.push('status')
       return { status: 'unknown' }
@@ -705,6 +709,21 @@ test('reports the NEAR balance rejection and does not submit the swap', async ()
   expect(graph.root.status).toBe('failed')
 })
 
+test('native NEAR wraps only the amount missing from the wrapped balance', async () => {
+  const harness = createHarness({
+    rpc: {
+      async getFungibleTokenBalance() {
+        return { contractId: 'wrap.near', accountId: sender, amountRaw: '400' }
+      }
+    }
+  })
+  const review = await harness.coordinator.prepare(binding(true).quoteHandle, binding(true))
+  expect(review.summaries).toHaveLength(3)
+  expect(harness.preparedTransactions[0]).toMatchObject({
+    receiverId: 'wrap.near',
+    actions: [{ methodName: 'near_deposit', gas: '50000000000000', depositYocto: '600' }]
+  })
+})
 test('unrelated NEAR FT skips wNEAR funding and mismatched wrap bindings fail before signing', async () => {
   const otherAsset = binding()
   otherAsset.origin.assetId = 'near:mainnet/nep141:usdc.near'
@@ -797,6 +816,10 @@ test('native NEAR records the final swap hash after broadcasting the wrap', asyn
           transaction: { hash: hashes[index] },
           status: { SuccessValue: '' }
         }
+      },
+      async broadcastSignedTransaction(transaction) {
+        const result = await this.broadcastSignedTransactionAndWait(transaction)
+        return result.transaction.hash
       }
     }
   })

@@ -9,6 +9,7 @@ export {
   assertConfidentialQuoteBinding,
   assertFlexibleExternalDepositQuoteBinding,
   canRetryConfidentialSubmission,
+  confidentialQuoteAppFeeBps,
   fingerprintConfidentialValue,
   fingerprintDirectConfidentialApproval,
   getConfidentialFundingProgress,

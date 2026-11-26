@@ -1,6 +1,7 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/config/extension'
 import { parseChainId } from '@/core/chains/registry'
 import { readBoundedResponseText } from '@/lib/fetch-utils'
+import { logDevelopmentError } from '@/lib/development-console'
 import type { EvmDAppReadMethod } from '@/core/dapp/eip1193'
 
 export const EVM_RPC_ERROR_CODES = Object.freeze([
@@ -379,7 +380,8 @@ export function createEvmRpcClient(
       let decoded: unknown
       try {
         decoded = JSON.parse(text)
-      } catch {
+      } catch (error) {
+        logDevelopmentError(`[EVM RPC] ${method} returned invalid JSON`, error)
         throw new EvmRpcError('invalid-response', 'EVM RPC response is not valid JSON')
       }
       if (!isRecord(decoded) || decoded.jsonrpc !== '2.0' || decoded.id !== id) {
@@ -397,6 +399,7 @@ export function createEvmRpcClient(
       return decoded.result
     } catch (error) {
       if (error instanceof EvmRpcError) throw error
+      logDevelopmentError(`[EVM RPC] ${method} request failed`, error)
       if (controller.signal.aborted) {
         throw new EvmRpcError(
           timedOut ? 'timeout' : 'cancelled',

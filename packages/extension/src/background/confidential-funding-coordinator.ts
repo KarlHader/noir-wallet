@@ -8,6 +8,8 @@ import {
 } from '@/config/intents'
 import { trackEvent } from '@/background/analytics/reporter'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
+import { developmentErrorArgs, logDevelopmentError } from '@/lib/development-console'
+import { logger } from '@/lib/logger'
 import { withMetadataLock } from '@/lib/wallet-metadata-storage'
 import {
   projectConfidentialPlanResult,
@@ -33,6 +35,7 @@ import { parseZcashAddress } from '@/core/address-book/address-book'
 import { isValidExternalRecipient } from './confidential-funding-recipient'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { SwapToken } from '@/core/services/intents-api'
+import type { OneClickOrder, OneClickViewer } from '@/core/services/near-intents/one-click-order'
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import {
   isDeprecatedIntentsToken,
@@ -44,6 +47,7 @@ import type { ChainId } from '@/core/chains/domain'
 import { parseAccountId } from '@/core/accounts/domain'
 import { resolveConfidentialIdentity } from '@/core/accounts/confidential-identity'
 import { parseKeyDomainId } from '@/core/keyring/domain'
+import { KeyringError } from '@/core/keyring/protocol/errors'
 import {
   getZcashChainId,
   parseAssetId,
@@ -68,6 +72,7 @@ import {
   fingerprintDirectConfidentialApproval,
   combineConfidentialSignerBalances,
   confidentialAvailableByProtocolAsset,
+  confidentialQuoteAppFeeBps,
   filterConfidentialPortfolioMappings,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio,
@@ -102,6 +107,7 @@ import {
   createConfiguredEvmRpcClient,
   createEvmTransactionSegmentEvent,
   estimateEvmTransferFee,
+  EvmRpcError,
   EvmTransactionError,
   isEvmSpeedUpReplacement,
   observeEvmTransaction,
@@ -118,6 +124,7 @@ import {
   ConfidentialFundingApiError,
   CONFIDENTIAL_QUOTED_FEE_UNREPRESENTABLE_ERROR,
   confidentialQuoteAppFeeUnrepresentable,
+  parseConfidentialOneClickStatus,
   readConfidentialQuoteAppFees,
   type ConfidentialBalance,
   type ConfidentialPrivateOrder,
@@ -149,6 +156,7 @@ import {
 } from '@/infrastructure/chains/near'
 import {
   ConfidentialFundingSigner,
+  requireConfidentialPea,
   type ConfidentialSigningIdentity
 } from './confidential-funding-signer'
 import {
@@ -160,6 +168,8 @@ import {
   type NativeZecActiveAccountSnapshot
 } from './native-zec-intents-swap'
 import { ShieldDappCoordinator } from './shield-dapp-coordinator'
+import type { ShieldDappOperationReport } from '@/core/services/confidential-funding/shield-dapp-projection'
+import type { queryOneClickOrderStatus } from './one-click-status'
 import type { PrepareNativeZecIntentsSwapInput } from '@/core/services/native-zec-intents-swap'
 import type { QuoteBinding } from '@/types/wallet'
 
@@ -323,11 +333,13 @@ function directConfidentialRecipientType(
 function keepsFrozenConfidentialQuote(plan: {
   readonly operation?: string
   readonly purpose?: string
+  readonly swapQuote?: ConfidentialQuote
 }): boolean {
   return (
     plan.operation === 'swap' ||
     plan.operation === 'confidential-transfer' ||
-    plan.purpose === 'native-zec-swap'
+    plan.purpose === 'native-zec-swap' ||
+    (plan.operation === 'withdraw' && plan.swapQuote !== undefined)
   )
 }
 
@@ -347,7 +359,9 @@ function clusterDepositBinding(
     signerId: near?.signerId ?? identity.address,
     refundTo:
       near?.refundTo ??
-      (input.sourceDomain === 'private' ? identity.peaAddress.toLowerCase() : identity.address),
+      (input.sourceDomain === 'private'
+        ? requireConfidentialPea(identity).toLowerCase()
+        : identity.address),
     recipient: near?.signerId ?? identity.address,
     depositType: 'ORIGIN_CHAIN' as const,
     refundType: 'ORIGIN_CHAIN' as const,
@@ -359,6 +373,7 @@ function clusterDepositBinding(
 export interface ConfidentialFundingCoordinatorOptions {
   readonly network: Network
   readonly api: ConfidentialFundingApi
+  readonly queryOneClickOrderStatus: typeof queryOneClickOrderStatus
   readonly store: ChromeConfidentialFundingStore
   readonly signer: ConfidentialFundingSigner
   readonly repository: TransactionRepository
@@ -368,6 +383,13 @@ export interface ConfidentialFundingCoordinatorOptions {
   readonly protocolTokens?: readonly SwapToken[]
   readonly getProtocolTokens?: () => readonly SwapToken[]
   readonly getNativeZecActiveAccount?: () => NativeZecActiveAccountSnapshot
+  readonly broadcastZcashShieldDeposit?: (input: {
+    readonly walletId: string
+    readonly accountId: string
+    readonly depositAddress: string
+    readonly amountRaw: string
+    readonly refundAddress: string
+  }) => Promise<{ txHash: string }>
   readonly scheduleMonitoring?: (delayInMinutes?: number) => Promise<void>
   readonly refreshPortfolio?: (
     target: Readonly<{
@@ -393,6 +415,15 @@ export interface ConfidentialFundingCoordinatorOptions {
     broadcastSignedTransaction(rawTransaction: string): Promise<string>
     getTransactionStatus(transactionHash: string, signerId: string): Promise<NearTransactionStatus>
   }>
+}
+
+function evmRefundViewer(refundTo: string, identity: ConfidentialSigningIdentity): OneClickViewer {
+  const address = refundTo.toLowerCase()
+  if (address === identity.address.toLowerCase())
+    return { chainFamily: 'evm', walletAddress: refundTo, signingMode: 'public' }
+  if (address === identity.peaAddress?.toLowerCase())
+    return { chainFamily: 'evm', walletAddress: refundTo, signingMode: 'private' }
+  throw new Error('Confidential refund address does not belong to the current account')
 }
 
 function isPositiveRaw(value: string): boolean {
@@ -478,7 +509,7 @@ function authenticationError(error: unknown): boolean {
   }
   return (
     error instanceof Error &&
-    /active software evm account|wallet account changed|locked|unlock|credential|authorization|session/i.test(
+    /active evm account|wallet account changed|locked|unlock|credential|authorization|session/i.test(
       error.message
     )
   )
@@ -519,6 +550,15 @@ function shieldWithdrawStillReserves(row: ConfidentialFundingPlan['withdraws'][n
     row.intentHash !== undefined ||
     row.depositAddress.length > 0
   )
+}
+
+function confirmationFailureDetails(error: unknown): string {
+  if (error instanceof ConfidentialFundingApiError)
+    return `source=confidential-api httpStatus=${error.status ?? 'unavailable'} businessCode=${error.businessCode ?? 'unavailable'}`
+  if (error instanceof EvmRpcError) return `source=evm-rpc code=${error.code}`
+  if (error instanceof EvmTransactionError) return `source=evm-transaction code=${error.code}`
+  if (error instanceof KeyringError) return `source=keyring code=${error.code}`
+  return 'source=unclassified'
 }
 
 function failureCode(status: string): TransactionFailureCode {
@@ -592,13 +632,13 @@ function reviewFromPlan(
   const quoteTimeEstimateSeconds =
     plan.operation === 'deposit'
       ? plan.depositQuote?.quote.timeEstimate
-      : plan.operation === 'swap' ||
-          plan.operation === 'confidential-transfer' ||
-          plan.purpose === 'native-zec-swap'
+      : keepsFrozenConfidentialQuote(plan)
         ? plan.swapQuote?.quote.timeEstimate
         : plan.operation === 'withdraw'
           ? plan.quoteTimeEstimateSeconds
           : undefined
+  const quoteAppFeeBps =
+    plan.reviewedAppFeeBps ?? confidentialQuoteAppFeeBps(plan.swapQuote ?? plan.depositQuote)
   return Object.freeze({
     planId: plan.planId,
     ...(plan.purpose ? { purpose: plan.purpose } : {}),
@@ -626,6 +666,9 @@ function reviewFromPlan(
     ...(validQuoteTimeEstimateSeconds(quoteTimeEstimateSeconds)
       ? { quoteTimeEstimateSeconds }
       : {}),
+    ...(quoteAppFeeBps > 0 || plan.operation === 'swap' || plan.purpose === 'native-zec-swap'
+      ? { quoteAppFeeBps }
+      : {}),
     ...(plan.operation === 'swap' || plan.purpose === 'native-zec-swap'
       ? {
           slippageBps: plan.slippageBps,
@@ -634,19 +677,7 @@ function reviewFromPlan(
             : {}),
           ...(plan.swapQuote?.quote.refundFee !== undefined
             ? { quoteRefundFeeRaw: plan.swapQuote.quote.refundFee }
-            : {}),
-          quoteAppFeeBps: Array.isArray(plan.swapQuote?.quoteRequest.appFees)
-            ? plan.swapQuote.quoteRequest.appFees.reduce(
-                (total: number, fee: unknown) =>
-                  total +
-                  (fee &&
-                  typeof fee === 'object' &&
-                  typeof (fee as { fee?: unknown }).fee === 'number'
-                    ? (fee as { fee: number }).fee
-                    : 0),
-                0
-              )
-            : 0
+            : {})
         }
       : {}),
     ...(nearPrepared && sourceFeeAsset
@@ -765,6 +796,7 @@ function nearConfidentialProtocolAccepted(
 }
 
 export class ConfidentialFundingCoordinator {
+  private readonly authenticating = new Map<string, Promise<ConfidentialSession>>()
   private readonly balanceRefreshes = new Map<
     string,
     DedupPromise<readonly ConfidentialBalance[]>
@@ -784,11 +816,12 @@ export class ConfidentialFundingCoordinator {
     }>
   >()
   private readonly cancellingPlans = new Set<string>()
+  private readonly zcashDepositSubmissions = new Map<string, Promise<ShieldDappOperationReport>>()
   private readonly refreshingExternalDeposits = new Map<
     string,
     Readonly<{ promise: Promise<ExternalShieldDeposit>; force: boolean }>
   >()
-  private readonly oneClickStatusQueries = new Map<string, Promise<ConfidentialStatus>>()
+  private readonly oneClickStatusQueries = new Map<string, Promise<ConfidentialStatus | null>>()
   private readonly oneClickStatusState = new Map<
     string,
     | { kind: 'fresh'; until: number; status: ConfidentialStatus }
@@ -807,9 +840,7 @@ export class ConfidentialFundingCoordinator {
     this.now = options.now ?? Date.now
     this.createId = options.createId ?? (() => crypto.randomUUID())
     const nativeIdentity = async (scope: { walletId: string; accountId: string }) => {
-      const chainId = options.evmNetworks[0]?.chainId
-      if (!chainId) throw new Error('Native ZEC Confidential identity is unavailable')
-      const identity = await options.signer.resolveIdentity(parseChainId(chainId).id)
+      const identity = await this.resolveShieldAccountIdentity()
       if (
         identity.context.chainAccount.scope.keyDomainId !== scope.walletId ||
         identity.context.chainAccount.scope.accountId !== scope.accountId
@@ -829,7 +860,6 @@ export class ConfidentialFundingCoordinator {
       },
       quoteConfidential: input =>
         options.api.quote({
-          referral: NOIR_SWAP_REFERRAL,
           ...input,
           recipient: input.signerId,
           depositType: 'ORIGIN_CHAIN',
@@ -856,10 +886,12 @@ export class ConfidentialFundingCoordinator {
       assetMappings: options.assetMappings,
       protocolTokens: options.protocolTokens,
       getProtocolTokens: options.getProtocolTokens,
+      getNativeZecActiveAccount: options.getNativeZecActiveAccount,
       now: this.now,
       prepare: value => this.prepare(value),
+      createExternalDeposit: value => this.createExternalDeposit(value),
       refreshBalances: (scope, authorize) => this.refreshBalances(scope, authorize),
-      requireConfidentialSession: scope => this.requireConfidentialSession(scope, true),
+      requireConfidentialSession: scope => this.requireConfidentialSession(scope, true, false),
       refreshExternalDeposit: depositId => this.refreshExternalDeposit(depositId),
       continuePlan: planId => this.continuePlan(planId),
       updatePlan: (plan, changes) => this.updatePlan(plan, changes),
@@ -963,7 +995,9 @@ export class ConfidentialFundingCoordinator {
       }
       return account.mainAccountId
     }
-    return input.destinationDomain === 'private' ? identity.peaAddress : identity.address
+    return input.destinationDomain === 'private'
+      ? requireConfidentialPea(identity)
+      : identity.address
   }
 
   getPortfolioAssetDefinitions(model: PortfolioReadModel | null): readonly AssetDefinitionInput[] {
@@ -1142,8 +1176,14 @@ export class ConfidentialFundingCoordinator {
     }
     const refundAddress = isNear ? input.refundAddress.trim().toLowerCase() : input.refundAddress
     if (isZcash) {
+      const active = this.options.getNativeZecActiveAccount?.()
       if (
-        !parseZcashAddress(refundAddress, input.network).scheme.startsWith('zcash-transparent-')
+        parseZcashAddress(input.refundAddress, input.network).scheme !==
+          'zcash-transparent-p2pkh' ||
+        active?.network !== input.network ||
+        active.walletId !== input.keyDomainId ||
+        active.accountId !== input.accountId ||
+        !active.refundAddresses.includes(input.refundAddress)
       ) {
         throw new Error('External Shield deposit requires a transparent Zcash refund address')
       }
@@ -1151,22 +1191,30 @@ export class ConfidentialFundingCoordinator {
       throw new Error('External Shield deposit refund address is invalid')
     }
     setStage('account')
-    const identityChain = isZcash || isNear ? this.options.evmNetworks[0]?.chainId : chain.id
-    if (!identityChain) throw new Error('External Shield deposit Account has no EVM identity')
-    const identity = await this.options.signer.resolveIdentity(parseChainId(identityChain).id)
+    const identity = isZcash
+      ? await this.resolveShieldAccountIdentity()
+      : isNear
+        ? await this.options.signer.resolveIdentity(
+            confidentialSigningChainId(chain.id, chain.id, input.network)
+          )
+        : await this.options.signer.resolveIdentity(chain.id)
+    const identityChain = identity.context.chainAccount.scope.chainId
     if (
       identity.context.chainAccount.scope.keyDomainId !== input.keyDomainId ||
       identity.context.chainAccount.scope.accountId !== input.accountId
     ) {
       throw new Error('External Shield deposit Account changed')
     }
+    // Reuse only the open deposit for this exact request id. That covers a retry
+    // of the same call. A new Receive click uses a new id and creates a new record.
     const existing = input.requestId
       ? (await this.options.store.listExternalDeposits()).find(
           record =>
             record.network === input.network &&
             record.keyDomainId === input.keyDomainId &&
             record.accountId === input.accountId &&
-            record.requestId === input.requestId
+            record.requestId === input.requestId &&
+            (record.phase === 'awaiting-payment' || record.phase === 'processing')
         )
       : undefined
     if (existing) {
@@ -1193,6 +1241,11 @@ export class ConfidentialFundingCoordinator {
       }
       return existing
     }
+    const viewer: OneClickViewer = isZcash
+      ? { chainFamily: 'zcash', walletAddress: input.refundAddress, signingMode: 'transparent' }
+      : isNear
+        ? { chainFamily: 'near', walletAddress: refundAddress }
+        : evmRefundViewer(refundAddress, identity)
     setStage('quote')
     const quote = minimumMode
       ? await this.options.api.quoteFlexibleDeposit({
@@ -1200,6 +1253,7 @@ export class ConfidentialFundingCoordinator {
           quoteAmountRaw: externalShieldQuoteAmountRaw(asset.metadata.decimals, token?.price),
           signerId: identity.address,
           refundTo: refundAddress,
+          viewer,
           slippageBps
         })
       : await this.quoteBound({
@@ -1209,6 +1263,7 @@ export class ConfidentialFundingCoordinator {
           amountRaw: input.source.amountRaw!,
           signerId: identity.address,
           refundTo: refundAddress,
+          viewer,
           recipient: identity.address,
           depositType: 'ORIGIN_CHAIN',
           refundType: 'ORIGIN_CHAIN',
@@ -1270,7 +1325,7 @@ export class ConfidentialFundingCoordinator {
       throw new Error('External Shield deposit Account changed after quoting')
     }
     setStage('authorization')
-    await this.ensureSession(currentIdentity, true)
+    await this.ensureSession(currentIdentity, true, quoteDeadline(quote))
     setStage('account')
     const activeIdentity = await this.options.signer.resolveIdentity(parseChainId(identityChain).id)
     if (
@@ -1283,6 +1338,7 @@ export class ConfidentialFundingCoordinator {
     }
     const depositId = this.createId()
     const createdAt = this.now()
+    if (quoteDeadline(quote) <= createdAt) throw new Error('External Shield quote expired')
     const record: ExternalShieldDeposit = Object.freeze({
       schemaVersion: 1,
       depositId,
@@ -1344,16 +1400,34 @@ export class ConfidentialFundingCoordinator {
     )
   }
 
-  private oneClickStatusKey(depositAddress: string, depositMemo?: string): string {
-    return `${depositAddress}\0${depositMemo ?? ''}`
+  private async readOwnerStatus(
+    scope: ExternalShieldDepositScope,
+    order?: OneClickOrder
+  ): Promise<ConfidentialStatus | null> {
+    if (!order?.viewer) return null
+    const value = await this.options.queryOneClickOrderStatus({
+      network: scope.network,
+      walletId: scope.keyDomainId,
+      accountId: scope.accountId,
+      order
+    })
+    return value === null
+      ? null
+      : parseConfidentialOneClickStatus(value, order.depositAddress, order.depositMemo)
   }
 
   private async fetchOneClickDepositStatus(
-    depositAddress: string,
-    depositMemo?: string,
+    record: ExternalShieldDeposit,
     force = false
-  ): Promise<ConfidentialStatus> {
-    const key = this.oneClickStatusKey(depositAddress, depositMemo)
+  ): Promise<ConfidentialStatus | null> {
+    const order = record.quote.oneClickOrder
+    if (
+      !order?.viewer ||
+      order.depositAddress !== record.depositAddress ||
+      order.depositMemo !== record.depositMemo
+    )
+      return null
+    const key = record.depositId
     const pending = this.oneClickStatusQueries.get(key)
     if (pending) return pending
     const state = this.oneClickStatusState.get(key)
@@ -1363,14 +1437,15 @@ export class ConfidentialFundingCoordinator {
       if (!force) return state.status
     }
 
-    const operation = this.options.api
-      .getOneClickStatus(depositAddress, depositMemo)
+    const operation = this.readOwnerStatus(record, order)
       .then(status => {
-        this.oneClickStatusState.set(key, {
-          kind: 'fresh',
-          until: this.now() + EXTERNAL_DEPOSIT_STATUS_FRESH_MS,
-          status
-        })
+        if (status) {
+          this.oneClickStatusState.set(key, {
+            kind: 'fresh',
+            until: this.now() + EXTERNAL_DEPOSIT_STATUS_FRESH_MS,
+            status
+          })
+        }
         return status
       })
       .catch(error => {
@@ -1407,7 +1482,7 @@ export class ConfidentialFundingCoordinator {
     force = false
   ): Promise<ConfidentialStatus | null> {
     try {
-      return await this.fetchOneClickDepositStatus(record.depositAddress, record.depositMemo, force)
+      return await this.fetchOneClickDepositStatus(record, force)
     } catch (error) {
       if (
         error instanceof ConfidentialFundingApiError &&
@@ -1638,18 +1713,18 @@ export class ConfidentialFundingCoordinator {
     try {
       let session = await this.readUsableSessionForScope(record.keyDomainId, record.accountId)
       if (!session) {
-        const identityChain =
-          parseChainId(record.source.chainId).namespace === 'eip155'
-            ? record.source.chainId
-            : this.options.evmNetworks[0]?.chainId
-        if (!identityChain) return record
-        const identity = await this.options.signer.resolveIdentity(parseChainId(identityChain).id)
+        const chain = parseChainId(record.source.chainId)
+        const identity =
+          chain.namespace === 'eip155'
+            ? await this.options.signer.resolveIdentity(chain.id)
+            : await this.resolveShieldAccountIdentity()
         if (
           identity.context.chainAccount.scope.keyDomainId !== record.keyDomainId ||
           identity.context.chainAccount.scope.accountId !== record.accountId ||
           identity.address !== record.signerId
         )
           return record
+        if (identity.context.keyDomainSource.kind === 'hardware') return record
         session = await this.ensureSession(identity, true)
       }
       if (!session) return record
@@ -1805,15 +1880,10 @@ export class ConfidentialFundingCoordinator {
     ) {
       throw new Error('Confidential preview route is invalid')
     }
-    const sourceSigningChain =
-      parseChainId(input.source.chainId).namespace === 'eip155'
-        ? input.source.chainId
-        : confidentialSigningChainId(input.source.chainId, input.destination.chainId, input.network)
-    const destinationSigningChain = confidentialSigningChainId(
-      input.source.chainId,
-      input.destination.chainId,
-      input.network
-    )
+    const destinationSigningChain = await this.resolveFundingSigningChain(input)
+    const sourceSigningChain = input.source.chainId.startsWith('eip155:')
+      ? input.source.chainId
+      : destinationSigningChain
     const sourceIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
     const destinationIdentity = await this.options.signer.resolveIdentity(destinationSigningChain)
     this.assertSameAccount(sourceIdentity, destinationIdentity)
@@ -1893,7 +1963,7 @@ export class ConfidentialFundingCoordinator {
     if (!Number.isSafeInteger(expiresAt) || expiresAt <= this.now()) {
       throw new Error('Confidential quote has expired')
     }
-    const appFeeBps = readConfidentialQuoteAppFees(quote).reduce((sum, fee) => sum + fee.fee, 0)
+    const appFeeBps = confidentialQuoteAppFeeBps(quote)
     return Object.freeze({
       amountOutRaw: quote.quote.amountOut,
       minimumOutputRaw: quote.quote.minAmountOut,
@@ -1959,7 +2029,7 @@ export class ConfidentialFundingCoordinator {
     const destinationAddress =
       near?.withdrawRecipient ??
       (input.destinationDomain === 'private'
-        ? destinationIdentity.peaAddress
+        ? requireConfidentialPea(destinationIdentity)
         : destinationIdentity.address)
     const depositBinding = clusterDepositBinding(input, sourceIdentity, near)
     const depositQuote =
@@ -2052,7 +2122,7 @@ export class ConfidentialFundingCoordinator {
           ? {
               executionAccount: {
                 kind: 'pea' as const,
-                address: identity.peaAddress,
+                address: requireConfidentialPea(identity),
                 addressIndex: identity.addressIndex
               }
             }
@@ -2117,7 +2187,15 @@ export class ConfidentialFundingCoordinator {
       }
       return quote
     }
-    const fetchQuote = () => this.quoteBound({ ...binding, referral, dry: false }).then(validate)
+    const fetchQuote = () =>
+      this.quoteBound({
+        ...binding,
+        referral,
+        dry: false,
+        viewer: near
+          ? { chainFamily: 'near', walletAddress: binding.refundTo }
+          : evmRefundViewer(binding.refundTo, identity)
+      }).then(validate)
     const cache = this.clusterDepositPrefetches
     for (const [key, entry] of cache) {
       if (entry.expiresAt <= this.now()) cache.delete(key)
@@ -2156,15 +2234,10 @@ export class ConfidentialFundingCoordinator {
     value: PrepareConfidentialFundingInput
   ): Promise<ConfidentialFundingReview> {
     const input = this.parseInput(value)
-    const sourceSigningChain =
-      parseChainId(input.source.chainId).namespace === 'eip155'
-        ? input.source.chainId
-        : confidentialSigningChainId(input.source.chainId, input.destination.chainId, input.network)
-    const destinationSigningChain = confidentialSigningChainId(
-      input.source.chainId,
-      input.destination.chainId,
-      input.network
-    )
+    const destinationSigningChain = await this.resolveFundingSigningChain(input)
+    const sourceSigningChain = input.source.chainId.startsWith('eip155:')
+      ? input.source.chainId
+      : destinationSigningChain
     const sourceIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
     const destinationIdentity = await this.options.signer.resolveIdentity(destinationSigningChain)
     this.assertSameAccount(sourceIdentity, destinationIdentity)
@@ -2293,6 +2366,7 @@ export class ConfidentialFundingCoordinator {
       recipient: sourceIdentity.address,
       depositType: 'ORIGIN_CHAIN',
       refundType: 'ORIGIN_CHAIN',
+      viewer: evmRefundViewer(sourceIdentity.address, sourceIdentity),
       recipientType: 'CONFIDENTIAL_INTENTS',
       slippageBps: input.slippageBps,
       dry: false
@@ -2321,7 +2395,7 @@ export class ConfidentialFundingCoordinator {
       destinationAsset: input.destination.protocolAssetId,
       spendRaw,
       signerId: sourceIdentity.address,
-      recipient: destinationIdentity.peaAddress,
+      recipient: requireConfidentialPea(destinationIdentity),
       slippageBps: input.slippageBps
     })
 
@@ -2356,7 +2430,7 @@ export class ConfidentialFundingCoordinator {
     const approvalFingerprint = await fingerprintConfidentialValue({
       network: this.options.network,
       source: input.source,
-      destination: { ...input.destination, address: destinationIdentity.peaAddress },
+      destination: { ...input.destination, address: requireConfidentialPea(destinationIdentity) },
       signerId: sourceIdentity.address,
       splitSourceAmounts: previews.amounts,
       expectedOutputRaw,
@@ -2374,7 +2448,10 @@ export class ConfidentialFundingCoordinator {
       transactionId: `tx:confidential:${planId}`,
       phase: 'prepared',
       source: Object.freeze({ ...input.source, address: sourceIdentity.address }),
-      destination: Object.freeze({ ...input.destination, address: destinationIdentity.peaAddress }),
+      destination: Object.freeze({
+        ...input.destination,
+        address: requireConfidentialPea(destinationIdentity)
+      }),
       signerId: sourceIdentity.address,
       addressIndex: sourceIdentity.addressIndex,
       slippageBps: input.slippageBps,
@@ -2394,7 +2471,7 @@ export class ConfidentialFundingCoordinator {
             sourceAmountRaw: previews.amounts[sequence],
             amountRaw: quote.quote.amountOut,
             depositAddress: '',
-            destinationAddress: destinationIdentity.peaAddress,
+            destinationAddress: requireConfidentialPea(destinationIdentity),
             destinationChain: input.destination.chainName,
             token: input.destination.protocolAssetId,
             deadline: quoteDeadline(quote),
@@ -2465,6 +2542,7 @@ export class ConfidentialFundingCoordinator {
       return reviewFromPlan(duplicate, this.options.assets)
     }
 
+    const isDeposit = input.operation === 'deposit'
     const shieldWithdraw = input.operation === 'withdraw' && input.sourceDomain === 'shield'
     // The confidential principal owns the Shield balance and quote recipient.
     // The NEAR account only sends the deposit and receives a refund.
@@ -2488,34 +2566,37 @@ export class ConfidentialFundingCoordinator {
         })
       : null
     const sessionIdentity = selected?.identity ?? confidentialIdentity
-    const session = selected?.session ?? (await this.readUsableSession(sessionIdentity))
-    if (!session) throw new Error(CONFIDENTIAL_SESSION_REQUIRED_ERROR)
-    const balances =
-      selected?.balances ?? (await this.readAndCacheBalances(sessionIdentity, session.accessToken))
-    const baseline = getConfidentialAvailableForAsset(balances, input.source.protocolAssetId) ?? '0'
+    let baseline = '0'
+    if (!isDeposit) {
+      const session = selected?.session ?? (await this.readUsableSession(sessionIdentity))
+      if (!session) throw new Error(CONFIDENTIAL_SESSION_REQUIRED_ERROR)
+      const balances =
+        selected?.balances ??
+        (await this.readAndCacheBalances(sessionIdentity, session.accessToken))
+      baseline = getConfidentialAvailableForAsset(balances, input.source.protocolAssetId) ?? '0'
+    }
     const spendIdentity = selected?.identity ?? confidentialIdentity
     const sourceAddress =
       input.sourceDomain === 'private'
-        ? sourceIdentity.peaAddress.toLowerCase()
+        ? requireConfidentialPea(sourceIdentity).toLowerCase()
         : sourceIdentity.address
     const isConfidentialTransfer = input.operation === 'confidential-transfer'
+    // Cross-chain confidential transfers may credit the same account on a different chain.
     if (
       isConfidentialTransfer &&
-      input.confidentialRecipient?.toLowerCase() === sourceIdentity.address.toLowerCase()
+      input.confidentialRecipient?.toLowerCase() === sourceIdentity.address.toLowerCase() &&
+      input.source.chainId === input.destination.chainId
     ) {
       throw new Error('Shield recipient account is invalid.')
     }
     const destinationAddress = isConfidentialTransfer
       ? input.confidentialRecipient!
       : await this.fundingDestinationAddress(input, destinationIdentity)
-    const isDeposit = input.operation === 'deposit'
     const depositRefundTo =
       isDeposit && parseChainId(input.source.chainId).namespace === 'near'
         ? await this.nearDepositRefundAccount(sourceIdentity, input.sourceDomain)
         : sourceAddress
     const isSwap = input.operation === 'swap'
-    const isFrozenSwap = isSwap || input.purpose === 'native-zec-swap'
-    const isFrozenQuote = isFrozenSwap || isConfidentialTransfer
     if (!isDeposit) {
       this.assertUnreservedBalance(
         plans,
@@ -2535,6 +2616,13 @@ export class ConfidentialFundingCoordinator {
       amountRaw: input.source.amountRaw,
       signerId: spendIdentity.address,
       ...(isDeposit ? { refundTo: depositRefundTo } : {}),
+      ...(isDeposit
+        ? {
+            viewer: input.source.chainId.startsWith('near:')
+              ? { chainFamily: 'near' as const, walletAddress: depositRefundTo }
+              : evmRefundViewer(depositRefundTo, sourceIdentity)
+          }
+        : {}),
       recipient: isDeposit ? spendIdentity.address : destinationAddress,
       depositType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
       refundType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
@@ -2543,7 +2631,7 @@ export class ConfidentialFundingCoordinator {
           ? 'CONFIDENTIAL_INTENTS'
           : 'DESTINATION_CHAIN',
       slippageBps: input.slippageBps,
-      dry: !isDeposit && !isFrozenQuote
+      dry: false
     })
     this.assertQuoteBinding(
       quote,
@@ -2572,11 +2660,13 @@ export class ConfidentialFundingCoordinator {
     } else if (isDeposit && !quote.quote.depositAddress) {
       throw new Error('Confidential deposit quote has no destination')
     }
-    if (isFrozenQuote && (quote.quoteRequest.dry !== false || !quote.quote.depositAddress)) {
+    if (!isDeposit && (quote.quoteRequest.dry !== false || !quote.quote.depositAddress)) {
       throw new Error(
         isConfidentialTransfer
           ? 'Shield transfer quote has no active destination'
-          : 'Shield swap quote has no active destination'
+          : isSwap || input.purpose === 'native-zec-swap'
+            ? 'Shield swap quote has no active destination'
+            : 'Shield withdraw quote has no active destination'
       )
     }
 
@@ -2600,7 +2690,7 @@ export class ConfidentialFundingCoordinator {
     const planId = this.createId()
     const approvalExpiresAt = Math.min(
       quoteDeadline(quote),
-      ...(isFrozenQuote ? [Date.parse(String(quote.quoteRequest.deadline ?? ''))] : []),
+      isDeposit ? Number.MAX_SAFE_INTEGER : Date.parse(String(quote.quoteRequest.deadline ?? '')),
       preparedDeposit?.expiresAt ?? Number.MAX_SAFE_INTEGER
     )
     if (!Number.isSafeInteger(approvalExpiresAt) || approvalExpiresAt <= this.now()) {
@@ -2629,18 +2719,7 @@ export class ConfidentialFundingCoordinator {
       slippageBps: input.slippageBps,
       requiresDeposit: isDeposit,
       confidentialBaselineRaw: baseline,
-      ...(isDeposit ? { depositQuote: quote, preparedDeposit } : {}),
-      ...(isFrozenQuote ? { swapQuote: quote } : {}),
-      ...(!isDeposit && !isFrozenQuote && validQuoteTimeEstimateSeconds(quote.quote.timeEstimate)
-        ? { quoteTimeEstimateSeconds: quote.quote.timeEstimate }
-        : {}),
-      ...(!isDeposit && !isFrozenQuote
-        ? {
-            reviewedAppFeesFingerprint: await fingerprintDirectConfidentialApproval([
-              readConfidentialQuoteAppFees(quote)
-            ])
-          }
-        : {}),
+      ...(isDeposit ? { depositQuote: quote, preparedDeposit } : { swapQuote: quote }),
       approvalFingerprint: '0'.repeat(64),
       approvalExpiresAt,
       expectedOutputRaw: quote.quote.amountOut,
@@ -2730,12 +2809,12 @@ export class ConfidentialFundingCoordinator {
     const sourceAddress =
       near?.sourceAddress ??
       (input.sourceDomain === 'private'
-        ? sourceIdentity.peaAddress.toLowerCase()
+        ? requireConfidentialPea(sourceIdentity).toLowerCase()
         : sourceIdentity.address)
     const destinationAddress =
       near?.destinationAddress ??
       (input.destinationDomain === 'private'
-        ? destinationIdentity.peaAddress
+        ? requireConfidentialPea(destinationIdentity)
         : destinationIdentity.address)
     const depositQuote = requiresDeposit
       ? await this.clusterDepositQuote(input, sourceIdentity, 'review')
@@ -2898,7 +2977,10 @@ export class ConfidentialFundingCoordinator {
       }
       return existing.promise
     }
-    const operation = this.confirmExclusive(planId, approvalFingerprint)
+    const diagnostic: { stage: string; failureDetails?: string } = {
+      stage: 'approval-validation'
+    }
+    const operation = this.confirmExclusive(planId, approvalFingerprint, diagnostic)
     this.confirmingByPlan.set(planId, { fingerprint: approvalFingerprint, promise: operation })
     void operation.then(
       plan => {
@@ -2915,9 +2997,13 @@ export class ConfidentialFundingCoordinator {
           void this.continuePlan(planId)
         }
       },
-      () => {
+      (error: unknown) => {
         if (this.confirmingByPlan.get(planId)?.promise === operation)
           this.confirmingByPlan.delete(planId)
+        const reason = diagnostic.failureDetails ?? confirmationFailureDetails(error)
+        logger.warn(
+          `[Confidential Funding] Confirmation failed stage=${diagnostic.stage} ${reason}`
+        )
       }
     )
     return operation
@@ -2925,7 +3011,8 @@ export class ConfidentialFundingCoordinator {
 
   private async confirmExclusive(
     planId: string,
-    approvalFingerprint: string
+    approvalFingerprint: string,
+    diagnostic: { stage: string; failureDetails?: string }
   ): Promise<ConfidentialFundingPlan> {
     let plan = await this.requirePlan(planId)
     if (
@@ -2948,6 +3035,7 @@ export class ConfidentialFundingCoordinator {
     ) {
       throw new Error('Confidential funding approval is unavailable or expired')
     }
+    diagnostic.stage = 'account-validation'
     const identity = await this.requirePlanIdentity(plan)
     const depositIdentity =
       parseChainId(plan.source.chainId).namespace === 'near' && identity.kind !== 'near'
@@ -2955,10 +3043,24 @@ export class ConfidentialFundingCoordinator {
             confidentialSigningChainId(plan.source.chainId, plan.destination.chainId, plan.network)
           )
         : identity
+    const hardware = identity.context.keyDomainSource?.kind === 'hardware'
+    const resumingUnsigned = plan.phase === 'needs-auth' && isUnsignedDirectWithdraw(plan)
+    if (hardware && resumingUnsigned) {
+      if (plan.approvalExpiresAt <= this.now()) {
+        throw new Error('Confidential funding approval expired. Review the transfer again.')
+      }
+      if (
+        (await fingerprintDirectConfidentialApproval(directApprovalIntent(plan))) !==
+        approvalFingerprint
+      ) {
+        throw new Error('Confidential funding approval content changed')
+      }
+    }
     if (keepsFrozenConfidentialQuote(plan) && plan.phase === 'prepared') {
-      if (!plan.swapQuote) throw new Error('Shield swap quote is unavailable')
+      diagnostic.stage = 'quote-validation'
+      if (!plan.swapQuote) throw new Error('Shield quote is unavailable')
       if (Date.parse(String(plan.swapQuote.quoteRequest.deadline ?? '')) <= this.now()) {
-        throw new Error('Shield swap quote has expired')
+        throw new Error('Shield quote has expired')
       }
       this.assertQuoteBinding(
         plan.swapQuote,
@@ -2978,43 +3080,70 @@ export class ConfidentialFundingCoordinator {
         this.now()
       )
     }
-    await this.ensureSession(identity, true)
+    const approvalExpiresAt =
+      plan.phase === 'prepared' || resumingUnsigned ? plan.approvalExpiresAt : undefined
+    diagnostic.stage = 'session-authorization'
+    await this.ensureSession(identity, true, hardware ? approvalExpiresAt : undefined)
+    diagnostic.stage = 'account-validation'
     await this.requirePlanIdentity(plan)
-    if (plan.operation === 'cluster' && plan.phase === 'prepared') {
-      const signerFamily = this.confidentialPlanSignerFamily(plan)
-      if (signerFamily === 'evm') {
-        try {
-          await this.ensureOrderHistoryToken(plan)
-        } catch (error) {
-          if (definitiveHistoryAuthRejection(error)) {
-            if (plan.preparedDeposit) {
-              await this.depositAdapter(depositIdentity, {
-                sourceChainId: plan.source.chainId,
-                destinationChainId: plan.destination.chainId
+    diagnostic.stage = 'approval-validation'
+    if (hardware && approvalExpiresAt !== undefined && approvalExpiresAt <= this.now()) {
+      throw new Error('Confidential funding approval expired. Review the transfer again.')
+    }
+    if (
+      plan.operation === 'cluster' &&
+      this.confidentialPlanSignerFamily(plan) === 'evm' &&
+      (plan.phase === 'prepared' || hardware)
+    ) {
+      diagnostic.stage = 'history-authorization'
+      try {
+        await this.ensureOrderHistoryToken(plan, true, approvalExpiresAt)
+      } catch (error) {
+        if (definitiveHistoryAuthRejection(error)) {
+          if (plan.preparedDeposit) {
+            await this.depositAdapter(depositIdentity, {
+              sourceChainId: plan.source.chainId,
+              destinationChainId: plan.destination.chainId
+            })
+              .cancelDeposit({
+                identity: depositIdentity,
+                commandId: plan.preparedDeposit.commandId
               })
-                .cancelDeposit({
-                  identity: depositIdentity,
-                  commandId: plan.preparedDeposit.commandId
-                })
-                .catch(() => {})
-            }
-            await this.updatePlan(plan, { phase: 'failed', errorStatus: 'HISTORY_AUTH_REJECTED' })
+              .catch(() => {})
           }
-          throw error
+          await this.updatePlan(plan, { phase: 'failed', errorStatus: 'HISTORY_AUTH_REJECTED' })
         }
+        throw error
       }
     }
     if (plan.phase === 'needs-auth') {
+      diagnostic.stage = 'resume-authorization'
+      const resumePhase = plan.resumePhase ?? 'authorized'
+      if (hardware && resumePhase === 'signing-withdraws') {
+        diagnostic.stage = 'intent-signing'
+        plan = await this.signAndFreezeWithdraws(plan, hardware ? approvalExpiresAt : undefined)
+        diagnostic.stage = 'monitoring'
+        await this.scheduleMonitoring()
+        void this.continuePlan(plan.planId)
+        return plan
+      }
       plan = await this.updatePlan(plan, {
-        phase: plan.resumePhase ?? 'authorized',
+        phase: resumePhase,
         resumePhase: undefined
       })
       void this.continuePlan(plan.planId)
       return plan
     }
 
+    diagnostic.stage = 'funding-preflight'
     plan = await this.reconcileDepositRequirement(plan, identity)
+    diagnostic.stage = 'account-validation'
     await this.requirePlanIdentity(plan)
+    diagnostic.stage = 'approval-validation'
+    if (hardware && plan.approvalExpiresAt <= this.now()) {
+      throw new Error('Confidential funding approval expired. Review the transfer again.')
+    }
+    diagnostic.stage = 'plan-authorization'
     plan = await this.updatePlan(plan, { phase: 'authorized' })
 
     if (!plan.requiresDeposit) {
@@ -3024,9 +3153,10 @@ export class ConfidentialFundingCoordinator {
         plan.operation === 'swap' ||
         plan.operation === 'confidential-transfer'
       ) {
+        diagnostic.stage = 'intent-signing'
         plan = await this.updatePlan(plan, { phase: 'signing-withdraws' })
         try {
-          plan = await this.signAndFreezeWithdraws(plan)
+          plan = await this.signAndFreezeWithdraws(plan, hardware ? approvalExpiresAt : undefined)
         } catch (error) {
           const current = await this.requirePlan(planId)
           if (!current.frozenRequest && !current.withdraws.some(row => row.signedPayload)) {
@@ -3039,14 +3169,17 @@ export class ConfidentialFundingCoordinator {
           }
           throw error
         }
+        diagnostic.stage = 'monitoring'
         await this.scheduleMonitoring()
         void this.continuePlan(plan.planId)
         return plan
       }
+      diagnostic.stage = 'activity-persistence'
       await this.ensureGraph(plan)
       void this.continuePlan(plan.planId)
       return plan
     }
+    diagnostic.stage = 'deposit-signing'
     if (!plan.preparedDeposit) throw new Error('Confidential funding deposit was not prepared')
     let signed: Awaited<ReturnType<ConfidentialDepositAdapter['confirmDeposit']>>
     try {
@@ -3057,14 +3190,24 @@ export class ConfidentialFundingCoordinator {
         identity: depositIdentity,
         commandId: plan.preparedDeposit.commandId,
         preparedTransfer: plan.preparedDeposit.preparedTransfer,
+        expiresAt: plan.approvalExpiresAt,
         ...(plan.operation === 'deposit' || plan.operation === 'cluster'
           ? { sourceDomain: plan.sourceDomain as 'public' | 'private' }
           : {})
       })
+      if (hardware) {
+        await this.requirePlanIdentity(plan)
+        if (plan.approvalExpiresAt <= this.now()) {
+          throw new Error('Confidential deposit approval expired')
+        }
+      }
     } catch (error) {
+      diagnostic.failureDetails = confirmationFailureDetails(error)
+      logDevelopmentError('[Confidential Funding] Deposit signing failed', error)
       await this.updatePlan(plan, { phase: 'failed', errorStatus: 'DEPOSIT_SIGNING_INTERRUPTED' })
       throw error
     }
+    diagnostic.stage = 'signed-deposit-persistence'
     plan = await this.updatePlan(plan, {
       phase: 'deposit-signed',
       preparedDeposit: Object.freeze({
@@ -3073,8 +3216,10 @@ export class ConfidentialFundingCoordinator {
         transactionHash: signed.transactionHash
       })
     })
+    diagnostic.stage = 'activity-persistence'
     await this.ensureGraph(plan)
     if (parseChainId(plan.source.chainId).namespace === 'near') {
+      diagnostic.stage = 'deposit-broadcast'
       const broadcast = await this.broadcastNearDeposit(plan)
       if (broadcast.phase !== 'deposit-confirming') {
         throw new Error('Confidential funding deposit is signed and will retry broadcasting')
@@ -3082,20 +3227,25 @@ export class ConfidentialFundingCoordinator {
       plan = broadcast
     } else {
       try {
+        diagnostic.stage = 'deposit-broadcast'
         await broadcastSignedEvmTransaction({
           rawTransaction: signed.rawTransaction,
           expectedTransactionHash: signed.transactionHash,
           rpc: this.requireRpc(plan.source.chainId)
         })
+        diagnostic.stage = 'broadcast-persistence'
         plan = await this.updatePlan(plan, { phase: 'deposit-confirming' })
         await this.applyGraphStatus(plan, 'origin', 'broadcast', {
           transactionHash: signed.transactionHash
         })
-      } catch {
+      } catch (error) {
+        diagnostic.failureDetails = confirmationFailureDetails(error)
+        logDevelopmentError(`[Confidential Funding] ${diagnostic.stage} failed`, error)
         await this.scheduleMonitoring()
         throw new Error('Confidential funding deposit is signed and will retry broadcasting')
       }
     }
+    diagnostic.stage = 'monitoring'
     await this.scheduleMonitoring()
     void this.continuePlan(plan.planId)
     return plan
@@ -3556,16 +3706,18 @@ export class ConfidentialFundingCoordinator {
 
   private async requireConfidentialSession(
     scope: Readonly<{ network: Network; keyDomainId: string; accountId: string }>,
-    authorize: boolean
+    authorize: boolean,
+    allowHardware = true
   ): Promise<Readonly<{ identity: ConfidentialSigningIdentity; session: ConfidentialSession }>> {
     if (scope.network !== this.options.network) throw new Error('Confidential network changed')
-    const firstEvm = this.options.evmNetworks[0]
-    if (!firstEvm) throw new Error('Confidential EVM network is unavailable')
     const existingSession = authorize
       ? null
       : await this.readUsableSessionForScope(scope.keyDomainId, scope.accountId)
     if (!authorize && !existingSession) throw new Error('Confidential authorization is required')
-    const identity = await this.options.signer.resolveIdentity(parseChainId(firstEvm.chainId).id)
+    const identity = await this.resolveShieldAccountIdentity()
+    if (!allowHardware && identity.context.keyDomainSource.kind === 'hardware') {
+      throw new Error('Open Shield in Noir Wallet to use this hardware account')
+    }
     if (
       identity.context.chainAccount.scope.keyDomainId !== scope.keyDomainId ||
       identity.context.chainAccount.scope.accountId !== scope.accountId
@@ -3668,6 +3820,73 @@ export class ConfidentialFundingCoordinator {
     ...args: Parameters<ShieldDappCoordinator['readShieldDappStatus']>
   ): ReturnType<ShieldDappCoordinator['readShieldDappStatus']> {
     return this.shieldDapp.readShieldDappStatus(...args)
+  }
+
+  /**
+   * Broadcast the confirmed transparent ZEC payment, then keep the deposit in processing
+   * while the provider still reports PENDING_DEPOSIT.
+   */
+  submitShieldDappZcashReceive(input: {
+    readonly scope: Readonly<{ network: Network; keyDomainId: string; accountId: string }>
+    readonly operationId: string
+  }): Promise<ShieldDappOperationReport> {
+    const pending = this.zcashDepositSubmissions.get(input.operationId)
+    if (pending) return pending
+    const operation = this.submitShieldDappZcashReceiveExclusive(input).finally(() => {
+      if (this.zcashDepositSubmissions.get(input.operationId) === operation) {
+        this.zcashDepositSubmissions.delete(input.operationId)
+      }
+    })
+    this.zcashDepositSubmissions.set(input.operationId, operation)
+    return operation
+  }
+
+  private async submitShieldDappZcashReceiveExclusive(input: {
+    readonly scope: Readonly<{ network: Network; keyDomainId: string; accountId: string }>
+    readonly operationId: string
+  }): Promise<ShieldDappOperationReport> {
+    let record = await this.getExternalDeposit(input.operationId)
+    if (
+      record.network !== input.scope.network ||
+      record.keyDomainId !== input.scope.keyDomainId ||
+      record.accountId !== input.scope.accountId
+    ) {
+      throw new Error('External Shield deposit is unavailable')
+    }
+    if (record.phase !== 'awaiting-payment' || record.originTxHash) {
+      return this.readShieldDappStatus(input)
+    }
+    if (isExternalShieldDepositExpired(record, this.now())) {
+      throw new Error('External Shield deposit quote has expired; create a new request')
+    }
+    if (!this.options.broadcastZcashShieldDeposit) {
+      throw new Error('Zcash Shield deposit broadcast is unavailable')
+    }
+    const { txHash } = await this.options.broadcastZcashShieldDeposit({
+      walletId: record.keyDomainId,
+      accountId: record.accountId,
+      depositAddress: record.depositAddress,
+      amountRaw: record.amountRaw,
+      refundAddress: record.refundAddress
+    })
+    if (!/^[0-9a-fA-F]{64}$/.test(txHash)) {
+      throw new Error('ZEC deposit payment did not return a transaction id')
+    }
+    const current = await this.getExternalDeposit(record.depositId)
+    if (current.phase === 'awaiting-payment' && !current.originTxHash) {
+      record = Object.freeze({
+        ...current,
+        phase: 'processing',
+        originTxHash: txHash,
+        fundingObservedAt: current.fundingObservedAt ?? this.now(),
+        updatedAt: this.now()
+      })
+      await this.options.store.putExternalDeposit(record)
+      await this.updateExternalDepositGraph(record)
+      void this.options.onActivityChanged?.(record).catch(() => undefined)
+    }
+    await this.scheduleMonitoring()
+    return this.readShieldDappStatus(input)
   }
 
   private async shieldDepositSourceIsFinal(plan: ConfidentialFundingPlan): Promise<boolean> {
@@ -3889,6 +4108,14 @@ export class ConfidentialFundingCoordinator {
     }
     if (isClusterRejectionReason(plan.errorStatus)) return this.finishRejectedCluster(plan)
     if (isUnsignedDirectWithdraw(plan) && !this.confirmingByPlan.has(planId)) {
+      if (plan.approvalExpiresAt > this.now()) {
+        const identity = await this.requirePlanIdentity(plan).catch(() => null)
+        if (identity?.context.keyDomainSource.kind === 'hardware') {
+          return plan.phase === 'needs-auth' && plan.resumePhase === 'signing-withdraws'
+            ? plan
+            : this.updatePlan(plan, { phase: 'needs-auth', resumePhase: 'signing-withdraws' })
+        }
+      }
       return this.updatePlan(plan, {
         phase: 'failed',
         resumePhase: undefined,
@@ -3913,10 +4140,12 @@ export class ConfidentialFundingCoordinator {
           })
           .catch(() => {})
       }
-      return this.updatePlan(plan, {
+      const failed = await this.updatePlan(plan, {
         phase: 'failed',
         errorStatus: 'DEPOSIT_SIGNING_INTERRUPTED'
       })
+      logger.warn('[Confidential Funding] Recovered unsigned deposit stage=deposit-signing')
+      return failed
     }
     if (
       (plan.operation === 'withdraw' ||
@@ -3988,6 +4217,7 @@ export class ConfidentialFundingCoordinator {
           })
         } catch (error) {
           if (!(error instanceof Error && /already known|known transaction/i.test(error.message))) {
+            logDevelopmentError('[Confidential Funding] Deposit broadcast retry failed', error)
             await this.scheduleMonitoring()
             return plan
           }
@@ -4170,7 +4400,10 @@ export class ConfidentialFundingCoordinator {
     }
 
     if (plan.phase === 'signing-withdraws') {
-      await this.requirePlanIdentity(plan)
+      const identity = await this.requirePlanIdentity(plan)
+      if (identity.context.keyDomainSource.kind === 'hardware') {
+        return this.updatePlan(plan, { phase: 'needs-auth', resumePhase: 'signing-withdraws' })
+      }
       plan = await this.signAndFreezeWithdraws(plan)
     }
     if (plan.phase === 'submitting')
@@ -4458,15 +4691,16 @@ export class ConfidentialFundingCoordinator {
   }
 
   private async signAndFreezeWithdraws(
-    plan: ConfidentialFundingPlan
+    plan: ConfidentialFundingPlan,
+    approvalExpiresAt?: number
   ): Promise<ConfidentialFundingPlan> {
     if (
       plan.operation === 'withdraw' ||
       plan.operation === 'swap' ||
       plan.operation === 'confidential-transfer'
     )
-      return this.signAndFreezeDirectWithdraw(plan)
-    if (plan.operation === 'cluster') return this.signAndFreezeCluster(plan)
+      return this.signAndFreezeDirectWithdraw(plan, approvalExpiresAt)
+    if (plan.operation === 'cluster') return this.signAndFreezeCluster(plan, approvalExpiresAt)
     const quotes = await Promise.all(
       plan.splitSourceAmounts.map(sourceAmountRaw =>
         this.quoteBound({
@@ -4551,7 +4785,8 @@ export class ConfidentialFundingCoordinator {
       const signedPayload = await this.options.signer.signMessage({
         identity: await this.requirePlanIdentity(plan),
         chainId: signingChainId,
-        payload: binding.payload
+        payload: binding.payload,
+        expiresAt: Math.min(binding.deadline, approvalExpiresAt ?? Infinity)
       })
       const amountRaw = quote.quote.amountOut
       rows.push(
@@ -4560,6 +4795,7 @@ export class ConfidentialFundingCoordinator {
           sourceAmountRaw,
           amountRaw,
           depositAddress: quote.quote.depositAddress,
+          ...(quote.oneClickOrder ? { oneClickOrder: quote.oneClickOrder } : {}),
           destinationAddress: plan.destination.address,
           destinationChain: plan.destination.chainName,
           token: plan.destination.protocolAssetId,
@@ -4592,6 +4828,7 @@ export class ConfidentialFundingCoordinator {
     const requestFingerprint = await fingerprintConfidentialValue(frozenRequest)
     plan = await this.updatePlan(plan, {
       phase: 'submitting',
+      resumePhase: undefined,
       withdraws: Object.freeze(rows),
       frozenRequest,
       requestFingerprint,
@@ -4609,7 +4846,8 @@ export class ConfidentialFundingCoordinator {
   }
 
   private async signAndFreezeCluster(
-    plan: ConfidentialFundingPlan
+    plan: ConfidentialFundingPlan,
+    approvalExpiresAt?: number
   ): Promise<ConfidentialFundingPlan> {
     if (plan.frozenRequest) return plan
     const quotes = await Promise.all(
@@ -4714,7 +4952,8 @@ export class ConfidentialFundingCoordinator {
         await this.options.signer.signMessage({
           identity,
           chainId: signingChainId,
-          payload: binding.payload
+          payload: binding.payload,
+          expiresAt: Math.min(binding.deadline, approvalExpiresAt ?? Infinity)
         })
       )
     }
@@ -4724,6 +4963,7 @@ export class ConfidentialFundingCoordinator {
         sourceAmountRaw: plan.splitSourceAmounts[sequence],
         amountRaw: quote.quote.amountOut,
         depositAddress: quote.quote.depositAddress,
+        ...(quote.oneClickOrder ? { oneClickOrder: quote.oneClickOrder } : {}),
         destinationAddress: plan.destination.address,
         destinationChain: plan.destination.chainName,
         token: plan.destination.protocolAssetId,
@@ -4756,6 +4996,7 @@ export class ConfidentialFundingCoordinator {
     const requestFingerprint = await fingerprintConfidentialValue(frozenRequest)
     const frozen = await this.updatePlan(plan, {
       phase: 'submitting',
+      resumePhase: undefined,
       withdraws: Object.freeze(rows),
       frozenRequest,
       requestFingerprint,
@@ -4772,7 +5013,8 @@ export class ConfidentialFundingCoordinator {
   }
 
   private async signAndFreezeDirectWithdraw(
-    plan: ConfidentialFundingPlan
+    plan: ConfidentialFundingPlan,
+    approvalExpiresAt?: number
   ): Promise<ConfidentialFundingPlan> {
     let row = plan.withdraws[0]
     let formalExpectedOutputRaw = plan.expectedOutputRaw
@@ -4858,15 +5100,18 @@ export class ConfidentialFundingCoordinator {
         destinationAddress: plan.destination.address,
         now: this.now()
       })
+      const identity = await this.requirePlanIdentity(plan)
       const signedPayload = await this.options.signer.signMessage({
-        identity: await this.requirePlanIdentity(plan),
+        identity,
         chainId: signingChainId,
-        payload: binding.payload
+        payload: binding.payload,
+        expiresAt: Math.min(binding.deadline, approvalExpiresAt ?? Infinity)
       })
       row = Object.freeze({
         ...row,
         amountRaw: quote.quote.amountOut,
         depositAddress: quote.quote.depositAddress,
+        ...(quote.oneClickOrder ? { oneClickOrder: quote.oneClickOrder } : {}),
         deadline: binding.deadline,
         status: 'SIGNED',
         signedPayload
@@ -4899,6 +5144,7 @@ export class ConfidentialFundingCoordinator {
     const requestFingerprint = await fingerprintConfidentialValue(frozenRequest)
     plan = await this.updatePlan(plan, {
       phase: 'submitting',
+      resumePhase: undefined,
       withdraws: Object.freeze([row]),
       expectedOutputRaw: formalExpectedOutputRaw,
       minimumOutputRaw: formalMinimumOutputRaw,
@@ -5017,7 +5263,11 @@ export class ConfidentialFundingCoordinator {
     })
   }
 
-  private async ensureOrderHistoryToken(plan: ConfidentialFundingPlan): Promise<string> {
+  private async ensureOrderHistoryToken(
+    plan: ConfidentialFundingPlan,
+    interactive = false,
+    expiresAt?: number
+  ): Promise<string> {
     const stored = await this.options.store.getHistorySession(
       plan.network,
       plan.keyDomainId,
@@ -5032,6 +5282,9 @@ export class ConfidentialFundingCoordinator {
       return stored.token
     const identity = await this.requirePlanIdentity(plan)
     const chainId = this.orderHistoryAuthChain(plan, identity)
+    if (!interactive && identity.context.keyDomainSource.kind === 'hardware') {
+      throw new Error('Confidential order history authorization is required')
+    }
     const challenge = await this.options.api.createOrderAuthChallenge({
       walletAddress: identity.address,
       chainId: parseChainId(chainId).reference
@@ -5039,7 +5292,8 @@ export class ConfidentialFundingCoordinator {
     const signed = await this.options.signer.signMessage({
       identity,
       chainId,
-      payload: challenge.message
+      payload: challenge.message,
+      expiresAt: Math.min(Date.parse(challenge.expiresAt), expiresAt ?? Infinity)
     })
     const token = await this.options.api.authenticateOrderChallenge(challenge, signed)
     await this.options.store.putHistorySession(
@@ -5577,13 +5831,17 @@ export class ConfidentialFundingCoordinator {
       await this.scheduleMonitoring()
       return plan
     }
-    console.error('[Confidential Funding] Continuation failed', {
-      planId: plan.planId,
-      phase: plan.phase,
-      errorName: error instanceof Error ? error.name : 'UnknownError',
-      serviceStatus: error instanceof ConfidentialFundingApiError ? error.status : null,
-      retryable: retryableFundingError(error)
-    })
+    console.error(
+      '[Confidential Funding] Continuation failed',
+      {
+        planId: plan.planId,
+        phase: plan.phase,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        serviceStatus: error instanceof ConfidentialFundingApiError ? error.status : null,
+        retryable: retryableFundingError(error)
+      },
+      ...developmentErrorArgs(error)
+    )
     if (authenticationError(error)) {
       if (error instanceof ConfidentialFundingApiError && [401, 403].includes(error.status ?? -1)) {
         await this.options.store.deleteSession(
@@ -5646,7 +5904,8 @@ export class ConfidentialFundingCoordinator {
       )
       await this.options.store.putSession(this.options.network, keyDomainId, accountId, next)
       return next
-    } catch {
+    } catch (error) {
+      logDevelopmentError('[Confidential Funding] Session refresh failed', error)
       return null
     }
   }
@@ -5688,28 +5947,86 @@ export class ConfidentialFundingCoordinator {
     return this.updatePlan(plan, { confidentialBaselineRaw: available })
   }
 
-  private async ensureSession(identity: ConfidentialSigningIdentity, authenticate: boolean) {
+  private async resolveShieldAccountIdentity(): Promise<ConfidentialSigningIdentity> {
+    let lastError: unknown = new Error('Confidential EVM network is unavailable')
+    for (const network of this.options.evmNetworks) {
+      try {
+        return await this.options.signer.resolveIdentity(parseChainId(network.chainId).id)
+      } catch (error) {
+        lastError = error
+      }
+    }
+    throw lastError
+  }
+
+  private async resolveFundingSigningChain(input: {
+    source: { chainId: string }
+    destination: { chainId: string }
+  }): Promise<ChainId> {
+    if (
+      input.source.chainId.startsWith('eip155:') ||
+      input.destination.chainId.startsWith('eip155:')
+    ) {
+      return confidentialSigningChainId(input.source.chainId, input.destination.chainId)
+    }
+    if (input.source.chainId.startsWith('near:') || input.destination.chainId.startsWith('near:')) {
+      return confidentialSigningChainId(input.source.chainId, input.destination.chainId)
+    }
+    return (await this.resolveShieldAccountIdentity()).context.chainAccount.scope.chainId
+  }
+
+  private async ensureSession(
+    identity: ConfidentialSigningIdentity,
+    authenticate: boolean,
+    expiresAt?: number
+  ) {
     const session = await this.readUsableSession(identity)
     if (session || !authenticate) return session
-    const chainId = identity.context.chainAccount.scope.chainId
+    const scope = identity.context.chainAccount.scope
+    const key = JSON.stringify([
+      this.options.network,
+      scope.keyDomainId,
+      scope.accountId,
+      identity.address
+    ])
+    const pending = this.authenticating.get(key)
+    if (pending) return pending
+    const operation = this.authenticateSession(identity, expiresAt)
+    this.authenticating.set(key, operation)
+    try {
+      return await operation
+    } finally {
+      if (this.authenticating.get(key) === operation) this.authenticating.delete(key)
+    }
+  }
+
+  private async authenticateSession(identity: ConfidentialSigningIdentity, expiresAt?: number) {
     const unsigned = await this.options.api.createAuthPayload(
       identity.address,
-      confidentialSignerFamily(chainId)
+      confidentialSignerFamily(identity.context.chainAccount.scope.chainId)
     )
     const signed = await this.options.signer.signMessage({
       identity,
-      chainId,
-      payload: unsigned.payload
+      chainId: identity.context.chainAccount.scope.chainId,
+      payload: unsigned.payload,
+      expiresAt: Math.min(unsigned.expiresAt ?? Infinity, expiresAt ?? Infinity)
     })
     const authenticated = await this.options.api.authenticate(signed)
-    const signedSession = Object.freeze({ ...authenticated, signerId: identity.address })
+    const scope = identity.context.chainAccount.scope
+    if (identity.context.keyDomainSource.kind === 'hardware') {
+      const current = await this.options.signer.resolveIdentity(scope.chainId)
+      this.assertSameAccount(identity, current)
+      if (identity.context.generationId !== current.context.generationId) {
+        throw new Error('Active Wallet Account changed during Shield authorization')
+      }
+    }
     await this.options.store.putSession(
       this.options.network,
-      identity.context.chainAccount.scope.keyDomainId,
-      identity.context.chainAccount.scope.accountId,
-      signedSession
+      scope.keyDomainId,
+      scope.accountId,
+      Object.freeze({ ...authenticated, signerId: identity.address })
     )
-    return signedSession
+    return Object.freeze({ ...authenticated, signerId: identity.address })
   }
 
   private async refreshPortfolioBalances(
@@ -6053,21 +6370,27 @@ export class ConfidentialFundingCoordinator {
     sequence?: number
   ) {
     try {
-      const chainId = parseChainId(
-        stage === 'deposit' ? plan.source.chainId : plan.destination.chainId
-      ).reference
-      return plan.operation === 'swap' || plan.operation === 'confidential-transfer'
-        ? await this.options.api.getOneClickStatus(depositAddress)
-        : await this.options.api.getStatus(depositAddress, chainId)
+      const order =
+        stage === 'deposit'
+          ? plan.depositQuote?.oneClickOrder
+          : plan.withdraws.find(row => row.sequence === sequence)?.oneClickOrder
+      return order?.depositAddress === depositAddress &&
+        (stage !== 'deposit' || order.depositMemo === plan.depositQuote?.quote.depositMemo)
+        ? await this.readOwnerStatus(plan, order)
+        : null
     } catch (error) {
-      console.warn('[Confidential Funding] Status request failed', {
-        planId: plan.planId,
-        phase: plan.phase,
-        stage,
-        ...(sequence === undefined ? {} : { sequence }),
-        errorName: error instanceof Error ? error.name : 'UnknownError',
-        serviceStatus: error instanceof ConfidentialFundingApiError ? error.status : null
-      })
+      console.warn(
+        '[Confidential Funding] Status request failed',
+        {
+          planId: plan.planId,
+          phase: plan.phase,
+          stage,
+          ...(sequence === undefined ? {} : { sequence }),
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+          serviceStatus: error instanceof ConfidentialFundingApiError ? error.status : null
+        },
+        ...developmentErrorArgs(error)
+      )
       return null
     }
   }
@@ -6270,11 +6593,12 @@ export class ConfidentialFundingCoordinator {
         : nearDepositAccount
           ? nearDepositSourceChanged
           : plan.operation === undefined
-            ? routeIdentity.peaAddress.toLowerCase() !== plan.destination.address.toLowerCase()
+            ? requireConfidentialPea(routeIdentity).toLowerCase() !==
+              plan.destination.address.toLowerCase()
             : plan.operation === 'deposit'
               ? plan.source.address.toLowerCase() !==
                 (plan.sourceDomain === 'private'
-                  ? routeIdentity.peaAddress
+                  ? requireConfidentialPea(routeIdentity)
                   : routeIdentity.address
                 ).toLowerCase()
               : plan.operation === 'swap'
@@ -6284,7 +6608,9 @@ export class ConfidentialFundingCoordinator {
                   ? plan.source.address.toLowerCase() !== routeIdentity.address.toLowerCase() ||
                     !isAddress(plan.destination.address) ||
                     /^0x0{40}$/i.test(plan.destination.address) ||
-                    plan.destination.address.toLowerCase() === routeIdentity.address.toLowerCase()
+                    (plan.destination.address.toLowerCase() ===
+                      routeIdentity.address.toLowerCase() &&
+                      plan.source.protocolAssetId === plan.destination.protocolAssetId)
                   : plan.externalRecipient
                     ? !isValidExternalRecipient(
                         plan.externalRecipient,
@@ -6296,7 +6622,7 @@ export class ConfidentialFundingCoordinator {
                       plan.source.address.toLowerCase() !== routeIdentity.address.toLowerCase()
                     : plan.destination.address.toLowerCase() !==
                       (plan.destinationDomain === 'private'
-                        ? routeIdentity.peaAddress
+                        ? requireConfidentialPea(routeIdentity)
                         : routeIdentity.address
                       ).toLowerCase())
     ) {

@@ -8,7 +8,9 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { Network } from '@/types/wallet'
 import type { AccountNetworksView } from './account-networks-client'
 import { getAssetDomainRaw, type ShieldProvider } from './asset-domains'
-import { getPrivateTransferChainIds } from './private-balance-transfer'
+import { getNearMoveChainIds } from './private-balance-transfer'
+import { getShieldTransferChainIds } from './shield-transfer'
+import { readEnabledChainFeatureFlags } from '@/config/enabled-chain-feature-flags'
 import { listDepositTokenChoices } from './shield-deposit-options'
 import { listExternalShieldReceiveAssets } from './shield-deposit-route'
 import { parseTokenBalanceDecimal } from './token-balance-format'
@@ -38,7 +40,14 @@ export interface ShieldReceiveToken {
 }
 
 export function canReceiveNearShield(network: Network, account: AccountNetworksView): boolean {
-  return getPrivateTransferChainIds(account, network === 'mainnet').length > 0
+  return (
+    getShieldTransferChainIds(account, network === 'mainnet').length > 0 ||
+    getNearMoveChainIds({
+      account,
+      mainnet: network === 'mainnet',
+      enabledFlags: readEnabledChainFeatureFlags()
+    }).length > 0
+  )
 }
 
 export function listShieldReceiveTokens(

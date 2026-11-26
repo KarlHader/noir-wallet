@@ -1,4 +1,5 @@
 import type { KeyDomainSource } from '@/core/keyring/domain'
+import type { HardwareCredentialMetadata } from '@/core/keyring/domain/hardware-credential'
 
 type EvmExecutionKeySource =
   | Readonly<{ kind: 'software' | 'hardware' }>
@@ -10,5 +11,22 @@ export function supportsEvmPrivateExecution(
   return (
     source?.kind === 'software' ||
     (source?.kind === 'private-key' && source.chainFamily === 'eip155')
+  )
+}
+
+type ConfidentialShieldKeySource =
+  | EvmExecutionKeySource
+  | Readonly<{ kind: 'hardware'; hardware: HardwareCredentialMetadata }>
+  | Extract<KeyDomainSource, { kind: 'hardware' }>
+
+export function supportsEvmConfidentialShield(
+  source: ConfidentialShieldKeySource | null | undefined
+): boolean {
+  if (source?.kind !== 'hardware') return supportsEvmPrivateExecution(source)
+  const hardware = 'hardware' in source ? source.hardware : source
+  return (
+    'vendor' in hardware &&
+    (hardware.vendor === 'ledger' || hardware.vendor === 'keystone') &&
+    hardware.capabilities.includes('evm')
   )
 }

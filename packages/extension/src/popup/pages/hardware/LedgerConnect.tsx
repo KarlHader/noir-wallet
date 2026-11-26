@@ -10,7 +10,7 @@ import { useNavigate } from '../../provider/Router'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import { PasswordInput } from '../../components/auth/PasswordInput'
 import { PasswordStrength } from '../../components/auth/PasswordStrength'
-import { SyncOptionsModal } from '../../components/zcash/SyncOptionsModal'
+import { SyncOptionsModal, type SyncStart } from '../../components/zcash/SyncOptionsModal'
 import { openModal } from '../../provider/ModalManager'
 import {
   accountNetworksClient,
@@ -108,7 +108,8 @@ export function LedgerConnect() {
   const [walletName, setWalletName] = useState('Ledger Wallet 1')
   const walletNameEdited = useRef(false)
   const newWalletName = useRef('Ledger Wallet 1')
-  const [birthdayHeight, setBirthdayHeight] = useState<number | undefined>()
+  const [syncStart, setSyncStart] = useState<SyncStart>()
+  const birthdayHeight = syncStart?.height
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [deviceStatus, setDeviceStatus] = useState<LedgerDeviceStatus>({
@@ -150,7 +151,9 @@ export function LedgerConnect() {
   const target = wallets.find(wallet => wallet.id === targetWalletId)
   const accountIndex = ledgerLogicalAccountIndex(targetAccount, target?.accounts ?? [])
   const registeredFamilies = ledgerRegisteredFamilies(existingCredential, accountIndex, network)
-  const canAddZcash = ledgerCanAddZcashAccount(existingCredential, accountIndex, network)
+  const canAddZcash =
+    (!targetWalletId || targetAccount !== 'new') &&
+    ledgerCanAddZcashAccount(existingCredential, accountIndex, network)
   const availableFamilies = ledgerAvailableFamilies(network)
   const selectedFamilies = families.filter(
     family => availableFamilies.includes(family) && (family !== 'zcash' || canAddZcash)
@@ -401,7 +404,7 @@ export function LedgerConnect() {
     )
       return
     connecting.current = true
-    setBirthdayHeight(undefined)
+    setSyncStart(undefined)
     const controller = new AbortController()
     abort.current = controller
     selectedAccounts.current = []
@@ -444,19 +447,19 @@ export function LedgerConnect() {
     }
   }
   const chooseBirthday = async () => {
-    const result = await openModal<{ height?: number; confirmed: boolean } | undefined>({
+    const result = await openModal<SyncStart | undefined>({
       title: 'Sync Optimization',
       body: (resolve, close) => (
         <SyncOptionsModal
-          initialHeight={birthdayHeight}
-          onConfirm={height => {
-            resolve({ height, confirmed: true })
+          initialSelection={syncStart}
+          onConfirm={selection => {
+            resolve(selection)
             close()
           }}
         />
       )
     })
-    if (result?.confirmed) setBirthdayHeight(result.height)
+    if (result) setSyncStart(result)
   }
   const create = async () => {
     if (!exported || accountIndex === null || provisioning.current) return

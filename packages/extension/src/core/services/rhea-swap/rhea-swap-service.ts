@@ -1,4 +1,5 @@
 import {
+  isOneClickConfidentialRoute,
   normalizeBuild,
   normalizeOrderStatus,
   normalizeQuote,
@@ -20,10 +21,10 @@ import {
   RHEA_SWAP_CHAIN_CATALOG,
   isEvmNativeQuoteAddress,
   parseRheaSwapQuoteRequest,
+  publicConfidentialRefundViewer,
   toRheaSwapExecutionView,
   toRheaSwapToken,
   toRheaSwapProtocolRequest,
-  usesPublicConfidentialTransferAdapter,
   type RheaSwapQuoteView,
   type RheaSwapReviewView,
   type RheaSwapOrderStatusView,
@@ -375,7 +376,7 @@ export class RheaSwapService {
     const record = await this.requireSession(quoteHandle)
     const quote = normalizeQuote(record.request, record.quoteRaw, record.receivedAt)
     this.assertQuoteFresh(record, quote)
-    const build = await this.client.buildSwap({ quote, signal })
+    const build = await this.client.buildSwap({ quote, signal, scope: record.privateSwapScope })
     this.assertBuildMatchesQuote(build, quote, record.privateSwapScope?.purpose)
     if (!build.request) throw new Error('RHEA Swap build is missing its normalized request')
     const updated = Object.freeze({
@@ -791,7 +792,10 @@ export class RheaSwapService {
     if (!record.submission) throw new Error('RHEA Swap has not been submitted')
     if (record.submission.reportStatus === 'reported') return this.toSubmissionView(record)
     try {
-      const result = await this.client.reportRaw(record.submission.reportRequest, { signal })
+      const result =
+        record.request.confidentiality === 'basic'
+          ? undefined
+          : await this.client.reportRaw(record.submission.reportRequest, { signal })
       const recordId = readRheaSwapReportRecordId(result?.id)
       const updated = Object.freeze({
         ...record,
@@ -824,19 +828,9 @@ export class RheaSwapService {
     const record = await this.requireSession(quoteHandle)
     const submission = record.submission
     if (!submission) throw new Error('RHEA Swap has not been submitted')
-    let status: SwapOrderStatusDataRaw
-    if (
-      usesPublicConfidentialTransferAdapter({
-        referral: record.request.extensions?.referral
-      })
-    ) {
-      if (!this.client.getPublicConfidentialTransferStatus || !submission.orderId) {
-        throw new Error('Confidential transfer order is unavailable')
-      }
-      status = await this.client.getPublicConfidentialTransferStatus(submission.orderId, signal)
-    } else {
-      status = await this.readOrderObservation(submission, signal)
-    }
+    const status = this.isOneClickOrder(record)
+      ? ((await this.readPublicConfidentialObservation(record, submission.orderId, signal)) ?? {})
+      : await this.readOrderObservation(submission, signal)
     return Object.freeze({
       quoteHandle: record.quoteHandle,
       orderId: record.submission.orderId,
@@ -844,6 +838,39 @@ export class RheaSwapService {
       status: normalizeOrderStatus(status),
       destinationHash: readRheaDestinationHash(status) ?? null
     })
+  }
+
+  private isOneClickOrder(record: RheaSwapQuoteSessionRecord): boolean {
+    return isOneClickConfidentialRoute(
+      record.request.confidentiality,
+      record.request.extensions?.referral,
+      record.quoteRaw?.bestQuote.bridge
+    )
+  }
+
+  private async readPublicConfidentialObservation(
+    record: RheaSwapQuoteSessionRecord,
+    orderId: string | null,
+    signal?: AbortSignal
+  ): Promise<SwapOrderStatusDataRaw | null> {
+    const scope = record.privateSwapScope
+    if (!scope || !record.build || !this.client.getPublicConfidentialTransferStatus) return null
+    const order = this.readBuild(record, true).deposit
+    if (!order || order.depositAddress !== orderId) return null
+    const viewer =
+      order.viewer ??
+      publicConfidentialRefundViewer(
+        record.request.fromChain,
+        record.request.sender,
+        record.privateSwapScope?.purpose
+      )
+    if (!viewer) return null
+    const { depositAddress, depositMemo } = order
+    return this.client.getPublicConfidentialTransferStatus(
+      { depositAddress, ...(depositMemo === undefined ? {} : { depositMemo }), viewer },
+      { walletId: scope.walletId, accountId: scope.accountId },
+      signal
+    )
   }
 
   private async readOrderObservation(
@@ -1070,9 +1097,6 @@ export class RheaSwapService {
       estimated_out: build.estimatedOut,
       router: build.router,
       tx_type: build.isCrossChain ? 'cross-chain' : 'same-chain',
-      ...(build.request.confidentiality === undefined
-        ? {}
-        : { confidentiality: build.request.confidentiality }),
       ...(reference.orderId ? { swapId: reference.orderId } : {})
     })
   }
@@ -1239,11 +1263,15 @@ export class RheaSwapService {
 
   private toQuoteView(record: RheaSwapQuoteSessionRecord, quote: Quote): RheaSwapQuoteView {
     if (!record.request.recipient) throw new Error('RHEA Swap quote is missing its recipient')
+    const bps = record.request.confidentiality === 'basic' ? quote.route.raw.appFeeBps : undefined
     return Object.freeze({
       quoteHandle: record.quoteHandle,
       recipient: record.request.recipient,
       estimatedOut: quote.estimatedOut,
       minAmountOut: quote.minAmountOut,
+      ...(typeof bps === 'number' && Number.isSafeInteger(bps) && bps >= 0 && bps <= 10_000
+        ? { appFeeBps: bps }
+        : {}),
       router: quote.route.router,
       alternatives: Object.freeze(
         this.selectableAlternatives(quote).map((route, index) =>

@@ -54,6 +54,7 @@ import {
   getPrivateTransferChainIds,
   type BalanceTransferIntent
 } from '@/popup/services/private-balance-transfer'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import {
   resolveNearConfidentialZecDetail,
   resolveNearConfidentialZecHolding
@@ -336,6 +337,8 @@ export function AssetDetail() {
     evmAccountNetwork?.privateExecutionAddress &&
     evmMainAddress
   )
+  const shieldChainIds = getShieldTransferChainIds(storageV2Account, currentNetwork === 'mainnet')
+  const evmShieldEligible = Boolean(chain && shieldChainIds.includes(chain.chain.id))
   const refreshConfidentialBalances =
     privateTransferEligible ||
     (chain?.chain.family === 'zcash' &&
@@ -351,7 +354,8 @@ export function AssetDetail() {
           asset,
           visibleModel,
           privateTransferEligible,
-          findAssetPrice(displayPrices, asset.asset.id)?.priceUsd
+          findAssetPrice(displayPrices, asset.asset.id)?.priceUsd,
+          evmShieldEligible
         )
       : null
   const nearConfidentialZec = asset
@@ -364,7 +368,8 @@ export function AssetDetail() {
       })
     : null
   const hasConfidentialCapability =
-    currentNetwork === 'mainnet' && getPrivateTransferChainIds(storageV2Account, true).length > 0
+    currentNetwork === 'mainnet' &&
+    (shieldChainIds.length > 0 || getPrivateTransferChainIds(storageV2Account, true).length > 0)
   const modeScopeKey = JSON.stringify([currentNetwork, effectiveWalletId, effectiveAccountId])
   const enabledIncognito = useSettingsStore(state => state.incognitoCardScopes[modeScopeKey])
   const { state: executionMode } = useDAppExecutionMode(
@@ -1404,6 +1409,7 @@ export function AssetDetail() {
                   return (
                     <AssetDetailBalanceRow
                       key={domain}
+                      shielded={domain === 'shield'}
                       onSelect={() => selectDetailMode(domain)}
                       label={
                         domain === 'shield'
@@ -1494,6 +1500,7 @@ export function AssetDetail() {
             {!confidentialOnlyDetail && (
               <AssetDetailBalanceRow
                 label="Zcash Shield"
+                shielded
                 onSelect={isTotalDetail ? () => selectDetailMode('shield') : undefined}
                 actions={isTotalDetail ? zcashActions('shielded') : undefined}
                 subtitle={renderBalanceAddress(
@@ -1516,6 +1523,7 @@ export function AssetDetail() {
             {(hasConfidentialCapability || confidentialOnlyDetail) && (
               <AssetDetailBalanceRow
                 label="NEAR Confidential"
+                shielded
                 onSelect={isTotalDetail ? () => selectDetailMode('shield') : undefined}
                 actions={isTotalDetail ? confidentialActions() : undefined}
                 balance={

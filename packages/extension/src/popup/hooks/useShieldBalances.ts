@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import type { ConfidentialBalanceErrorCode } from '@/popup/services/confidential-funding-client'
 import { usePortfolioSnapshot } from './usePortfolioSnapshot'
 import type { Network } from '@/types/wallet'
+import { needsShieldHardwareTab, openShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 
 type BalanceScope = Readonly<{ network: Network; keyDomainId: string; accountId: string }>
 
@@ -10,14 +12,20 @@ export function useShieldBalances({
   enabled,
   scopeKey,
   scope,
+  hardware,
+  authorizationPath,
   authorizeOnMount = true
 }: Readonly<{
   active: boolean
   enabled: boolean
   scopeKey: string
   scope: BalanceScope | null
+  hardware: boolean
+  authorizationPath?: string
   authorizeOnMount?: boolean
 }>) {
+  const { pathname, search } = useLocation()
+  const connectPath = authorizationPath ?? `${pathname}${search}`
   const {
     model,
     settled,
@@ -87,7 +95,7 @@ export function useShieldBalances({
   const refreshBalances = useCallback(
     (
       force = true,
-      authorize = true,
+      authorize = !hardware || lastErrorCode.current === 'authorization_required',
       notifyPortfolio = true,
       automatic = false
     ): Promise<boolean> => {
@@ -103,6 +111,10 @@ export function useShieldBalances({
         setErrorCode(null)
         lastErrorCode.current = null
         try {
+          if (authorize && needsShieldHardwareTab(hardware)) {
+            await openShieldHardwareTab(connectPath)
+            return false
+          }
           const refreshed = await refreshSource({
             source: 'near-confidential',
             authorize,
@@ -150,6 +162,8 @@ export function useShieldBalances({
       active,
       balances,
       enabled,
+      hardware,
+      connectPath,
       refreshSource,
       scope?.network,
       scope?.keyDomainId,
@@ -202,10 +216,19 @@ export function useShieldBalances({
       if (cancelled) return
       started = true
       setAutoRecoveringKey(lifecycleKey)
-      void attempt(true)
+      void attempt(!hardware)
     })
     return stop
-  }, [active, enabled, authorizeOnMount, settled, Boolean(balances), lifecycleKey, refreshBalances])
+  }, [
+    active,
+    enabled,
+    authorizeOnMount,
+    hardware,
+    settled,
+    Boolean(balances),
+    lifecycleKey,
+    refreshBalances
+  ])
 
   return {
     balances,

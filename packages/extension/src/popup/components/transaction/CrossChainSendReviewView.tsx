@@ -10,6 +10,7 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
 import { quoteReviewPrimaryAction } from '@/popup/services/quote-review'
+import { QuoteFeeAmount } from './QuoteFeeAmount'
 import { RouteProviderLabel } from './RouteProviderLabel'
 import { TransactionReviewView } from './TransactionReviewView'
 import { TransactionReviewParty } from './TransactionReviewParty'
@@ -49,7 +50,10 @@ export function CrossChainSendReviewView({
   readonly sourceAddress?: string
   readonly sourceAccountName?: string
   readonly sourceDomain?: 'public' | 'private'
-  readonly review: Pick<RheaSwapReviewView, 'amountIn' | 'estimatedOut' | 'recipient' | 'router'>
+  readonly review: Pick<
+    RheaSwapReviewView,
+    'amountIn' | 'estimatedOut' | 'recipient' | 'router' | 'appFeeBps'
+  >
   readonly routeCost: string | null
   readonly sourceNetworkFee: { readonly amount: string; readonly symbol: string } | null
   readonly combinedNetworkFee?: { readonly amount: string; readonly symbol: string }
@@ -137,9 +141,17 @@ export function CrossChainSendReviewView({
           )
         },
         {
-          label: 'Route cost (est.)',
+          label: 'Fee',
           content: isPreparingReview ? (
             'Updating...'
+          ) : reviewedQuoteReady && review.appFeeBps ? (
+            <QuoteFeeAmount
+              sourceAmountRaw={review.amountIn}
+              decimals={source.decimals}
+              symbol={source.symbol}
+              bps={review.appFeeBps}
+              fallbackAmount={routeCost}
+            />
           ) : routeCost === null ? (
             'Unavailable'
           ) : (
@@ -149,7 +161,7 @@ export function CrossChainSendReviewView({
         ...(combinedNetworkFee
           ? [
               {
-                label: 'Max network fee',
+                label: 'Network fee',
                 content: (
                   <AmountDisplay
                     value={combinedNetworkFee.amount}
@@ -163,7 +175,7 @@ export function CrossChainSendReviewView({
         ...(sourceNetworkFee
           ? [
               {
-                label: combinedNetworkFee ? 'Approval fee' : 'Source network fee',
+                label: combinedNetworkFee ? 'Approval network fee' : 'Network fee',
                 content: sourceFeeControl ?? (
                   <AmountDisplay
                     value={sourceNetworkFee.amount}

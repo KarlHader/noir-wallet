@@ -4,6 +4,7 @@ import { Tooltip } from '@/popup/components/ui/tooltip'
 
 interface AssetDetailBalanceRowProps {
   readonly label: string
+  readonly shielded?: boolean
   readonly subtitle?: ReactNode
   readonly balance: ReactNode
   readonly fiat: string
@@ -19,6 +20,7 @@ interface AssetDetailBalanceRowProps {
 
 export function AssetDetailBalanceRow({
   label,
+  shielded = false,
   subtitle,
   balance,
   fiat,
@@ -67,7 +69,7 @@ export function AssetDetailBalanceRow({
                   disabled={disabled}
                   className="wallet-interactive flex size-8 shrink-0 items-center justify-center rounded-lg bg-card hover:brightness-110 focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40"
                 >
-                  <WalletActionIcon action={action} size={18} />
+                  <WalletActionIcon action={action} shielded={shielded} size={18} />
                 </button>
               </Tooltip>
             ))}

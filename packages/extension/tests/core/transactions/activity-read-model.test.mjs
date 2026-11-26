@@ -161,6 +161,123 @@ test('Activity notifications report settlement amounts and wait for a refund out
   ).toBe('refunded')
 })
 
+test('Activity notifications baseline historical receipts and deduplicate route payouts', () => {
+  const receipt = (id, status, hash, createdAt) => ({
+    id,
+    source: 'rpc',
+    kind: 'transfer',
+    status,
+    createdAt,
+    scope,
+    snapshot: { schemaVersion: 1, direction: 'incoming' },
+    segments: [
+      {
+        role: 'origin',
+        status,
+        target: { kind: 'onchain', chainId: evmChainId },
+        evidence: { transactionHash: hash }
+      }
+    ]
+  })
+  const historical = receipt('old', 'final', '0x1', 10)
+  const pending = new Set()
+  expect(
+    collectActivityReceiptNotifications(
+      [historical, receipt('pending', 'confirming', '0x2', 10)],
+      {},
+      pending
+    )
+  ).toEqual([])
+  const walletSwap = {
+    source: 'wallet-v2',
+    kind: 'swap',
+    segments: [
+      {
+        role: 'destination',
+        target: { kind: 'onchain', chainId: evmChainId },
+        evidence: { transactionHash: '0x3' }
+      }
+    ]
+  }
+  expect(
+    collectActivityReceiptNotifications(
+      [
+        historical,
+        receipt('confirmed', 'final', '0x2', 10),
+        receipt('wallet payout', 'final', '0x3', 20),
+        receipt('new', 'final', '0x4', 20),
+        walletSwap
+      ],
+      { [`${evmChainId}:main`]: 15 },
+      pending
+    ).map(outcome => outcome.item.id)
+  ).toEqual(['confirmed', 'new'])
+})
+
+test('Activity notifications report settlement amounts and wait for a refund outcome', () => {
+  const origin = {
+    role: 'origin',
+    status: 'final',
+    target: { kind: 'onchain', chainId: evmChainId },
+    evidence: { transactionHash: evmHash }
+  }
+  const destination = {
+    role: 'destination',
+    status: 'confirming',
+    target: { kind: 'onchain', chainId: arbitrumChainId }
+  }
+  const swap = {
+    id: 'swap',
+    source: 'wallet-v2',
+    kind: 'swap',
+    status: 'confirming',
+    scope,
+    snapshot: {
+      direction: 'outgoing',
+      primaryAmount: { assetId: ethAssetId, amountRaw: '50000000000000000' },
+      counterAmount: { assetId: usdcAssetId, amountRaw: '91000000' }
+    },
+    segments: [origin, destination]
+  }
+  expect(resolveActivityNotification(swap)).toBeUndefined()
+  const settled = { assetId: usdcAssetId, amountRaw: '90000000' }
+  const confirmation = resolveActivityNotification({
+    ...swap,
+    status: 'final',
+    segments: [origin, { ...destination, status: 'final', evidence: { settledAmount: settled } }]
+  })
+  expect(
+    formatActivityNotification(confirmation, {
+      asset: assetId =>
+        assetId === ethAssetId ? { symbol: 'ETH', decimals: 18 } : { symbol: 'USDC', decimals: 6 },
+      chain: () => 'Ethereum'
+    })
+  ).toEqual({ title: 'Swap completed', message: '0.05 ETH → 90 USDC' })
+
+  const refund = { ...origin, role: 'refund', status: 'confirming' }
+  const failed = { ...swap, status: 'failed', failureCode: 'relay-failed' }
+  expect(resolveActivityNotification({ ...failed, segments: [origin, refund] })).toBeUndefined()
+  expect(
+    resolveActivityNotification({ ...failed, segments: [origin, { ...refund, status: 'final' }] })
+      ?.result
+  ).toBe('refunded')
+  expect(
+    resolveActivityNotification({ ...failed, failureCode: 'user-rejected', segments: [] })
+  ).toBeUndefined()
+  expect(
+    resolveActivityNotification({
+      ...failed,
+      id: 'tx:confidential-external:demo',
+      kind: 'shield',
+      failureCode: 'refunded',
+      snapshot: {
+        direction: 'incoming',
+        shield: { operation: 'deposit', destinationDomain: 'shield' }
+      }
+    })?.result
+  ).toBe('refunded')
+})
+
 function graph({
   id = 'transaction:activity',
   chainId = evmChainId,

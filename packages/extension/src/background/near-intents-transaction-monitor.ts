@@ -1,8 +1,12 @@
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
-import { getZcashChainId } from '@/core/chains/registry'
+import { getBitcoinChainId, getZcashChainId } from '@/core/chains/registry'
 import { readActiveStorageV2Snapshot } from '@/core/keyring/application/active-storage-v2-snapshot'
-import type { TransactionAccountScope } from '@/core/transactions/domain'
-import { fetchSwapStatus } from '@/core/services/intents-api'
+import type {
+  NearIntentsTransactionBinding,
+  TransactionAccountScope
+} from '@/core/transactions/domain'
+import { parseSwapStatusResponse } from '@/core/services/intents-api'
+import type { OneClickViewer } from '@/core/services/near-intents/one-click-order'
 import {
   NearIntentsTransactionMonitor,
   parseNearIntentsStatusObservation,
@@ -15,11 +19,28 @@ import {
 } from '@/infrastructure/persistence/repositories'
 import { getRequiredConfirmations } from '@/lib/transaction-status'
 import { lookupTransaction } from '@/lib/zcash-node-rpc'
-import { getConfidentialFundingNetworkConfig } from '@/config/intents'
-import { ConfidentialFundingApi } from './confidential-funding-api'
+import { parseConfidentialOneClickStatus } from './confidential-funding-api'
+import { queryOneClickOrderStatus } from './one-click-status'
 
 export const NEAR_INTENTS_TRANSACTION_MONITOR_ALARM = 'near-intents-transaction-monitor-alarm'
 const POLL_DELAY_MINUTES = 0.5
+
+function readLegacyRefundViewer(
+  binding: NearIntentsTransactionBinding,
+  network: typeof DEFAULT_NETWORK
+): OneClickViewer | undefined {
+  const { origin, refundAddress: walletAddress } = binding
+  if (origin.chainId.startsWith('eip155:')) {
+    return {
+      chainFamily: 'evm',
+      walletAddress,
+      signingMode: binding.userAction === 'transfer' ? 'private' : 'public'
+    }
+  }
+  if (origin.chainId === getBitcoinChainId(network)) return { chainFamily: 'btc', walletAddress }
+  if (origin.chainId.startsWith('solana:')) return { chainFamily: 'solana', walletAddress }
+  if (origin.chainId.startsWith('near:')) return { chainFamily: 'near', walletAddress }
+}
 
 export class BackgroundNearIntentsTransactionMonitor {
   private readonly storageRepository = new IndexedDbStorageV2Repository()
@@ -28,15 +49,23 @@ export class BackgroundNearIntentsTransactionMonitor {
   constructor() {
     this.monitor = new NearIntentsTransactionMonitor({
       repository: new IndexedDbTransactionRepository(),
-      fetchStatus: async (depositAddress, binding) => {
+      fetchStatus: async (depositAddress, binding, scope) => {
+        const network = DEFAULT_NETWORK
+        const viewer = binding.viewer ?? readLegacyRefundViewer(binding, network)
+        if (!viewer) return null
+        const value = await queryOneClickOrderStatus({
+          network,
+          walletId: scope.keyDomainId,
+          accountId: scope.accountId,
+          order: {
+            depositAddress,
+            ...(binding.depositMemo === undefined ? {} : { depositMemo: binding.depositMemo }),
+            viewer
+          }
+        })
+        if (value === null) return null
         if (binding.userAction === 'transfer') {
-          const config = getConfidentialFundingNetworkConfig(DEFAULT_NETWORK)
-          if (!config) return null
-          const status = await new ConfidentialFundingApi(
-            config,
-            '',
-            __RHEA_SWAP_ACCESS_TOKEN__
-          ).getOneClickStatus(depositAddress)
+          const status = parseConfidentialOneClickStatus(value, depositAddress, binding.depositMemo)
           const normalized = status.status.toUpperCase()
           return parseNearIntentsStatusObservation({
             status:
@@ -52,8 +81,7 @@ export class BackgroundNearIntentsTransactionMonitor {
             destinationTransactionHashes: status.transactionHash ? [status.transactionHash] : []
           })
         }
-        const status = await fetchSwapStatus(depositAddress)
-        if (!status) return null
+        const status = parseSwapStatusResponse(value)
         return parseNearIntentsStatusObservation({
           status:
             status.status === 'SUCCESS' ||

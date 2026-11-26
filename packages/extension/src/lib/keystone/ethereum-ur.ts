@@ -9,17 +9,24 @@ export const KEYSTONE_ETHEREUM_SIGNATURE_UR_TYPE = 'eth-signature' as const
 export const DEFAULT_ETHEREUM_SIGN_REQUEST_FRAGMENT_LENGTH = 200
 
 const ETHEREUM_TYPED_TRANSACTION_DATA_TYPE = 4
+const ETHEREUM_PERSONAL_MESSAGE_DATA_TYPE = 3
+const ETHEREUM_LEGACY_TRANSACTION_DATA_TYPE = 1
 const MAX_CBOR_BYTES = 256 * 1024
-const MAX_UNSIGNED_TRANSACTION_BYTES = 128 * 1024
+const MAX_SIGNING_DATA_BYTES = 128 * 1024
 const MAX_PATH_INDEX = 0x7fffffff
 
-export interface KeystoneEthereumSignRequestInput {
+type EthereumSignatureKind = 'personal-sign' | 'transaction' | 'legacy-transaction'
+
+interface KeystoneEthereumRequestBinding {
   readonly requestId: string
-  readonly unsignedTransactionHex: string
   readonly chainId: number
   readonly derivationPath: string
   readonly masterFingerprintHex: string
   readonly address: string
+}
+
+export interface KeystoneEthereumSignRequestInput extends KeystoneEthereumRequestBinding {
+  readonly unsignedTransactionHex: string
 }
 
 export interface KeystoneEthereumSignRequest extends KeystoneEthereumSignRequestInput {
@@ -101,18 +108,18 @@ function assertCanonicalAddress(value: string): string {
 }
 
 function assertCanonicalUnsignedTransaction(value: string): string {
-  if (
-    !/^0x02(?:[0-9a-f]{2})+$/.test(value) ||
-    (value.length - 2) / 2 > MAX_UNSIGNED_TRANSACTION_BYTES
-  ) {
+  if (!/^0x02(?:[0-9a-f]{2})+$/.test(value) || (value.length - 2) / 2 > MAX_SIGNING_DATA_BYTES) {
     throw new Error('Invalid unsigned Keystone Ethereum transaction')
   }
   return value
 }
 
-function createRequestCbor(input: KeystoneEthereumSignRequestInput): Uint8Array {
+function createRequestCbor(
+  input: KeystoneEthereumRequestBinding,
+  dataHex: string,
+  dataType: number
+): Uint8Array {
   const requestId = parseUuid(input.requestId)
-  const unsignedTransactionHex = assertCanonicalUnsignedTransaction(input.unsignedTransactionHex)
   const chainId = assertCanonicalChainId(input.chainId)
   const address = assertCanonicalAddress(input.address)
   const masterFingerprint = hexToBytes(
@@ -128,8 +135,8 @@ function createRequestCbor(input: KeystoneEthereumSignRequestInput): Uint8Array 
   taggedKeypath.setTag(keypath.getRegistryType().getTag())
   const map: Record<number, unknown> = {
     1: new DataItem(Buffer.from(requestId), extend.RegistryTypes.UUID.getTag()),
-    2: Buffer.from(unsignedTransactionHex.slice(2), 'hex'),
-    3: ETHEREUM_TYPED_TRANSACTION_DATA_TYPE,
+    2: Buffer.from(dataHex.slice(2), 'hex'),
+    3: dataType,
     4: chainId,
     5: taggedKeypath,
     6: Buffer.from(address.slice(2), 'hex'),
@@ -145,16 +152,52 @@ function createRequestCbor(input: KeystoneEthereumSignRequestInput): Uint8Array 
 export function createKeystoneEthereumSignRequest(
   input: KeystoneEthereumSignRequestInput
 ): KeystoneEthereumSignRequest {
-  const cbor = createRequestCbor(input)
+  const unsignedTransactionHex = assertCanonicalUnsignedTransaction(input.unsignedTransactionHex)
+  const cbor = createRequestCbor(
+    input,
+    unsignedTransactionHex,
+    ETHEREUM_TYPED_TRANSACTION_DATA_TYPE
+  )
   return Object.freeze({
     requestId: formatUuid(parseUuid(input.requestId)),
-    unsignedTransactionHex: assertCanonicalUnsignedTransaction(input.unsignedTransactionHex),
+    unsignedTransactionHex,
     chainId: assertCanonicalChainId(input.chainId),
     derivationPath: input.derivationPath,
     masterFingerprintHex: input.masterFingerprintHex.toLowerCase(),
     address: assertCanonicalAddress(input.address),
     cborBase64: Buffer.from(cbor).toString('base64')
   })
+}
+
+export function createKeystoneEthereumPersonalSignRequest(
+  input: KeystoneEthereumRequestBinding & { readonly messageHex: string }
+): { readonly cborBase64: string } {
+  if (
+    input.messageHex.length > 2 + MAX_SIGNING_DATA_BYTES * 2 ||
+    !/^0x(?:[0-9a-fA-F]{2})+$/.test(input.messageHex)
+  ) {
+    throw new Error('Invalid Keystone Ethereum personal message')
+  }
+  const cbor = createRequestCbor(input, input.messageHex, ETHEREUM_PERSONAL_MESSAGE_DATA_TYPE)
+  return Object.freeze({ cborBase64: Buffer.from(cbor).toString('base64') })
+}
+
+export function createKeystoneEthereumLegacySignRequest(input: KeystoneEthereumSignRequestInput): {
+  readonly cborBase64: string
+} {
+  const { unsignedTransactionHex } = input
+  if (
+    unsignedTransactionHex.length > 2 + MAX_SIGNING_DATA_BYTES * 2 ||
+    !/^0x[c-f][0-9a-f](?:[0-9a-f]{2})+$/.test(unsignedTransactionHex)
+  ) {
+    throw new Error('Invalid unsigned Keystone Ethereum legacy transaction')
+  }
+  const cbor = createRequestCbor(
+    input,
+    unsignedTransactionHex,
+    ETHEREUM_LEGACY_TRANSACTION_DATA_TYPE
+  )
+  return Object.freeze({ cborBase64: Buffer.from(cbor).toString('base64') })
 }
 
 export function createKeystoneEthereumSignRequestUREncoder(
@@ -184,7 +227,10 @@ function readMap(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-function parseSignatureCbor(cbor: Uint8Array): KeystoneEthereumSignature {
+function parseSignatureCbor(
+  cbor: Uint8Array,
+  kind: EthereumSignatureKind
+): KeystoneEthereumSignature {
   if (!(cbor instanceof Uint8Array) || cbor.byteLength === 0 || cbor.byteLength > MAX_CBOR_BYTES) {
     throw new Error('Invalid Keystone Ethereum signature')
   }
@@ -210,8 +256,27 @@ function parseSignatureCbor(cbor: Uint8Array): KeystoneEthereumSignature {
   ) {
     throw new Error('Invalid Keystone Ethereum signature request ID')
   }
-  const signature = bytes(map[2], 65, 'Keystone Ethereum signature')
-  if (signature[64] !== 0 && signature[64] !== 1) {
+  const rawSignature = map[2]
+  if (
+    kind === 'legacy-transaction' &&
+    (!(rawSignature instanceof Uint8Array) ||
+      rawSignature.byteLength < 65 ||
+      rawSignature.byteLength > 72 ||
+      rawSignature[64] === 0)
+  ) {
+    throw new Error('Invalid Keystone Ethereum signature recovery ID')
+  }
+  const signature =
+    kind === 'legacy-transaction' && rawSignature instanceof Uint8Array
+      ? rawSignature
+      : bytes(rawSignature, 65, 'Keystone Ethereum signature')
+  const recovery = signature[64]
+  if (
+    kind !== 'legacy-transaction' &&
+    recovery !== 0 &&
+    recovery !== 1 &&
+    !(kind === 'personal-sign' && (recovery === 27 || recovery === 28))
+  ) {
     throw new Error('Invalid Keystone Ethereum signature recovery ID')
   }
   const origin = map[3]
@@ -231,16 +296,22 @@ function parseSignatureCbor(cbor: Uint8Array): KeystoneEthereumSignature {
   })
 }
 
-export function parseKeystoneEthereumSignature(ur: UR): KeystoneEthereumSignature {
+export function parseKeystoneEthereumSignature(
+  ur: UR,
+  kind: EthereumSignatureKind = 'transaction'
+): KeystoneEthereumSignature {
   if (ur.type !== KEYSTONE_ETHEREUM_SIGNATURE_UR_TYPE) {
     throw new Error(
       `Unexpected QR content: ${ur.type} (expected ${KEYSTONE_ETHEREUM_SIGNATURE_UR_TYPE})`
     )
   }
-  return parseSignatureCbor(new Uint8Array(ur.cbor))
+  return parseSignatureCbor(new Uint8Array(ur.cbor), kind)
 }
 
-export function parseKeystoneEthereumSignatureCborBase64(value: string): KeystoneEthereumSignature {
+export function parseKeystoneEthereumSignatureCborBase64(
+  value: string,
+  kind: EthereumSignatureKind = 'transaction'
+): KeystoneEthereumSignature {
   if (
     value.length === 0 ||
     value.length > MAX_CBOR_BYTES * 2 ||
@@ -249,5 +320,5 @@ export function parseKeystoneEthereumSignatureCborBase64(value: string): Keyston
   ) {
     throw new Error('Invalid Keystone Ethereum signature')
   }
-  return parseSignatureCbor(new Uint8Array(Buffer.from(value, 'base64')))
+  return parseSignatureCbor(new Uint8Array(Buffer.from(value, 'base64')), kind)
 }

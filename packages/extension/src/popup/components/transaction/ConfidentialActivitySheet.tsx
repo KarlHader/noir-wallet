@@ -30,6 +30,7 @@ export interface ConfidentialActivityTarget {
   readonly keyDomainId: string
   readonly accountId: string
   readonly transactionId: string
+  readonly depositQuote?: ConfidentialFundingPlan['depositQuote']
 }
 
 interface ConfidentialActivitySheetProps {
@@ -109,13 +110,46 @@ export function ConfidentialActivityView({
     let active = true
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     let inFlight: Promise<void> | null = null
+    let planInFlight = false
+    let pendingPlanUpdate = false
     let pendingUpdate = false
+    let refunded = false
     const delayTimer = setTimeout(() => {
       if (active) setStillLoading(true)
     }, 10_000)
 
     const planId = getConfidentialFundingPlanId(plan.transactionId)
-    const load = () => {
+    const loadPlan = () => {
+      if (!active || !planId || refunded) return
+      if (planInFlight) {
+        pendingPlanUpdate = true
+        return
+      }
+      planInFlight = true
+      void confidentialFundingClient
+        .get(planId)
+        .then(nextPlan => {
+          if (
+            active &&
+            nextPlan.transactionId === plan.transactionId &&
+            nextPlan.network === plan.network &&
+            nextPlan.keyDomainId === plan.keyDomainId &&
+            nextPlan.accountId === plan.accountId
+          ) {
+            refunded = nextPlan.phase === 'refunded'
+            setConfidentialPlan(nextPlan)
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          planInFlight = false
+          if (pendingPlanUpdate) {
+            pendingPlanUpdate = false
+            loadPlan()
+          }
+        })
+    }
+    const loadActivity = () => {
       if (!active) return
       if (inFlight) {
         pendingUpdate = true
@@ -123,23 +157,11 @@ export function ConfidentialActivityView({
       }
       if (retryTimer !== undefined) clearTimeout(retryTimer)
       retryTimer = undefined
-      inFlight = Promise.allSettled([
-        planId ? confidentialFundingClient.get(planId) : Promise.resolve(null),
-        evmWalletClient.getActivity('read', 'all')
-      ])
-        .then(([planResult, activityResult]) => {
+      inFlight = evmWalletClient
+        .getActivity('read', 'all')
+        .catch(() => null)
+        .then(model => {
           if (!active) return
-          const nextPlan = planResult.status === 'fulfilled' ? planResult.value : null
-          const scopedPlan =
-            nextPlan?.transactionId === plan.transactionId &&
-            nextPlan.network === plan.network &&
-            nextPlan.keyDomainId === plan.keyDomainId &&
-            nextPlan.accountId === plan.accountId
-              ? nextPlan
-              : null
-          if (scopedPlan) setConfidentialPlan(scopedPlan)
-
-          const model = activityResult.status === 'fulfilled' ? activityResult.value : null
           const item = model?.items.find(candidate => candidate.id === plan.transactionId)
           if (
             model?.scope.keyDomainId === plan.keyDomainId &&
@@ -155,7 +177,7 @@ export function ConfidentialActivityView({
           }
           const current = activityRef.current
           if (
-            scopedPlan?.phase !== 'refunded' &&
+            !refunded &&
             !(
               current?.status === 'failed' ||
               (current?.status === 'final' &&
@@ -171,9 +193,13 @@ export function ConfidentialActivityView({
           inFlight = null
           if (active && pendingUpdate) {
             pendingUpdate = false
-            load()
+            loadActivity()
           }
         })
+    }
+    const load = () => {
+      loadPlan()
+      loadActivity()
     }
     const listener = (message: unknown, sender: chrome.runtime.MessageSender) => {
       if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
@@ -318,7 +344,9 @@ export function ConfidentialActivityView({
                         .symbol ?? scopedActivity.snapshot.feeLimit.metadata?.symbol)
                     : undefined
                 }
-                shieldQuoteExpiresAt={Date.parse(scopedPlan?.depositQuote?.quote.deadline ?? '')}
+                shieldQuoteExpiresAt={Date.parse(
+                  (scopedPlan ? scopedPlan.depositQuote : plan.depositQuote)?.quote.deadline ?? ''
+                )}
               />
             )}
             {confirmed || failed || refunded ? (

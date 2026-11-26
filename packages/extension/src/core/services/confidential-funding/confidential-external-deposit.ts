@@ -40,6 +40,8 @@ export interface ExternalShieldDeposit {
   readonly depositedAmountRaw?: string
   readonly refundTransactionHash?: string
   readonly fundingObservedAt?: number
+  /** Transparent ZEC payment already broadcast to the deposit address. */
+  readonly originTxHash?: string
   readonly providerStatus?: string
   readonly balanceRefreshedAt?: number
   readonly slippageBps: number

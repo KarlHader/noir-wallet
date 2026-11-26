@@ -2,6 +2,21 @@
 
 All notable user-facing changes to Noir Wallet are documented in this file.
 
+## [2.1.1] - 2026-11-26
+
+- Prepare Shield quotes and native Zcash fees before showing the confirmation screen.
+- Continue eligible EVM swaps after token approval when gas estimates rise within the already reviewed budget.
+
+## [2.1.0] - 2026-11-26
+
+- Open Home on Shield and keep Public and Incognito balances easy to reach.
+- Use separate Shield Receive and Unshield flows for native Zcash and supported NEAR Confidential routes.
+- Connect compatible dApps to Shield with wallet approval for each receive or transfer operation.
+- Continue reviewed token approvals and swaps in the background, including when the popup closes.
+- Improve Ledger account setup across supported networks and restore Confidential authorization.
+- Reuse reviewed Shield Send and Unshield quotes and show Speed Up and Cancel as soon as the source transaction is eligible.
+- Improve background Zcash sync, transaction progress, and Activity recovery.
+
 ## [2.0.0] - 2026-11-19
 
 - Manage Zcash and supported EVM accounts from the redesigned Home and account switcher.

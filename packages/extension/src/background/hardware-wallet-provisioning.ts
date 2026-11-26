@@ -166,6 +166,7 @@ async function provisionLedgerMultichain(
   if (!zcash && input.birthdayHeight !== undefined) {
     throw new Error('Birthday height requires a Zcash Ledger account')
   }
+  const birthdayHeight = validateBirthdayHeight(zcash?.birthdayHeight ?? input.birthdayHeight)
   let existingKeyDomainId = input.existingKeyDomainId
   let anchorProof = input.anchorProof
   let zcashProjection:
@@ -186,7 +187,7 @@ async function provisionLedgerMultichain(
       }),
       input.displayName,
       password,
-      input.birthdayHeight,
+      birthdayHeight,
       isFirstWallet
     )
     existingKeyDomainId = retained.keyDomainId
@@ -239,7 +240,7 @@ async function provisionLedgerMultichain(
         deviceName: credential.deviceName,
         existingLedgerWalletId: existingKeyDomainId,
         existingLedgerAccountId: accountId,
-        ...(input.birthdayHeight === undefined ? {} : { birthdayHeight: input.birthdayHeight }),
+        ...(birthdayHeight === undefined ? {} : { birthdayHeight }),
         enforceNewPasswordPolicy: false
       })
       const wallet = useWalletStore.getState().getWallet(existingKeyDomainId)
@@ -266,6 +267,7 @@ async function provisionLedgerMultichain(
   }
   const descriptor = await credentialSession.unlock(password)
   if (!descriptor) throw new Error('Ledger provisioning produced an empty session')
+  if (zcashProjection) syncScheduler.onRequestSync()
   if (isFirstWallet) {
     await Promise.all([SecureStorage.resetLoginAttempts(), SecureStorage.saveLastActivityTime()])
   }

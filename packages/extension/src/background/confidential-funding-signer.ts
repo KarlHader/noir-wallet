@@ -1,5 +1,5 @@
 import type { ChainId } from '@/core/chains/domain'
-import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import { supportsEvmConfidentialShield } from '@/core/chains/evm'
 import {
   parseNearAccountId,
   supportsNearPrivateExecution,
@@ -10,6 +10,9 @@ import type { KeyDomainSource } from '@/core/keyring/domain'
 import type { ConfidentialSignedPayload } from '@/core/services/confidential-funding'
 import { base64ToBytes } from '@/lib/bytes'
 import { encodeNearFunctionArgs } from '@/infrastructure/chains/near/near-rpc-codecs'
+import { secp256k1 } from '@noble/curves/secp256k1'
+import { hashMessage, hexToBytes, toHex, type Hex } from 'viem'
+import { publicKeyToAddress } from 'viem/accounts'
 import { parseEvmAccountBinding, type ActiveEvmPortfolioContext } from '@/infrastructure/chains/evm'
 import type { NearMultichainSigningClient } from '@/infrastructure/keyring/multichain/near-signing-client'
 import type {
@@ -19,12 +22,19 @@ import type {
 import {
   assertEvmSigningSummaryMatchesPrepared,
   assertSignedEvmTransactionMatchesPrepared,
+  createEvmSigningSummary,
   createEvmSigningPreparePayload,
+  createKeystoneSignedEvmTransaction,
   parsePreparedEvmTransfer,
+  serializePreparedEvmUnsignedTransaction,
   type PreparedEvmTransfer
 } from '@/infrastructure/chains/evm'
 import { parseSigningCommandId } from '@/core/keyring/ports'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
+import type { HardwareEvmSigningContextResolver } from '@/infrastructure/keyring/hardware-evm-signing-context'
+import type { LedgerSigningBinding } from '@/infrastructure/keyring/multichain/ledger-signing-bridge'
+import type { LedgerEvmSigningRequest, LedgerEvmSigningResponse } from '@/lib/ledger/evm'
+import { digestLedgerPayload, ledgerEvmPersonalSummary } from './ledger-evm-dapp-review'
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 const INTENTS_CONTRACT = 'intents.near'
@@ -70,7 +80,7 @@ function encodeBase58(bytes: Uint8Array): string {
   return output
 }
 
-function normalizeSignature(value: string): string {
+function parseSignature(value: string): Uint8Array {
   const hex = value.replace(/^0x/, '')
   if (!/^[0-9a-fA-F]{130}$/.test(hex)) throw new Error('Confidential ERC-191 signature is invalid')
   const bytes = Uint8Array.from(hex.match(/.{2}/g) ?? [], byte => Number.parseInt(byte, 16))
@@ -78,6 +88,10 @@ function normalizeSignature(value: string): string {
   if (bytes[64] !== 0 && bytes[64] !== 1) {
     throw new Error('Confidential ERC-191 signature recovery byte is invalid')
   }
+  return bytes
+}
+
+function encodeSignature(bytes: Uint8Array): string {
   return `secp256k1:${encodeBase58(bytes)}`
 }
 
@@ -88,61 +102,101 @@ export interface ConfidentialSigningIdentity {
   readonly context: ActiveEvmPortfolioContext
   readonly address: string
   readonly addressIndex: number
-  readonly peaAddress: string
+  readonly peaAddress?: string
 }
 
-export interface ConfidentialAuthSigner {
-  readonly kind: 'evm'
-  resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity>
-  signMessage(input: {
-    readonly identity: ConfidentialSigningIdentity
-    readonly chainId: ChainId
-    readonly payload: string
-  }): Promise<ConfidentialSignedPayload>
+export function requireConfidentialPea(identity: ConfidentialSigningIdentity): string {
+  if (!identity.peaAddress) throw new Error('Incognito is unavailable for this account')
+  return identity.peaAddress
 }
 
-async function assertCurrentEvmIdentity(
-  resolveIdentity: (chainId: ChainId) => Promise<ConfidentialSigningIdentity>,
-  identity: ConfidentialSigningIdentity,
-  chainId: ChainId
-): Promise<void> {
-  const current = await resolveIdentity(chainId)
-  if (
-    current.context.chainAccount.scope.keyDomainId !==
-      identity.context.chainAccount.scope.keyDomainId ||
-    current.context.chainAccount.scope.accountId !==
-      identity.context.chainAccount.scope.accountId ||
-    current.address !== identity.address ||
-    current.peaAddress.toLowerCase() !== identity.peaAddress.toLowerCase() ||
-    current.addressIndex !== identity.addressIndex
-  )
-    throw new Error('Active Wallet Account changed before confidential signing')
-}
+type ShieldDeviceRequest = Extract<
+  LedgerEvmSigningRequest,
+  { kind: 'personal-sign' | 'transaction' }
+>
 
-export class EvmConfidentialAuthSigner implements ConfidentialAuthSigner {
-  readonly kind = 'evm' as const
+type DeviceSigner = Readonly<{
+  resolve: HardwareEvmSigningContextResolver['resolve']
+  request: (
+    vendor: 'ledger' | 'keystone',
+    request: ShieldDeviceRequest,
+    binding: LedgerSigningBinding,
+    masterFingerprintHex?: string
+  ) => Promise<LedgerEvmSigningResponse>
+}>
+
+type HardwareDepositReview = Readonly<{
+  identity: ConfidentialSigningIdentity
+  serialized: string
+  payloadFingerprint: string
+  expiresAt: number
+}>
+
+export class ConfidentialFundingSigner {
+  private readonly hardwareDeposits = new Map<string, HardwareDepositReview>()
+  private readonly nearChain: ConfidentialNearChain | null
+  private readonly device?: DeviceSigner
 
   constructor(
     private readonly signer: EvmMultichainSigningClient,
     private readonly loadContext: (chainId: ChainId) => Promise<ActiveEvmPortfolioContext | null>,
     private readonly runActiveOperation: <T>(
       operation: () => Promise<T>
-    ) => Promise<T> = operation => operation()
-  ) {}
+    ) => Promise<T> = operation => operation(),
+    nearChainOrDevice: ConfidentialNearChain | DeviceSigner | null = null,
+    device?: DeviceSigner
+  ) {
+    this.nearChain = nearChainOrDevice && 'chainId' in nearChainOrDevice ? nearChainOrDevice : null
+    this.device =
+      device ??
+      (nearChainOrDevice && 'request' in nearChainOrDevice ? nearChainOrDevice : undefined)
+  }
 
   private async assertCurrentIdentity(
     identity: ConfidentialSigningIdentity,
     chainId: ChainId
   ): Promise<void> {
-    await assertCurrentEvmIdentity(chainId => this.resolveIdentity(chainId), identity, chainId)
+    const current = await this.resolveIdentity(chainId)
+    if (
+      current.context.chainAccount.scope.keyDomainId !==
+        identity.context.chainAccount.scope.keyDomainId ||
+      current.context.chainAccount.scope.accountId !==
+        identity.context.chainAccount.scope.accountId ||
+      current.address !== identity.address ||
+      current.peaAddress?.toLowerCase() !== identity.peaAddress?.toLowerCase() ||
+      current.addressIndex !== identity.addressIndex ||
+      (chainId === identity.context.chainAccount.scope.chainId &&
+        (current.context.chainAccount.id !== identity.context.chainAccount.id ||
+          current.context.chainAccount.derivation.path !==
+            identity.context.chainAccount.derivation.path)) ||
+      (identity.context.keyDomainSource.kind === 'hardware' &&
+        (current.context.generationId !== identity.context.generationId ||
+          current.context.keyDomainSource.kind !== 'hardware' ||
+          current.context.keyDomainSource.vendor !== identity.context.keyDomainSource.vendor))
+    )
+      throw new Error('Active Wallet Account changed before confidential signing')
   }
 
   async resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
+    if (parseChainId(chainId).namespace === 'near') return this.resolveNearIdentity(chainId)
+    return this.resolveEvmIdentity(chainId)
+  }
+
+  private async resolveEvmIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
     const context = await this.loadContext(chainId)
-    if (!context || !supportsEvmPrivateExecution(context.keyDomainSource)) {
-      throw new Error('Confidential funding requires an active software EVM Account')
+    if (!context || !supportsEvmConfidentialShield(context.keyDomainSource)) {
+      throw new Error('Confidential funding requires a supported active EVM Account')
     }
     const binding = parseEvmAccountBinding(context.chainAccount, chainId)
+    if (context.keyDomainSource.kind === 'hardware') {
+      if (!this.device) throw new Error('Confidential hardware signing is unavailable')
+      return Object.freeze({
+        kind: 'evm' as const,
+        context,
+        address: binding.address.toLowerCase(),
+        addressIndex: binding.addressIndex
+      })
+    }
     const pea = await this.signer.deriveGlobalPea(
       context.chainAccount.scope.keyDomainId,
       binding.addressIndex
@@ -163,7 +217,45 @@ export class EvmConfidentialAuthSigner implements ConfidentialAuthSigner {
     readonly identity: ConfidentialSigningIdentity
     readonly chainId: ChainId
     readonly payload: string
+    readonly expiresAt?: number
   }): Promise<ConfidentialSignedPayload> {
+    if (parseChainId(input.chainId).namespace === 'near') return this.signNearMessage(input)
+    return this.signEvmMessage(input)
+  }
+
+  private async signEvmMessage(input: {
+    readonly identity: ConfidentialSigningIdentity
+    readonly chainId: ChainId
+    readonly payload: string
+    readonly expiresAt?: number
+  }): Promise<ConfidentialSignedPayload> {
+    if (input.identity.context.keyDomainSource.kind === 'hardware') {
+      const bytes = new TextEncoder().encode(input.payload)
+      const messageHex = toHex(bytes)
+      const signatureHex = await this.requestDeviceSignature(
+        input.identity,
+        input.chainId,
+        { kind: 'personal-sign', messageHex },
+        await ledgerEvmPersonalSummary(input.chainId, input.identity.address, bytes),
+        await digestLedgerPayload(bytes),
+        Math.min(input.expiresAt ?? Infinity, Date.now() + 5 * 60_000)
+      )
+      const signature = parseSignature(signatureHex)
+      const messageHash = hashMessage({ raw: messageHex })
+      const publicKey = secp256k1.Signature.fromCompact(signature.subarray(0, 64))
+        .addRecoveryBit(signature[64])
+        .recoverPublicKey(messageHash.slice(2))
+        .toHex(false)
+      if (publicKeyToAddress(`0x${publicKey}`).toLowerCase() !== input.identity.address) {
+        throw new Error('Confidential signature does not match the active EVM account')
+      }
+      await this.assertCurrentIdentity(input.identity, input.chainId)
+      return Object.freeze({
+        standard: 'erc191',
+        payload: input.payload,
+        signature: encodeSignature(signature)
+      })
+    }
     return this.runActiveOperation(async () => {
       await this.assertCurrentIdentity(input.identity, input.chainId)
       const prepared = await this.signer.prepare(
@@ -200,7 +292,7 @@ export class EvmConfidentialAuthSigner implements ConfidentialAuthSigner {
         return Object.freeze({
           standard: 'erc191' as const,
           payload: input.payload,
-          signature: normalizeSignature(result.signature.value)
+          signature: encodeSignature(parseSignature(result.signature.value))
         })
       } finally {
         if (!consumed) {
@@ -210,43 +302,6 @@ export class EvmConfidentialAuthSigner implements ConfidentialAuthSigner {
         }
       }
     })
-  }
-}
-
-export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
-  readonly kind = 'evm' as const
-  private readonly evmAuth: EvmConfidentialAuthSigner
-
-  constructor(
-    private readonly signer: EvmMultichainSigningClient,
-    loadContext: (chainId: ChainId) => Promise<ActiveEvmPortfolioContext | null>,
-    private readonly runActiveOperation: <T>(
-      operation: () => Promise<T>
-    ) => Promise<T> = operation => operation(),
-    private readonly nearChain: ConfidentialNearChain | null = null
-  ) {
-    this.evmAuth = new EvmConfidentialAuthSigner(signer, loadContext, runActiveOperation)
-  }
-
-  private async assertCurrentIdentity(
-    identity: ConfidentialSigningIdentity,
-    chainId: ChainId
-  ): Promise<void> {
-    await assertCurrentEvmIdentity(chainId => this.resolveIdentity(chainId), identity, chainId)
-  }
-
-  async resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
-    if (parseChainId(chainId).namespace === 'near') return this.resolveNearIdentity(chainId)
-    return this.evmAuth.resolveIdentity(chainId)
-  }
-
-  async signMessage(input: {
-    readonly identity: ConfidentialSigningIdentity
-    readonly chainId: ChainId
-    readonly payload: string
-  }): Promise<ConfidentialSignedPayload> {
-    if (parseChainId(input.chainId).namespace === 'near') return this.signNearMessage(input)
-    return this.evmAuth.signMessage(input)
   }
 
   private async resolveNearIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
@@ -302,7 +357,10 @@ export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
         current.context.chainAccount.scope.accountId !==
           input.identity.context.chainAccount.scope.accountId ||
         !sameConfidentialAddress(current.address, input.identity.address) ||
-        !sameConfidentialAddress(current.peaAddress, input.identity.peaAddress) ||
+        !sameConfidentialAddress(
+          requireConfidentialPea(current),
+          requireConfidentialPea(input.identity)
+        ) ||
         current.addressIndex !== input.identity.addressIndex
       ) {
         throw new Error('Active Wallet Account changed before confidential signing')
@@ -463,12 +521,34 @@ export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
     return this.runActiveOperation(async () => {
       await this.assertCurrentIdentity(input.identity, input.prepared.chainId)
       const expectedAddress =
-        input.sourceDomain === 'private' ? input.identity.peaAddress : input.identity.address
+        input.sourceDomain === 'private'
+          ? requireConfidentialPea(input.identity)
+          : input.identity.address
       if (
         input.prepared.from.toLowerCase() !== expectedAddress.toLowerCase() ||
         input.prepared.addressIndex !== input.identity.addressIndex
       ) {
         throw new Error('Confidential funding deposit does not match the active Main account')
+      }
+      if (input.identity.context.keyDomainSource.kind === 'hardware') {
+        const now = Date.now()
+        for (const [commandId, review] of this.hardwareDeposits) {
+          if (review.expiresAt <= now) this.hardwareDeposits.delete(commandId)
+        }
+        const commandId = `shield-device:${crypto.randomUUID()}`
+        const serialized = serializePreparedEvmUnsignedTransaction(input.prepared)
+        const payloadFingerprint = await digestLedgerPayload(hexToBytes(serialized as Hex))
+        const expiresAt = now + 5 * 60_000
+        this.hardwareDeposits.set(
+          commandId,
+          Object.freeze({
+            identity: input.identity,
+            serialized,
+            payloadFingerprint,
+            expiresAt
+          })
+        )
+        return Object.freeze({ commandId, payloadFingerprint, expiresAt })
       }
       const prepared = await this.signer.prepare(
         input.identity.context.chainAccount.scope.keyDomainId,
@@ -506,6 +586,7 @@ export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
     readonly commandId: string
     readonly preparedTransfer: unknown
     readonly sourceDomain?: 'public' | 'private'
+    readonly expiresAt?: number
   }): Promise<
     Readonly<{
       prepared: PreparedEvmTransfer
@@ -513,11 +594,44 @@ export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
       transactionHash: string
     }>
   > {
+    if (input.identity.context.keyDomainSource.kind === 'hardware') {
+      const prepared = parsePreparedEvmTransfer(input.preparedTransfer)
+      const review = this.hardwareDeposits.get(input.commandId)
+      if (
+        !review ||
+        review.expiresAt <= Date.now() ||
+        input.sourceDomain === 'private' ||
+        review.identity.context.chainAccount.scope.keyDomainId !==
+          input.identity.context.chainAccount.scope.keyDomainId ||
+        review.identity.context.chainAccount.scope.accountId !==
+          input.identity.context.chainAccount.scope.accountId ||
+        review.identity.context.generationId !== input.identity.context.generationId ||
+        input.identity.address !== prepared.from.toLowerCase() ||
+        input.identity.addressIndex !== prepared.addressIndex ||
+        serializePreparedEvmUnsignedTransaction(prepared) !== review.serialized
+      ) {
+        throw new Error('Confidential hardware deposit review is unavailable or changed')
+      }
+      this.hardwareDeposits.delete(input.commandId)
+      const signatureHex = await this.requestDeviceSignature(
+        review.identity,
+        prepared.chainId,
+        { kind: 'transaction', unsignedTransactionHex: review.serialized },
+        await createEvmSigningSummary(prepared),
+        review.payloadFingerprint,
+        Math.min(review.expiresAt, input.expiresAt ?? Infinity)
+      )
+      const signed = await createKeystoneSignedEvmTransaction(prepared, signatureHex)
+      await this.assertCurrentIdentity(review.identity, prepared.chainId)
+      return Object.freeze({ prepared, ...signed })
+    }
     return this.runActiveOperation(async () => {
       const prepared = parsePreparedEvmTransfer(input.preparedTransfer)
       await this.assertCurrentIdentity(input.identity, prepared.chainId)
       const expectedAddress =
-        input.sourceDomain === 'private' ? input.identity.peaAddress : input.identity.address
+        input.sourceDomain === 'private'
+          ? requireConfidentialPea(input.identity)
+          : input.identity.address
       if (
         prepared.from.toLowerCase() !== expectedAddress.toLowerCase() ||
         prepared.addressIndex !== input.identity.addressIndex
@@ -547,10 +661,79 @@ export class ConfidentialFundingSigner implements ConfidentialAuthSigner {
     })
   }
 
+  private async requestDeviceSignature(
+    identity: ConfidentialSigningIdentity,
+    chainId: ChainId,
+    request:
+      | Pick<Extract<ShieldDeviceRequest, { kind: 'personal-sign' }>, 'kind' | 'messageHex'>
+      | Pick<
+          Extract<ShieldDeviceRequest, { kind: 'transaction' }>,
+          'kind' | 'unsignedTransactionHex'
+        >,
+    summary: LedgerSigningBinding['summary'],
+    digestHex: string,
+    expiresAt: number
+  ): Promise<string> {
+    const device = this.device
+    const source = identity.context.keyDomainSource
+    if (!device || source.kind !== 'hardware') throw new Error('Confidential device is unavailable')
+    const loadBinding = () =>
+      this.runActiveOperation(async () => {
+        if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
+          throw new Error('Confidential hardware signing request expired')
+        }
+        await this.assertCurrentIdentity(identity, chainId)
+        const binding = await device.resolve(identity.context.chainAccount)
+        if (binding.address.toLowerCase() !== identity.address) {
+          throw new Error('Confidential device does not match the active EVM account')
+        }
+        return binding
+      })
+    const binding = await loadBinding()
+    const fingerprint = 'masterFingerprintHex' in binding ? binding.masterFingerprintHex : undefined
+    const validate = async () => {
+      const current = await loadBinding()
+      if (
+        current.derivationPath !== binding.derivationPath ||
+        current.address !== binding.address ||
+        ('masterFingerprintHex' in current ? current.masterFingerprintHex : undefined) !==
+          fingerprint
+      ) {
+        throw new Error('Confidential device binding changed')
+      }
+    }
+    const signed = await device.request(
+      source.vendor === 'ledger' ? 'ledger' : 'keystone',
+      { ...request, derivationPath: binding.derivationPath, expectedAddress: binding.address },
+      {
+        scope: identity.context.chainAccount.scope,
+        payloadFingerprint: { algorithm: 'sha256', digestHex },
+        expiresAt,
+        summary,
+        validate
+      },
+      fingerprint
+    )
+    await validate()
+    return signed.signatureHex
+  }
+
   async cancelTransaction(input: {
     readonly identity: ConfidentialSigningIdentity
     readonly commandId: string
   }): Promise<void> {
+    if (input.identity.context.keyDomainSource.kind === 'hardware') {
+      const review = this.hardwareDeposits.get(input.commandId)
+      if (
+        review?.identity.context.chainAccount.scope.keyDomainId ===
+          input.identity.context.chainAccount.scope.keyDomainId &&
+        review?.identity.context.chainAccount.scope.accountId ===
+          input.identity.context.chainAccount.scope.accountId
+      ) {
+        this.hardwareDeposits.delete(input.commandId)
+      }
+      return
+    }
     await this.runActiveOperation(async () => {
       await this.assertCurrentIdentity(
         input.identity,

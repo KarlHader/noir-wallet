@@ -157,7 +157,7 @@ export function SendTransferView({
           <>
             <div>
               <SendRouteInfoCard
-                fee={
+                networkFee={
                   <span>
                     {state.feePreviewLoading && (
                       <Icon

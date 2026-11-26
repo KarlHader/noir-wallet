@@ -60,7 +60,7 @@ export function HardwareTransactionSummary({
             <TransactionReviewParty address={request.displayTo} />
           </DetailRow>
         )}
-        <DetailRow label="Network Fee">
+        <DetailRow label="Network fee">
           {feeZec ? (
             <span className="text-sm">
               ≈ <AmountDisplay value={feeZec} symbol="ZEC" profile="fee" />

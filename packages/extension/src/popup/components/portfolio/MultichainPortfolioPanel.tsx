@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import { getShieldTransferChainIds } from '@/popup/services/shield-transfer'
 import type { AccountNetworksView } from '@/popup/services/account-networks-client'
 import { PortfolioShell } from './PortfolioShell'
 import { resolvePortfolioChainSelection } from '@/popup/services/portfolio-presentation'
@@ -131,7 +132,9 @@ export function MultichainPortfolioPanel({
       ? visibleModel
       : visibleModel
         ? projectPortfolioForDomain(visibleModel, domain, {
-            evmPrivateAvailable: supportsEvmPrivateExecution(scopedAccount?.walletSource)
+            evmPrivateAvailable: supportsEvmPrivateExecution(scopedAccount?.walletSource),
+            evmShieldAvailable:
+              getShieldTransferChainIds(scopedAccount, network === 'mainnet').length > 0
           })
         : null
   const domainModel =

@@ -49,7 +49,8 @@ export interface BackgroundEvmTransferRouteController {
     rheaSwapBindingValue?: unknown,
     executionAccount?: PeaEvmExecutionAccount,
     executionModeValue?: unknown,
-    debugRequestId?: string
+    debugRequestId?: string,
+    reviewedMaxFeePerGas?: bigint
   ) => Promise<BackgroundEvmTransferReview>
   readonly getTokenAllowance: (
     token: string,
@@ -241,7 +242,8 @@ export class BackgroundEvmTransferRouter {
     feeTierValue?: unknown,
     rheaSwapBindingValue?: unknown,
     executionMode: EvmTransferExecutionMode = 'main',
-    debugRequestId?: string
+    debugRequestId?: string,
+    reviewedMaxFeePerGas?: bigint
   ): Promise<BackgroundEvmTransferReview> {
     const intent = parseEvmContractCallIntent(intentValue)
     const controller = this.requireController(intent.chainId)
@@ -251,7 +253,8 @@ export class BackgroundEvmTransferRouter {
       rheaSwapBindingValue,
       undefined,
       executionMode,
-      debugRequestId
+      debugRequestId,
+      reviewedMaxFeePerGas
     )
     if (result.review.chainId !== intent.chainId) {
       throw new Error('Prepared EVM contract call was returned by the wrong network controller')

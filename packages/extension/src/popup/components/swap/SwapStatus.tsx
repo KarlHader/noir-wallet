@@ -392,7 +392,7 @@ export function SwapStatusDisplay({
 
           {showFee && (
             <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 py-3">
-              <span className="text-sm text-muted">Fee</span>
+              <span className="text-sm text-muted">Network fee</span>
               <AmountDisplay
                 value={fee}
                 symbol="ZEC"

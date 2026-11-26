@@ -22,6 +22,8 @@ import { useSpeedUp } from '../hooks/useSpeedUp'
 import { useResyncZcash } from '../hooks/useResyncZcash'
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { ExtensionUpdateBanner } from '../components/shell/ExtensionUpdateBanner'
+import { SidebarModeToggle } from '../components/shell/SidebarModeToggle'
+import { HomeAdBanner } from '../components/shell/HomeAdBanner'
 import { LegacyPoolPrivacyNotice } from '../components/zcash/LegacyPoolPrivacyNotice'
 import { useLegacyPoolPrivacyNotice } from '../hooks/useLegacyPoolPrivacyNotice'
 import { hasLegacyOrchardBalance } from '@/lib/legacy-pool-privacy-notice'
@@ -275,7 +277,11 @@ export function Home() {
   const assetDomain = routeAssetDomain
   const walletMode = assetDomain === 'private' ? 'private' : 'public'
   const isShieldView = assetDomain === 'shield'
-  const tabScrollRegion = useHomeScrollPosition(location.key, modeScopeKey)
+  const { region: homeScrollRegion, nextPosition: nextHomeScrollPosition } = useHomeScrollPosition(
+    location.key,
+    modeScopeKey
+  )
+  const homeTabs = useRef<HTMLDivElement>(null)
   const enabledIncognito = useSettingsStore(state => state.incognitoCardScopes[modeScopeKey])
   const enableIncognitoCard = useSettingsStore(state => state.enableIncognitoCard)
   const hasIncognitoHoldings = useMemo(
@@ -767,7 +773,9 @@ export function Home() {
   const shieldPortfolioEmpty =
     portfolioSettled &&
     !balanceDisplay.loading.shield &&
-    multichainPortfolio?.assets.every(asset => getAssetDomainRaw(asset, 'shield') === '0')
+    multichainPortfolio !== null &&
+    multichainPortfolio.assets.every(asset => getAssetDomainRaw(asset, 'shield') === '0') &&
+    !multichainPortfolio.confidential?.assets.some(asset => BigInt(asset.availableRaw) > 0n)
   const showShieldEmpty = isShieldView && quickShield.eligible && shieldPortfolioEmpty
   const showProviders = isShieldView
   const dappModeControl =
@@ -823,8 +831,9 @@ export function Home() {
         onDismiss={legacyPoolPrivacyNotice.dismiss}
       />
       <div
+        ref={homeScrollRegion}
         data-testid="home-scroll-container"
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain scroll-pt-10 [container-type:size]"
       >
         <div className="home-wallet-header shrink-0 overflow-hidden rounded-b-[20px]">
           <header className="flex h-14 shrink-0 items-center justify-between gap-3 px-4">
@@ -850,6 +859,7 @@ export function Home() {
                   </button>
                 </PopoverTrigger>
                 <PopoverContent align="end" sideOffset={8} className="w-48 border-white/10 p-1">
+                  <SidebarModeToggle compact />
                   {(
                     [
                       ['Accounts', 'lucide:wallet', '/account-list'],
@@ -910,6 +920,10 @@ export function Home() {
                 : undefined
             }
             onQuickShield={quickShield.onOpen}
+            shieldEmpty={shieldPortfolioEmpty}
+            onExploreShieldProviders={() =>
+              navigate.replace(homeTabPath(location.search, 'providers'))
+            }
             onToggleHidden={() => setBalancesHidden(!balancesHidden)}
             onSelect={selectAssetDomain}
           />
@@ -962,13 +976,13 @@ export function Home() {
             ) : (
               <>
                 <WalletActionButton
-                  icon={<WalletActionIcon action="send" />}
+                  icon={<WalletActionIcon action="send" shielded={isShieldView} />}
                   label="Send"
                   disabled={isShieldView && shieldActions.providersFor('send').length === 0}
                   onClick={openSend}
                 />
                 <WalletActionButton
-                  icon={<WalletActionIcon action="receive" />}
+                  icon={<WalletActionIcon action="receive" shielded={isShieldView} />}
                   label="Receive"
                   disabled={isShieldView && shieldActions.providersFor('receive').length === 0}
                   onClick={() =>
@@ -1006,8 +1020,11 @@ export function Home() {
             />
           </div>
 
+          <HomeAdBanner />
+
           {/* Tabs */}
           <Tabs
+            ref={homeTabs}
             value={activeTab}
             onValueChange={value => {
               if (
@@ -1018,12 +1035,21 @@ export function Home() {
               ) {
                 if (value !== 'activity') setFocusTransactionId(null)
                 const path = homeTabPath(location.search, value)
-                if (path !== `${location.pathname}${location.search}`) navigate.replace(path)
+                if (path === `${location.pathname}${location.search}`) return
+                const scrollRegion = homeScrollRegion.current
+                const tabs = homeTabs.current
+                if (scrollRegion && tabs) {
+                  const distanceToTabs =
+                    tabs.getBoundingClientRect().top - scrollRegion.getBoundingClientRect().top
+                  nextHomeScrollPosition.current =
+                    scrollRegion.scrollTop + Math.min(0, distanceToTabs)
+                }
+                navigate.replace(path)
               }
             }}
-            className="relative min-h-36 w-full flex-1 gap-0"
+            className="relative min-h-[100cqh] w-full flex-1 gap-0"
           >
-            <div className="home-portfolio-tabs flex h-10 shrink-0 items-center gap-3 bg-background px-[17px]">
+            <div className="home-portfolio-tabs sticky top-0 z-10 flex h-10 shrink-0 items-center gap-3 bg-background px-[17px]">
               <PageTabsList className="h-full flex-1 gap-9">
                 <PageTabsTrigger value="assets">Tokens</PageTabsTrigger>
                 <PageTabsTrigger value={showProviders ? 'providers' : 'dapp'}>
@@ -1041,11 +1067,7 @@ export function Home() {
                 />
               )}
             </div>
-            <div
-              ref={tabScrollRegion}
-              data-testid="home-tab-scroll-region"
-              className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
-            >
+            <div className="flex flex-1 flex-col">
               {syncIssue && activeTab !== 'dapp' && (
                 <div
                   className={

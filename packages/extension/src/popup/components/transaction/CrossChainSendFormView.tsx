@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { QuoteFeeAmount } from './QuoteFeeAmount'
 import { Icon } from '@iconify/react'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import { formatChainName, formatInsufficientBalance, formatSymbol } from '@/lib/format'
@@ -20,6 +21,7 @@ interface CrossChainSendFormViewProps {
   readonly amount: string
   readonly estimatedOut: string
   readonly routeCost?: string | null
+  readonly appFee?: { readonly sourceAmountRaw: string; readonly bps: number }
   readonly recipient: string
   readonly spendableBalance: string
   readonly onSelectSourceAsset?: () => void
@@ -59,6 +61,7 @@ export function CrossChainSendFormView({
   amount,
   estimatedOut,
   routeCost,
+  appFee,
   recipient,
   spendableBalance,
   onSelectSourceAsset,
@@ -165,9 +168,15 @@ export function CrossChainSendFormView({
               '—'
             )
           }
-          feeLabel="Route cost (est.)"
           fee={
-            isQuoting || routeCost === undefined ? (
+            !isQuoting && tokenIn && appFee?.bps ? (
+              <QuoteFeeAmount
+                {...appFee}
+                decimals={tokenIn.decimals}
+                symbol={sourceSymbol}
+                fallbackAmount={routeCost}
+              />
+            ) : isQuoting || routeCost === undefined ? (
               '—'
             ) : routeCost === null ? (
               'Unavailable'

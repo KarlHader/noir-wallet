@@ -22,6 +22,10 @@ on:
         description: Full wallet source SHA that passed acceptance
         required: false
         type: string
+      manual_upload_crx_sha256:
+        description: SHA-256 of the signed CRX you uploaded and verified as the current store draft
+        required: false
+        type: string
 
 concurrency:
   group: extension-production-promotion
@@ -89,7 +93,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.bundle.outputs.tag }}
           SOURCE_SHA: ${{ steps.bundle.outputs.source_sha }}
+          MANUAL_UPLOAD_CRX_SHA256: ${{ inputs.manual_upload_crx_sha256 }}
         run: |
+          if [[ -n "$MANUAL_UPLOAD_CRX_SHA256" ]]; then
+            echo 'Manual upload recovery requires an existing production GitHub Release.' >&2
+            exit 1
+          fi
           gh release create "$TAG" --repo "$GH_REPO" --title "Noir Wallet $TAG" \
             --latest --target "$SOURCE_SHA" --notes-file release-assets/release-body.md \
             release-assets/*.zip release-assets/SHA256SUMS
@@ -162,6 +171,7 @@ jobs:
       CANDIDATE_WORKFLOW_SHA: ${{ needs.publish.outputs.workflow_sha }}
       CONFIRM_SHA: ${{ inputs.confirm_sha }}
       SIGNED_METADATA_SHA256: ${{ needs.sign.outputs.metadata_sha256 }}
+      MANUAL_UPLOAD_CRX_SHA256: ${{ inputs.manual_upload_crx_sha256 }}
       CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
       CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
       CWS_SIGNING_PUBLIC_KEY_SHA256: ${{ vars.CWS_SIGNING_PUBLIC_KEY_SHA256 }}
@@ -231,6 +241,7 @@ jobs:
       CANDIDATE_WORKFLOW_SHA: ${{ needs.publish.outputs.workflow_sha }}
       CONFIRM_SHA: ${{ inputs.confirm_sha }}
       SIGNED_METADATA_SHA256: ${{ needs.sign.outputs.metadata_sha256 }}
+      MANUAL_UPLOAD_CRX_SHA256: ${{ inputs.manual_upload_crx_sha256 }}
       CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
       CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
       CWS_SIGNING_PUBLIC_KEY_SHA256: ${{ vars.CWS_SIGNING_PUBLIC_KEY_SHA256 }}

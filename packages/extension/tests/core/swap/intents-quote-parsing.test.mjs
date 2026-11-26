@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
+import { ONE_CLICK_TOKEN_CATALOG_URL } from '../../../src/config/intents.ts'
 
 import {
   fetchQuote,
   fetchIntentsWalletTokens,
   fetchSwapTokens,
-  fetchSwapStatus,
   evaluateIntentsStatusQuoteBinding,
   getCachedTokens,
   INTENTS_SWAP_TOKEN_CATALOG_TTL_MS,
@@ -16,6 +16,11 @@ import {
   refreshSwapTokenIcons,
   refreshSwapTokenCatalog
 } from '../../../src/core/services/intents-api.ts'
+
+Object.defineProperty(globalThis, '__CONFIDENTIAL_ONE_CLICK_API_URL__', {
+  value: '',
+  configurable: true
+})
 
 test('Intents token directory stays cached for one hour', async () => {
   const originalFetch = globalThis.fetch
@@ -34,7 +39,7 @@ test('Intents token directory stays cached for one hour', async () => {
   }
   Date.now = () => now
   globalThis.fetch = async input => {
-    expect(String(input)).toBe('https://1click.chaindefuser.com/v0/tokens')
+    expect(String(input)).toBe('https://api.zknoir.com/v1/1click/v0/tokens')
     calls++
     return Response.json([token])
   }
@@ -91,15 +96,17 @@ test('Intents settlement checks the quoted raw minimum with destination precisio
   ).toBe('mismatch')
 })
 
-test('swap quote sends the configured 35 bps app fee', async () => {
+test('swap quote keeps the shielded refund and binds a separate viewer through the proxy', async () => {
   const originalFetch = globalThis.fetch
+  const shieldedRefund = `u1${'q'.repeat(55)}`
+  const viewerAddress = `t1${'A'.repeat(33)}`
+  const depositMemo = ' memo+1 & 2 '
+  let quoteUrl
   let submittedBody
-  globalThis.fetch = async (_input, init) => {
+  globalThis.fetch = async (input, init) => {
+    quoteUrl = String(input)
     submittedBody = JSON.parse(init.body)
-    return new Response(JSON.stringify({ message: 'No route' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' }
-    })
+    return Response.json(response({ depositMemo }))
   }
 
   try {
@@ -107,11 +114,20 @@ test('swap quote sends the configured 35 bps app fee', async () => {
       originAsset: 'nep141:zec.omft.near',
       destinationAsset: 'nep141:wrap.near',
       amount: '100000000',
-      refundTo: 'zs1refund',
-      recipient: 'recipient.near'
+      refundTo: shieldedRefund,
+      recipient: 'recipient.near',
+      viewer: { chainFamily: 'zcash', walletAddress: viewerAddress, signingMode: 'derived' }
     })
-    expect(result.quoteStatus).toBe('error')
-    expect(submittedBody.appFees).toEqual([{ recipient: 'noir_swap.near', fee: 35 }])
+    expect(result.quoteSuccessResult?.quote.depositMemo).toBe(depositMemo)
+    expect(quoteUrl).toBe('https://api.rhea.finance/proxy/1click/v0/quote')
+    expect(submittedBody).toMatchObject({
+      dry: false,
+      refundType: 'ORIGIN_CHAIN',
+      refundTo: shieldedRefund,
+      user: viewerAddress,
+      userChainFamily: 'zcash',
+      appFees: [{ recipient: 'noir_swap.near', fee: 20 }]
+    })
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -288,7 +304,7 @@ test.describe('CoinGecko token icon parsing', () => {
     globalThis.fetch = async input => {
       const url = String(input)
       requestedUrls.push(url)
-      if (url === 'https://1click.chaindefuser.com/v0/tokens') {
+      if (url === ONE_CLICK_TOKEN_CATALOG_URL) {
         return Response.json([token])
       }
       if (url.startsWith('https://api.rhea.finance/get_multichain_lending_tokens_data')) {
@@ -337,7 +353,7 @@ test.describe('CoinGecko token icon parsing', () => {
     globalThis.fetch = async input => {
       const url = String(input)
       requestedUrls.push(url)
-      if (url === 'https://1click.chaindefuser.com/v0/tokens') {
+      if (url === ONE_CLICK_TOKEN_CATALOG_URL) {
         return Response.json([token])
       }
       if (url.startsWith('https://api.rhea.finance/get_multichain_lending_tokens_data')) {
@@ -395,7 +411,7 @@ test.describe('CoinGecko token icon parsing', () => {
     globalThis.fetch = async input => {
       const url = String(input)
       requestedUrls.push(url)
-      if (url === 'https://1click.chaindefuser.com/v0/tokens') {
+      if (url === ONE_CLICK_TOKEN_CATALOG_URL) {
         catalogRequests += 1
         return Response.json([
           goodToken,
@@ -436,69 +452,19 @@ test.describe('CoinGecko token icon parsing', () => {
 })
 
 test.describe('Near Intents status response parsing', () => {
-  test('uses the RHEA status response without calling the backup', async () => {
-    const originalFetch = globalThis.fetch
-    const requestedUrls = []
-    globalThis.fetch = async input => {
-      requestedUrls.push(String(input))
-      return new Response(JSON.stringify({ status: 'PENDING_DEPOSIT', status_response: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      })
-    }
-
-    try {
-      await expect(fetchSwapStatus('deposit address')).resolves.toEqual({
-        status: 'PENDING_DEPOSIT'
-      })
-      expect(requestedUrls).toEqual([
-        'https://api.rhea.finance/api/1click/status?depositAddress=deposit%20address'
-      ])
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+  test('normalizes settled raw amounts at their original precision', () => {
+    expect(
+      parseSwapStatusResponse({ status: 'COMPLETED', swapDetails: { amountOut: '1' } }, 24)
+    ).toEqual({
+      status: 'SUCCESS',
+      swapDetails: { amountOutFormatted: '0.000000000000000000000001' }
+    })
   })
 
-  test('falls back to 1Click when the RHEA status endpoint is unavailable', async () => {
-    const originalFetch = globalThis.fetch
-    const requestedUrls = []
-    globalThis.fetch = async input => {
-      const url = String(input)
-      requestedUrls.push(url)
-      if (url.startsWith('https://api.rhea.finance/')) {
-        return new Response(JSON.stringify({ message: 'Unavailable' }), {
-          status: 503,
-          statusText: 'Service Unavailable',
-          headers: { 'Content-Type': 'application/json' }
-        })
-      }
-      return new Response(
-        JSON.stringify({
-          status: 'SUCCESS',
-          swapDetails: {
-            amountOutFormatted: '0.5',
-            destinationChainTxHashes: [{ hash: '0xdestination' }]
-          }
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      )
-    }
-
-    try {
-      await expect(fetchSwapStatus('deposit address')).resolves.toEqual({
-        status: 'SUCCESS',
-        swapDetails: {
-          amountOutFormatted: '0.5',
-          destinationChainTxHashes: [{ hash: '0xdestination' }]
-        }
-      })
-      expect(requestedUrls).toEqual([
-        'https://api.rhea.finance/api/1click/status?depositAddress=deposit%20address',
-        'https://1click.chaindefuser.com/v0/status?depositAddress=deposit%20address'
-      ])
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+  test('parses an empty status response envelope while the deposit is pending', () => {
+    expect(parseSwapStatusResponse({ status: 'PENDING_DEPOSIT', status_response: null })).toEqual({
+      status: 'PENDING_DEPOSIT'
+    })
   })
 
   test('keeps only bounded protocol evidence from provider envelopes', () => {

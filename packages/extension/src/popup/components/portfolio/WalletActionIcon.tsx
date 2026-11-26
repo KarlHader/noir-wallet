@@ -1,4 +1,7 @@
 import { Icon } from '@iconify/react'
+import shieldReceiveIcon from '@/images/shield-receive.svg'
+import shieldSendIcon from '@/images/shield-send.svg'
+import { cn } from '@/lib/utils'
 
 const LUCIDE_ACTION_ICONS = {
   deposit: 'lucide:arrow-down-to-line',
@@ -11,13 +14,29 @@ export type WalletAction = 'send' | 'receive' | 'swap' | keyof typeof LUCIDE_ACT
 
 export function WalletActionIcon({
   action,
+  shielded = false,
   size = 20,
   className
 }: {
   readonly action: WalletAction
+  readonly shielded?: boolean
   readonly size?: number
   readonly className?: string
 }) {
+  if (shielded && (action === 'send' || action === 'receive')) {
+    return (
+      <img
+        src={action === 'send' ? shieldSendIcon : shieldReceiveIcon}
+        alt=""
+        aria-hidden="true"
+        width={size}
+        height={size}
+        style={{ width: size, height: size }}
+        className={cn('shrink-0 object-contain', className)}
+      />
+    )
+  }
+
   if (action !== 'send' && action !== 'receive' && action !== 'swap') {
     return (
       <Icon

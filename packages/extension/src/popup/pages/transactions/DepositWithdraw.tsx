@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate as useRouterNavigate, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
+import { NOIR_PUBLIC_CONFIDENTIAL_TRANSFER_APP_FEES } from '@/config/intents'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import {
@@ -40,6 +41,9 @@ import {
 } from '@/popup/services/balance-transfer-estimate'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
+import { QuoteFeeAmount } from '@/popup/components/transaction/QuoteFeeAmount'
+import { ShieldHardwareTabNotice } from '@/popup/components/transaction/ShieldHardwareTabNotice'
+import { needsShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
@@ -117,6 +121,8 @@ import {
   buildShieldTransferRequest,
   formatShieldQuoteTime,
   getZcashTokenPickerChain,
+  canOpenShieldActivity,
+  getShieldTransferChainIds,
   hasShieldTransferStarted,
   isClusterTransferRoute,
   isUnsignedShieldTerminal,
@@ -320,6 +326,8 @@ function MethodCard({
   unavailableReason?: string | null
   onClick: () => void
 }) {
+  const networkFee =
+    'networkFee' in fee && typeof fee.networkFee === 'string' ? fee.networkFee : null
   return (
     <button
       type="button"
@@ -375,6 +383,12 @@ function MethodCard({
           )}
         </span>
       </span>
+      {networkFee && !loading && (
+        <span className="mt-2 flex justify-between gap-2">
+          <span className="shrink-0 text-muted">Network fee</span>
+          <span className="min-w-0 break-words text-right">{networkFee}</span>
+        </span>
+      )}
     </button>
   )
 }
@@ -677,10 +691,21 @@ function DepositWithdrawForm({
   const [catalogReady, setCatalogReady] = useState(false)
   const [managedAssets, setManagedAssets] = useState<readonly IntentsManagedAsset[]>([])
   const [catalogTokens, setCatalogTokens] = useState<readonly SwapToken[]>([])
-  const canLoadShield =
-    getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
+  const shieldChainIds = useMemo(
+    () => getShieldTransferChainIds(activeAccount, currentNetwork === 'mainnet'),
+    [activeAccount, currentNetwork]
+  )
+  const privateChainIds = useMemo(
+    () => getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet'),
+    [activeAccount, currentNetwork]
+  )
+  const canLoadShield = shieldChainIds.length > 0 || privateChainIds.length > 0
+  const hardwareShield = canLoadShield && activeAccount?.walletSource.kind === 'hardware'
   const shieldPickerOpen =
-    domainPicker !== null && !receiveEntry && pickerAccountId === effective?.accountId
+    domainPicker !== null &&
+    !receiveEntry &&
+    !fixedDirection &&
+    pickerAccountId === effective?.accountId
   const shieldBalanceKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}`
   const {
     balances: shieldBalances,
@@ -690,6 +715,7 @@ function DepositWithdrawForm({
     errorCode: shieldBalanceErrorCode,
     refreshBalances: loadShieldBalances
   } = useShieldBalances({
+    hardware: hardwareShield,
     active: usesConfidentialBalances || shieldPickerOpen,
     enabled: canLoadShield,
     scopeKey: shieldBalanceKey,
@@ -901,10 +927,10 @@ function DepositWithdrawForm({
     routerNavigate
   ])
 
-  const eligibleChainIds = useMemo(
-    () => getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet'),
-    [activeAccount, currentNetwork]
-  )
+  const eligibleChainIds =
+    isShieldTransferRoute(from, to) && from !== 'private' && to !== 'private'
+      ? shieldChainIds
+      : privateChainIds
   const nearMoveChainIds = useMemo(
     () =>
       getNearMoveChainIds({
@@ -915,8 +941,8 @@ function DepositWithdrawForm({
     [activeAccount, currentNetwork]
   )
   const moveChainIds = useMemo(
-    () => [...eligibleChainIds, ...nearMoveChainIds],
-    [eligibleChainIds, nearMoveChainIds]
+    () => [...new Set([...eligibleChainIds, ...privateChainIds, ...nearMoveChainIds])],
+    [eligibleChainIds, privateChainIds, nearMoveChainIds]
   )
   const currentShieldBalances = useMemo(
     () => shieldBalances ?? shieldPortfolioBalances(portfolio),
@@ -1518,7 +1544,8 @@ function DepositWithdrawForm({
     (selected?.chain.chain.family === 'evm' || nearPublicPrivate)
   const clusterSelected = method === 'cluster' && clusterPair
   const fundingRoute = Boolean(shieldPair || clusterSelected)
-  const fundingReady = !shieldPair || shieldConnection === 'connected'
+  const fundingReady =
+    !shieldPair || (from === 'shield' ? shieldConnection === 'connected' : canLoadShield)
   useEffect(() => {
     if (!supportedPair && !fundingRoute) return
     let cancelled = false
@@ -2333,13 +2360,22 @@ function DepositWithdrawForm({
         return false
       }
       if (result.phase !== 'prepared') {
-        const status = await checkShieldPlan(result.planId)
-        if (replacingReview && scopeStillCurrent()) {
+        const status = await checkShieldPlan(result.planId, expectedKey)
+        if (
+          replacingReview &&
+          scopeStillCurrent() &&
+          latestShieldReviewKey.current === expectedKey
+        ) {
           if (status !== 'started')
             throw new Error('Transfer review could not be prepared. Try again.')
         }
         if (status === 'started') reviewAttempt.current = null
         return false
+      }
+      if (result.expiresAt <= Date.now()) {
+        void confidentialFundingClient.cancel(result.planId).catch(() => {})
+        reviewAttempt.current = null
+        throw new Error('Shield review expired. Try again.')
       }
       if (
         !matchesShieldReview(result, request) ||
@@ -2360,7 +2396,7 @@ function DepositWithdrawForm({
       setPreparedShield({ key, review: result })
       return true
     } catch (error) {
-      if (scopeStillCurrent()) {
+      if (scopeStillCurrent() && latestShieldReviewKey.current === expectedKey) {
         const message = error instanceof Error ? error.message : ''
         const classifiedMessage = classifyError(error, {
           source: selected.asset.metadata.symbol,
@@ -2418,12 +2454,16 @@ function DepositWithdrawForm({
     }
   }
   const checkShieldPlan = async (
-    planId: string
+    planId: string,
+    expectedReviewKey?: string
   ): Promise<'prepared' | 'started' | 'pending' | 'failed' | null> => {
+    const stillCurrent = () =>
+      scopeStillCurrent() &&
+      (expectedReviewKey === undefined || latestShieldReviewKey.current === expectedReviewKey)
     try {
       const plan = await confidentialFundingClient.get(planId)
-      if (!scopeStillCurrent()) return null
-      if (hasShieldTransferStarted(plan)) {
+      if (!stillCurrent()) return null
+      if (canOpenShieldActivity(plan)) {
         openShieldActivity(plan)
         return 'started'
       }
@@ -2599,12 +2639,19 @@ function DepositWithdrawForm({
       targetAsset && targetAsset.asset.metadata.decimals !== selected.asset.metadata.decimals
         ? null
         : shieldQuoteFeeRaw(activeShieldReview)
-    const quoteDifference =
-      quoteFeeRaw !== null && BigInt(quoteFeeRaw) > 0n ? (
-        <AmountDisplay
-          value={formatBaseUnitAmount(quoteFeeRaw, selected.asset.metadata.decimals)}
+    const routeFee =
+      quoteFeeRaw !== null && BigInt(quoteFeeRaw) > 0n
+        ? formatBaseUnitDecimalAmount(quoteFeeRaw, selected.asset.metadata.decimals)
+        : null
+    const appFeeBps = activeShieldReview.quoteAppFeeBps ?? 0
+    const quoteFee =
+      routeFee !== null || appFeeBps > 0 ? (
+        <QuoteFeeAmount
+          sourceAmountRaw={activeShieldReview.sourceAmountRaw}
+          decimals={selected.asset.metadata.decimals}
           symbol={symbol}
-          profile="fee"
+          bps={appFeeBps}
+          fallbackAmount={routeFee}
         />
       ) : null
     const networkFee = activeShieldReview.sourceNetworkFee
@@ -2696,11 +2743,11 @@ function DepositWithdrawForm({
             ...(activeShieldReview.operation === 'cluster'
               ? [{ label: 'Split transfers', content: `${activeShieldReview.withdrawCount}` }]
               : []),
-            ...(quoteDifference ? [{ label: 'Quote difference', content: quoteDifference }] : []),
+            ...(quoteFee ? [{ label: 'Fee', content: quoteFee }] : []),
             ...(networkFee
               ? [
                   {
-                    label: 'Max network fee',
+                    label: 'Network fee',
                     content: activeShieldReview.sourceEvmFee ? (
                       <NetworkFeeTierPicker
                         chainFamily="evm"
@@ -2934,6 +2981,21 @@ function DepositWithdrawForm({
     )
   }
 
+  if (shieldPair && eligible && !showNativeMove && needsShieldHardwareTab(hardwareShield)) {
+    const nextParams = new URLSearchParams(params)
+    nextParams.set('from', from)
+    nextParams.set('to', to)
+    if (selected) nextParams.set('assetId', selected.asset.asset.id)
+    nextParams.set('provider', 'near-confidential')
+    const pathname = fixedDirection ? `/${fixedDirection}` : location.pathname
+    return (
+      <div className="page-container" data-wallet-mode="shield">
+        <PageHeader title={actionLabel} showBack onBack={fixedShield?.onBack ?? goBack} />
+        <ShieldHardwareTabNotice path={`${pathname}?${nextParams}`} />
+      </div>
+    )
+  }
+
   return (
     <div className="page-container" data-wallet-mode={receiveEntry ? 'public' : walletMode}>
       {(!showNativeMove || !nativeReceiveState.reviewing) && (
@@ -3148,6 +3210,19 @@ function DepositWithdrawForm({
                 No transferable assets
               </p>
             )}
+            {shieldPair && !clusterSelected && selected && shieldAmountState?.amountRaw && (
+              <div className="mt-3 flex justify-between gap-3 border-t border-border/60 pt-3 text-xs">
+                <span className="text-muted">Fee</span>
+                <span className="text-right">
+                  <QuoteFeeAmount
+                    sourceAmountRaw={shieldAmountState.amountRaw}
+                    decimals={selected.asset.metadata.decimals}
+                    symbol={symbol}
+                    bps={NOIR_PUBLIC_CONFIDENTIAL_TRANSFER_APP_FEES[0]?.fee}
+                  />
+                </span>
+              </div>
+            )}
             {(selected?.chain.chain.family === 'evm' || nearPublicPrivate) &&
               clusterPair &&
               (clusterAvailable || methodAvailable) && (
@@ -3237,11 +3312,15 @@ function DepositWithdrawForm({
                 message="Assets could not be loaded."
                 onRetry={() => void refreshPortfolio(true, { forceDiscovery: true })}
               />
-            ) : shieldPair && shieldConnection === 'required' && !shieldConnecting ? (
+            ) : (shieldPair || (hardwareShield && canLoadShield && shieldNeedsAuthorization)) &&
+              from === 'shield' &&
+              shieldConnection === 'required' &&
+              !shieldConnecting ? (
               <TransactionNotice
                 className="mt-2"
                 message={shieldError ?? 'Shield balance unavailable.'}
                 onRetry={() => void refreshShield(shieldNeedsAuthorization)}
+                retryLabel={shieldNeedsAuthorization ? 'Connect' : 'Refresh balances'}
               />
             ) : transferError ? (
               <TransactionNotice className="mt-2" message={transferError} tone="warning" />
@@ -3263,6 +3342,7 @@ function DepositWithdrawForm({
               isLoading={
                 preparingShield ||
                 (shieldPair &&
+                  from === 'shield' &&
                   (shieldConnecting ||
                     shieldConnection === 'checking' ||
                     shieldConnection === 'busy')) ||
@@ -3288,6 +3368,15 @@ function DepositWithdrawForm({
         }}
         title="Select asset"
       >
+        {hardwareShield && from === 'shield' && shieldNeedsAuthorization && (
+          <TransactionNotice
+            className="mx-4 mb-2"
+            message={shieldBalanceError}
+            retryLabel="Connect"
+            retrying={shieldConnecting}
+            onRetry={() => void refreshShield(true)}
+          />
+        )}
         <TokenPicker<TransferPickerRow>
           networks={
             shieldAssetPicker

@@ -20,6 +20,8 @@ import { useWalletStore } from '@/store/wallet-store'
 import { buildAccountKey } from '@/store/account-data-store'
 import { useActivityEvmAssets } from '@/popup/hooks/useActivityEvmAssets'
 import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
+import { homeActivityPath } from '@/popup/services/home-navigation'
+import { needsShieldHardwareTab, openShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 import {
   confidentialFundingClient,
   getConfidentialFundingPlanId
@@ -543,8 +545,21 @@ export function MultichainActivityDetail({
     setResumingPrivateFunding(true)
     try {
       const plan = await confidentialFundingClient.get(privateFundingPlanId)
-      await confidentialFundingClient.confirm(plan.planId, plan.approvalFingerprint)
-      setPrivateFundingNeedsAuth(false)
+      if (
+        plan.phase !== 'needs-auth' ||
+        plan.network !== currentNetwork ||
+        plan.keyDomainId !== activeSwapAccount?.walletId ||
+        plan.accountId !== activeSwapAccount.accountId
+      )
+        return
+      if (needsShieldHardwareTab(activeSwapAccount?.walletSource.kind === 'hardware')) {
+        await openShieldHardwareTab(homeActivityPath('shield', plan.transactionId))
+        return
+      }
+      const resumed = await confidentialFundingClient.confirm(plan.planId, plan.approvalFingerprint)
+      setConfidentialPlan(resumed)
+      setPrivateFundingNeedsAuth(resumed.phase === 'needs-auth')
+      if (resumed.phase === 'needs-auth') return
       toast.success(
         plan.operation === 'cluster'
           ? 'Cluster transfer resumed'
@@ -722,6 +737,10 @@ export function MultichainActivityDetail({
       {privateFundingNeedsAuth && (
         <Button
           className="mt-4 h-[45px] w-full"
+          disabled={
+            activeSwapAccount?.walletId !== activeConfidentialPlan?.keyDomainId ||
+            activeSwapAccount?.accountId !== activeConfidentialPlan?.accountId
+          }
           isLoading={resumingPrivateFunding}
           onClick={handleResumePrivateFunding}
         >

@@ -237,6 +237,72 @@ test('Shield receive approval shows the source account, quote, and network fee',
   })
 })
 
+test('ZEC receive confirms by broadcasting the transparent deposit', async () => {
+  const depositAddress = 't1Ku2KLyndDPsR32jwnrTMd3yvi9tfFP8ML'
+  const calls = []
+  let summary = null
+  const result = await handleShieldDAppRequest(
+    grantedSite({
+      method: 'shield_receive',
+      params: {
+        layer: 'near-confidential',
+        source: {
+          chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+          assetId: 'bip122:00040fe8ec8471911baa1db1266ea15d/slip44:133'
+        },
+        amount: '0.10'
+      },
+      coordinator: {
+        prepareShieldDappReceive: async () => ({
+          planId: operationId,
+          phase: 'awaiting-payment',
+          payloadFingerprint: 'd'.repeat(64),
+          amount: '0.10',
+          symbol: 'ZEC',
+          chainName: 'Zcash',
+          assetId: 'bip122:00040fe8ec8471911baa1db1266ea15d/slip44:133',
+          sourceAddress: depositAddress,
+          expectedReceive: '0.099',
+          expectedSymbol: 'ZEC'
+        }),
+        submitShieldDappZcashReceive: async input => {
+          calls.push(input.operationId)
+          return {
+            id: input.operationId,
+            layer: 'near-confidential',
+            action: 'receive',
+            status: 'processing',
+            depositAddress
+          }
+        },
+        confirm: async () => {
+          throw new Error('not called')
+        },
+        cancel: async () => {
+          throw new Error('not called')
+        }
+      },
+      scope,
+      requestApproval: async (action, approval) => {
+        summary = { action, approval }
+        return true
+      }
+    })
+  )
+
+  assert.equal(summary.action, 'shieldReceive')
+  assert.equal(summary.approval.symbol, 'ZEC')
+  assert.equal(summary.approval.chainName, 'Zcash')
+  assert.deepEqual(calls, [operationId])
+  assert.deepEqual(result, {
+    id: operationId,
+    layer: 'near-confidential',
+    action: 'receive',
+    status: 'processing',
+    depositAddress
+  })
+})
+
 test('rejected Shield receive cancels the prepared plan and returns 4001', async () => {
   const calls = []
   await assert.rejects(

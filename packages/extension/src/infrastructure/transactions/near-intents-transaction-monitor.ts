@@ -33,7 +33,8 @@ export interface NearIntentsTransactionMonitorOptions {
   readonly repository: TransactionRepository
   readonly fetchStatus: (
     depositAddress: string,
-    binding: NearIntentsTransactionBinding
+    binding: NearIntentsTransactionBinding,
+    scope: TransactionAccountScope
   ) => Promise<NearIntentsStatusObservation | null>
   readonly observeDestination?: (
     chainId: string,
@@ -247,7 +248,11 @@ export class NearIntentsTransactionMonitor {
     const segments = protocolSegments(graph)
     if (!segments) return 'unchanged'
     let applied = false
-    const status = await this.fetchStatus(segments.binding.depositAddress, segments.binding)
+    const status = await this.fetchStatus(
+      segments.binding.depositAddress,
+      segments.binding,
+      graph.root.scope
+    )
     if (!status || status.status === 'PENDING') return 'unchanged'
     if (
       (status.originAsset !== undefined &&

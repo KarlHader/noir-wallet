@@ -3,7 +3,9 @@ import type { AssetPriceReadModel } from '@/core/prices'
 import type { Network } from '@/types/wallet'
 import type { AccountNetworksView } from './account-networks-client'
 import { summarizeNearConfidentialHoldings } from './near-confidential-holdings'
-import { getPrivateTransferChainIds } from './private-balance-transfer'
+import { getNearMoveChainIds } from './private-balance-transfer'
+import { getShieldTransferChainIds } from './shield-transfer'
+import { readEnabledChainFeatureFlags } from '@/config/enabled-chain-feature-flags'
 import type { ShieldProvider } from './asset-domains'
 
 export const SHIELD_ACTIONS = [
@@ -53,7 +55,13 @@ export function selectShieldActions(input: {
 }) {
   const { model, prices, account, network } = input
   const near = summarizeNearConfidentialHoldings(model, prices)
-  const canManageNear = getPrivateTransferChainIds(account, network === 'mainnet').length > 0
+  const canManageNear =
+    getShieldTransferChainIds(account, network === 'mainnet').length > 0 ||
+    getNearMoveChainIds({
+      account,
+      mainnet: network === 'mainnet',
+      enabledFlags: readEnabledChainFeatureFlags()
+    }).length > 0
   const hasZcash = account?.networks.some(item => item.chain.family === 'zcash') ?? false
   const providersFor = (action: ShieldAction): readonly ShieldProvider[] => {
     const nearAvailable = canManageNear

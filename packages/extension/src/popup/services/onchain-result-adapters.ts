@@ -31,7 +31,7 @@ const adapters = {
     client: evmWalletClient,
     feeDecimals: 18,
     feeSymbol: 'ETH',
-    feeLabel: 'Max fee',
+    feeLabel: 'Max network fee',
     totalLabel: 'Maximum total',
     resolveFeeSymbol: chain =>
       chain.assets.find(entry => entry.asset.kind === 'native')?.metadata.symbol

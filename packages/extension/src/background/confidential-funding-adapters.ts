@@ -24,7 +24,10 @@ import {
   type PrepareNearIntentsDepositInput
 } from '@/infrastructure/chains/near'
 import { assertNearConfidentialDepositAddress } from './confidential-near-quote'
-import type { ConfidentialSigningIdentity } from './confidential-funding-signer'
+import {
+  requireConfidentialPea,
+  type ConfidentialSigningIdentity
+} from './confidential-funding-signer'
 
 export interface ConfidentialDepositPrepareInput {
   readonly identity: ConfidentialSigningIdentity
@@ -49,6 +52,7 @@ export interface ConfidentialDepositConfirmInput {
   readonly commandId: string
   readonly preparedTransfer: unknown
   readonly sourceDomain?: 'public' | 'private'
+  readonly expiresAt?: number
 }
 
 export interface ConfidentialDepositCancelInput {
@@ -150,7 +154,7 @@ export class EvmConfidentialDepositAdapter implements ConfidentialDepositAdapter
         ? {
             executionAccount: {
               kind: 'pea' as const,
-              address: input.identity.peaAddress,
+              address: requireConfidentialPea(input.identity),
               addressIndex: input.identity.addressIndex
             }
           }

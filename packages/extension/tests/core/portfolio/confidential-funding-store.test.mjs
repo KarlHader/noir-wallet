@@ -355,7 +355,7 @@ test('persists external Shield deposit quote bindings across a restart', async (
   }
 })
 
-test('persists a confidential account transfer and rejects a transfer to the same account', async () => {
+test('persists a confidential account transfer and rejects a same-chain transfer to the connected account', async () => {
   const local = storageArea()
   const session = storageArea()
   const previousChrome = globalThis.chrome
@@ -446,6 +446,19 @@ test('persists a confidential account transfer and rejects a transfer to the sam
     }
     await store.putPlan(plan)
     expect(await store.listPlans()).toEqual([plan])
+    const crossChainSelf = {
+      ...plan,
+      planId: 'plan-self-cross-chain',
+      transactionId: 'tx:confidential:plan-self-cross-chain',
+      destination: { ...plan.destination, address: signerId },
+      swapQuote: {
+        ...plan.swapQuote,
+        quoteRequest: { ...plan.swapQuote.quoteRequest, recipient: signerId }
+      },
+      withdraws: [{ ...plan.withdraws[0], destinationAddress: signerId }]
+    }
+    await store.putPlan(crossChainSelf)
+    expect(await store.getPlan(crossChainSelf.planId)).toEqual(crossChainSelf)
     await expect(
       store.putPlan({
         ...plan,
@@ -454,8 +467,19 @@ test('persists a confidential account transfer and rejects a transfer to the sam
         destination: { ...source, address: signerId },
         swapQuote: {
           ...plan.swapQuote,
-          quoteRequest: { ...plan.swapQuote.quoteRequest, recipient: signerId }
-        }
+          quoteRequest: {
+            ...plan.swapQuote.quoteRequest,
+            recipient: signerId,
+            destinationAsset: source.protocolAssetId
+          }
+        },
+        withdraws: [
+          {
+            ...plan.withdraws[0],
+            destinationAddress: signerId,
+            token: source.protocolAssetId
+          }
+        ]
       })
     ).rejects.toThrow('Stored confidential funding plan bindings are invalid')
   } finally {

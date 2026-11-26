@@ -87,7 +87,7 @@ export function NetworkFeeTierPicker(props: LiveFeePickerProps | ZcashFeePickerP
         )}
       </FeePickerDialog>
     )
-    return props.hideLabel ? picker : <DetailRow label="Network Fee">{picker}</DetailRow>
+    return props.hideLabel ? picker : <DetailRow label="Network fee">{picker}</DetailRow>
   }
 
   const {
@@ -500,7 +500,7 @@ function NetworkFeeTierEditContent({
             ([field]) => !(fixedGasLimit && field === 'gasLimit') && !draft[field].trim()
           )}
         >
-          <FeeAmountSummary label="Current maximum fee" fee={currentFee} />
+          <FeeAmountSummary label="Max network fee" fee={currentFee} />
           <div className="divide-y divide-border/60 rounded-lg border border-border/65 bg-card/25">
             {fields.map(([field, label]) => {
               const isLimit = field === 'gasLimit'
@@ -542,7 +542,7 @@ function NetworkFeeTierEditContent({
       ) : (
         <div className="space-y-3">
           <FeeAmountSummary
-            label={chainFamily === 'evm' ? 'Maximum fee' : 'Estimated fee'}
+            label={chainFamily === 'evm' ? 'Max network fee' : 'Network fee'}
             fee={currentFee}
           />
           <FeeOptionList

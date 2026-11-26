@@ -72,7 +72,8 @@ export function getAssetDetailCategories(
   asset: PortfolioAssetView,
   model: PortfolioReadModel | null,
   privateEligible: boolean,
-  priceUsd?: string
+  priceUsd?: string,
+  shieldEligible = privateEligible
 ): {
   domains: readonly AssetDomain[]
   raw: Record<AssetDomain, string | null>
@@ -117,7 +118,16 @@ export function getAssetDetailCategories(
     }
   }
 
-  const domains = selectAssetDetailDomains(family, raw, privateEligible)
+  const domains = [...selectAssetDetailDomains(family, raw, privateEligible)].filter(
+    domain =>
+      domain !== 'shield' ||
+      family !== 'evm' ||
+      shieldEligible ||
+      (raw.shield !== null && BigInt(raw.shield) > 0n)
+  )
+  if (family === 'evm' && shieldEligible && !domains.includes('shield')) {
+    domains.splice(2, 0, 'shield')
+  }
 
   const fiat = Object.fromEntries(
     (['all', 'public', 'shield', 'private'] as const).map(domain => {

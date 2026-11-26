@@ -192,6 +192,22 @@ export function formatFeeAmount(value: NumericValue): string {
   })
 }
 
+export function estimateBpsFeeAmount(
+  amountRaw: string,
+  decimals: number,
+  bps: number
+): string | null {
+  if (
+    !RAW_AMOUNT.test(amountRaw) ||
+    !isAssetPrecision(decimals) ||
+    !Number.isSafeInteger(bps) ||
+    bps < 0 ||
+    bps > 10_000
+  )
+    return null
+  return formatBaseUnitDecimalAmount((BigInt(amountRaw) * BigInt(bps)) / 10_000n, decimals)
+}
+
 /** Fiat valuations use cents; token unit prices have their own formatter. */
 export function formatFiatAmount(value: NumericValue, options?: { showSign?: boolean }): string {
   const parsed = parseNumericValue(value)

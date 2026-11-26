@@ -1,4 +1,5 @@
 import type { Network } from '@/types'
+import type { OneClickOrder } from '@/core/services/near-intents/one-click-order'
 import { confidentialPrivateTokenId } from './confidential-funding-portfolio'
 
 export const CONFIDENTIAL_WITHDRAW_MIN_COUNT = 2
@@ -50,6 +51,7 @@ export type ConfidentialSignedPayload =
 
 export interface ConfidentialQuote {
   readonly correlationId: string
+  readonly oneClickOrder?: OneClickOrder
   readonly quoteRequest: Readonly<Record<string, unknown>>
   readonly quote: Readonly<{
     amountIn: string
@@ -78,12 +80,28 @@ export interface ConfidentialQuoteBinding {
   readonly slippageBps: number
 }
 
+export function confidentialQuoteAppFeeBps(
+  quote: Pick<ConfidentialQuote, 'quoteRequest'> | undefined
+): number {
+  const fees = quote?.quoteRequest?.appFees
+  if (!Array.isArray(fees)) return 0
+  let total = 0
+  for (const entry of fees) {
+    const fee: unknown = entry?.fee
+    if (typeof fee !== 'number' || !Number.isSafeInteger(fee) || fee < 0) return 0
+    total += fee
+    if (total > 10_000) return 0
+  }
+  return total
+}
+
 export interface ConfidentialWithdrawRow {
   readonly sequence: number
   readonly sourceAmountRaw: string
   readonly amountRaw: string
   readonly settledOutputRaw?: string
   readonly depositAddress: string
+  readonly oneClickOrder?: OneClickOrder
   readonly destinationAddress: string
   readonly destinationChain: string
   readonly token: string
@@ -206,6 +224,7 @@ export interface ConfidentialFundingPlan {
   readonly swapQuote?: ConfidentialQuote
   readonly quoteTimeEstimateSeconds?: number
   readonly reviewedAppFeesFingerprint?: string
+  readonly reviewedAppFeeBps?: number
   readonly preparedDeposit?: Readonly<{
     commandId: string
     payloadFingerprint: string

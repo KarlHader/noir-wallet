@@ -878,6 +878,7 @@ it('retries a terminal graph report after restart and deduplicates concurrent se
   await sessions.put({
     schemaVersion: 1,
     quoteHandle: handle,
+    request: {},
     build: { executionId: 'execution:retry' },
     submission: {
       sourceHash: 'source:retry',
@@ -916,6 +917,7 @@ it('keeps terminal disposal when retirement overlaps an in-flight report', async
   await sessions.put({
     schemaVersion: 1,
     quoteHandle: handle,
+    request: {},
     build: { executionId: 'execution:overlap' },
     submission: {
       sourceHash: 'source:overlap',
@@ -958,6 +960,7 @@ it('waits for an in-flight report before clearing wallet sessions', async () => 
   await sessions.put({
     schemaVersion: 1,
     quoteHandle: handle,
+    request: {},
     build: { executionId: 'execution:reset-overlap' },
     submission: {
       sourceHash: 'source:reset-overlap',

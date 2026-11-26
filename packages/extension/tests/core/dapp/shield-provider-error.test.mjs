@@ -39,6 +39,10 @@ test('Shield session failures stay specific without exposing secrets', () => {
     toShieldProviderErrorShape(new Error('Shield amount is invalid.')).code,
     -32602
   )
+  assert.equal(
+    toShieldProviderErrorShape(new Error('Shield recipient account is invalid.')).code,
+    -32602
+  )
   assert.equal(isShieldUnlockRetryError(locked), true)
   assert.equal(toShieldProviderErrorShape(locked).code, 4100)
 })

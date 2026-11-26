@@ -783,6 +783,20 @@ function AccountRow({
   )
 }
 
+function LedgerNetworksMenuItem({ walletId, accountId }: { walletId: string; accountId: string }) {
+  return (
+    <DropdownMenuItem
+      onClick={event => {
+        event.stopPropagation()
+        openHardwareConnectTab('ledger', { walletId, accountId })
+      }}
+    >
+      <Icon icon="lucide:network" className="mr-2 h-4 w-4" />
+      Add networks
+    </DropdownMenuItem>
+  )
+}
+
 function NativeAccountItem({
   account,
   switching,
@@ -835,18 +849,7 @@ function NativeAccountItem({
         Addresses
       </DropdownMenuItem>
       {isLedger && (
-        <DropdownMenuItem
-          onClick={event => {
-            event.stopPropagation()
-            openHardwareConnectTab('ledger', {
-              walletId: account.walletId,
-              accountId: account.accountId
-            })
-          }}
-        >
-          <Icon icon="lucide:network" className="mr-2 h-4 w-4" />
-          Add networks
-        </DropdownMenuItem>
+        <LedgerNetworksMenuItem walletId={account.walletId} accountId={account.accountId} />
       )}
       {isPrivateKey && (
         <DropdownMenuItem
@@ -938,9 +941,15 @@ function AccountItem({
           navigate(`/addresses-list?accountId=${account.id}&walletId=${wallet.id}`)
         }}
       >
-        <Icon icon="lucide:scan-qr-code" className="mr-2 h-4 w-4" />
+        <Icon
+          icon={wallet.keySource === 'ledger' ? 'lucide:qr-code' : 'lucide:scan-qr-code'}
+          className="mr-2 h-4 w-4"
+        />
         Addresses
       </DropdownMenuItem>
+      {wallet.keySource === 'ledger' && (
+        <LedgerNetworksMenuItem walletId={wallet.id} accountId={account.id} />
+      )}
       <DropdownMenuItem
         onClick={async e => {
           e.stopPropagation()

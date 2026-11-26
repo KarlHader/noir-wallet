@@ -4,11 +4,13 @@ const positions = new Map<string, number>()
 
 export function useHomeScrollPosition(entryKey: string, scope: string) {
   const region = useRef<HTMLDivElement>(null)
+  const nextPosition = useRef<number | null>(null)
   useLayoutEffect(() => {
     const element = region.current
     if (!element) return
     const key = JSON.stringify([entryKey, scope])
-    const saved = positions.get(key) ?? 0
+    const saved = nextPosition.current ?? positions.get(key) ?? 0
+    nextPosition.current = null
     let restoring = saved > 0
     const restore = () => {
       if (!restoring) return
@@ -39,5 +41,5 @@ export function useHomeScrollPosition(entryKey: string, scope: string) {
       element.removeEventListener('keydown', interrupt)
     }
   }, [entryKey, scope])
-  return region
+  return { region, nextPosition }
 }

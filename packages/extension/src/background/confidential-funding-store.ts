@@ -304,7 +304,11 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         !['public', 'private'].includes(plan.destinationDomain ?? '') ||
         plan.requiresDeposit ||
         plan.withdraws.length !== 1 ||
-        plan.splitSourceAmounts[0] !== plan.source.amountRaw)) ||
+        plan.splitSourceAmounts[0] !== plan.source.amountRaw ||
+        (plan.swapQuote !== undefined &&
+          (plan.swapQuote.quoteRequest.dry !== false ||
+            plan.swapQuote.quoteRequest.recipientType !== 'DESTINATION_CHAIN' ||
+            !plan.swapQuote.quote.depositAddress)))) ||
     (plan.operation === 'swap' &&
       (plan.sourceDomain !== 'shield' ||
         plan.destinationDomain !== 'shield' ||
@@ -322,7 +326,8 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
       (plan.sourceDomain !== 'shield' ||
         plan.destinationDomain !== 'shield' ||
         plan.source.address.toLowerCase() !== plan.signerId.toLowerCase() ||
-        plan.destination.address.toLowerCase() === plan.signerId.toLowerCase() ||
+        (plan.source.chainId === plan.destination.chainId &&
+          plan.destination.address.toLowerCase() === plan.signerId.toLowerCase()) ||
         !/^0x[0-9a-fA-F]{40}$/.test(plan.destination.address) ||
         /^0x0{40}$/i.test(plan.destination.address) ||
         plan.requiresDeposit ||
@@ -347,11 +352,17 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         plan.reviewedAppFeesFingerprint !== undefined)) ||
     (plan.operation !== 'swap' &&
       plan.operation !== 'confidential-transfer' &&
+      plan.operation !== 'withdraw' &&
       plan.purpose !== 'native-zec-swap' &&
       plan.swapQuote !== undefined) ||
     (plan.reviewedAppFeesFingerprint !== undefined &&
       ((plan.operation !== 'withdraw' && plan.operation !== 'cluster') ||
         !/^[0-9a-f]{64}$/.test(plan.reviewedAppFeesFingerprint))) ||
+    (plan.reviewedAppFeeBps !== undefined &&
+      (plan.operation !== 'withdraw' ||
+        !Number.isSafeInteger(plan.reviewedAppFeeBps) ||
+        plan.reviewedAppFeeBps < 0 ||
+        plan.reviewedAppFeeBps > 10_000)) ||
     (plan.operation === 'cluster' &&
       (!['public', 'private', 'shield'].includes(plan.sourceDomain ?? '') ||
         !['public', 'private'].includes(plan.destinationDomain ?? '') ||
@@ -457,6 +468,7 @@ function parseExternalDeposit(value: unknown): ExternalShieldDeposit {
     (value.fundingObservedAt !== undefined &&
       (!Number.isSafeInteger(value.fundingObservedAt) ||
         (value.fundingObservedAt as number) < 0)) ||
+    (value.originTxHash !== undefined && !/^[0-9a-fA-F]{64}$/.test(String(value.originTxHash))) ||
     (value.providerStatus !== undefined && !isBoundedString(value.providerStatus, 64)) ||
     (value.refundTransactionHash !== undefined &&
       !isBoundedString(value.refundTransactionHash, 100)) ||

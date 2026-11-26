@@ -459,7 +459,7 @@ export function parseRheaSwapQuoteView(value: unknown): RheaSwapQuoteView {
       'receivedAt',
       'expiresAt'
     ],
-    ['alternatives'],
+    ['alternatives', 'appFeeBps'],
     'RHEA Swap quote result'
   )
   if (
@@ -478,6 +478,16 @@ export function parseRheaSwapQuoteView(value: unknown): RheaSwapQuoteView {
     (!Array.isArray(value.alternatives) || value.alternatives.length > 12)
   ) {
     throw new Error('RHEA Swap alternatives are invalid')
+  }
+  const { appFeeBps } = value
+  if (
+    appFeeBps !== undefined &&
+    (typeof appFeeBps !== 'number' ||
+      !Number.isSafeInteger(appFeeBps) ||
+      appFeeBps < 0 ||
+      appFeeBps > 10_000)
+  ) {
+    throw new Error('RHEA Swap app fee is invalid')
   }
   const alternatives = (value.alternatives as unknown[] | undefined)?.map((item, index) => {
     if (!isRecord(item)) throw new Error('RHEA Swap alternative is invalid')
@@ -500,6 +510,7 @@ export function parseRheaSwapQuoteView(value: unknown): RheaSwapQuoteView {
     recipient: readString(value.recipient, 'RHEA Swap recipient'),
     estimatedOut: readRawAmount(value.estimatedOut, 'RHEA Swap estimated output'),
     minAmountOut: readRawAmount(value.minAmountOut, 'RHEA Swap minimum output'),
+    ...(appFeeBps === undefined ? {} : { appFeeBps }),
     router: readString(value.router, 'RHEA Swap router', 128),
     ...(alternatives === undefined ? {} : { alternatives: Object.freeze(alternatives) }),
     receivedAt: value.receivedAt,
@@ -566,7 +577,7 @@ export function parseRheaSwapReviewView(value: unknown): RheaSwapReviewView {
       'amountIn',
       'execution'
     ],
-    ['alternatives', 'timeEstimateSeconds'],
+    ['alternatives', 'timeEstimateSeconds', 'appFeeBps'],
     'RHEA Swap review'
   )
   const quote = parseRheaSwapQuoteView({
@@ -575,6 +586,7 @@ export function parseRheaSwapReviewView(value: unknown): RheaSwapReviewView {
     estimatedOut: value.estimatedOut,
     minAmountOut: value.minAmountOut,
     router: value.router,
+    ...(value.appFeeBps === undefined ? {} : { appFeeBps: value.appFeeBps }),
     receivedAt: value.receivedAt,
     expiresAt: value.expiresAt,
     ...(value.alternatives === undefined ? {} : { alternatives: value.alternatives })

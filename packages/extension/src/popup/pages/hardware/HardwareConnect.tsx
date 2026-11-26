@@ -5,7 +5,7 @@ import { PageHeader } from '../../components/common/PageHeader'
 import { useNavigate } from '../../provider/Router'
 
 export function HardwareConnect() {
-  const { navigate, replace } = useNavigate()
+  const { replace } = useNavigate()
   return (
     <div className="page-container page-container--tab">
       <PageHeader title="Connect Hardware Wallet" showBack onBack={() => replace('/')} />
@@ -15,7 +15,10 @@ export function HardwareConnect() {
             key={device.vendor}
             label={device.name}
             icon={<HardwareWalletLogo vendor={device.vendor} />}
-            onClick={() => navigate(hardwareConnectRoute(device.vendor))}
+            onClick={() => {
+              window.history.replaceState(null, '', `#${hardwareConnectRoute(device.vendor)}`)
+              window.location.reload()
+            }}
           />
         ))}
       </div>

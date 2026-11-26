@@ -1,6 +1,26 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "2.1.1": {
+      "notifyUpdate": true,
+      "changes": [
+        "Shield prepares the quote before opening confirmation.",
+        "Eligible swaps continue after token approval when gas still fits the fee limits you confirmed."
+      ]
+    },
+    "2.1.0": {
+      "notifyUpdate": true,
+      "changes": [
+        "Open Home on Shield and switch between Public, Shield, and Incognito balances.",
+        "Use separate Shield Receive and Unshield flows for native Zcash and supported Confidential routes.",
+        "Connect compatible apps to Shield and approve each receive or transfer in your wallet.",
+        "Reviewed token approvals and swaps can continue when the popup closes.",
+        "Set up Ledger accounts across supported networks and connect them to Shield.",
+        "Shield Send and Unshield reuse the reviewed quote when you confirm.",
+        "Speed Up and Cancel appear sooner on eligible pending transactions.",
+        "Improved background Zcash sync and transaction progress in Activity."
+      ]
+    },
     "2.0.0": {
       "notifyUpdate": false,
       "changes": [

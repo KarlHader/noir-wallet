@@ -97,7 +97,7 @@ import {
 import { transactionRecorder } from './transaction-recorder'
 import { subscribeTransactionPortfolioInvalidations } from '@/infrastructure/persistence/repositories/transaction-portfolio-invalidation'
 import { useAccountDataStore } from '@/store/account-data-store'
-import { syncScheduler, SYNC_KEEPALIVE_ALARM } from './sync-scheduler'
+import { syncScheduler, SYNC_KEEPALIVE_ALARM, withTxSyncPause } from './sync-scheduler'
 import {
   catchUpAfterOnChainTx,
   markWalletNeedsCatchUp,
@@ -425,6 +425,13 @@ import {
   cancelLedgerSigning,
   cancelAllLedgerSigning
 } from './ledger-signing-coordinator'
+import {
+  cancelAllKeystoneEvmSigning,
+  cancelKeystoneEvmSigning,
+  getKeystoneEvmSigningRequest,
+  registerKeystoneEvmSigningTabLifecycle,
+  submitKeystoneEvmSigningResponse
+} from './keystone-evm-message-signing'
 import { readLedgerProvisioningCredential } from './ledger-signing-bridge'
 
 import type { ChromeTokenVisibilityRepository } from '@/infrastructure/portfolio/chrome-token-visibility'
@@ -767,13 +774,15 @@ async function requireCurrentPrivateSwapQuote(
     throw new Error('Private quote execution mode changed. Get a new quote.')
   }
   if (binding) {
-    const isWithdraw = quote.scope.purpose === 'private-cross-chain-withdraw'
+    const isCrossChainWithdraw = quote.scope.purpose === 'private-cross-chain-withdraw'
+    const isSameChainWithdraw = quote.scope.purpose === 'private-transfer'
+    const isWithdraw = isCrossChainWithdraw || isSameChainWithdraw
     if (
       binding.quoteHandle !== quoteHandle ||
       binding.sender.toLowerCase() !== quote.request.sender.toLowerCase() ||
       binding.destination.recipient.toLowerCase() !== quote.request.recipient?.toLowerCase() ||
       (binding.balanceTransfer !== undefined && !isWithdraw) ||
-      (isWithdraw &&
+      (isCrossChainWithdraw &&
         (!binding.isCrossChain ||
           binding.origin.protocolChainId !== quote.request.fromChain ||
           binding.destination.protocolChainId !== quote.request.toChain ||
@@ -781,9 +790,15 @@ async function requireCurrentPrivateSwapQuote(
             getPrivateWithdrawAsset(quote.request.fromChain, quote.request.tokenIn)?.id ||
           binding.destination.assetId !==
             getPrivateWithdrawAsset(quote.request.toChain, quote.request.tokenOut)?.id)) ||
-      ((quote.scope.purpose === 'private-transfer' ||
+      (isSameChainWithdraw &&
+        (binding.origin.protocolChainId !== quote.request.fromChain ||
+          binding.destination.protocolChainId !== quote.request.toChain ||
+          !binding.origin.chainId.startsWith('eip155:') ||
+          binding.origin.chainId !== binding.destination.chainId ||
+          binding.origin.assetId !== binding.destination.assetId ||
+          binding.sender.toLowerCase() === binding.destination.recipient.toLowerCase())) ||
+      ((isWithdraw ||
         quote.scope.purpose === 'private-cross-chain-send' ||
-        quote.scope.purpose === 'private-cross-chain-withdraw' ||
         quote.scope.purpose === 'private-dapp-transfer' ||
         quote.scope.purpose === 'public-private-send' ||
         quote.scope.purpose === 'public-cross-chain-send') &&
@@ -2057,6 +2072,7 @@ async function switchGlobalNetworkMode(target: Network): Promise<{ restartRequir
   if (!(await credentialSession.hasUnlockSession())) {
     throw new Error('Unlock the wallet before switching networks')
   }
+  cancelAllKeystoneEvmSigning('Network mode changed. Review this action again.')
   await cancelAllLedgerSigning('Network mode changed. Review this action again.')
   const hardwareMissingTargetMetadata = hasKeystoneWalletMissingNetworkProjection(
     useWalletStore.getState().wallets,
@@ -2278,6 +2294,7 @@ configureLedgerSigningCoordinator(async scope => {
   )
 })
 registerLedgerSigningTabLifecycle()
+registerKeystoneEvmSigningTabLifecycle()
 
 logger.info(`Background service worker started version=${__APP_VERSION__} build=${__BUILD_TIME__}`)
 
@@ -6045,6 +6062,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         }
 
         pendingRequestsManager.cancelContext(walletId, accountId)
+        cancelAllKeystoneEvmSigning('Account network changed. Review this action again.')
         await cancelAllLedgerSigning('Account network changed. Review this action again.')
         syncScheduler.pauseForTx()
         try {
@@ -6668,7 +6686,11 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         ? { accountKey: currentAccountKey, walletId: currentWalletId, accountId: currentAccountId }
         : null
     void Promise.allSettled([
-      transactionMonitor.recheckNow(),
+      accountScope && currentNetwork === 'mainnet'
+        ? transactionMonitor
+            .restorePendingWithdrawals([accountScope])
+            .then(() => transactionMonitor.recheckNow())
+        : transactionMonitor.recheckNow(),
       accountScope
         ? zcashTxMonitor
             .restoreStuckWithdrawals([accountScope])
@@ -6764,6 +6786,47 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (
+    isRuntimeRecord(message) &&
+    (message.type === 'GET_KEYSTONE_EVM_DEVICE_SIGNING_REQUEST' ||
+      message.type === 'SUBMIT_KEYSTONE_EVM_DEVICE_SIGNING_RESPONSE' ||
+      message.type === 'CANCEL_KEYSTONE_EVM_DEVICE_SIGNING_REQUEST')
+  ) {
+    const { type, requestId, signatureCborBase64 } = message
+    const tabId = sender.tab?.id
+    const submitting = type === 'SUBMIT_KEYSTONE_EVM_DEVICE_SIGNING_RESPONSE'
+    const expectedKeys = submitting
+      ? ['type', 'requestId', 'signatureCborBase64']
+      : ['type', 'requestId']
+    if (
+      sender.frameId !== 0 ||
+      typeof tabId !== 'number' ||
+      !isOwnExtensionRouteSender(sender, chrome.runtime.id, '/hardware/evm-sign') ||
+      typeof requestId !== 'string' ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(requestId) ||
+      !hasExactRuntimeKeys(message, expectedKeys) ||
+      (submitting && typeof signatureCborBase64 !== 'string')
+    ) {
+      sendResponse({ error: 'Invalid Keystone signing request' })
+      return true
+    }
+    if (networkRestartRequired || walletLockCleanupPending) {
+      sendResponse({ error: 'Keystone signing was interrupted. Review this action again.' })
+      return true
+    }
+    const operation =
+      type === 'GET_KEYSTONE_EVM_DEVICE_SIGNING_REQUEST'
+        ? getKeystoneEvmSigningRequest(requestId, tabId)
+        : submitting && typeof signatureCborBase64 === 'string'
+          ? submitKeystoneEvmSigningResponse(requestId, tabId, signatureCborBase64)
+          : cancelKeystoneEvmSigning(requestId, tabId)
+    void operation
+      .then(result => sendResponse({ result: result ?? true }))
+      .catch(error =>
+        sendResponse({ error: error instanceof Error ? error.message : 'Keystone signing failed' })
+      )
+    return true
+  }
   if (isRuntimeRecord(message) && message.type === 'LEDGER_SWAP_APPROVAL_SIGNED') {
     if (getOwnExtensionSenderContext(sender, chrome.runtime.id) === 'service-worker') return false
     sendResponse({ error: 'Unauthorized Ledger continuation sender' })
@@ -7341,6 +7404,7 @@ function beginWalletLockQuiesce(): Promise<
   { readonly success: true } | { readonly success: false; readonly error: unknown }
 > {
   walletLockCleanupPending = true
+  cancelAllKeystoneEvmSigning('Wallet was locked. Review this action again.')
   backgroundZcashWalletRuntime.beginLock()
   void credentialSession.lock().catch(() => {})
   syncScheduler.pauseForTx()
@@ -7384,6 +7448,7 @@ function handleWalletLock(): Promise<void> {
 async function performWalletLockState(): Promise<void> {
   syncScheduler.pauseForTx()
   try {
+    cancelAllKeystoneEvmSigning('Wallet was locked. Review this action again.')
     await cancelAllLedgerSigning('Wallet was locked. Review this action again.')
     pendingRequestsManager.cancelAll()
     syncScheduler.abortSync()
@@ -7449,6 +7514,7 @@ async function performKeyringRuntimesResetAfterCredentialChange(): Promise<void>
 async function handleAccountSwitched({
   refreshPortfolio = true
 }: { refreshPortfolio?: boolean } = {}): Promise<void> {
+  cancelAllKeystoneEvmSigning('Account changed. Review this action again.')
   await cancelAllLedgerSigning('Account changed. Review this action again.')
   try {
     const account = backgroundZcashWalletRuntime.getCurrentAccount()
@@ -7495,28 +7561,6 @@ async function handleDAppDisconnect(origin: string): Promise<boolean> {
   } catch (error: any) {
     console.warn('Disconnect error:', error)
     throw error
-  }
-}
-
-/**
- * Pause sync, wait for the wallet's in-flight batch to go idle, run the
- * tx-critical work, then resume sync. Worker soft-read RPCs (account restore)
- * are blocked while a sync batch mutates wallet state, so every transaction
- * build/broadcast must run inside this window.
- */
-async function withTxSyncPause<T>(walletId: string | undefined, fn: () => Promise<T>): Promise<T> {
-  try {
-    syncScheduler.pauseForTx()
-    const syncWaitMs = WALLET_CONFIG.SYNC.MAX_BLOCKING_WAIT_MS
-    const syncIdle = walletId
-      ? await syncScheduler.waitForWalletSyncIdle(walletId, syncWaitMs)
-      : await syncScheduler.waitForActiveSyncIdle(syncWaitMs)
-    if (!syncIdle) {
-      throw new Error('Wallet is syncing. Please try again after sync completes.')
-    }
-    return await fn()
-  } finally {
-    syncScheduler.resumeAfterTx()
   }
 }
 

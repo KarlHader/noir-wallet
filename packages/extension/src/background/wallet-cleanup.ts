@@ -86,6 +86,7 @@ import { dappExecutionModeCoordinator } from './dapp-execution-mode'
 import type { WalletBackupVerification } from '@/core/wallet/secret-phrase-backup'
 import { isNativeV2CredentialKeyDomain } from '@/core/wallet/native-hardware-identity'
 import type { StorageV2Snapshot } from '@/ports/repositories'
+import { removeOneClickStatusTokens } from './one-click-status-tokens'
 
 type ActiveAccount = {
   walletId: string | null
@@ -755,6 +756,7 @@ export class WalletCleanupCoordinator {
         ])
         await Promise.all([
           deleteIndexedDbTransactionPersistence(),
+          ...wallets.map(wallet => removeOneClickStatusTokens(wallet.id)),
           deleteIndexedDbPortfolioCache(),
           deleteIndexedDbBitcoinDiscovery(),
           deleteIndexedDbBitcoinChangeReservations(),
@@ -808,6 +810,7 @@ export class WalletCleanupCoordinator {
     const confidentialFundingStore = new ChromeConfidentialFundingStore()
     await Promise.all([
       this.bitcoinDiscovery.deleteByAccountScope(scope),
+      removeOneClickStatusTokens(walletId, accountId),
       this.bitcoinChangeReservations.deleteByAccountScope(scope),
       this.bitcoinInputReservations.deleteByAccountScope(scope),
       deleteHistoryCacheByAccountScope(scope),

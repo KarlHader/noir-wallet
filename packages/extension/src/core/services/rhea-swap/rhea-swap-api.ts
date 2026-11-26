@@ -98,6 +98,13 @@ export class RheaSwapApi {
     method: 'GET' | 'POST',
     options: RequestOptions
   ): Promise<unknown> {
+    if (
+      path.startsWith('/crosschain/swap/') &&
+      isRecord(options.body) &&
+      'confidentiality' in options.body
+    ) {
+      throw new RheaSwapHttpError('INVALID_REQUEST', stage, 'Confidential requests require 1Click')
+    }
     const url = new URL(`${this.baseUrl}${path}`)
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value))

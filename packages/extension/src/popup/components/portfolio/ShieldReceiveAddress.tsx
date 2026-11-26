@@ -21,6 +21,7 @@ import {
   useCopyToClipboard
 } from '@/popup/components/common/CopyToast'
 import { TransactionNotice } from '@/popup/components/transaction/TransactionNotice'
+import { QuoteFeeAmount } from '@/popup/components/transaction/QuoteFeeAmount'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import { ShieldProviderLogo, SHIELD_PROVIDERS } from './shield-providers'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
@@ -45,6 +46,8 @@ import {
   externalShieldDepositClient,
   type ExternalShieldDeposit
 } from '@/popup/services/confidential-funding-client'
+import { buildShieldActionPath } from '@/popup/services/shield-action-selection'
+import { needsShieldHardwareTab, openShieldHardwareTab } from '@/popup/services/shield-hardware-tab'
 
 export interface ShieldReceiveAddressProps {
   readonly provider: ShieldProvider
@@ -97,6 +100,8 @@ export function ShieldReceiveAddress({
   enabled,
   inline = false
 }: ShieldReceiveAddressProps) {
+  const hardwareShield =
+    provider === 'near-confidential' && account?.walletSource.kind === 'hardware'
   const walletId = account?.walletId ?? ''
   const accountId = account?.accountId ?? ''
   const scope = `${network}:${walletId}:${accountId}:${provider}:${asset?.assetId ?? ''}`
@@ -143,6 +148,12 @@ export function ShieldReceiveAddress({
       : null
   const payment = currentRecord ? depositPaymentProgress(currentRecord, now) : null
   const canPay = payment?.canPay ?? false
+  const appFeeBps =
+    currentRecord &&
+    'quoteAppFeeBps' in currentRecord &&
+    typeof currentRecord.quoteAppFeeBps === 'number'
+      ? currentRecord.quoteAppFeeBps
+      : 0
   const refundAddress = defaultDepositRefundAddress(asset?.chain ?? null, account?.networks ?? [])
   const sourceAssetId = asset ? depositSourceAssetId(asset.token, asset.chain) : null
   const nearReady =
@@ -228,6 +239,26 @@ export function ShieldReceiveAddress({
 
   const createAddress = async (newAddress = false) => {
     if (busyRef.current || !canGenerate) return
+    if (needsShieldHardwareTab(hardwareShield)) {
+      busyRef.current = true
+      setBusy(true)
+      setError(null)
+      try {
+        await openShieldHardwareTab(
+          buildShieldActionPath('receive', {
+            account,
+            assetId: asset?.assetId,
+            provider
+          })
+        )
+      } catch {
+        setError('Could not open the wallet tab.')
+      } finally {
+        busyRef.current = false
+        setBusy(false)
+      }
+      return
+    }
     setError(null)
     if (provider === 'zcash-shield') {
       setOpen(true)
@@ -301,8 +332,9 @@ export function ShieldReceiveAddress({
     if (!error) void createAddress()
   })
   useEffect(() => {
-    if (inline && canGenerate && provider === 'near-confidential') createInlineAddress()
-  }, [inline, canGenerate, provider, scope])
+    if (inline && canGenerate && provider === 'near-confidential' && !hardwareShield)
+      createInlineAddress()
+  }, [inline, canGenerate, provider, hardwareShield, scope])
 
   const checkStatus = async () => {
     if (!currentRecord || refreshing) return
@@ -578,6 +610,19 @@ export function ShieldReceiveAddress({
               If this deposit cannot complete, funds return to this address on the sending network.
             </p>
           )}
+          {canPay && appFeeBps > 0 && currentRecord.amountMode !== 'minimum' && (
+            <p className="mt-2 flex justify-between gap-3 text-xs">
+              <span className="text-muted">Fee</span>
+              <span className="text-right">
+                <QuoteFeeAmount
+                  sourceAmountRaw={currentRecord.amountRaw}
+                  decimals={currentRecord.sourceDecimals}
+                  symbol={symbol}
+                  bps={appFeeBps}
+                />
+              </span>
+            </p>
+          )}
           {(!canPay || payment?.hasDeposit) && (
             <div className="mt-5 flex items-center justify-between gap-3">
               <h2
@@ -730,6 +775,20 @@ export function ShieldReceiveAddress({
       <>
         {currentRecord || (provider === 'zcash-shield' && zcashAddress) ? (
           addressContent
+        ) : canGenerate && hardwareShield && !error ? (
+          <button
+            type="button"
+            disabled={busy}
+            aria-busy={busy || undefined}
+            onClick={() => void createAddress()}
+            className="wallet-interactive mt-5 h-11 w-full rounded-lg bg-primary text-sm font-medium text-background enabled:hover:brightness-110 enabled:active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+          >
+            {busy
+              ? 'Generating...'
+              : needsShieldHardwareTab(hardwareShield)
+                ? 'Open wallet tab'
+                : 'Generate QR Code'}
+          </button>
         ) : !error && canGenerate ? (
           <ShieldReceiveAddressSkeleton />
         ) : (

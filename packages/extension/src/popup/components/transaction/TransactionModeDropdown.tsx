@@ -14,6 +14,12 @@ const modeLabels = {
   shield: 'Shield'
 } satisfies Record<BalanceDomain, string>
 
+export const swapModeLabels = {
+  public: 'Swap(Public)',
+  private: 'Swap(Incognito)',
+  shield: 'Private swap'
+} satisfies Record<BalanceDomain, string>
+
 export function TransactionModeDropdown({
   action,
   value,
@@ -27,7 +33,9 @@ export function TransactionModeDropdown({
   readonly onChange: (mode: BalanceDomain) => void
   readonly disabled?: boolean
 }) {
-  const title = `${modeLabels[value]} ${action}`
+  const getLabel = (mode: BalanceDomain) =>
+    action === 'Swap' ? swapModeLabels[mode] : `${modeLabels[mode]} ${action}`
+  const title = getLabel(value)
 
   if (options.length < 2) return <span className="block truncate">{title}</span>
 
@@ -58,7 +66,7 @@ export function TransactionModeDropdown({
         >
           {options.map(mode => (
             <DropdownMenuRadioItem key={mode} value={mode} className="min-h-10 justify-center px-8">
-              {modeLabels[mode]} {action}
+              {getLabel(mode)}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

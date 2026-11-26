@@ -10,6 +10,7 @@ import {
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { setTimeout as delay } from 'node:timers/promises'
 import { sourceProfileForVersion, verifyReleaseArtifact } from './extension-release.mjs'
 import { validatePublicationTarget } from './extension-release-gates.mjs'
 import { signCrx3, verifyCrx3 } from './lib/crx3.mjs'
@@ -216,7 +217,7 @@ function workflowOutputs(values, env) {
   }
 }
 
-function githubRequest(env) {
+function githubRequest(env, purpose = 'GitHub release verification') {
   if (!env.GH_TOKEN) throw new Error('A read-only GitHub token is required')
   return async (route, { allowNotFound = false } = {}) => {
     let response
@@ -231,11 +232,10 @@ function githubRequest(env) {
         redirect: 'error'
       })
     } catch {
-      throw new Error('GitHub release verification request failed')
+      throw new Error(`${purpose} request failed`)
     }
     if (response.status === 404 && allowNotFound) return null
-    if (!response.ok)
-      throw new Error(`GitHub release verification failed (HTTP ${response.status})`)
+    if (!response.ok) throw new Error(`${purpose} failed (HTTP ${response.status})`)
     return response.json()
   }
 }
@@ -245,6 +245,49 @@ function writeReceipt(directory, receipt) {
   writeFileSync(path.join(directory, 'receipt.json'), json(receipt))
 }
 
+function requireManualUploadDigest(value, binding) {
+  if (requireMatch(value, DIGEST, 'manually uploaded CRX digest') !== binding.crxSha256) {
+    throw new Error('Manually uploaded CRX digest does not match the accepted package')
+  }
+}
+
+export function confirmManualUpload(value, binding, journal) {
+  if (!value) return false
+  requireManualUploadDigest(value, binding)
+  const upload = journal.upload
+  if (upload?.status === 'succeeded') return false
+  if (!upload || (upload.status === 'failed' && !upload.retryable) || journal.submit) {
+    throw new Error('Manual upload recovery requires an unresolved upload and no prior submission')
+  }
+  return true
+}
+
+export async function verifyWriteIntent({
+  request,
+  artifactId,
+  binding,
+  stage,
+  run,
+  wait = delay
+}) {
+  const intent = makeReceipt({ binding, stage, phase: 'intent', run })
+  for (const backoff of [0, 1000, 2000, 4000, 8000]) {
+    if (backoff) await wait(backoff)
+    const artifact = await request(`actions/artifacts/${artifactId}`, { allowNotFound: true })
+    if (!artifact) continue
+    if (
+      artifact.expired ||
+      artifact.name !== receiptArtifactName(intent) ||
+      String(artifact.workflow_run?.id) !== run.id ||
+      artifact.workflow_run?.head_sha !== run.sha
+    ) {
+      throw new Error('Store write intent does not match this workflow')
+    }
+    return
+  }
+  throw new Error('Store write intent is not visible in the GitHub Actions API')
+}
+
 export function needsWriteIntent(stage, journal) {
   const previous = journal[stage]
   if (stage === 'upload') return canStartUploadAttempt(previous)
@@ -252,6 +295,15 @@ export function needsWriteIntent(stage, journal) {
   if (stage === 'submit' && journal.upload?.status !== 'succeeded') return false
   if (stage === 'notify' && journal.submit?.status !== 'succeeded') return false
   return true
+}
+
+function stageWritePlan(stage, journal, binding, manualUploadDigest) {
+  const manualUpload =
+    stage === 'upload' && confirmManualUpload(manualUploadDigest, binding, journal)
+  if (stage === 'submit' && journal.upload?.reason === 'operator_confirmed_manual_upload') {
+    requireManualUploadDigest(manualUploadDigest, binding)
+  }
+  return { manualUpload, needsIntent: !manualUpload && needsWriteIntent(stage, journal) }
 }
 
 export async function sendStoreNotification({
@@ -381,6 +433,7 @@ async function cli(env, [command, ...args]) {
   if (binding.publisherId !== config.publisherId || binding.extensionId !== config.extensionId) {
     throw new Error('Store destination changed after signing')
   }
+  const manualUploadDigest = env.MANUAL_UPLOAD_CRX_SHA256
   if (command === 'prepare') {
     const journal = await loadReleaseJournal({
       binding,
@@ -388,17 +441,17 @@ async function cli(env, [command, ...args]) {
       token: env.GH_TOKEN,
       currentRun: run
     })
-    const needsIntent = needsWriteIntent(stage, journal)
-    const plan = { stage, binding, run, journal, needsIntent }
+    const writes = stageWritePlan(stage, journal, binding, manualUploadDigest)
+    const plan = { stage, binding, run, journal, ...writes }
     mkdirSync(stateDirectory, { recursive: true })
     if (readdirSync(stateDirectory).length) throw new Error('Stage output directory must be empty')
     const bytes = Buffer.from(json(plan))
     writeFileSync(path.join(stateDirectory, 'plan.json'), bytes)
     const intent = makeReceipt({ binding, stage, phase: 'intent', run })
-    if (needsIntent) writeReceipt(path.join(stateDirectory, 'intent'), intent)
+    if (plan.needsIntent) writeReceipt(path.join(stateDirectory, 'intent'), intent)
     workflowOutputs(
       {
-        needs_intent: needsIntent,
+        needs_intent: plan.needsIntent,
         plan_sha256: digest(bytes),
         intent_artifact_name: receiptArtifactName(intent),
         result_artifact_name: receiptArtifactName(
@@ -424,21 +477,34 @@ async function cli(env, [command, ...args]) {
   if (
     plan.stage !== stage ||
     JSON.stringify(plan.binding) !== JSON.stringify(binding) ||
-    JSON.stringify(plan.run) !== JSON.stringify(run) ||
-    plan.needsIntent !== needsWriteIntent(stage, plan.journal)
+    JSON.stringify(plan.run) !== JSON.stringify(run)
   )
     throw new Error('Store stage plan identity mismatch')
+  const writes = stageWritePlan(stage, plan.journal, binding, manualUploadDigest)
+  if (plan.needsIntent !== writes.needsIntent || plan.manualUpload !== writes.manualUpload) {
+    throw new Error('Store stage plan write authorization changed')
+  }
   if (plan.needsIntent) {
-    const artifactId = requireMatch(env.INTENT_ARTIFACT_ID, ID, 'persisted intent artifact ID')
-    const artifact = await githubRequest(env)(`actions/artifacts/${artifactId}`)
-    const intent = makeReceipt({ binding, stage, phase: 'intent', run })
-    if (
-      artifact.expired ||
-      artifact.name !== receiptArtifactName(intent) ||
-      String(artifact.workflow_run?.id) !== run.id ||
-      artifact.workflow_run?.head_sha !== run.sha
-    ) {
-      throw new Error('Store write intent was not durably recorded by this workflow')
+    try {
+      await verifyWriteIntent({
+        request: githubRequest(env, 'GitHub Actions intent verification'),
+        artifactId: requireMatch(env.INTENT_ARTIFACT_ID, ID, 'persisted intent artifact ID'),
+        binding,
+        stage,
+        run
+      })
+    } catch (error) {
+      writeReceipt(
+        path.join(stateDirectory, 'result'),
+        makeReceipt({
+          binding,
+          stage,
+          phase: 'result',
+          run,
+          result: { status: 'failed', retryable: true, reason: 'intent_verification_failed' }
+        })
+      )
+      throw error
     }
   }
   let result
@@ -466,7 +532,8 @@ async function cli(env, [command, ...args]) {
               crxBytes: crx,
               filename: binding.crxName,
               previousUpload: plan.journal.upload,
-              previousSubmission: plan.journal.submit
+              previousSubmission: plan.journal.submit,
+              manualUpload: plan.manualUpload
             })
           : await submitPackage({
               client,

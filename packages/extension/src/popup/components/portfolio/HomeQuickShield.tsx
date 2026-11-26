@@ -14,7 +14,8 @@ import { ShieldFundsForm } from '@/popup/pages/transactions/ShieldFunds'
 import type { ShieldFundsFormState } from '@/popup/services/shield-funds-route'
 import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { ShieldTokenPicker } from '@/popup/components/tokens/ShieldTokenPicker'
-import { Dialog, DialogContent, DialogTitle } from '@/popup/components/ui/dialog'
+import { TokenSelectorContent } from '@/popup/components/tokens/TokenSelectorDialog'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import { fullHeightTransactionDialogClassName } from '@/popup/components/transaction/TransactionResult'
 import type { MultichainPortfolioPanelProps } from './MultichainPortfolioPanel'
 
@@ -134,16 +135,15 @@ export function useHomeQuickShield({
         onOpenChange={visible => !visible && close()}
       >
         <DialogContent
-          position="bottom"
+          position={formOpen ? 'bottom' : 'fullscreen'}
           overlayClassName="bg-black/55 backdrop-blur-none"
           scroll="body"
-          showCloseButton={!formOpen}
+          showCloseButton={false}
           className={cn(
-            'home-wallet-sheet rounded-t-[20px]',
-            formOpen ? 'gap-0 p-0' : 'gap-3 px-4 pt-5 pb-4',
-            formOpen ? formHeight : 'h-[70dvh]'
+            'gap-0 p-0',
+            formOpen && `home-wallet-sheet rounded-t-[20px] ${formHeight}`
           )}
-          aria-describedby={undefined}
+          {...(formOpen ? { 'aria-describedby': undefined } : {})}
           onEscapeKeyDown={event => {
             if (formState.busy) event.preventDefault()
           }}
@@ -157,17 +157,13 @@ export function useHomeQuickShield({
             trigger.focus()
           }}
         >
-          <DialogTitle
-            asChild={formOpen}
-            className={formOpen ? 'sr-only' : 'min-h-7 pr-10 leading-7'}
-          >
-            {formOpen ? <span>Shield</span> : 'Select asset'}
-          </DialogTitle>
-          {selection && account && (
-            <div
-              className={formOpen ? 'min-h-0 flex-1' : 'min-h-0 overflow-y-auto overscroll-contain'}
-            >
-              {selection.step === 'form' ? (
+          {selection &&
+            account &&
+            (selection.step === 'form' ? (
+              <div className="min-h-0 flex-1">
+                <DialogTitle asChild className="sr-only">
+                  <span>Shield</span>
+                </DialogTitle>
                 <ShieldFundsForm
                   direction="shield"
                   assetId={selection.assetId}
@@ -175,7 +171,10 @@ export function useHomeQuickShield({
                   onStateChange={setFormState}
                   onBack={close}
                 />
-              ) : (
+              </div>
+            ) : (
+              <TokenSelectorContent title="Select asset" onBack={close}>
+                <DialogDescription className="sr-only">Choose an asset</DialogDescription>
                 <ShieldTokenPicker
                   rows={assets.map(item => ({
                     item,
@@ -193,6 +192,10 @@ export function useHomeQuickShield({
                       item.chain.displayName,
                       item.chain.id
                     ),
+                    zcashFundingSource:
+                      item.chain.family === 'zcash' && item.asset.asset.kind === 'native'
+                        ? ('transparent' as const)
+                        : undefined,
                     availableRaw: item.availableRaw,
                     decimals: item.asset.metadata.decimals,
                     valueUsd: item.valueUsd
@@ -201,9 +204,8 @@ export function useHomeQuickShield({
                   balancesHidden={balancesHidden}
                   onSelect={row => selectAsset(row.item)}
                 />
-              )}
-            </div>
-          )}
+              </TokenSelectorContent>
+            ))}
         </DialogContent>
       </Dialog>
     )

@@ -108,6 +108,7 @@ interface SwapInputViewProps {
   topContent?: ReactNode
   hideAccountDetails?: boolean
   addressType: AddressType
+  destinationIsConfidential?: boolean
   destinationAddress?: string
   spendableBalance: string
   availableBalance?: string
@@ -115,6 +116,7 @@ interface SwapInputViewProps {
   recipientError?: string | null
   slippage: number
   networkFee?: string
+  quoteFee?: ReactNode
   isQuoting: boolean
   quoteError?: string | null
   onEnableReceiveNetwork?: () => void
@@ -597,6 +599,7 @@ export function SwapInputView({
   topContent,
   hideAccountDetails = false,
   addressType,
+  destinationIsConfidential = false,
   destinationAddress,
   spendableBalance,
   availableBalance,
@@ -604,6 +607,7 @@ export function SwapInputView({
   recipientError,
   slippage,
   networkFee,
+  quoteFee,
   isQuoting,
   quoteError,
   onEnableReceiveNetwork,
@@ -663,6 +667,23 @@ export function SwapInputView({
   const quoteNotice = getSwapQuoteNotice(quoteError)
   const providerNetworkFeeLabel =
     isZecSource && networkFee !== undefined ? `${formatFeeAmount(networkFee)} ZEC` : null
+  const providerFees =
+    quoteFee || providerNetworkFeeLabel ? (
+      <div className="mt-1.5 space-y-1.5 text-muted">
+        {quoteFee && (
+          <div className="flex justify-between gap-2">
+            <span>Fee</span>
+            <span className="text-right text-foreground">{quoteFee}</span>
+          </div>
+        )}
+        {providerNetworkFeeLabel && (
+          <div className="flex justify-between gap-2">
+            <span>Network fee</span>
+            <span className="text-right text-foreground">{providerNetworkFeeLabel}</span>
+          </div>
+        )}
+      </div>
+    ) : undefined
 
   return (
     <>
@@ -708,6 +729,7 @@ export function SwapInputView({
             fallbackAssetId={tokenOutAssetId}
             fallbackSymbol={tokenOutSymbol}
             zcashFundingSource={isZecDestination ? addressType : undefined}
+            tokenNetworkLabel={destinationIsConfidential ? 'NEAR Confidential' : undefined}
             amount={estimatedOut}
             fiatValue={toFiat}
             accountAddress={hideAccountDetails ? undefined : destinationAddress}
@@ -803,15 +825,7 @@ export function SwapInputView({
                 </button>
               )
             }
-            details={
-              providerNetworkFeeLabel ? (
-                <div className="mt-1.5 flex items-center justify-end gap-2 text-muted">
-                  <span>
-                    Network fee <span className="text-foreground">{providerNetworkFeeLabel}</span>
-                  </span>
-                </div>
-              ) : undefined
-            }
+            details={providerFees}
           />
         )}
 
@@ -1038,13 +1052,7 @@ export function SwapInputView({
                     {formatTokenQuantity(estimatedOut)} {formatSymbol(tokenOut?.symbol)}
                   </span>
                 </div>
-                {providerNetworkFeeLabel && (
-                  <div className="mt-4 flex items-center justify-end gap-2 text-xs text-muted">
-                    <span>
-                      Network fee <span className="text-foreground">{providerNetworkFeeLabel}</span>
-                    </span>
-                  </div>
-                )}
+                {providerFees}
               </div>
             )}
             {providerAlternatives.map(route => (
