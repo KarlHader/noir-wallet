@@ -99,11 +99,13 @@ export function closedCampaignHint(board: BoardView): string {
 }
 
 export function latestEntry(entries: readonly ShieldWinEntry[]): ShieldWinEntry | null {
-  let latest: ShieldWinEntry | null = null
-  for (const entry of entries) {
-    if (latest === null || entry.id > latest.id) latest = entry
-  }
-  return latest
+  return sortedEntries(entries)[0] ?? null
+}
+
+export function sortedEntries(entries: readonly ShieldWinEntry[]): ShieldWinEntry[] {
+  return [...entries].sort(
+    (left, right) => right.shield_completed_at - left.shield_completed_at || right.id - left.id
+  )
 }
 
 export function entryView(entry: ShieldWinEntry | null): EntryViewState {
@@ -137,25 +139,25 @@ export function entryCopy(view: EntryViewState, entry: ShieldWinEntry | null): E
     case 'none':
       return { title: 'Not entered yet', body: 'You have not entered yet.' }
     case 'notwon':
-      return { title: 'Not a winner', body: 'This Shield was not selected.' }
+      return { title: 'Not a winner', body: '' }
     case 'won':
       return {
-        title: 'Prize won',
-        body: 'Claim on this page to a Zcash transparent address.'
+        title: 'Unclaimed',
+        body: 'You won a prize. Claim on this page to a Zcash transparent address.'
       }
     case 'claiming':
-      return { title: 'Claim received', body: 'The payout is being prepared.' }
+      return { title: 'Claiming', body: 'Your claim is being processed.' }
     case 'sending':
-      return { title: 'Sending payout', body: 'The payout is being sent.' }
+      return { title: 'Sending', body: 'Your payout is being sent.' }
     case 'claimed':
       return {
-        title: 'Payout sent',
-        body: 'The payout has been sent to your Zcash transparent address.'
+        title: 'Completed',
+        body: 'Your payout is complete.'
       }
     case 'failed':
       return {
-        title: 'Payout needs support',
-        body: 'This payout needs support before it can be sent.'
+        title: 'Failed',
+        body: 'The payout failed. Contact support for help.'
       }
     default: {
       const unreachable: never = view

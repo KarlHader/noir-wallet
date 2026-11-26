@@ -121,6 +121,29 @@ export async function getEntries(
   return parseEntryPage(data)
 }
 
+export async function getAllEntries(
+  query: Omit<GetEntriesQuery, 'page_size' | 'page_number'>,
+  signal?: AbortSignal,
+  fetcher: typeof fetch = fetch
+): Promise<readonly ShieldWinEntry[]> {
+  const entries: ShieldWinEntry[] = []
+  let pageNumber = 1
+  while (true) {
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+    const page = await getEntries(
+      { ...query, page_size: 100, page_number: pageNumber },
+      signal,
+      fetcher
+    )
+    entries.push(...page.list)
+    if (!page.has_next_page) return entries
+    if (page.page_number !== pageNumber || page.list.length === 0 || entries.length >= page.total) {
+      throw new Error('Shield & Win returned an invalid response.')
+    }
+    pageNumber += 1
+  }
+}
+
 export async function claimReward(
   input: ClaimRewardInput,
   signal?: AbortSignal,

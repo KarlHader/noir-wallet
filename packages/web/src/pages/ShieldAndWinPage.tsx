@@ -2,12 +2,14 @@ import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from
 import {
   ShieldWinApiError,
   claimReward,
+  getAllEntries,
   getCampaigns,
   getEntries,
   selectCampaign,
   type ShieldWinCampaign,
   type ShieldWinEntry
 } from '../shield-and-win/api'
+import { assetLabel, getAssetLabels } from '../shield-and-win/asset-label'
 import {
   clearCachedCampaign,
   readCachedCampaign,
@@ -26,6 +28,7 @@ import {
   entryCopy,
   entryView,
   latestEntry,
+  sortedEntries,
   unclaimedWins,
   type EntryViewState
 } from '../shield-and-win/view'
@@ -97,23 +100,6 @@ function claimCodeMessage(code: number): string {
   }
 }
 
-function rewardStatusLabel(status: ShieldWinEntry['reward_status']): string {
-  switch (status) {
-    case 'UNCLAIMED':
-      return 'Unclaimed'
-    case 'CLAIMING':
-      return 'Claiming'
-    case 'SENDING':
-      return 'Sending'
-    case 'COMPLETED':
-      return 'Completed'
-    case 'FAILED':
-      return 'Failed'
-    default:
-      return ''
-  }
-}
-
 function rewardText(entry: ShieldWinEntry): string {
   return [entry.reward_amount, entry.reward_asset].filter(part => part && part.length > 0).join(' ')
 }
@@ -173,6 +159,81 @@ function entryTone(view: EntryViewState): string {
     default:
       return ''
   }
+}
+
+function completedLabel(timestamp: number): string {
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(timestamp))
+}
+
+function EntryRow({
+  entry,
+  phone,
+  claimBusy,
+  assetLabels,
+  onClaim
+}: {
+  entry: ShieldWinEntry
+  phone: boolean
+  claimBusy: boolean
+  assetLabels: ReadonlyMap<string, string>
+  onClaim: (entry: ShieldWinEntry) => void
+}) {
+  const view = entryView(entry)
+  const copy = entryCopy(view, entry)
+  const chipClass = chipTone(view)
+  return (
+    <li className={`entry-row ${entryTone(view)}`}>
+      <div className="entry-details">
+        <div>
+          <span>Asset</span>
+          <b title={entry.destination_asset}>{assetLabel(entry.destination_asset, assetLabels)}</b>
+        </div>
+        <div>
+          <span>USD value</span>
+          <b>${entry.usd_value}</b>
+        </div>
+        <div>
+          <span>Completed</span>
+          <b>{completedLabel(entry.shield_completed_at)}</b>
+        </div>
+      </div>
+      <div className="entry-result">
+        <div>
+          <span className="entry-k">
+            {view === 'notwon' ? 'Draw result' : 'Reward status'} &nbsp;
+          </span>
+          <span className={chipClass ? `chip ${chipClass}` : 'chip'}>{copy.title}</span>
+          {!!copy.body && <p>{copy.body}</p>}
+          {view === 'won' ? <small>{rewardText(entry)}</small> : null}
+        </div>
+        {view === 'won' && !phone ? (
+          <button
+            type="button"
+            className="btn primary"
+            disabled={claimBusy}
+            onClick={() => onClaim(entry)}
+          >
+            Claim
+          </button>
+        ) : view === 'failed' ? (
+          <SupportLink />
+        ) : null}
+      </div>
+      {view === 'claiming' || view === 'sending' ? (
+        <span className="dots" aria-hidden="true">
+          {Array.from({ length: 8 }, (_, index) => (
+            <i key={index} style={{ '--k': index } as CSSProperties} />
+          ))}
+        </span>
+      ) : null}
+    </li>
+  )
 }
 
 function SupportLink() {
@@ -265,6 +326,32 @@ function RefreshIcon() {
       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
       <path d="M21 3v5h-5" />
     </svg>
+  )
+}
+
+function EntriesRefreshButton({
+  busy,
+  cooling,
+  blocked,
+  onRefresh
+}: {
+  busy: boolean
+  cooling: boolean
+  blocked: boolean
+  onRefresh: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className={busy ? 'entry-refresh is-busy' : 'entry-refresh'}
+      aria-label="Refresh your entries"
+      title={cooling ? 'Available again in one minute' : 'Refresh entries'}
+      aria-busy={busy}
+      disabled={busy || cooling || blocked}
+      onClick={onRefresh}
+    >
+      <RefreshIcon />
+    </button>
   )
 }
 
@@ -394,6 +481,11 @@ export default function ShieldAndWinPage() {
   const [wins, setWins] = useState<readonly ShieldWinEntry[]>([])
   const [entriesReady, setEntriesReady] = useState(false)
   const [entriesError, setEntriesError] = useState(false)
+  const [entryTotal, setEntryTotal] = useState(0)
+  const [allEntriesOpen, setAllEntriesOpen] = useState(false)
+  const [allEntriesLoading, setAllEntriesLoading] = useState(false)
+  const [allEntriesError, setAllEntriesError] = useState(false)
+  const [allEntriesRetry, setAllEntriesRetry] = useState(0)
   const [phone, setPhone] = useState(detectPhone)
   const [now, setNow] = useState(() => Date.now())
   const [rulesOpen, setRulesOpen] = useState(false)
@@ -407,10 +499,10 @@ export default function ShieldAndWinPage() {
   const [claimError, setClaimError] = useState<string | null>(null)
   const [claimBusy, setClaimBusy] = useState(false)
   const [connectBusy, setConnectBusy] = useState(false)
-  const [swap, setSwap] = useState(false)
   const [liveText, setLiveText] = useState('')
   const [entryRefreshBusy, setEntryRefreshBusy] = useState(false)
   const [entryRefreshCooling, setEntryRefreshCooling] = useState(false)
+  const [assetLabels, setAssetLabels] = useState<ReadonlyMap<string, string>>(new Map())
 
   const addressRef = useRef(address)
   const campaignRef = useRef(campaign)
@@ -422,8 +514,11 @@ export default function ShieldAndWinPage() {
   const entryRefreshAbort = useRef<AbortController | null>(null)
   const entryRefreshCooldownTimer = useRef(0)
   const entryRefreshGate = useRef({ busy: false, cooling: false })
+  const allEntriesLoaded = useRef(false)
+  const allEntriesAbort = useRef<AbortController | null>(null)
   const rulesRef = useRef<HTMLDialogElement>(null)
   const claimRef = useRef<HTMLDialogElement>(null)
+  const entriesRef = useRef<HTMLDialogElement>(null)
   const clearConnectedRef = useRef<() => void>(() => undefined)
   addressRef.current = address
   campaignRef.current = campaign
@@ -437,12 +532,18 @@ export default function ShieldAndWinPage() {
     setEntriesReady(false)
     setEntriesError(false)
     setDrawPending(false)
+    setEntryTotal(0)
+    setAllEntriesOpen(false)
+    setAllEntriesLoading(false)
+    setAllEntriesError(false)
+    allEntriesLoaded.current = false
   }
 
   const board = boardView(campaignState === 'ready' ? campaign : null, now)
   const latest = latestEntry(entries)
   const view = entryView(latest)
   const copy = entryCopy(view, latest)
+  const orderedEntries = sortedEntries(entries)
   const claimable = unclaimedWins(mergeEntries(entries, wins))
   const rewardKey = inFlightKey(entries, wins)
   const showEntry =
@@ -462,6 +563,7 @@ export default function ShieldAndWinPage() {
     awaitingDraw.current = false
     addressRef.current = null
     entryRefreshAbort.current?.abort()
+    allEntriesAbort.current?.abort()
     claimAbort.current?.abort()
     claimAbort.current = null
     setAddress(null)
@@ -469,6 +571,14 @@ export default function ShieldAndWinPage() {
     setWins([])
     setEntriesReady(false)
     setEntriesError(false)
+    setEntryTotal(0)
+    setAllEntriesOpen(false)
+    allEntriesLoaded.current = false
+    window.clearTimeout(entryRefreshCooldownTimer.current)
+    entryRefreshGate.current = { busy: false, cooling: false }
+    setEntryRefreshBusy(false)
+    setEntryRefreshCooling(false)
+    setAssetLabels(new Map())
     setDrawPending(false)
     setClaimOpen(false)
     setClaimBusy(false)
@@ -478,20 +588,24 @@ export default function ShieldAndWinPage() {
   }
   clearConnectedRef.current = clearConnectedWallet
 
-  async function loadWalletData(signal: AbortSignal): Promise<WalletSnapshot | null> {
+  async function loadWalletData(signal: AbortSignal, full = false): Promise<WalletSnapshot | null> {
     const walletAddress = addressRef.current
     const current = campaignRef.current
     if (!walletAddress || !current || signal.aborted) return null
     const [entryPage, winPage] = await Promise.all([
-      getEntries(
-        {
-          wallet_address: walletAddress,
-          campaign_id: current.id,
-          page_size: 20,
-          page_number: 1
-        },
-        signal
-      ),
+      full
+        ? getAllEntries({ wallet_address: walletAddress, campaign_id: current.id }, signal).then(
+            list => ({ list, total: list.length })
+          )
+        : getEntries(
+            {
+              wallet_address: walletAddress,
+              campaign_id: current.id,
+              page_size: 20,
+              page_number: 1
+            },
+            signal
+          ),
       getEntries(
         {
           wallet_address: walletAddress,
@@ -502,8 +616,21 @@ export default function ShieldAndWinPage() {
         signal
       )
     ])
-    if (signal.aborted || !mountedRef.current || addressRef.current !== walletAddress) return null
-    setEntries(entryPage.list)
+    if (
+      signal.aborted ||
+      !mountedRef.current ||
+      addressRef.current !== walletAddress ||
+      campaignRef.current?.id !== current.id
+    )
+      return null
+    if (full) allEntriesLoaded.current = true
+    setEntries(previous => {
+      if (full || !allEntriesLoaded.current) return entryPage.list
+      const merged = new Map(previous.map(entry => [entry.id, entry]))
+      for (const entry of entryPage.list) merged.set(entry.id, entry)
+      return [...merged.values()]
+    })
+    setEntryTotal(entryPage.total)
     setWins(winPage.list)
     setEntriesError(false)
     return { entries: entryPage.list, wins: winPage.list }
@@ -594,6 +721,7 @@ export default function ShieldAndWinPage() {
       claimAbort.current?.abort()
       stopEntryPoll()
       entryRefreshAbort.current?.abort()
+      allEntriesAbort.current?.abort()
       window.clearTimeout(entryRefreshCooldownTimer.current)
     }
   }, [])
@@ -781,6 +909,67 @@ export default function ShieldAndWinPage() {
   }, [claimOpen])
 
   useEffect(() => {
+    const dialog = entriesRef.current
+    if (!dialog) return
+    if (allEntriesOpen && !dialog.open) dialog.showModal()
+    if (!allEntriesOpen && dialog.open) dialog.close()
+  }, [allEntriesOpen])
+
+  useEffect(() => {
+    entryRefreshAbort.current?.abort()
+    allEntriesAbort.current?.abort()
+    window.clearTimeout(entryRefreshCooldownTimer.current)
+    entryRefreshGate.current = { busy: false, cooling: false }
+    setEntryRefreshBusy(false)
+    setEntryRefreshCooling(false)
+  }, [scopeKey])
+
+  const hasEntries = entries.length > 0 || wins.length > 0
+  useEffect(() => {
+    setAssetLabels(new Map())
+    if (!address || !entriesReady || !hasEntries) return
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), 8_000)
+    void getAssetLabels(controller.signal).then(
+      labels => {
+        if (!controller.signal.aborted) setAssetLabels(labels)
+      },
+      () => undefined
+    )
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [address, entriesReady, hasEntries])
+
+  useEffect(() => {
+    if (!allEntriesOpen || allEntriesLoaded.current) return
+    const controller = new AbortController()
+    allEntriesAbort.current = controller
+    setAllEntriesLoading(true)
+    setAllEntriesError(false)
+    void loadWalletData(controller.signal, true)
+      .then(
+        snapshot => {
+          if (!controller.signal.aborted && mountedRef.current && !snapshot)
+            setAllEntriesError(true)
+        },
+        error => {
+          if (!controller.signal.aborted && !isAbortError(error) && mountedRef.current) {
+            setAllEntriesError(true)
+          }
+        }
+      )
+      .finally(() => {
+        if (allEntriesAbort.current === controller) allEntriesAbort.current = null
+        if (!controller.signal.aborted && mountedRef.current) setAllEntriesLoading(false)
+      })
+    return () => controller.abort()
+    // loadWalletData reads the current wallet and campaign through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allEntriesOpen, allEntriesRetry, scopeKey])
+
+  useEffect(() => {
     seenView.current = null
   }, [address])
 
@@ -793,9 +982,6 @@ export default function ShieldAndWinPage() {
     if (seenView.current === view) return
     seenView.current = view
     setLiveText(`${copy.title}. ${copy.body}`)
-    setSwap(true)
-    const timer = window.setTimeout(() => setSwap(false), 300)
-    return () => window.clearTimeout(timer)
   }, [address, entriesReady, entriesError, view, copy.title, copy.body])
 
   useEffect(() => {
@@ -836,14 +1022,14 @@ export default function ShieldAndWinPage() {
     const controller = new AbortController()
     entryRefreshAbort.current = controller
     try {
-      await loadWalletData(controller.signal)
+      await loadWalletData(controller.signal, allEntriesLoaded.current || allEntriesOpen)
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error) || !mountedRef.current) return
       setNotice('Your entry could not be loaded.')
       setNoticeWarn(true)
     } finally {
       if (entryRefreshAbort.current === controller) entryRefreshAbort.current = null
-      entryRefreshGate.current.busy = false
+      gate.busy = false
       if (mountedRef.current) setEntryRefreshBusy(false)
     }
   }
@@ -965,7 +1151,7 @@ export default function ShieldAndWinPage() {
       }
       const signature = await signClaim(currentProvider, walletAddress, message)
       if (controller.signal.aborted) return
-      await claimReward(
+      const result = await claimReward(
         {
           entry_id: entryId,
           wallet_address: walletAddress,
@@ -975,8 +1161,18 @@ export default function ShieldAndWinPage() {
         controller.signal
       )
       if (controller.signal.aborted || !mountedRef.current) return
+      setEntries(previous =>
+        previous.map(entry =>
+          entry.id === entryId ? { ...entry, reward_status: result.reward_status } : entry
+        )
+      )
+      setWins(previous =>
+        previous.map(entry =>
+          entry.id === entryId ? { ...entry, reward_status: result.reward_status } : entry
+        )
+      )
       try {
-        await loadWalletData(controller.signal)
+        await loadWalletData(controller.signal, true)
       } catch (error) {
         if (isAbortError(error)) return
       }
@@ -988,7 +1184,7 @@ export default function ShieldAndWinPage() {
         const message = claimCodeMessage(error.code)
         if (error.code === 2004 || error.code === 4004) {
           try {
-            await loadWalletData(controller.signal)
+            await loadWalletData(controller.signal, true)
           } catch (reloadError) {
             if (isAbortError(reloadError)) return
           }
@@ -1004,7 +1200,7 @@ export default function ShieldAndWinPage() {
       if (isTransportError(error)) {
         let movedOn = false
         try {
-          const snapshot = await loadWalletData(controller.signal)
+          const snapshot = await loadWalletData(controller.signal, true)
           const current = snapshot
             ? mergeEntries(snapshot.entries, snapshot.wins).find(entry => entry.id === entryId)
             : undefined
@@ -1092,8 +1288,18 @@ export default function ShieldAndWinPage() {
     !board.canJoin &&
     claimable.length === 0 &&
     (!address || entriesReady)
-  const entryClass = ['entry', entryTone(view), swap ? 'swap' : ''].filter(Boolean).join(' ')
-  const chipClass = chipTone(view)
+  const historicalWins = wins.filter(win => win.campaign_id !== campaign?.id)
+
+  const renderEntry = (entry: ShieldWinEntry) => (
+    <EntryRow
+      key={entry.id}
+      entry={entry}
+      phone={phone}
+      claimBusy={claimBusy}
+      assetLabels={assetLabels}
+      onClaim={item => void openClaim(item)}
+    />
+  )
 
   return (
     <div className="shield-win">
@@ -1242,65 +1448,42 @@ export default function ShieldAndWinPage() {
             </p>
 
             {showEntry ? (
-              <div className={entryClass} aria-label="Your entry">
-                <div className="entry-head">
-                  <span className="entry-k">Your entry</span>
-                  <span className={chipClass ? `chip ${chipClass}` : 'chip'}>{copy.title}</span>
-                  <button
-                    type="button"
-                    className={entryRefreshBusy ? 'entry-refresh is-busy' : 'entry-refresh'}
-                    aria-label="Refresh your entry"
-                    aria-busy={entryRefreshBusy}
-                    disabled={entryRefreshBusy || entryRefreshCooling}
-                    onClick={() => void onRefreshEntry()}
-                  >
-                    <RefreshIcon />
-                  </button>
+              <section className="entries-card" aria-label="Your entries">
+                <div className="entries-head">
+                  <h2>Your entries</h2>
+                  <div className="entries-tools">
+                    <EntriesRefreshButton
+                      busy={entryRefreshBusy}
+                      cooling={entryRefreshCooling}
+                      blocked={allEntriesLoading || claimBusy}
+                      onRefresh={() => void onRefreshEntry()}
+                    />
+                    <button
+                      type="button"
+                      className="entries-all"
+                      onClick={() => setAllEntriesOpen(true)}
+                    >
+                      View all <span aria-hidden="true">→</span>
+                    </button>
+                  </div>
                 </div>
-                <p>{copy.body}</p>
-                {view === 'claiming' || view === 'sending' ? (
-                  <span className="dots" aria-hidden="true">
-                    {Array.from({ length: 8 }, (_, index) => (
-                      <i key={index} style={{ '--k': index } as CSSProperties} />
-                    ))}
-                  </span>
-                ) : null}
-                {view === 'failed' ? (
-                  <p>
-                    <SupportLink />
-                  </p>
-                ) : null}
-              </div>
+                {orderedEntries.length > 0 ? (
+                  <ul className="entries-list">{orderedEntries.slice(0, 3).map(renderEntry)}</ul>
+                ) : (
+                  <div className="entry-empty">
+                    <p>{copy.body}</p>
+                  </div>
+                )}
+              </section>
             ) : null}
             <p className="sr" aria-live="polite">
               {liveText}
             </p>
 
-            {wins.length > 0 ? (
+            {historicalWins.length > 0 ? (
               <section className="wins" aria-label="Your wins">
-                <h2>Your wins</h2>
-                <ul>
-                  {wins.map(win => {
-                    const label = rewardText(win)
-                    const status = rewardStatusLabel(win.reward_status)
-                    return (
-                      <li key={win.id} className="win">
-                        {label ? <b>{label}</b> : null}
-                        {status ? <span className="status">{status}</span> : null}
-                        {win.reward_status === 'UNCLAIMED' && !phone ? (
-                          <button
-                            type="button"
-                            className="btn primary"
-                            onClick={() => void openClaim(win)}
-                          >
-                            Claim
-                          </button>
-                        ) : null}
-                        {win.reward_status === 'FAILED' ? <SupportLink /> : null}
-                      </li>
-                    )
-                  })}
-                </ul>
+                <h2>Earlier wins</h2>
+                <ul className="entries-list">{historicalWins.map(renderEntry)}</ul>
               </section>
             ) : null}
 
@@ -1435,6 +1618,61 @@ export default function ShieldAndWinPage() {
               </li>
             </ul>
           )}
+        </div>
+      </dialog>
+
+      <dialog
+        ref={entriesRef}
+        className="rules entries-dialog"
+        aria-labelledby="entries-title"
+        onClose={() => setAllEntriesOpen(false)}
+        onClick={event => closeOnBackdrop(event, () => setAllEntriesOpen(false))}
+      >
+        <div className="rules-head">
+          <div>
+            <h2 id="entries-title">Your entries</h2>
+            <span className="entries-count">{entryTotal} entries</span>
+          </div>
+          <div className="entries-tools">
+            <EntriesRefreshButton
+              busy={entryRefreshBusy}
+              cooling={entryRefreshCooling}
+              blocked={allEntriesLoading || claimBusy}
+              onRefresh={() => void onRefreshEntry()}
+            />
+            <button
+              type="button"
+              className="x"
+              aria-label="Close"
+              onClick={() => setAllEntriesOpen(false)}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        </div>
+        <div className="rules-scroll">
+          {allEntriesLoading ? (
+            <p className="entries-message" role="status">
+              Loading all entries…
+            </p>
+          ) : null}
+          {allEntriesError ? (
+            <div className="entries-message" role="alert">
+              Could not load all entries.{' '}
+              <button
+                type="button"
+                className="textlink"
+                onClick={() => setAllEntriesRetry(value => value + 1)}
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
+          {orderedEntries.length > 0 ? (
+            <ul className="entries-list">{orderedEntries.map(renderEntry)}</ul>
+          ) : !allEntriesLoading ? (
+            <p className="entries-message">No entries yet.</p>
+          ) : null}
         </div>
       </dialog>
 

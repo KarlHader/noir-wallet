@@ -352,29 +352,158 @@
   color: #ffc04d;
 }
 
-.shield-win .entry {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 8px 12px;
+.shield-win .entries-card,
+.shield-win .wins {
   max-width: 520px;
   margin-top: 22px;
-  padding: 14px 16px;
-  border-radius: 14px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid #2c2c2c;
+  overflow: hidden;
 }
 
-.shield-win .entry.swap {
-  animation: shield-win-in 0.3s ease-out;
-}
-
-.shield-win .entry-head {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+.shield-win .entries-head {
+  display: flex;
   align-items: center;
-  column-gap: 12px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #303033;
+}
+
+.shield-win .entries-head h2,
+.shield-win .wins h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.shield-win .entries-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.shield-win button.entries-all {
+  color: var(--mint);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.shield-win button.entries-all:hover {
+  color: #fff;
+}
+
+.shield-win .entries-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.shield-win .entry-row {
+  min-width: 0;
+  padding: 12px 16px 14px;
+}
+
+.shield-win .entry-row + .entry-row {
+  border-top: 1px solid #303033;
+}
+
+.shield-win .entry-row.is-won,
+.shield-win .entry-row.is-claiming,
+.shield-win .entry-row.is-sending,
+.shield-win .entry-row.is-claimed {
+  background: rgba(255, 204, 0, 0.035);
+}
+
+.shield-win .entry-row.is-failed {
+  background: rgba(255, 192, 77, 0.035);
+}
+
+.shield-win .entry-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shield-win .entry-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.7fr) minmax(0, 1.2fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.shield-win .entry-details div {
+  min-width: 0;
+}
+
+.shield-win .entry-details span,
+.shield-win .entry-details b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shield-win .entry-details span {
+  color: var(--mute);
+  font-size: 11px;
+}
+
+.shield-win .entry-details b {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.shield-win .entry-result {
+  border-top: 1px solid #303033;
+  padding-top: 10px;
+}
+
+.shield-win .entry-result > div {
+  min-width: 0;
+}
+
+.shield-win .entry-result p {
+  color: var(--sub);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.shield-win .entry-result small {
+  color: var(--gold);
+}
+
+.shield-win .entry-result .btn {
+  flex: none;
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.shield-win .entry-empty {
+  padding: 12px 16px;
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.shield-win .entry-row .dots {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.shield-win .entry-row .dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  animation: shield-win-run 1.4s infinite;
+  animation-delay: calc(var(--k) * 120ms);
 }
 
 .shield-win .entry-k {
@@ -383,7 +512,6 @@
 }
 
 .shield-win .entry-refresh {
-  justify-self: end;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -444,93 +572,13 @@
   background: rgba(255, 204, 0, 0.12);
 }
 
-.shield-win .entry p {
-  grid-column: 1 / -1;
-  font-size: 15px;
-  line-height: 1.5;
-  color: var(--sub);
-}
-
-.shield-win .entry p b {
-  color: #fff;
-  font-weight: 500;
-}
-
-.shield-win .entry.is-won,
-.shield-win .entry.is-claiming,
-.shield-win .entry.is-sending,
-.shield-win .entry.is-claimed {
-  border-color: rgba(255, 204, 0, 0.4);
-  background:
-    radial-gradient(120% 140% at 0% 0%, rgba(255, 161, 0, 0.14), transparent 60%),
-    rgba(255, 255, 255, 0.03);
-}
-
-.shield-win .entry.is-failed {
-  border-color: rgba(255, 192, 77, 0.45);
-}
-
-.shield-win .entry .dots {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 6px;
-}
-
-.shield-win .entry .dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.14);
-  animation: shield-win-run 1.4s infinite;
-  animation-delay: calc(var(--k) * 120ms);
-}
-
 .shield-win .wins {
-  max-width: 520px;
   margin-top: 16px;
 }
 
 .shield-win .wins h2 {
-  margin: 0 0 8px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--mute);
-}
-
-.shield-win .wins ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.shield-win .win {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid #2c2c2c;
-}
-
-.shield-win .win b {
-  color: #fff;
-  font-weight: 600;
-}
-
-.shield-win .win .status {
-  margin-right: auto;
-  color: var(--mute-2);
-  font-size: 13px;
-}
-
-.shield-win .win .btn {
-  height: 36px;
-  padding: 0 14px;
-  font-size: 14px;
-  flex: none;
+  padding: 12px 16px;
+  border-bottom: 1px solid #303033;
 }
 
 .shield-win .assure {
@@ -802,6 +850,33 @@
 .shield-win dialog.rules.claim {
   width: min(360px, calc(100% - 32px));
   border-radius: 24px;
+}
+
+.shield-win dialog.rules.entries-dialog {
+  width: min(680px, calc(100% - 32px));
+}
+
+.shield-win .entries-dialog .entries-list {
+  padding: 0 6px 8px;
+}
+
+.shield-win .entries-dialog .entry-row {
+  padding: 14px 16px;
+}
+
+.shield-win dialog.entries-dialog .entry-row::before {
+  display: none;
+}
+
+.shield-win .entries-count {
+  color: var(--mute);
+  font-size: 12px;
+}
+
+.shield-win .entries-message {
+  padding: 16px 22px;
+  color: var(--sub);
+  font-size: 13px;
 }
 
 .shield-win dialog.rules[open] {
@@ -1088,7 +1163,7 @@
     flex-direction: column;
   }
 
-  .shield-win .actions .tip-anchor {
+  .shield-win .actions .noir-tooltip-anchor {
     display: flex;
     width: 100%;
   }
@@ -1117,8 +1192,12 @@
     padding: 14px;
   }
 
-  .shield-win .win {
-    flex-wrap: wrap;
+  .shield-win .entry-details {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  }
+
+  .shield-win .entry-details div:last-child {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1141,8 +1220,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .shield-win .entry .dots i,
-  .shield-win .entry.swap,
+  .shield-win .entry-row .dots i,
   .shield-win .sk,
   .shield-win .reveal,
   .shield-win .btn-spin,

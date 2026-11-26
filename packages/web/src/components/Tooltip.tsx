@@ -1,7 +1,7 @@
 import {
   cloneElement,
-  useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactElement,
@@ -25,7 +25,7 @@ export function Tooltip({ content, side = 'top', variant = 'text', children }: T
   const [open, setOpen] = useState(false)
   const [point, setPoint] = useState<{ top: number; left: number } | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return
     const anchor = anchorRef.current
     if (!anchor) return
@@ -54,11 +54,17 @@ export function Tooltip({ content, side = 'top', variant = 'text', children }: T
   return (
     <span
       ref={anchorRef}
-      className="tip-anchor"
+      className="noir-tooltip-anchor"
       onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onMouseLeave={() => {
+        setOpen(false)
+        setPoint(null)
+      }}
       onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
+      onBlur={() => {
+        setOpen(false)
+        setPoint(null)
+      }}
     >
       {describedBy.length > 0
         ? cloneElement(children, { 'aria-describedby': describedBy })
@@ -68,7 +74,11 @@ export function Tooltip({ content, side = 'top', variant = 'text', children }: T
             <span
               id={tooltipId}
               role="tooltip"
-              className={variant === 'plain' ? 'tip tip-plain' : 'tip tip-text'}
+              className={
+                variant === 'plain'
+                  ? 'noir-tooltip noir-tooltip-plain'
+                  : 'noir-tooltip noir-tooltip-text'
+              }
               data-side={side}
               style={{ left: point.left, top: point.top }}
             >

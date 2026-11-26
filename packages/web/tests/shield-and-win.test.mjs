@@ -4,11 +4,13 @@ import { test } from 'node:test'
 import {
   ShieldWinApiError,
   claimReward,
+  getAllEntries,
   getCampaigns,
   getEntries,
   selectCampaign,
   shieldWinApiBase
 } from '../src/shield-and-win/api.ts'
+import { assetLabel, getAssetLabels } from '../src/shield-and-win/asset-label.ts'
 import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../src/shield-and-win/claim.ts'
 import {
   ENTRY_POLL_INTERVAL_MS,
@@ -22,6 +24,7 @@ import {
   entryCopy,
   entryView,
   latestEntry,
+  sortedEntries,
   unclaimedWins
 } from '../src/shield-and-win/view.ts'
 import {
@@ -109,13 +112,14 @@ test('selectCampaign prefers the first active campaign, then the newest item', (
 test('the board is built from campaign fields and hardcodes only the draw odds', () => {
   for (const name of ['api.ts', 'view.ts', 'claim.ts', 'wallet.ts']) {
     const source = readFileSync(new URL(`../src/shield-and-win/${name}`, import.meta.url), 'utf8')
-    for (const phrase of BANNED) assert.equal(source.includes(phrase), false, `${name} includes ${phrase}`)
+    for (const phrase of BANNED)
+      assert.equal(source.includes(phrase), false, `${name} includes ${phrase}`)
     if (name !== 'view.ts') {
       assert.equal(source.includes(ODDS_LITERAL), false, `${name} includes ${ODDS_LITERAL}`)
     }
     assert.equal(/\bparseFloat\b|\btoFixed\b|\bNumber\(/.test(source), false, name)
   }
-  assert.equal(shieldWinApiBase(), 'https://api.zknoir.com/v1/shield-win')
+  assert.equal(shieldWinApiBase(), 'https://apinoir.refburrow.top/v1/shield-win')
 
   const live = boardView(campaign(), 1_762_600_000 * 1000 - 3661 * 1000)
   assert.equal(live.state, 'live')
@@ -132,8 +136,14 @@ test('the board is built from campaign fields and hardcodes only the draw odds',
   assert.equal(live.minimumValue, '$25.50')
   assert.equal(live.winnerNote, 'Up to 100 winners · 3 so far')
   assert.equal(boardView(campaign({ min_usd_value: '$25.50' }), 0).minimumValue, '$25.50')
-  assert.equal(boardView(campaign({ max_winners: 1, winner_count: 0 }), 0).winnerNote, 'Only one winner')
-  assert.equal(boardView(campaign({ max_winners: 0, winner_count: 4 }), 0).winnerNote, 'No winner cap')
+  assert.equal(
+    boardView(campaign({ max_winners: 1, winner_count: 0 }), 0).winnerNote,
+    'Only one winner'
+  )
+  assert.equal(
+    boardView(campaign({ max_winners: 0, winner_count: 4 }), 0).winnerNote,
+    'No winner cap'
+  )
   assert.equal(deadlineLabel(1_762_600_000), 'Nov 8, 2025')
   assert.equal(deadlineLabel(Number.NaN), '')
   assert.equal(campaignStatusWord('UPCOMING'), 'Soon')
@@ -210,6 +220,14 @@ test('entry views describe the latest result without a draw number or confirmati
 
   const rows = [entry({ id: 4, draw_result: 'NOT_WON' }), entry({ id: 9 }), entry({ id: 2 })]
   assert.equal(latestEntry(rows).id, 9)
+  assert.deepEqual(
+    sortedEntries([
+      entry({ id: 9, shield_completed_at: 100 }),
+      entry({ id: 3, shield_completed_at: 200 }),
+      entry({ id: 7, shield_completed_at: 200 })
+    ]).map(item => item.id),
+    [7, 3, 9]
+  )
   assert.equal(latestEntry([]), null)
   assert.equal(entryView(null), 'none')
   assert.equal(entryView(entry({ id: 77, draw_result: 'NOT_WON' })), 'notwon')
@@ -240,18 +258,31 @@ test('entry views describe the latest result without a draw number or confirmati
   assert.match(notwon.title, /Not a winner/)
 
   const won = entryCopy('won', entry())
+  assert.equal(won.title, 'Unclaimed')
   assert.match(won.body, /Claim on this page to a Zcash transparent address/)
 
-  for (const view of ['claiming', 'sending']) {
-    const copy = entryCopy(view, entry({ reward_status: view === 'claiming' ? 'CLAIMING' : 'SENDING' }))
+  for (const [view, status, title] of [
+    ['claiming', 'CLAIMING', 'Claiming'],
+    ['sending', 'SENDING', 'Sending']
+  ]) {
+    const copy = entryCopy(view, entry({ reward_status: status }))
+    assert.equal(copy.title, title)
     assert.equal(copy.body.includes('of 10'), false)
     assert.equal(/confirmation/i.test(`${copy.title} ${copy.body}`), false)
     assert.equal(/\d/.test(`${copy.title} ${copy.body}`), false)
   }
 
+  const completed = entryCopy('claimed', entry({ reward_status: 'COMPLETED' }))
+  assert.equal(completed.title, 'Completed')
+  assert.match(completed.body, /payout is complete/i)
+
   const failed = entryCopy('failed', entry({ reward_status: 'FAILED' }))
-  assert.match(`${failed.title} ${failed.body}`, /needs support/i)
-  assert.equal(/claim again|try claiming|claim once more/i.test(`${failed.title} ${failed.body}`), false)
+  assert.equal(failed.title, 'Failed')
+  assert.match(failed.body, /contact support/i)
+  assert.equal(
+    /claim again|try claiming|claim once more/i.test(`${failed.title} ${failed.body}`),
+    false
+  )
 })
 
 test('claim text matches the signed bytes and only transparent addresses pass', () => {
@@ -260,7 +291,10 @@ test('claim text matches the signed bytes and only transparent addresses pass', 
     walletAddress: '0xAbC',
     zcashAddress: 't1MixedCASE'
   })
-  assert.equal(message, 'Shield & Win Claim\nEntry ID: 12\nWallet: 0xAbC\nZcash Address: t1MixedCASE')
+  assert.equal(
+    message,
+    'Shield & Win Claim\nEntry ID: 12\nWallet: 0xAbC\nZcash Address: t1MixedCASE'
+  )
   assert.equal(message.endsWith('\n'), false)
   const hex = utf8ToHex(message)
   assert.match(hex, /^0x(?:[0-9a-f]{2})+$/)
@@ -299,7 +333,7 @@ test('code 0 returns decimal strings and HTTP 200 still follows the body code', 
     assert.equal(options.cache, 'no-store')
     return jsonResponse({ code: 0, data: [campaign()] })
   })
-  assert.deepEqual(seen, ['https://api.zknoir.com/v1/shield-win/campaigns'])
+  assert.deepEqual(seen, [`${shieldWinApiBase()}/campaigns`])
   assert.equal(campaigns[0].min_usd_value, '25.50')
   assert.equal(campaigns[0].reward_amount, '0.20')
   assert.equal(typeof campaigns[0].min_usd_value, 'string')
@@ -307,7 +341,7 @@ test('code 0 returns decimal strings and HTTP 200 still follows the body code', 
 
   const input = claimInput()
   const claimed = await claimReward(input, undefined, async (url, options) => {
-    assert.equal(url, 'https://api.zknoir.com/v1/shield-win/claim')
+    assert.equal(url, `${shieldWinApiBase()}/claim`)
     assert.equal(options.method, 'POST')
     assert.equal(options.headers['Content-Type'], 'application/json')
     assert.deepEqual(JSON.parse(options.body), input)
@@ -339,7 +373,8 @@ test('code 0 returns decimal strings and HTTP 200 still follows the body code', 
     )
   }
   await assert.rejects(
-    () => claimReward(input, undefined, async () => jsonResponse({ code: 999, message: 'nope' }, 200)),
+    () =>
+      claimReward(input, undefined, async () => jsonResponse({ code: 999, message: 'nope' }, 200)),
     error => {
       assert.ok(error instanceof ShieldWinApiError)
       assert.equal(error.code, 999)
@@ -351,11 +386,18 @@ test('code 0 returns decimal strings and HTTP 200 still follows the body code', 
 
 test('entries are queried by wallet address and malformed payloads are rejected', async () => {
   const page = await getEntries(
-    { wallet_address: '0xAbC', campaign_id: 3, draw_result: 'WON', page_size: 20, page_number: 1, operation_id: 99 },
+    {
+      wallet_address: '0xAbC',
+      campaign_id: 3,
+      draw_result: 'WON',
+      page_size: 20,
+      page_number: 1,
+      operation_id: 99
+    },
     undefined,
     async (url, options) => {
       const parsed = new URL(url)
-      assert.equal(parsed.origin + parsed.pathname, 'https://api.zknoir.com/v1/shield-win/entries')
+      assert.equal(parsed.origin + parsed.pathname, `${shieldWinApiBase()}/entries`)
       assert.equal(parsed.searchParams.has('operation_id'), false)
       assert.equal(parsed.searchParams.get('wallet_address'), '0xAbC')
       assert.equal(parsed.searchParams.get('campaign_id'), '3')
@@ -373,7 +415,15 @@ test('entries are queried by wallet address and malformed payloads are rejected'
     jsonResponse({
       code: 0,
       data: {
-        list: [entry(), { ...entry({ id: 4, draw_result: 'NOT_WON' }), reward_amount: undefined, reward_asset: undefined, reward_status: undefined }],
+        list: [
+          entry(),
+          {
+            ...entry({ id: 4, draw_result: 'NOT_WON' }),
+            reward_amount: undefined,
+            reward_asset: undefined,
+            reward_status: undefined
+          }
+        ],
         total: 2,
         page_size: 20,
         page_number: 1,
@@ -382,6 +432,7 @@ test('entries are queried by wallet address and malformed payloads are rejected'
     })
   )
   assert.equal(won.list[0].usd_value, '25.50')
+  assert.equal('credited_amount' in won.list[0], false)
   assert.equal(typeof won.list[0].usd_value, 'string')
   assert.equal(won.list[0].operation_id, 98765)
   assert.equal(won.list[1].reward_status, undefined)
@@ -397,10 +448,13 @@ test('entries are queried by wallet address and malformed payloads are rejected'
     async () => jsonResponse({ code: 0, data: { list: [entry({ reward_status: undefined })] } })
   ]
   for (const fetcher of failures) {
-    await assert.rejects(() => getCampaigns(undefined, fetcher), error => {
-      assert.equal(error instanceof ShieldWinApiError, false)
-      return true
-    })
+    await assert.rejects(
+      () => getCampaigns(undefined, fetcher),
+      error => {
+        assert.equal(error instanceof ShieldWinApiError, false)
+        return true
+      }
+    )
   }
   await assert.rejects(
     () => getEntries({ wallet_address: '0xAbC' }, undefined, failures[6]),
@@ -411,10 +465,70 @@ test('entries are queried by wallet address and malformed payloads are rejected'
     }
   )
   await assert.rejects(
-    () => getCampaigns(undefined, async () => {
-      throw new TypeError('Failed to fetch')
-    }),
+    () =>
+      getCampaigns(undefined, async () => {
+        throw new TypeError('Failed to fetch')
+      }),
     { message: 'Shield & Win could not be reached.' }
+  )
+})
+
+test('the token catalog resolves network and symbol by exact asset ID with a safe fallback', async () => {
+  const labels = await getAssetLabels(undefined, async (url, options) => {
+    assert.equal(url, 'https://1click.chaindefuser.com/v0/tokens')
+    assert.equal(options.method, undefined)
+    return jsonResponse([
+      { assetId: 'nep141:usdt.tether-token.near', blockchain: 'near', symbol: 'USDT' },
+      { assetId: 'nep141:eth.omft.near', blockchain: 'eth', symbol: 'ETH' },
+      { assetId: 'bad', blockchain: 'near' }
+    ])
+  })
+  assert.equal(assetLabel('nep141:usdt.tether-token.near', labels), 'NEAR · USDT')
+  assert.equal(assetLabel('nep141:eth.omft.near', labels), 'Ethereum · ETH')
+  assert.equal(assetLabel('nep141:unknown.near', labels), 'nep141:unknown.near')
+  assert.equal(labels.has('bad'), false)
+  await assert.rejects(
+    () => getAssetLabels(undefined, async () => jsonResponse({ list: [] })),
+    /invalid/
+  )
+})
+
+test('all entries loads every page and rejects a stalled pagination response', async () => {
+  const pages = []
+  const list = await getAllEntries(
+    { wallet_address: '0xAbC', campaign_id: 1 },
+    undefined,
+    async url => {
+      const query = new URL(url).searchParams
+      const page = Number(query.get('page_number'))
+      pages.push(page)
+      assert.equal(query.get('page_size'), '100')
+      return jsonResponse({
+        code: 0,
+        data: {
+          list: [entry({ id: page })],
+          total: 2,
+          page_size: 100,
+          page_number: page,
+          has_next_page: page === 1
+        }
+      })
+    }
+  )
+  assert.deepEqual(pages, [1, 2])
+  assert.deepEqual(
+    list.map(item => item.id),
+    [1, 2]
+  )
+  await assert.rejects(
+    () =>
+      getAllEntries({}, undefined, async () =>
+        jsonResponse({
+          code: 0,
+          data: { list: [], total: 2, page_size: 100, page_number: 1, has_next_page: true }
+        })
+      ),
+    /invalid response/
   )
 })
 
@@ -424,9 +538,13 @@ test('cancellation stays an AbortError', async () => {
     controller.signal,
     async (_url, options) =>
       await new Promise((_resolve, reject) => {
-        options.signal.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), {
-          once: true
-        })
+        options.signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Cancelled', 'AbortError')),
+          {
+            once: true
+          }
+        )
       })
   )
   controller.abort()
@@ -439,7 +557,8 @@ test('readTransparentAddress prefers a silent transparent address', async () => 
   const payout = await readTransparentAddress({
     async request(args) {
       calls.push(args.method)
-      if (args.method === 'zcash_getAccounts') return { transparent, shielded: `zs${'1'.repeat(40)}` }
+      if (args.method === 'zcash_getAccounts')
+        return { transparent, shielded: `zs${'1'.repeat(40)}` }
       throw new Error(`unexpected ${args.method}`)
     }
   })
@@ -517,7 +636,10 @@ test('revokeAccount drops only the eth_accounts permission', async () => {
 
 test('the campaign page reserves a skeleton and keeps rules on the interface', () => {
   const page = readFileSync(new URL('../src/pages/ShieldAndWinPage.tsx', import.meta.url), 'utf8')
-  const css = readFileSync(new URL('../src/shield-and-win/shield-and-win.css', import.meta.url), 'utf8')
+  const css = readFileSync(
+    new URL('../src/shield-and-win/shield-and-win.css', import.meta.url),
+    'utf8'
+  )
   assert.match(page, /sk-prize-amt/)
   assert.match(page, /sk-prize-sub/)
   assert.match(page, /Connect to see your entry and result on this page\./)
@@ -526,7 +648,16 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.match(page, /Draws so far/)
   assert.equal(page.includes('sk-title'), false)
   assert.match(page, /aria-label="Disconnect"/)
-  assert.match(page, /aria-label="Refresh your entry"/)
+  assert.match(page, /aria-label="Refresh your entries"/)
+  assert.equal(page.includes('credited_amount'), false)
+  const entryRow = page.slice(
+    page.indexOf('function EntryRow('),
+    page.indexOf('function SupportLink()')
+  )
+  assert.equal(entryRow.includes('<RefreshIcon'), false)
+  assert.match(entryRow, /<span>USD value<\/span>[\s\S]*<span>Completed<\/span>/)
+  assert.match(entryRow, /view === 'notwon' \? 'Draw result' : 'Reward status'/)
+  assert.equal((page.match(/<EntriesRefreshButton/g) ?? []).length, 2)
   assert.match(page, /const ENTRY_REFRESH_COOLDOWN_MS = 60_000/)
   const participate = page.slice(page.indexOf('function onParticipate()'))
   const participateBody = participate.slice(0, participate.indexOf('\n  }'))
@@ -535,7 +666,7 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.match(page, /Claim\s+window/)
   assert.match(page, /Full terms and eligibility restrictions apply/)
   assert.equal(page.includes('Loading the campaign.'), false)
-  assert.equal(page.includes('1 in 4,444'), false)
+  assert.match(page, /1 in 4,444/)
   assert.match(
     page,
     /Every draw is independent\. More draws don’t make the next one more likely to win\./
@@ -553,6 +684,18 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.match(css, /dialog\.rules\[open\]/)
   assert.match(css, /\.rules-scroll/)
   assert.match(css, /overflow:\s*hidden/)
+})
+
+test('the portal tooltip does not inherit the home page tip positioning', () => {
+  const component = readFileSync(new URL('../src/components/Tooltip.tsx', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/components/tooltip.css', import.meta.url), 'utf8')
+  const homeCss = readFileSync(new URL('../src/home/site.css', import.meta.url), 'utf8')
+  assert.match(homeCss, /^\.tip \{/m)
+  assert.match(component, /className="noir-tooltip-anchor"/)
+  assert.match(component, /useLayoutEffect/)
+  assert.match(css, /\.noir-tooltip \{\s*position: fixed;/)
+  assert.match(css, /\.noir-tooltip\[data-side='top'\] \{/)
+  assert.equal(/(^|\n)\.tip(?:\s|[.:[{])/.test(css), false)
 })
 
 test('wallet helpers use the existing EVM provider and keep rejection text', async () => {
@@ -580,11 +723,23 @@ test('wallet helpers use the existing EVM provider and keep rejection text', asy
     assert.deepEqual(calls, [])
     assert.equal(await readAccounts(provider), '0xAbC')
     assert.equal(await requestAccount(provider), '0xAbC')
-    const message = claimMessage({ entryId: 12, walletAddress: '0xAbC', zcashAddress: address('t1', 35) })
+    const message = claimMessage({
+      entryId: 12,
+      walletAddress: '0xAbC',
+      zcashAddress: address('t1', 35)
+    })
     assert.equal(await signClaim(provider, '0xAbC', message), `0x${'aa'.repeat(65)}`)
     assert.deepEqual(calls[2], { method: 'personal_sign', params: [utf8ToHex(message), '0xAbC'] })
-    for (const method of ['wallet_openCampaign', 'wallet_getCampaignStatus', 'shield_transfer', 'zcash_getAddresses']) {
-      assert.equal(calls.some(args => args.method === method), false)
+    for (const method of [
+      'wallet_openCampaign',
+      'wallet_getCampaignStatus',
+      'shield_transfer',
+      'zcash_getAddresses'
+    ]) {
+      assert.equal(
+        calls.some(args => args.method === method),
+        false
+      )
     }
   } finally {
     if (previous === undefined) delete globalThis.noirwallet
@@ -604,7 +759,15 @@ test('wallet helpers use the existing EVM provider and keep rejection text', asy
   assert.deepEqual(seen, ['0xAbC', null])
   assert.equal(provider.removed.listener, provider.listener)
   let listened = false
-  subscribeAccounts({ request: async () => [], on() { listened = true } }, () => {})()
+  subscribeAccounts(
+    {
+      request: async () => [],
+      on() {
+        listened = true
+      }
+    },
+    () => {}
+  )()
   assert.equal(listened, false)
 
   const keystone = 'Keystone EVM signing is available only from the Noir Wallet transaction screen.'
@@ -615,7 +778,8 @@ test('wallet helpers use the existing EVM provider and keep rejection text', asy
   )
   const signature = `0x${'ab'.repeat(65)}`
   assert.equal(walletErrorMessage({ message: signature }).includes(signature), false)
-  const seed = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+  const seed =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
   assert.equal(walletErrorMessage(new Error(seed)).includes('abandon'), false)
 })
 

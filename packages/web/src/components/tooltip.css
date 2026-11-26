@@ -1,23 +1,23 @@
-.tip-anchor {
+.noir-tooltip-anchor {
   display: inline-flex;
   max-width: 100%;
 }
 
-.tip {
+.noir-tooltip {
   position: fixed;
   z-index: 80;
   pointer-events: none;
 }
 
-.tip[data-side='top'] {
+.noir-tooltip[data-side='top'] {
   transform: translate(-50%, calc(-100% - 10px));
 }
 
-.tip[data-side='bottom'] {
+.noir-tooltip[data-side='bottom'] {
   transform: translate(-50%, 10px);
 }
 
-.tip-text {
+.noir-tooltip-text {
   width: max-content;
   max-width: min(280px, calc(100vw - 24px));
   padding: 8px 12px;
@@ -33,7 +33,7 @@
   white-space: normal;
 }
 
-.tip-plain img {
+.noir-tooltip-plain img {
   display: block;
   width: min(280px, calc(100vw - 24px));
   height: auto;
