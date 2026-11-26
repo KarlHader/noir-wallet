@@ -320,7 +320,11 @@ function RulesCopy({
           We count the USD value credited after network, bridge and protocol fees. Smaller transfers
           can&apos;t be added together.
         </li>
-        <li>Each eligible transfer gets one automatic draw as soon as it&apos;s credited.</li>
+        <li>
+          Each eligible transfer gets one automatic draw as soon as it&apos;s credited. at{' '}
+          <strong>1 in 4,444</strong> (about 0.0225%). That doesn&apos;t mean someone wins every
+          4,444 draws.
+        </li>
         <li>
           {campaign.max_winners === 0 ? (
             <>
@@ -351,10 +355,8 @@ function RulesCopy({
           draws again.
         </li>
         <li>
-          The winner claims on this page to a Zcash transparent address. Mainnet addresses start
-          with t1 and testnet addresses start with tm. Shielded and unified addresses are rejected,
-          and the address cannot be changed after you submit. The prize is <b>{prize}</b>. Claim
-          window <Tbc />.
+          The winner claims to a Zcash transparent address in Noir Wallet. We pay the network fee,
+          so the full {prize} ZEC arrives. Claim window <Tbc />.
         </li>
         <li>
           We never ask for your seed phrase or keys, and never publish your balances, addresses or
