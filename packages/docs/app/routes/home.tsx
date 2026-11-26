@@ -10,10 +10,9 @@ import {
   LockKeyhole,
   Package,
   ShieldCheck,
-  Sparkles,
   WalletCards
 } from 'lucide-react'
-import { baseOptions } from '@/lib/layout.shared'
+import { baseOptions, chromeWebStoreUrl } from '@/lib/layout.shared'
 
 export const meta: MetaFunction = () => [
   { title: 'Noir Wallet Docs — Private Zcash Wallet' },
@@ -37,7 +36,6 @@ const destinations = [
       'Install the Chrome extension, create a wallet, and make your first private Zcash transaction.',
     href: '/get-started',
     icon: Chrome,
-    accent: 'cyan',
     label: 'Start here'
   },
   {
@@ -46,7 +44,6 @@ const destinations = [
       'Learn addresses, shielded funds, swaps, lending, dApp connections, and account security.',
     href: '/wallet-guide/install-and-setup',
     icon: WalletCards,
-    accent: 'violet',
     label: 'Wallet guide'
   },
   {
@@ -55,7 +52,6 @@ const destinations = [
       'Connect your dApp, query accounts and balances, and request private Zcash transactions.',
     href: '/noir-sdk-integration',
     icon: Code2,
-    accent: 'green',
     label: 'Developer docs'
   }
 ]
@@ -66,14 +62,9 @@ export default function HomePage() {
       <main className="portal">
         <section className="hero-shell">
           <div className="hero-grid" aria-hidden="true" />
-          <div className="hero-glow hero-glow-primary" aria-hidden="true" />
-          <div className="hero-glow hero-glow-secondary" aria-hidden="true" />
 
           <div className="hero-copy">
-            <div className="eyebrow">
-              <Sparkles aria-hidden="true" />
-              Private by design. Open to build on.
-            </div>
+            <div className="eyebrow">Private by design. Open to build on.</div>
             <h1>
               Your guide to the
               <span> private Zcash economy.</span>
@@ -136,11 +127,7 @@ export default function HomePage() {
             {destinations.map(destination => {
               const Icon = destination.icon
               return (
-                <Link
-                  className={`destination-card accent-${destination.accent}`}
-                  to={destination.href}
-                  key={destination.href}
-                >
+                <Link className="destination-card" to={destination.href} key={destination.href}>
                   <span className="card-label">{destination.label}</span>
                   <span className="card-icon">
                     <Icon aria-hidden="true" />
@@ -157,11 +144,7 @@ export default function HomePage() {
         </section>
 
         <section className="quick-links" aria-label="Quick links">
-          <a
-            href="https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn"
-            target="_blank"
-            rel="noreferrer"
-          >
+          <a href={chromeWebStoreUrl} target="_blank" rel="noreferrer">
             <Chrome aria-hidden="true" />
             <span>
               <strong>Chrome Web Store</strong>
