@@ -30,6 +30,9 @@ export default defineConfig({
             `/beta/versions/  ${releasesUrl}  302`,
             `/beta            ${releasesUrl}  302`,
             `/beta/           ${releasesUrl}  302`,
+            // The campaign page moved; App.tsx does the same in the browser (dev server)
+            '/shield-and-win  /campaign  302',
+            '/shield-and-win/ /campaign  302',
             '/*               /index.html  200',
             ''
           ].join('\n')
