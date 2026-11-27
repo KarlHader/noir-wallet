@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { MAX_BALLOONS, popOrder, prizeBoard } from '../src/shield-and-win/prizes.ts'
+import { MAX_PRIZE_BOXES, prizeBoard } from '../src/shield-and-win/prizes.ts'
 
 function campaign(overrides = {}) {
   return {
@@ -20,54 +20,47 @@ function campaign(overrides = {}) {
   }
 }
 
-const poppedAt = board => board.popped.flatMap((popped, index) => (popped ? [index] : []))
+const openAt = board => board.opened.flatMap((open, index) => (open ? [index] : []))
 
-test('every prize is a balloon, and none is popped before anyone wins', () => {
+test('every prize is a sealed box until someone wins, and the first one is in the draw', () => {
   const board = prizeBoard(campaign())
   assert.deepEqual(
-    { total: board.total, taken: board.taken, left: board.left },
-    { total: 10, taken: 0, left: 10 }
+    { total: board.total, taken: board.taken, left: board.left, current: board.current },
+    { total: 10, taken: 0, left: 10, current: 0 }
   )
-  assert.deepEqual(poppedAt(board), [])
+  assert.deepEqual(openAt(board), [])
 })
 
-test('each win pops one more balloon and keeps the earlier ones popped', () => {
-  let earlier = []
-  for (let won = 1; won <= 10; won++) {
+test('wins open the boxes from the left, and the next box moves into the draw', () => {
+  for (let won = 1; won < 10; won++) {
     const board = prizeBoard(campaign({ winner_count: won }))
-    const now = poppedAt(board)
-    assert.equal(now.length, won)
+    assert.deepEqual(
+      openAt(board),
+      Array.from({ length: won }, (_, index) => index)
+    )
     assert.equal(board.left, 10 - won)
-    assert.ok(earlier.every(index => now.includes(index)))
-    earlier = now
+    assert.equal(board.current, won)
   }
 })
 
-test('wins land around the board, the same way on every visit', () => {
-  const first = poppedAt(prizeBoard(campaign({ winner_count: 3 })))
-  assert.deepEqual(poppedAt(prizeBoard(campaign({ winner_count: 3 }))), first)
-  // No two of the first three hits sit side by side (5 balloons a row)
-  for (const a of first)
-    for (const b of first) {
-      if (a === b) continue
-      const apart = Math.abs((a % 5) - (b % 5)) + Math.abs(Math.floor(a / 5) - Math.floor(b / 5))
-      assert.ok(apart > 1, `${a} and ${b} are neighbours`)
-    }
-  const order = popOrder(10, 1)
-  assert.deepEqual(
-    [...order].sort((a, b) => a - b),
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  )
+test('no box is in the draw once the campaign is sold out, over or not started', () => {
+  const soldOut = prizeBoard(campaign({ status: 'SOLD_OUT', winner_count: 7 }))
+  assert.equal(soldOut.left, 0)
+  assert.equal(soldOut.current, null)
+  const lastPrize = prizeBoard(campaign({ winner_count: 10 }))
+  assert.equal(lastPrize.current, null)
+  const ended = prizeBoard(campaign({ status: 'ENDED', winner_count: 4 }))
+  assert.deepEqual({ taken: ended.taken, current: ended.current }, { taken: 4, current: null })
+  assert.equal(prizeBoard(campaign({ status: 'UPCOMING' })).current, null)
 })
 
-test('a sold-out campaign has every balloon popped, and odd counts are kept in range', () => {
-  assert.equal(prizeBoard(campaign({ status: 'SOLD_OUT', winner_count: 7 })).left, 0)
+test('odd winner counts are kept in range', () => {
   assert.equal(prizeBoard(campaign({ winner_count: 25 })).taken, 10)
   assert.equal(prizeBoard(campaign({ winner_count: -2 })).taken, 0)
 })
 
-test('uncapped or very large prize pools keep the coin view', () => {
+test('uncapped or larger prize pools keep the coin view', () => {
   assert.equal(prizeBoard(campaign({ max_winners: 0 })), null)
-  assert.equal(prizeBoard(campaign({ max_winners: MAX_BALLOONS + 1 })), null)
+  assert.equal(prizeBoard(campaign({ max_winners: MAX_PRIZE_BOXES + 1 })), null)
   assert.equal(prizeBoard(campaign({ max_winners: 1 })).total, 1)
 })

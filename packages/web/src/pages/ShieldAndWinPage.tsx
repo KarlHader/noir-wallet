@@ -16,7 +16,7 @@ import {
   writeCachedCampaign
 } from '../shield-and-win/campaign-cache'
 import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../shield-and-win/claim'
-import { PrizeBalloons } from '../shield-and-win/PrizeBalloons'
+import { PrizeBar, PrizeBoxes, PrizesLeft } from '../shield-and-win/PrizeBoxes'
 import { prizeBoard } from '../shield-and-win/prizes'
 import {
   CAMPAIGN_POLL_INTERVAL_MS,
@@ -1823,10 +1823,28 @@ export default function ShieldAndWinPage() {
           </div>
 
           <aside
-            className="min-w-0 min-[1040px]:max-w-[560px] pt-12"
+            className={
+              prizeReady && prizes
+                ? 'min-w-0 min-[1040px]:max-w-[560px] pt-2'
+                : 'min-w-0 min-[1040px]:max-w-[560px] pt-12'
+            }
             aria-label="Campaign progress"
           >
+            {prizeReady && prizes ? (
+              <PrizeBoxes
+                board={prizes}
+                amount={board.prizeAmount}
+                stage={
+                  board.state === 'live'
+                    ? 'live'
+                    : board.state === 'upcoming'
+                      ? 'upcoming'
+                      : 'ended'
+                }
+              />
+            ) : null}
             <div className="relative min-w-0 rounded-3xl border border-[rgba(61,255,190,0.3)] bg-[linear-gradient(180deg,rgba(20,22,30,0.94),rgba(13,14,20,0.97))] p-[clamp(22px,2.4vw,32px)] shadow-[0_0_0_4px_rgba(61,255,190,0.04),0_30px_80px_rgba(0,0,0,0.5)] w-full max-[760px]:px-[18px] max-[760px]:py-5">
+              {prizeReady && prizes ? <PrizeBar board={prizes} /> : null}
               <div className="flex items-center justify-between gap-3 text-[15px] text-[#a7a9ad]">
                 {campaignState === 'loading' ? (
                   <>
@@ -1851,7 +1869,13 @@ export default function ShieldAndWinPage() {
                       />
                       <span>{board.pill}</span>
                     </span>
-                    {board.winnerNote && !prizes ? (
+                    {prizeReady && prizes ? (
+                      <PrizesLeft
+                        board={prizes}
+                        amount={board.prizeAmount}
+                        asset={board.prizeAsset}
+                      />
+                    ) : board.winnerNote ? (
                       <span className="max-[760px]:hidden">{board.winnerNote}</span>
                     ) : null}
                   </>
@@ -1865,20 +1889,7 @@ export default function ShieldAndWinPage() {
                     <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2.5 h-[calc(clamp(15px,1.2vw,18px)*1.55)] w-[240px] max-w-full rounded-lg" />
                   </div>
                 </div>
-              ) : prizeReady && prizes ? (
-                <PrizeBalloons
-                  board={prizes}
-                  amount={board.prizeAmount}
-                  asset={board.prizeAsset}
-                  stage={
-                    board.state === 'live'
-                      ? 'live'
-                      : board.state === 'upcoming'
-                        ? 'upcoming'
-                        : 'ended'
-                  }
-                />
-              ) : prizeReady ? (
+              ) : prizeReady && prizes ? null : prizeReady ? (
                 <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
                   <img
                     className="aspect-square h-auto w-[clamp(64px,6.5vw,96px)]"
