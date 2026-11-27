@@ -1576,6 +1576,14 @@
   :where(:root[data-page='home']) body {
     padding-bottom: 64px;
   }
+  /* The support chat would sit on the band, and Zendesk Messaging ignores its offset settings
+     (lib/zendesk.ts), so lift its launcher and the greeting beside it by the band's height. Its
+     elements have no classes: the launcher has a fixed id and the greeting is its fixed sibling.
+     Only pages with the band (the home page) are affected. */
+  :root:has(.band) iframe#launcher,
+  :root:has(.band) div:has(> iframe#launcher) > div[style*='position: fixed'] {
+    translate: 0 -64px;
+  }
   .band > span:first-child {
     font-size: 16px;
   }
