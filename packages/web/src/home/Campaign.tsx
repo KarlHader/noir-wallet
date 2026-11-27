@@ -2,8 +2,9 @@
  * Shield & Win campaign entry on the home page, per the design mock ("Go Private, Win …"). The
  * prize, minimum and dates come from the campaign API, the same data the campaign page shows.
  * Desktop: a countdown ticket in the bottom-right corner (clear of the support chat) opens a
- * sheet with the three steps and Join Now. Phones cannot run the extension, so on every visit a
- * sheet sends people to a computer and offers the site link to copy.
+ * sheet with the three steps and Join Now; its close button hides it until the next visit.
+ * Phones cannot run the extension, so on every visit a sheet sends people to a computer and
+ * offers the site link to copy.
  */
 import './campaign.css'
 import { type MouseEvent, useEffect, useRef, useState } from 'react'
@@ -137,6 +138,8 @@ export default function Campaign({ inert }: { inert: boolean }) {
   const sheetRef = useRef<HTMLDialogElement>(null)
   const phoneRef = useRef<HTMLDialogElement>(null)
   const [copied, setCopied] = useState(false)
+  // Desktop: the ticket can be closed for this page view; every visit shows it again
+  const [ticketClosed, setTicketClosed] = useState(false)
   const phase = campaign ? phaseOf(campaign, now) : null
   const running = phase !== null
 
@@ -166,14 +169,26 @@ export default function Campaign({ inert }: { inert: boolean }) {
 
   return (
     <div className="cw" inert={inert}>
-      <button
-        type="button"
-        className="cw-badge"
-        aria-label={`${title}. ${when}. See how to enter.`}
-        onClick={() => openSheet(sheetRef.current)}
-      >
-        <Ticket title={title} when={when} {...time} />
-      </button>
+      {ticketClosed ? null : (
+        <div className="cw-float">
+          <button
+            type="button"
+            className="cw-badge"
+            aria-label={`${title}. ${when}. See how to enter.`}
+            onClick={() => openSheet(sheetRef.current)}
+          >
+            <Ticket title={title} when={when} {...time} />
+          </button>
+          <button
+            type="button"
+            className="cw-dismiss"
+            aria-label={`Hide the ${title} ticket`}
+            onClick={() => setTicketClosed(true)}
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+      )}
 
       <dialog
         ref={sheetRef}

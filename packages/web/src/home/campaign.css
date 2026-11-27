@@ -69,12 +69,19 @@
 }
 
 /* ---------- Desktop: the ticket floats bottom right, clear of the support chat button and its
-   greeting bubble ---------- */
-.cw-badge {
+   greeting bubble, with a close button on its top-right corner ---------- */
+.cw-float {
   position: fixed;
   z-index: 59;
   right: 16px;
   bottom: 140px;
+  transition: transform 0.2s ease;
+}
+.cw-float:hover {
+  transform: translateY(-3px);
+}
+.cw-badge {
+  display: block;
   padding: 0;
   border: 0;
   background: none;
@@ -82,15 +89,43 @@
   font: inherit;
   cursor: pointer;
   filter: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.6));
-  transition: transform 0.2s ease;
-}
-.cw-badge:hover {
-  transform: translateY(-3px);
 }
 .cw-badge:focus-visible {
   outline: 2px solid var(--mint);
   outline-offset: 4px;
   border-radius: 10px;
+}
+.cw-dismiss {
+  position: absolute;
+  top: -12px;
+  right: -8px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background: rgba(10, 10, 10, 0.88);
+  color: #fff;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+.cw-dismiss:hover {
+  background: #262626;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+.cw-dismiss:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+.cw-dismiss svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.4;
 }
 
 /* ---------- Sheets: native dialogs pinned to the bottom, over a dimmed, blurred page. A window
@@ -364,7 +399,7 @@
 /* Phones never see the floating ticket (they get their own sheet); narrower desktops get a
    stacked sheet */
 @media (max-width: 759px) {
-  .cw-badge {
+  .cw-float {
     display: none;
   }
 }
@@ -396,7 +431,7 @@
   .cw-phone[open] {
     animation: none;
   }
-  .cw-badge {
+  .cw-float {
     transition: none;
   }
 }
