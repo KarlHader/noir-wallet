@@ -1,4 +1,5 @@
-const BASE58_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]+$/
+/** Mainnet t1/t3 and testnet tm/t2, matching the wallet's transparent address schemes. */
+const TRANSPARENT_ZCASH_ADDRESS = /^(?:t1|t3|tm|t2)[a-km-zA-HJ-NP-Z1-9]{33}$/
 
 export interface ClaimMessageInput {
   readonly entryId: number
@@ -27,14 +28,11 @@ export function utf8ToHex(text: string): string {
 }
 
 /**
- * Outer whitespace is ignored. Mainnet transparent addresses start with t1
- * and testnet transparent addresses start with tm.
+ * Outer whitespace is ignored. Accepts mainnet and testnet transparent
+ * addresses because this page does not know the wallet's network mode.
+ * P2PKH is t1/tm and P2SH is t3/t2; each prefix is followed by 33 Base58 characters.
  */
 export function isTransparentZcashAddress(value: string): boolean {
   if (typeof value !== 'string') return false
-  const address = value.trim()
-  if (address.length < 26 || address.length > 40) return false
-  if (!address.startsWith('t1') && !address.startsWith('tm')) return false
-  if (/\s/.test(address)) return false
-  return BASE58_ADDRESS.test(address)
+  return TRANSPARENT_ZCASH_ADDRESS.test(value.trim())
 }

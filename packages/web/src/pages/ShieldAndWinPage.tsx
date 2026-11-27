@@ -15,7 +15,7 @@ import {
   readCachedCampaign,
   writeCachedCampaign
 } from '../shield-and-win/campaign-cache'
-import { claimMessage, utf8ToHex } from '../shield-and-win/claim'
+import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../shield-and-win/claim'
 import {
   CAMPAIGN_POLL_INTERVAL_MS,
   ENTRY_POLL_INTERVAL_MS,
@@ -35,10 +35,13 @@ import {
   type EntryViewState
 } from '../shield-and-win/view'
 import {
+  connectTransparentAddress,
   detectNoirWallet,
   detectZcashProvider,
+  disconnectZcash,
+  isUnsupportedZcashAccount,
   readAccounts,
-  readTransparentAddress,
+  readConnectedTransparentAddress,
   requestAccount,
   revokeAccount,
   signClaim,
@@ -63,6 +66,10 @@ const CONNECT_HINT = 'Connect to see your entry and result on this page.'
 const TOOLBAR_HINT = 'Open Noir Wallet from the Chrome toolbar.'
 const PUBLIC_TOOLTIP_SRC = '/shield-and-win/select-public-tooltip.png'
 const ENTRY_REFRESH_COOLDOWN_MS = 60_000
+const NO_ZCASH_ADDRESS = 'This account has no Zcash address. Enter a transparent address.'
+const INVALID_TRANSPARENT_ADDRESS = 'Enter a valid transparent Zcash address.'
+
+type PayoutSource = 'wallet' | 'manual'
 
 type CampaignState = 'loading' | 'ready' | 'error'
 type WalletSnapshot = { entries: readonly ShieldWinEntry[]; wins: readonly ShieldWinEntry[] }
@@ -371,16 +378,47 @@ function AssureIcon() {
   )
 }
 
-function DisconnectIcon() {
+function selectedTransparentAddress(
+  source: PayoutSource,
+  walletAddress: string | null,
+  manualAddress: string
+): string | null {
+  if (source === 'wallet') return walletAddress
+  const trimmed = manualAddress.trim()
+  return isTransparentZcashAddress(trimmed) ? trimmed : null
+}
+
+function destinationRowClass(selected: boolean): string {
+  return selected
+    ? 'flex w-full cursor-pointer items-center gap-2.5 rounded-xl border border-[rgba(61,255,190,0.45)] bg-[#1c1c22] px-3 py-2.5 text-left'
+    : 'flex w-full cursor-pointer items-center gap-2.5 rounded-xl border border-[#3a3a3a] bg-[#1c1c22] px-3 py-2.5 text-left'
+}
+
+function DestinationRadio({ selected }: { selected: boolean }) {
+  return (
+    <span
+      className={
+        selected
+          ? "grid size-[18px] shrink-0 place-items-center rounded-full border border-[#3dffbe] after:size-[9px] after:rounded-full after:bg-[#3dffbe] after:content-['']"
+          : 'size-[18px] shrink-0 rounded-full border border-[#6a6a6a]'
+      }
+      aria-hidden="true"
+    />
+  )
+}
+
+function DisconnectIcon(props: { className?: string; color?: string }) {
+  const { className, color } = props
   return (
     <svg
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
+      stroke={color || 'currentColor'}
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      className={className}
     >
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
       <path d="M16 17l5-5-5-5" />
@@ -579,7 +617,9 @@ export default function ShieldAndWinPage() {
   const [copied, setCopied] = useState(false)
   const [claimOpen, setClaimOpen] = useState(false)
   const [claimTarget, setClaimTarget] = useState<ShieldWinEntry | null>(null)
-  const [payoutAddress, setPayoutAddress] = useState<string | null>(null)
+  const [walletPayout, setWalletPayout] = useState<string | null>(null)
+  const [manualPayout, setManualPayout] = useState('')
+  const [payoutSource, setPayoutSource] = useState<PayoutSource>('wallet')
   const [claimError, setClaimError] = useState<string | null>(null)
   const [claimBusy, setClaimBusy] = useState(false)
   const [connectBusy, setConnectBusy] = useState(false)
@@ -602,6 +642,8 @@ export default function ShieldAndWinPage() {
   const allEntriesAbort = useRef<AbortController | null>(null)
   const rulesRef = useRef<HTMLDialogElement>(null)
   const claimRef = useRef<HTMLDialogElement>(null)
+  const manualPayoutRef = useRef<HTMLInputElement>(null)
+  const claimSession = useRef(0)
   const entriesRef = useRef<HTMLDialogElement>(null)
   const clearConnectedRef = useRef<() => void>(() => undefined)
   addressRef.current = address
@@ -667,8 +709,11 @@ export default function ShieldAndWinPage() {
     setClaimOpen(false)
     setClaimBusy(false)
     setClaimTarget(null)
-    setPayoutAddress(null)
+    setWalletPayout(null)
+    setManualPayout('')
+    setPayoutSource('wallet')
     setClaimError(null)
+    claimSession.current += 1
   }
   clearConnectedRef.current = clearConnectedWallet
 
@@ -1136,6 +1181,14 @@ export default function ShieldAndWinPage() {
     if (!current || !addressRef.current) return
     try {
       await revokeAccount(current)
+      const zcash = detectZcashProvider()
+      if (zcash) {
+        try {
+          await disconnectZcash(zcash)
+        } catch {
+          // Zcash may already be disconnected. Logout still completes.
+        }
+      }
       if (!mountedRef.current) return
       clearConnectedWallet()
     } catch (error) {
@@ -1196,34 +1249,84 @@ export default function ShieldAndWinPage() {
       setNoticeWarn(true)
       return
     }
-    setClaimBusy(true)
+    const session = ++claimSession.current
     setNotice(null)
     setNoticeWarn(false)
+    setClaimTarget(entry)
+    setWalletPayout(null)
+    setManualPayout('')
+    setPayoutSource('wallet')
+    setClaimError(null)
+    setClaimOpen(true)
+    const zcash = detectZcashProvider()
+    if (!zcash) return
     try {
-      let walletAddress = addressRef.current
-      if (!walletAddress) {
-        walletAddress = await requestAccount(current)
-        if (!mountedRef.current) return
-        setAddress(walletAddress)
+      const payout = await readConnectedTransparentAddress(zcash)
+      if (!mountedRef.current || claimSession.current !== session || !payout) return
+      setWalletPayout(payout)
+    } catch {
+      // A silent lookup must not block the dialog.
+    }
+  }
+
+  function selectManualPayout() {
+    setPayoutSource('manual')
+    manualPayoutRef.current?.focus()
+  }
+
+  async function onDisconnectZcash() {
+    if (claimBusy) return
+    const session = ++claimSession.current
+    const zcash = detectZcashProvider()
+    if (zcash) {
+      try {
+        await disconnectZcash(zcash)
+      } catch (error) {
+        if (!mountedRef.current || claimSession.current !== session || isAbortError(error)) return
+        setClaimError(walletErrorMessage(error))
+        return
       }
-      const zcash = detectZcashProvider()
-      if (!zcash) throw new Error('Noir Wallet did not return a transparent address.')
-      const payout = await readTransparentAddress(zcash)
-      if (!mountedRef.current) return
-      setClaimTarget(entry)
-      setPayoutAddress(payout)
-      setClaimError(null)
-      setClaimOpen(true)
+    }
+    if (!mountedRef.current || claimSession.current !== session) return
+    setClaimError(null)
+    setWalletPayout(null)
+  }
+
+  async function onConnectZcash() {
+    if (claimBusy) return
+    const zcash = detectZcashProvider()
+    if (!zcash) {
+      setClaimError('Install Noir Wallet in desktop Chrome, then refresh this page.')
+      return
+    }
+    const session = claimSession.current
+    setClaimBusy(true)
+    setClaimError(null)
+    try {
+      const payout = await connectTransparentAddress(zcash)
+      if (!mountedRef.current || claimSession.current !== session) return
+      setWalletPayout(payout)
+      setPayoutSource('wallet')
     } catch (error) {
-      if (!mountedRef.current || isAbortError(error)) return
-      setNotice(walletErrorMessage(error))
-      setNoticeWarn(true)
+      if (!mountedRef.current || claimSession.current !== session || isAbortError(error)) return
+      if (isUnsupportedZcashAccount(error)) {
+        setPayoutSource('manual')
+        setClaimError(NO_ZCASH_ADDRESS)
+        window.setTimeout(() => {
+          if (mountedRef.current && claimSession.current === session) {
+            manualPayoutRef.current?.focus()
+          }
+        }, 0)
+        return
+      }
+      setClaimError(walletErrorMessage(error))
     } finally {
-      if (mountedRef.current) setClaimBusy(false)
+      if (mountedRef.current && claimSession.current === session) setClaimBusy(false)
     }
   }
 
   async function onSign() {
+    const payoutAddress = selectedTransparentAddress(payoutSource, walletPayout, manualPayout)
     if (claimBusy || !claimTarget || !payoutAddress) return
     const currentProvider = detectNoirWallet()
     const walletAddress = addressRef.current
@@ -1382,6 +1485,14 @@ export default function ShieldAndWinPage() {
     claimable.length === 0 &&
     (!address || entriesReady)
   const historicalWins = wins.filter(win => win.campaign_id !== campaign?.id)
+  const manualTrimmed = manualPayout.trim()
+  const manualInvalid =
+    payoutSource === 'manual' &&
+    manualTrimmed.length > 0 &&
+    !isTransparentZcashAddress(manualTrimmed)
+  const walletSelected = payoutSource === 'wallet'
+  const selectedPayout = selectedTransparentAddress(payoutSource, walletPayout, manualPayout)
+  const claimAction = selectedPayout ? 'claim' : walletSelected ? 'connect' : 'enter'
 
   const renderEntry = (entry: ShieldWinEntry) => (
     <EntryRow
@@ -1436,7 +1547,7 @@ export default function ShieldAndWinPage() {
                 aria-label="Disconnect"
                 onClick={() => void onDisconnect()}
               >
-                <DisconnectIcon />
+                <DisconnectIcon color="#FF5E59" />
               </button>
             </>
           ) : null}
@@ -1467,7 +1578,7 @@ export default function ShieldAndWinPage() {
             {showFixedWin ? (
               <h1
                 id="title"
-                className="mt-[clamp(18px,3vh,28px)] text-[clamp(48px,min(6vw,10vh),96px)] leading-[1.02] font-semibold tracking-[-0.035em] max-[760px]:text-[clamp(44px,13vw,60px)]"
+                className="pt-[clamp(18px,3vh,28px)] text-[clamp(48px,min(6vw,10vh),96px)] leading-[1.02] font-semibold tracking-[-0.035em] max-[760px]:text-[clamp(44px,13vw,60px)]"
               >
                 Go Shield,
                 <br />
@@ -1492,21 +1603,21 @@ export default function ShieldAndWinPage() {
             ) : (
               <h1
                 id="title"
-                className="mt-[clamp(18px,3vh,28px)] text-[clamp(48px,min(6vw,10vh),96px)] leading-[1.02] font-semibold tracking-[-0.035em] max-[760px]:text-[clamp(44px,13vw,60px)]"
+                className="pt-[clamp(18px,3vh,28px)] text-[clamp(48px,min(6vw,10vh),96px)] leading-[1.02] font-semibold tracking-[-0.035em] max-[760px]:text-[clamp(44px,13vw,60px)]"
               >
                 Shield & Win
               </h1>
             )}
             {campaignState === 'error' ? (
-              <p className="mt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
+              <p className="pt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
                 {CAMPAIGN_ERROR}
               </p>
             ) : campaignState === 'ready' && !prizeReady ? (
-              <p className="mt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
+              <p className="pt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
                 No campaign is available right now.
               </p>
             ) : (
-              <p className="mt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
+              <p className="pt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
                 {'Try a shield transfer'}
                 {board.minimumValue ? (
                   <span
@@ -1523,7 +1634,7 @@ export default function ShieldAndWinPage() {
               </p>
             )}
 
-            <div className="mt-[clamp(24px,4vh,40px)] flex min-h-14 flex-wrap gap-3.5 max-[760px]:flex-col">
+            <div className="mt-[clamp(18px,3vh,30px)] flex min-h-14 flex-wrap gap-3.5 max-[760px]:flex-col">
               {actionsReady && phone ? (
                 <button
                   type="button"
@@ -1621,8 +1732,8 @@ export default function ShieldAndWinPage() {
             <p
               className={
                 hintWarn
-                  ? 'mt-3 max-w-[36em] text-sm leading-normal text-[#ffc04d] empty:hidden'
-                  : 'mt-3 max-w-[36em] text-sm leading-normal text-[#8b8e93] empty:hidden'
+                  ? 'pt-3 max-w-[36em] text-sm leading-normal text-[#ffc04d] empty:hidden'
+                  : 'pt-3 max-w-[36em] text-sm leading-normal text-[#8b8e93] empty:hidden'
               }
               aria-live="polite"
             >
@@ -1892,7 +2003,7 @@ export default function ShieldAndWinPage() {
         {orderedEntries.length > 0 ? <EntryColumns dialog /> : null}
         <div className="min-h-0 flex-1 overflow-auto pt-1 pb-2 px-1">
           {allEntriesLoading ? (
-            <p className="px-[22px] py-4 text-[13px] text-[#bcbcc8]" role="status">
+            <p className="text-center px-[22px] py-4 text-[12px] text-[#bcbcc8]" role="status">
               Loading all entries…
             </p>
           ) : null}
@@ -1930,12 +2041,23 @@ export default function ShieldAndWinPage() {
           if (!claimBusy) closeOnBackdrop(event, () => setClaimOpen(false))
         }}
       >
-        {claimTarget && payoutAddress ? (
+        {claimTarget ? (
           <>
             <div className="flex shrink-0 items-center justify-between gap-3 bg-[#141414] px-5 pt-[22px] pb-1">
               <h2 id="claim-title" className="text-xl font-semibold text-white">
                 Claim {rewardText(claimTarget)}
               </h2>
+              {walletPayout ? (
+                <button
+                  type="button"
+                  className="grid size-7 text-[#FF5E59] shrink-0 cursor-pointer place-items-center rounded-lg border border-[#333] bg-transparent text-white enabled:hover:border-[#666] disabled:cursor-default disabled:opacity-[0.55] [&_svg]:size-[18px]"
+                  aria-label="Disconnect Zcash"
+                  disabled={claimBusy}
+                  onClick={() => void onDisconnectZcash()}
+                >
+                  <DisconnectIcon className="scale-75" color="#FF5E59" />
+                </button>
+              ) : null}
             </div>
             <div className="min-h-0 flex-1 overflow-auto">
               <div className="px-5 pt-2 pb-5">
@@ -1949,25 +2071,74 @@ export default function ShieldAndWinPage() {
                   </small>
                 </div>
                 <p className="mx-0.5 pb-1.5 text-xs leading-[1.4] text-[#8b8e93]">Send to</p>
-                <div className="flex w-full items-center gap-2.5 rounded-xl border border-[rgba(61,255,190,0.45)] bg-[#1c1c22] px-3 py-2.5">
-                  <img
-                    className="size-[30px] shrink-0 rounded-lg"
-                    src="/shield-and-win/zec.svg"
-                    alt=""
-                  />
-                  <div className="min-w-0 flex-1">
-                    <b className="block font-medium text-white">Zcash · Transparent</b>
-                    <small
-                      className="block truncate text-xs leading-[1.4] text-[#8b8e93]"
-                      aria-label={payoutAddress}
-                    >
-                      {shortPayoutAddress(payoutAddress)}
-                    </small>
+                <div className="flex flex-col gap-2" role="radiogroup" aria-label="Send to">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={walletSelected}
+                    className={destinationRowClass(walletSelected)}
+                    onClick={() => setPayoutSource('wallet')}
+                  >
+                    <img
+                      className="size-[30px] shrink-0 rounded-lg"
+                      src="/shield-and-win/zec.svg"
+                      alt=""
+                    />
+                    <span className="min-w-0 flex-1">
+                      <b className="block font-medium text-white">Zcash · Transparent</b>
+                      <small
+                        className="block truncate text-xs leading-[1.4] text-[#8b8e93]"
+                        aria-label={walletPayout ?? undefined}
+                      >
+                        {walletPayout ? shortPayoutAddress(walletPayout) : 'Not connected'}
+                      </small>
+                    </span>
+                    <DestinationRadio selected={walletSelected} />
+                  </button>
+                  <div
+                    role="radio"
+                    aria-checked={!walletSelected}
+                    tabIndex={0}
+                    className={destinationRowClass(!walletSelected)}
+                    onClick={selectManualPayout}
+                    onKeyDown={event => {
+                      if (event.target !== event.currentTarget) return
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      selectManualPayout()
+                    }}
+                  >
+                    <img
+                      className="size-[30px] shrink-0 rounded-lg"
+                      src="/shield-and-win/zec.svg"
+                      alt=""
+                    />
+                    <span className="min-w-0 flex-1">
+                      <b className="block font-medium text-white">Transparent address</b>
+                      <input
+                        ref={manualPayoutRef}
+                        value={manualPayout}
+                        readOnly={walletSelected}
+                        aria-label="Transparent address"
+                        aria-invalid={manualInvalid}
+                        aria-describedby={manualInvalid ? 'shield-win-address-error' : undefined}
+                        placeholder="t1..."
+                        className="mt-0.5 w-full bg-transparent text-xs leading-[1.4] text-white outline-none placeholder:text-[#5d5d66] read-only:cursor-pointer read-only:text-[#8b8e93]"
+                        onChange={event => setManualPayout(event.target.value)}
+                        onFocus={() => setPayoutSource('manual')}
+                        onClick={event => event.stopPropagation()}
+                      />
+                    </span>
+                    <DestinationRadio selected={!walletSelected} />
                   </div>
-                  <span
-                    className="grid size-[18px] shrink-0 place-items-center rounded-full border border-[#3dffbe] after:size-[9px] after:rounded-full after:bg-[#3dffbe] after:content-['']"
-                    aria-hidden="true"
-                  />
+                  {manualInvalid ? (
+                    <p
+                      id="shield-win-address-error"
+                      className="mx-0.5 text-xs leading-normal text-[#ffc04d]"
+                    >
+                      {INVALID_TRANSPARENT_ADDRESS}
+                    </p>
+                  ) : null}
                 </div>
                 <p className="mx-0.5 pt-3 pb-3.5 text-xs leading-normal text-[#a7a9ad]">
                   We ask for this address only because you won, and we don&apos;t link it to your
@@ -1985,11 +2156,27 @@ export default function ShieldAndWinPage() {
                   <button
                     type="button"
                     className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-[46px] w-full rounded-[10px] px-7 text-[15px] border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
-                    disabled={claimBusy || !address}
-                    aria-describedby={claimError ? 'shield-win-claim-error' : undefined}
-                    onClick={() => void onSign()}
+                    disabled={
+                      claimBusy || claimAction === 'enter' || (claimAction === 'claim' && !address)
+                    }
+                    aria-describedby={
+                      [
+                        manualInvalid ? 'shield-win-address-error' : null,
+                        claimError ? 'shield-win-claim-error' : null
+                      ]
+                        .filter(Boolean)
+                        .join(' ') || undefined
+                    }
+                    onClick={() => {
+                      if (claimAction === 'connect') void onConnectZcash()
+                      else void onSign()
+                    }}
                   >
-                    Claim {rewardText(claimTarget)}
+                    {claimAction === 'connect'
+                      ? 'Connect Noir Wallet'
+                      : claimAction === 'enter'
+                        ? 'Enter address'
+                        : `Claim ${rewardText(claimTarget)}`}
                   </button>
                   <button
                     type="button"

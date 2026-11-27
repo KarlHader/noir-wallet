@@ -29,10 +29,13 @@ import {
   unclaimedWins
 } from '../src/shield-and-win/view.ts'
 import {
+  connectTransparentAddress,
   detectNoirWallet,
   detectZcashProvider,
+  disconnectZcash,
+  isUnsupportedZcashAccount,
   readAccounts,
-  readTransparentAddress,
+  readConnectedTransparentAddress,
   requestAccount,
   revokeAccount,
   signClaim,
@@ -316,17 +319,19 @@ test('claim text matches the signed bytes and only transparent addresses pass', 
 
   assert.equal(isTransparentZcashAddress(address('t1', 35)), true)
   assert.equal(isTransparentZcashAddress(address('tm', 35)), true)
-  assert.equal(isTransparentZcashAddress(`  ${address('t1', 26)}  `), true)
-  assert.equal(isTransparentZcashAddress(address('t1', 40)), true)
+  assert.equal(isTransparentZcashAddress(address('t3', 35)), true)
+  assert.equal(isTransparentZcashAddress(address('t2', 35)), true)
+  assert.equal(isTransparentZcashAddress(`  ${address('t1', 35)}  `), true)
   for (const value of [
     '',
     '   ',
+    address('t1', 26),
+    address('t1', 40),
     address('t1', 25),
     address('t1', 41),
-    address('t3', 35),
-    address('t2', 35),
     address('zs', 35),
     `u${'1'.repeat(34)}`,
+    `tex1${'q'.repeat(20)}`,
     `${address('t1', 20)} ${'1'.repeat(14)}`,
     address('t1', 34) + '0',
     address('tm', 34) + 'O',
@@ -650,7 +655,9 @@ test('missing catalog icons are filled from the Rhea chain list', async () => {
     undefined,
     async url => {
       if (url.startsWith('https://api.rhea.finance/')) throw new Error('offline')
-      return jsonResponse([{ assetId: 'nep141:base-usdc.omft.near', blockchain: 'base', symbol: 'USDC' }])
+      return jsonResponse([
+        { assetId: 'nep141:base-usdc.omft.near', blockchain: 'base', symbol: 'USDC' }
+      ])
     },
     ['nep141:base-usdc.omft.near']
   )
@@ -716,10 +723,10 @@ test('cancellation stays an AbortError', async () => {
   await assert.rejects(pending, { name: 'AbortError' })
 })
 
-test('readTransparentAddress prefers a silent transparent address', async () => {
+test('readConnectedTransparentAddress stays silent', async () => {
   const transparent = address('t1', 35)
   const calls = []
-  const payout = await readTransparentAddress({
+  const payout = await readConnectedTransparentAddress({
     async request(args) {
       calls.push(args.method)
       if (args.method === 'zcash_getAccounts')
@@ -729,47 +736,72 @@ test('readTransparentAddress prefers a silent transparent address', async () => 
   })
   assert.equal(payout, transparent)
   assert.deepEqual(calls, ['zcash_getAccounts'])
+
+  const missing = []
+  assert.equal(
+    await readConnectedTransparentAddress({
+      async request(args) {
+        missing.push(args.method)
+        return null
+      }
+    }),
+    null
+  )
+  assert.equal(
+    await readConnectedTransparentAddress({
+      async request(args) {
+        missing.push(args.method)
+        return { transparent: `zs${'1'.repeat(40)}` }
+      }
+    }),
+    null
+  )
+  assert.deepEqual(missing, ['zcash_getAccounts', 'zcash_getAccounts'])
 })
 
-test('readTransparentAddress requests access when no Zcash account is connected', async () => {
+test('connectTransparentAddress asks once and rejects an unusable address', async () => {
   const transparent = `  ${address('tm', 35)}  `
   const calls = []
-  const payout = await readTransparentAddress({
+  const payout = await connectTransparentAddress({
     async request(args) {
       calls.push(args.method)
-      if (args.method === 'zcash_getAccounts') return null
       if (args.method === 'zcash_requestAccounts') return { transparent }
       throw new Error(`unexpected ${args.method}`)
     }
   })
   assert.equal(payout, transparent.trim())
-  assert.deepEqual(calls, ['zcash_getAccounts', 'zcash_requestAccounts'])
-})
-
-test('readTransparentAddress rejects an unusable address without asking again', async () => {
-  const calls = []
-  await assert.rejects(
-    () =>
-      readTransparentAddress({
-        async request(args) {
-          calls.push(args.method)
-          return { transparent: `zs${'1'.repeat(40)}` }
-        }
-      }),
-    /transparent address/
-  )
-  assert.deepEqual(calls, ['zcash_getAccounts'])
+  assert.deepEqual(calls, ['zcash_requestAccounts'])
 
   await assert.rejects(
     () =>
-      readTransparentAddress({
-        async request(args) {
-          if (args.method === 'zcash_getAccounts') return null
+      connectTransparentAddress({
+        async request() {
           return { transparent: 'not-an-address' }
         }
       }),
     /transparent address/
   )
+  const unsupported = new Error('No authorized Zcash account available')
+  assert.equal(isUnsupportedZcashAccount(unsupported), true)
+  assert.equal(
+    isUnsupportedZcashAccount(new Error('Noir Wallet did not return a transparent address.')),
+    true
+  )
+  assert.equal(
+    isUnsupportedZcashAccount(Object.assign(new Error('rejected'), { code: 4001 })),
+    false
+  )
+})
+
+test('disconnectZcash revokes only the Zcash provider session', async () => {
+  const calls = []
+  await disconnectZcash({
+    async request(args) {
+      calls.push(args)
+      return null
+    }
+  })
+  assert.deepEqual(calls, [{ method: 'zcash_disconnect', params: [] }])
 })
 
 test('detectZcashProvider reads the Zcash provider separately from the EVM provider', () => {
@@ -856,11 +888,16 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.equal(page.includes('nep141:'), false)
   assert.equal(page.includes('$10'), false)
   assert.equal(page.includes('1 ZEC'), false)
-  assert.equal(page.includes('<input'), false)
-  assert.equal(page.includes('name="zcash-address"'), false)
-  assert.match(page, /readTransparentAddress/)
+  assert.match(page, /aria-label="Transparent address"/)
+  assert.match(page, /readConnectedTransparentAddress/)
+  assert.match(page, /connectTransparentAddress/)
+  assert.match(page, /disconnectZcash/)
   assert.match(page, /Zcash · Transparent/)
-  assert.match(page, /Claim \{rewardText\(claimTarget\)\}/)
+  assert.match(page, /Not connected/)
+  assert.match(page, /Connect Noir Wallet/)
+  assert.match(page, /Enter address/)
+  assert.match(page, /Claim \$\{rewardText\(claimTarget\)\}/)
+  assert.match(page, /aria-label="Disconnect Zcash"/)
   assert.match(page, /w-\[min\(360px,calc\(100%-32px\)\)\]/)
   assert.match(page, /open:flex/)
   assert.match(page, /overflow-auto/)

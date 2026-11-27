@@ -20,6 +20,7 @@ declare global {
 
 const REJECTION_MESSAGE = 'The request was rejected in Noir Wallet.'
 const MISSING_TRANSPARENT_ADDRESS = 'Noir Wallet did not return a transparent address.'
+const NO_ZCASH_ACCOUNT = 'No authorized Zcash account available'
 const SECRET_MATERIAL = /0x[0-9a-fA-F]{64,}|[0-9a-fA-F]{128,}/
 
 export function detectNoirWallet(): NoirEthereumProvider | null {
@@ -33,17 +34,31 @@ export function detectZcashProvider(): NoirEthereumProvider | null {
 }
 
 /**
- * Read the connected account's transparent payout address.
- * A silent lookup stays quiet when this site is already authorized.
- * No account prompts once; an unusable address does not prompt again.
+ * Read a transparent address only when this site is already authorized.
+ * A missing provider result and an unusable address both stay quiet.
  */
-export async function readTransparentAddress(provider: NoirEthereumProvider): Promise<string> {
+export async function readConnectedTransparentAddress(
+  provider: NoirEthereumProvider
+): Promise<string | null> {
   const silent = transparentFrom(await provider.request({ method: 'zcash_getAccounts' }))
-  if (silent.status === 'ok') return silent.address
-  if (silent.status === 'invalid') throw new Error(MISSING_TRANSPARENT_ADDRESS)
+  return silent.status === 'ok' ? silent.address : null
+}
+
+/** Ask the wallet for a transparent payout address. Does not fall back to a prompt retry. */
+export async function connectTransparentAddress(provider: NoirEthereumProvider): Promise<string> {
   const connected = transparentFrom(await provider.request({ method: 'zcash_requestAccounts' }))
   if (connected.status === 'ok') return connected.address
   throw new Error(MISSING_TRANSPARENT_ADDRESS)
+}
+
+export async function disconnectZcash(provider: NoirEthereumProvider): Promise<void> {
+  await provider.request({ method: 'zcash_disconnect', params: [] })
+}
+
+/** True when the active account cannot provide a Zcash transparent address. */
+export function isUnsupportedZcashAccount(error: unknown): boolean {
+  const message = readMessage(error)
+  return message === NO_ZCASH_ACCOUNT || message === MISSING_TRANSPARENT_ADDRESS
 }
 
 export async function readAccounts(provider: NoirEthereumProvider): Promise<string | null> {
