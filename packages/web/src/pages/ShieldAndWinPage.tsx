@@ -16,6 +16,8 @@ import {
   writeCachedCampaign
 } from '../shield-and-win/campaign-cache'
 import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../shield-and-win/claim'
+import { PrizeBalloons } from '../shield-and-win/PrizeBalloons'
+import { prizeBoard } from '../shield-and-win/prizes'
 import {
   CAMPAIGN_POLL_INTERVAL_MS,
   ENTRIES_LIST_POLL_INTERVAL_MS,
@@ -1473,6 +1475,8 @@ export default function ShieldAndWinPage() {
 
   const actionsReady = phone || (walletReady && (!provider || accountReady))
   const prizeReady = Boolean(board.prizeAmount && board.prizeAsset)
+  // One balloon per prize; campaigns without a small fixed number of prizes keep the coin view
+  const prizes = campaignState === 'ready' && campaign ? prizeBoard(campaign) : null
   const showFixedWin = campaignState === 'loading' || prizeReady
   const accountPending = !walletReady || Boolean(provider && !accountReady)
   const connectLoading = accountPending || connectBusy
@@ -1630,7 +1634,7 @@ export default function ShieldAndWinPage() {
               </p>
             ) : (
               <p className="pt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
-                {'Try a shield transfer'}
+                {'Shield'}
                 {board.minimumValue ? (
                   <span
                     className={
@@ -1639,10 +1643,10 @@ export default function ShieldAndWinPage() {
                         : undefined
                     }
                   >
-                    {` (min ${board.minimumValue})`}
+                    {` min ${board.minimumValue}`}
                   </span>
                 ) : null}
-                {' and get an instant draw.'}
+                {' to get a chance for an instant draw.'}
               </p>
             )}
 
@@ -1847,7 +1851,7 @@ export default function ShieldAndWinPage() {
                       />
                       <span>{board.pill}</span>
                     </span>
-                    {board.winnerNote ? (
+                    {board.winnerNote && !prizes ? (
                       <span className="max-[760px]:hidden">{board.winnerNote}</span>
                     ) : null}
                   </>
@@ -1861,6 +1865,19 @@ export default function ShieldAndWinPage() {
                     <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2.5 h-[calc(clamp(15px,1.2vw,18px)*1.55)] w-[240px] max-w-full rounded-lg" />
                   </div>
                 </div>
+              ) : prizeReady && prizes ? (
+                <PrizeBalloons
+                  board={prizes}
+                  amount={board.prizeAmount}
+                  asset={board.prizeAsset}
+                  stage={
+                    board.state === 'live'
+                      ? 'live'
+                      : board.state === 'upcoming'
+                        ? 'upcoming'
+                        : 'ended'
+                  }
+                />
               ) : prizeReady ? (
                 <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
                   <img

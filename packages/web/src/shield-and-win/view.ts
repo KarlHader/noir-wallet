@@ -190,7 +190,8 @@ function stateOf(campaign: ShieldWinCampaign): BoardState {
 function pillOf(campaign: ShieldWinCampaign): string {
   switch (campaign.status) {
     case 'ACTIVE':
-      return 'Live · Prize unclaimed'
+      // With several prizes the prize board shows how many are left
+      return campaign.max_winners === 1 ? 'Live · Prize unclaimed' : 'Live'
     case 'SOLD_OUT':
       return 'Ended · Prize won'
     case 'ENDED':

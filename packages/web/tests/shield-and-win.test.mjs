@@ -129,7 +129,11 @@ test('the board is built from campaign fields and hardcodes only the draw odds',
 
   const live = boardView(campaign(), 1_762_600_000 * 1000 - 3661 * 1000)
   assert.equal(live.state, 'live')
-  assert.equal(live.pill, 'Live · Prize unclaimed')
+  assert.equal(live.pill, 'Live')
+  assert.equal(
+    boardView(campaign({ max_winners: 1 }), 1_762_600_000 * 1000 - 3661 * 1000).pill,
+    'Live · Prize unclaimed'
+  )
   assert.equal(live.canJoin, true)
   assert.equal(live.prizeAmount, '0.20')
   assert.equal(live.prizeAsset, 'ZEC')
@@ -148,10 +152,8 @@ test('the board is built from campaign fields and hardcodes only the draw odds',
     '0 ZEC remaining in the prize pool'
   )
   assert.equal(
-    boardView(
-      campaign({ max_winners: 50000, winner_count: 12, reward_amount: '0.0001' }),
-      0
-    ).prizePoolLabel,
+    boardView(campaign({ max_winners: 50000, winner_count: 12, reward_amount: '0.0001' }), 0)
+      .prizePoolLabel,
     '4.9988 ZEC remaining in the prize pool'
   )
   assert.equal(
