@@ -51,7 +51,7 @@ import {
 } from '../src/shield-and-win/campaign-cache.ts'
 
 const BANNED = ['$10', '1 ZEC', 'shielded']
-const ODDS_LITERAL = '1 / 4444'
+const ODDS_LITERAL = '1 / 444'
 
 function campaign(overrides = {}) {
   return {
@@ -133,7 +133,31 @@ test('the board is built from campaign fields and hardcodes only the draw odds',
   assert.equal(live.canJoin, true)
   assert.equal(live.prizeAmount, '0.20')
   assert.equal(live.prizeAsset, 'ZEC')
-  assert.equal(live.prizeDestination, 'Sent to your Zcash transparent address')
+  assert.equal(live.prizePoolLabel, '19.4 ZEC remaining in the prize pool')
+  assert.equal(
+    boardView(campaign({ max_winners: 0, winner_count: 4 }), 0).prizePoolLabel,
+    'No cap on the prize pool'
+  )
+  assert.equal(
+    boardView(campaign({ max_winners: 100, winner_count: 100 }), 0).prizePoolLabel,
+    '0 ZEC remaining in the prize pool'
+  )
+  assert.equal(
+    boardView(campaign({ max_winners: 3, winner_count: 9, reward_amount: '0.0001' }), 0)
+      .prizePoolLabel,
+    '0 ZEC remaining in the prize pool'
+  )
+  assert.equal(
+    boardView(
+      campaign({ max_winners: 50000, winner_count: 12, reward_amount: '0.0001' }),
+      0
+    ).prizePoolLabel,
+    '4.9988 ZEC remaining in the prize pool'
+  )
+  assert.equal(
+    boardView(campaign({ reward_amount: 'nope', reward_asset: 'ZEC' }), 0).prizePoolLabel,
+    ''
+  )
   assert.equal(live.drawsSoFar, 57)
   assert.equal(live.endsLabel, 'Ends in')
   assert.equal(live.endsValue, '01:01:01')
@@ -207,7 +231,7 @@ test('the board is built from campaign fields and hardcodes only the draw odds',
   assert.equal(missing.canJoin, false)
   assert.equal(missing.prizeAmount, '')
   assert.equal(missing.prizeAsset, '')
-  assert.equal(missing.prizeDestination, '')
+  assert.equal(missing.prizePoolLabel, '')
   assert.equal(missing.drawsSoFar, null)
   assert.equal(missing.endsLabel, 'Status')
   assert.equal(missing.endsValue, 'Unavailable')
@@ -273,7 +297,7 @@ test('entry views describe the latest result without a draw number or confirmati
   const notwon = entryCopy('notwon', entry({ id: 77, operation_id: 4444, draw_result: 'NOT_WON' }))
   assert.equal(`${notwon.title} ${notwon.body}`.includes('77'), false)
   assert.equal(`${notwon.title} ${notwon.body}`.includes('4444'), false)
-  assert.match(notwon.title, /Not a winner/)
+  assert.equal(notwon.title, 'No win')
 
   const won = entryCopy('won', entry())
   assert.equal(won.title, 'Unclaimed')
@@ -292,7 +316,7 @@ test('entry views describe the latest result without a draw number or confirmati
 
   const completed = entryCopy('claimed', entry({ reward_status: 'COMPLETED' }))
   assert.equal(completed.title, 'Completed')
-  assert.match(completed.body, /payout is complete/i)
+  assert.equal(completed.body, '')
 
   const failed = entryCopy('failed', entry({ reward_status: 'FAILED' }))
   assert.equal(failed.title, 'Failed')
@@ -954,7 +978,7 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.match(connectAction, /walletLinkOpen/)
   assert.equal(connectAction.includes('canJoin'), false)
   assert.match(page, /Open Noir Wallet from the Chrome toolbar\./)
-  assert.match(page, /At least \$\{minimumValue\} must land after fees\./)
+  assert.equal(page.includes('must land after fees'), false)
   assert.match(page, /Draws so far/)
   assert.equal(page.includes('sk-title'), false)
   assert.match(page, /aria-label="Disconnect"/)
@@ -986,11 +1010,19 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.match(page, /NEAR Confidential/)
   assert.match(page, /zknoir\.com reserves the right to interpret this campaign\./)
   assert.equal(page.includes('Loading the campaign.'), false)
-  assert.match(page, /1 in 4,444/)
-  assert.match(
-    page,
-    /Every draw is independent\. More draws don’t make the next one more likely to win\./
-  )
+  assert.match(page, /it&apos;s credited, at/)
+  assert.match(page, /1 in 444/)
+  assert.match(page, /about 0\.225%/)
+  assert.equal(page.includes('so the full {prize} arrives.'), true)
+  assert.equal(page.includes('4,444'), false)
+  assert.equal(page.includes('{prize} ZEC'), false)
+  assert.equal(page.includes('Every draw is independent'), false)
+  assert.equal(page.includes('Fees may apply.'), false)
+  assert.match(page, /board\.prizePoolLabel/)
+  const participateClick = page.indexOf('onClick={onParticipate}')
+  const tryClass = page.slice(participateClick - 1800, participateClick)
+  assert.equal(tryClass.includes('cursor-pointer'), false)
+  assert.match(tryClass, /cursor-default/)
   assert.equal(page.includes('nep141:'), false)
   assert.equal(page.includes('$10'), false)
   assert.equal(page.includes('1 ZEC'), false)

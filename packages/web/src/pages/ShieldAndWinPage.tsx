@@ -120,10 +120,6 @@ function shortPayoutAddress(value: string): string {
   return `${value.slice(0, 6)}…${value.slice(-5)}`
 }
 
-function qualifyHint(minimumValue: string): string {
-  return `Only transfers into NEAR Confidential count. At least ${minimumValue} must land after fees.`
-}
-
 function isInFlight(entry: ShieldWinEntry): boolean {
   return entry.reward_status === 'CLAIMING' || entry.reward_status === 'SENDING'
 }
@@ -277,44 +273,45 @@ function EntryRow({
             {copy.title}
           </span>
         </div>
-        {view === 'won' && !phone ? (
-          <button
-            type="button"
-            className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-[28px] shrink-0 rounded border-transparent bg-[#00d18a] px-3.5 text-[13px] text-black hover:bg-[#1ee3a0] hover:text-black"
-            disabled={claimBusy}
-            onClick={() => onClaim(entry)}
-          >
-            Claim
-          </button>
-        ) : view === 'failed' ? (
-          <SupportLink />
-        ) : transactionUrl ? (
-          <a
-            className="inline-flex w-11 shrink-0 items-center justify-end gap-1 text-[11px] leading-[18px] font-medium whitespace-nowrap !text-[#1ee3a0] no-underline hover:text-white hover:underline hover:underline-offset-[3px]"
-            href={transactionUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="View payout transaction on Blockchair"
-          >
-            Tx <span aria-hidden="true">↗</span>
-          </a>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2.5">
+          {view === 'won' ? (
+            <small className="text-xs text-[#ffcc00]">{rewardText(entry)}</small>
+          ) : null}
+          {view === 'won' && !phone ? (
+            <button
+              type="button"
+              className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-[28px] shrink-0 rounded border-transparent bg-[#00d18a] px-3.5 text-[13px] text-black hover:bg-[#1ee3a0] hover:text-black"
+              disabled={claimBusy}
+              onClick={() => onClaim(entry)}
+            >
+              Claim
+            </button>
+          ) : view === 'claiming' || view === 'sending' ? (
+            <span className="flex gap-1.5" aria-hidden="true">
+              {Array.from({ length: 8 }, (_, index) => (
+                <i
+                  key={index}
+                  className="size-1.5 animate-shield-run rounded-full bg-white/14 motion-reduce:animate-none"
+                  style={{ animationDelay: `${index * 120}ms` }}
+                />
+              ))}
+            </span>
+          ) : view === 'failed' ? (
+            <SupportLink />
+          ) : transactionUrl ? (
+            <a
+              className="inline-flex w-11 shrink-0 items-center justify-end gap-1 text-[11px] leading-[18px] font-medium whitespace-nowrap !text-[#1ee3a0] no-underline hover:text-white hover:underline hover:underline-offset-[3px]"
+              href={transactionUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="View payout transaction on Blockchair"
+            >
+              Tx <span aria-hidden="true">↗</span>
+            </a>
+          ) : null}
+        </div>
       </div>
       {copy.body ? <p className="text-[11px] leading-[18px] text-[#bbc1bc]">{copy.body}</p> : null}
-      {view === 'won' ? (
-        <small className="text-xs text-[#ffcc00]">{rewardText(entry)}</small>
-      ) : null}
-      {view === 'claiming' || view === 'sending' ? (
-        <span className="mt-2.5 flex gap-1.5" aria-hidden="true">
-          {Array.from({ length: 8 }, (_, index) => (
-            <i
-              key={index}
-              className="size-1.5 animate-shield-run rounded-full bg-white/14 motion-reduce:animate-none"
-              style={{ animationDelay: `${index * 120}ms` }}
-            />
-          ))}
-        </span>
-      ) : null}
     </li>
   )
 }
@@ -532,9 +529,9 @@ function RulesCopy({
           can&apos;t be added together.
         </li>
         <li>
-          Each eligible transfer gets one automatic draw as soon as it&apos;s credited. at{' '}
-          <strong>1 in 4,444</strong> (about 0.0225%). That doesn&apos;t mean someone wins every
-          4,444 draws.
+          Each eligible transfer gets one automatic draw as soon as it&apos;s credited, at{' '}
+          <strong>1 in 444</strong> (about 0.225%). That doesn&apos;t mean someone wins every 444
+          draws.
         </li>
         <li>
           {campaign.max_winners === 0 ? (
@@ -567,7 +564,7 @@ function RulesCopy({
         </li>
         <li>
           The winner claims to a Zcash transparent address in Noir Wallet. We pay the network fee,
-          so the full {prize} ZEC arrives.
+          so the full {prize} arrives.
         </li>
         <li>
           We never ask for your seed phrase or keys, and never publish your balances, addresses or
@@ -1466,14 +1463,6 @@ export default function ShieldAndWinPage() {
   } else if (provider && accountReady && !address && board.canJoin && claimable.length === 0) {
     hint = CONNECT_HINT
   } else if (
-    address &&
-    campaign &&
-    board.canJoin &&
-    claimable.length === 0 &&
-    board.minimumValue.length > 0
-  ) {
-    hint = qualifyHint(board.minimumValue)
-  } else if (
     campaignState === 'ready' &&
     !board.canJoin &&
     claimable.length === 0 &&
@@ -1698,8 +1687,8 @@ export default function ShieldAndWinPage() {
                     type="button"
                     className={
                       claimable.length > 0
-                        ? "inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-[#3a3a3a] bg-[#0b0b0b] text-white hover:border-[#6a6a6a] hover:text-white"
-                        : "inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
+                        ? "inline-flex cursor-default items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-[#3a3a3a] bg-[#0b0b0b] text-white hover:border-[#6a6a6a] hover:text-white"
+                        : "inline-flex cursor-default items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
                     }
                     onClick={onParticipate}
                   >
@@ -1882,9 +1871,11 @@ export default function ShieldAndWinPage() {
                   <b className="block text-[clamp(44px,5vw,72px)] leading-none font-semibold tracking-[-0.02em] text-white">
                     {board.prizeAmount} {board.prizeAsset}
                   </b>
-                  <span className="mt-2.5 block text-[clamp(15px,1.2vw,18px)] text-[#bcbcc8]">
-                    {board.prizeDestination}
-                  </span>
+                  {board.prizePoolLabel ? (
+                    <span className="mt-2.5 block text-[clamp(15px,1.2vw,18px)] text-[#bcbcc8]">
+                      {board.prizePoolLabel}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -1925,20 +1916,14 @@ export default function ShieldAndWinPage() {
                 </div>
               </div>
             ) : null}
-            {campaignState === 'loading' || (campaignState === 'ready' && campaign) ? (
-              <p className="pt-3.5 text-[13px] leading-[1.5] text-[#8b8e93]">
-                Every draw is independent. More draws don’t make the next one more likely to win.
-              </p>
-            ) : null}
           </aside>
         </section>
       </main>
 
       <footer className="px-4 pt-[22px] pb-[26px] text-center text-[13px] leading-[1.6] text-[#8b8e93]">
-        {prizeReady ? (
+        {prizeReady && board.prizePoolLabel ? (
           <p>
-            {board.prizeAmount} {board.prizeAsset}. The campaign ends when it is no longer active.
-            Fees may apply.{' '}
+            {board.prizePoolLabel}. The campaign ends when it is no longer active.{' '}
             <button
               type="button"
               className="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[length:inherit] leading-[inherit] text-[#bcbcc8] underline decoration-white/30 underline-offset-[3px] hover:text-white"

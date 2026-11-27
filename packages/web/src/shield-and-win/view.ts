@@ -14,7 +14,7 @@ export interface BoardView {
   readonly pill: string
   readonly prizeAmount: string
   readonly prizeAsset: string
-  readonly prizeDestination: string
+  readonly prizePoolLabel: string
   readonly drawsSoFar: number | null
   readonly endsLabel: string
   readonly endsValue: string
@@ -40,10 +40,10 @@ export interface EntryCopy {
   readonly body: string
 }
 
-const PRIZE_DESTINATION = 'Sent to your Zcash transparent address'
 const ODDS_LABEL = 'Odds per draw'
-const ODDS_VALUE = '1 / 4444'
+const ODDS_VALUE = '1 / 444'
 const MINIMUM_LABEL = 'Minimum credited'
+const ENTRY_USD = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
 
 export function boardView(campaign: ShieldWinCampaign | null, nowMs: number): BoardView {
   if (campaign === null) {
@@ -52,7 +52,7 @@ export function boardView(campaign: ShieldWinCampaign | null, nowMs: number): Bo
       pill: 'Unavailable',
       prizeAmount: '',
       prizeAsset: '',
-      prizeDestination: '',
+      prizePoolLabel: '',
       drawsSoFar: null,
       endsLabel: 'Status',
       endsValue: 'Unavailable',
@@ -70,7 +70,7 @@ export function boardView(campaign: ShieldWinCampaign | null, nowMs: number): Bo
     pill: pillOf(campaign),
     prizeAmount: campaign.reward_amount,
     prizeAsset: campaign.reward_asset,
-    prizeDestination: PRIZE_DESTINATION,
+    prizePoolLabel: prizePoolLabel(campaign),
     drawsSoFar: campaign.draw_count,
     endsLabel: campaign.status === 'ACTIVE' ? 'Ends in' : 'Status',
     endsValue:
@@ -147,7 +147,7 @@ export function entryCopy(view: EntryViewState, entry: ShieldWinEntry | null): E
     case 'none':
       return { title: 'Not entered yet', body: 'You have not entered yet.' }
     case 'notwon':
-      return { title: 'Not a winner', body: '' }
+      return { title: 'No win', body: '' }
     case 'won':
       return {
         title: 'Unclaimed',
@@ -160,7 +160,7 @@ export function entryCopy(view: EntryViewState, entry: ShieldWinEntry | null): E
     case 'claimed':
       return {
         title: 'Completed',
-        body: 'Your payout is complete.'
+        body: ''
       }
     case 'failed':
       return {
@@ -242,7 +242,30 @@ function usdLabel(amount: string): string {
   return amount.startsWith('$') ? amount : `$${amount}`
 }
 
-const ENTRY_USD = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
+function prizePoolLabel(campaign: ShieldWinCampaign): string {
+  if (campaign.max_winners === 0) return 'No cap on the prize pool'
+  const scaled = scaleAmount(campaign.reward_amount)
+  if (scaled === null || campaign.reward_asset.length === 0) return ''
+  const cap = BigInt(campaign.max_winners)
+  const awarded = BigInt(campaign.winner_count)
+  const left = cap > awarded ? cap - awarded : 0n
+  const amount = formatUnits(scaled.units * left, scaled.scale)
+  return `${amount} ${campaign.reward_asset} remaining in the prize pool`
+}
+
+function scaleAmount(amount: string): { units: bigint; scale: number } | null {
+  if (!ENTRY_USD.test(amount)) return null
+  const [whole, fraction = ''] = amount.split('.')
+  return { units: BigInt(`${whole}${fraction}`), scale: fraction.length }
+}
+
+function formatUnits(units: bigint, scale: number): string {
+  if (scale === 0) return units.toString()
+  const text = units.toString().padStart(scale + 1, '0')
+  const cut = text.length - scale
+  const fraction = text.slice(cut).replace(/0+$/, '')
+  return fraction.length > 0 ? `${text.slice(0, cut)}.${fraction}` : text.slice(0, cut)
+}
 
 export function formatEntryUsd(amount: string): string {
   if (!ENTRY_USD.test(amount)) return amount.startsWith('$') ? amount : `$${amount}`
