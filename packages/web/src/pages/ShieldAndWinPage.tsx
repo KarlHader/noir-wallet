@@ -1277,12 +1277,8 @@ export default function ShieldAndWinPage() {
   const accountPending = !walletReady || Boolean(provider && !accountReady)
   const connectLoading = accountPending || connectBusy
   const campaignOpen = campaignState === 'loading' || board.canJoin
-  const showInstall =
-    !phone &&
-    walletReady &&
-    !provider &&
-    claimable.length === 0 &&
-    (campaignState === 'loading' || board.canJoin)
+  const walletLinkOpen = campaignState === 'loading' || campaign !== null
+  const showInstall = !phone && walletReady && !provider && claimable.length === 0 && walletLinkOpen
   const showTry =
     !phone &&
     ((claimable.length === 0 && campaignOpen && (accountPending || Boolean(provider))) ||
@@ -1291,7 +1287,7 @@ export default function ShieldAndWinPage() {
     !phone &&
     !address &&
     claimable.length === 0 &&
-    campaignOpen &&
+    walletLinkOpen &&
     !showInstall &&
     (connectLoading || Boolean(provider && accountReady))
   const showExplore =

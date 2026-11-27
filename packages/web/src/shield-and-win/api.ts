@@ -273,6 +273,8 @@ function parseCampaign(value: unknown): ShieldWinCampaign {
 }
 
 function parseAssets(value: unknown): ShieldWinCampaignAsset[] {
+  // Campaigns can omit this list. A present but malformed list is still invalid.
+  if (value === undefined || value === null) return []
   if (!Array.isArray(value)) invalidResponse()
   return value.map(item => {
     if (!isRecord(item)) invalidResponse()

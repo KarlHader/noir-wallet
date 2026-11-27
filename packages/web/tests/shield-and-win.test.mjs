@@ -337,6 +337,59 @@ test('claim text matches the signed bytes and only transparent addresses pass', 
   }
 })
 
+test('a campaign without assets still loads and renders as ended when prizes were won', async () => {
+  const campaigns = await getCampaigns(undefined, async () =>
+    jsonResponse({
+      code: 0,
+      data: [
+        {
+          id: 1,
+          name: 'Shield & Win Week 1',
+          status: 'ENDED',
+          start_time: 1795513569,
+          end_time: 1795708799,
+          min_usd_value: '0.5',
+          max_winners: 50,
+          reward_amount: '0.0001',
+          reward_asset: 'ZEC',
+          winner_count: 10,
+          draw_count: 22
+        }
+      ]
+    })
+  )
+  assert.equal(campaigns.length, 1)
+  assert.deepEqual(campaigns[0].assets, [])
+  assert.equal(campaigns[0].status, 'ENDED')
+  assert.equal(campaigns[0].reward_amount, '0.0001')
+  assert.equal(campaigns[0].winner_count, 10)
+
+  const board = boardView(campaigns[0], Date.parse('2026-11-27T00:00:00Z'))
+  assert.equal(board.state, 'ended-won')
+  assert.equal(board.pill, 'Ended · Prize won')
+  assert.equal(board.endsValue, 'Ended')
+  assert.equal(board.canJoin, false)
+  assert.equal(board.prizeAmount, '0.0001')
+  assert.equal(board.prizeAsset, 'ZEC')
+  assert.equal(
+    closedCampaignHint(board),
+    'The 0.0001 ZEC prize has been won. Thank you for participating!'
+  )
+
+  const withoutList = await getCampaigns(undefined, async () =>
+    jsonResponse({ code: 0, data: [campaign({ assets: null })] })
+  )
+  assert.deepEqual(withoutList[0].assets, [])
+
+  await assert.rejects(
+    () =>
+      getCampaigns(undefined, async () =>
+        jsonResponse({ code: 0, data: [campaign({ assets: { asset_id: 'x', decimal: 6 } })] })
+      ),
+    /invalid response/
+  )
+})
+
 test('code 0 returns decimal strings and HTTP 200 still follows the body code', async () => {
   const seen = []
   const campaigns = await getCampaigns(undefined, async (url, options) => {
@@ -672,6 +725,18 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.match(page, /sk-prize-amt/)
   assert.match(page, /sk-prize-sub/)
   assert.match(page, /Connect to see your entry and result on this page\./)
+  const installAction = page.slice(page.indexOf('const showInstall'), page.indexOf('const showTry'))
+  const tryAction = page.slice(page.indexOf('const showTry'), page.indexOf('const showConnect'))
+  const connectAction = page.slice(
+    page.indexOf('const showConnect'),
+    page.indexOf('const showExplore')
+  )
+  assert.match(installAction, /walletLinkOpen/)
+  assert.equal(installAction.includes('canJoin'), false)
+  assert.match(tryAction, /campaignOpen/)
+  assert.match(tryAction, /board\.canJoin/)
+  assert.match(connectAction, /walletLinkOpen/)
+  assert.equal(connectAction.includes('canJoin'), false)
   assert.match(page, /Open Noir Wallet from the Chrome toolbar\./)
   assert.match(page, /At least \$\{minimumValue\} must land after fees\./)
   assert.match(page, /Draws so far/)
