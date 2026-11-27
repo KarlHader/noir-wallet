@@ -1,6 +1,8 @@
 const TOKEN_CATALOG_URL = 'https://1click.chaindefuser.com/v0/tokens'
 const RHEA_TOKEN_ICONS_API = 'https://api.rhea.finance/get_multichain_lending_tokens_data'
+const COINGECKO_MARKETS_API = 'https://api.coingecko.com/api/v3/coins/markets'
 const CHAIN_ICON_BASE_URL = 'https://assets.zknoir.com/chain'
+const MAX_COINGECKO_ICON_COUNT = 250
 
 const NETWORK_NAMES: Readonly<Record<string, string>> = {
   near: 'NEAR',
@@ -75,6 +77,7 @@ export async function getAssetLabels(
 
   const labels = new Map<string, ShieldWinAsset>()
   const chains = new Map<string, string>()
+  const coingeckoIds = new Map<string, string>()
   for (const token of data) {
     if (typeof token !== 'object' || token === null) continue
     const { assetId, blockchain, symbol } = token
@@ -92,6 +95,8 @@ export async function getAssetLabels(
       continue
     const chain = blockchain.trim().toLowerCase()
     const chainFile = CHAIN_ICON_FILES[chain]
+    const coingeckoId = readCoingeckoId(token)
+    if (coingeckoId) coingeckoIds.set(assetId, coingeckoId)
     labels.set(assetId, {
       symbol,
       network: NETWORK_NAMES[blockchain] ?? blockchain.toUpperCase(),
@@ -102,6 +107,7 @@ export async function getAssetLabels(
   }
   if (assetIds && assetIds.length > 0) {
     await backfillRheaIcons(labels, chains, assetIds, signal, fetcher)
+    await backfillCoinGeckoIcons(labels, coingeckoIds, assetIds, signal, fetcher)
   }
   return labels
 }
@@ -165,8 +171,85 @@ async function backfillRheaIcons(
   )
 }
 
+async function backfillCoinGeckoIcons(
+  labels: Map<string, ShieldWinAsset>,
+  coingeckoIds: ReadonlyMap<string, string>,
+  assetIds: readonly string[],
+  signal: AbortSignal | undefined,
+  fetcher: typeof fetch
+): Promise<void> {
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const assetId of assetIds) {
+    const asset = labels.get(assetId)
+    const id = coingeckoIds.get(assetId)
+    if (!asset || asset.tokenIconUrl || !id || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+    if (ids.length >= MAX_COINGECKO_ICON_COUNT) break
+  }
+  if (ids.length === 0) return
+  if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+  try {
+    const url = new URL(COINGECKO_MARKETS_API)
+    url.searchParams.set('vs_currency', 'usd')
+    url.searchParams.set('ids', ids.join(','))
+    url.searchParams.set('per_page', String(MAX_COINGECKO_ICON_COUNT))
+    url.searchParams.set('page', '1')
+    url.searchParams.set('sparkline', 'false')
+    const response = await fetcher(url.toString(), { signal })
+    if (!response.ok) return
+    const data: unknown = await response.json()
+    if (!Array.isArray(data)) return
+    const images = new Map<string, string>()
+    for (const entry of data) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const id = 'id' in entry ? entry.id : null
+      const image = 'image' in entry ? entry.image : null
+      if (typeof id !== 'string' || images.has(id) || !isCoinGeckoImageUrl(image)) continue
+      images.set(id, image)
+    }
+    for (const assetId of assetIds) {
+      const current = labels.get(assetId)
+      const id = coingeckoIds.get(assetId)
+      if (!current || current.tokenIconUrl || !id) continue
+      const icon = images.get(id)
+      if (!icon) continue
+      labels.set(assetId, { ...current, tokenIconUrl: icon })
+    }
+  } catch (error) {
+    if (signal?.aborted || isAbortError(error)) throw error
+  }
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function readCoingeckoId(token: object): string | null {
+  const value = 'coingeckoId' in token ? token.coingeckoId : null
+  if (typeof value !== 'string') return null
+  const id = value.trim()
+  if (!id || id.length > 128 || id.startsWith('custom:') || !/^[A-Za-z0-9._-]+$/.test(id)) {
+    return null
+  }
+  return id
+}
+
+function isCoinGeckoImageUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return false
+  try {
+    const url = new URL(value)
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'coin-images.coingecko.com' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.pathname.startsWith('/coins/images/')
+    )
+  } catch {
+    return false
+  }
 }
 
 function tokenIconUrl(token: object): string | null {

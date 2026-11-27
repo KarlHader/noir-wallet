@@ -5,6 +5,7 @@ export const ENTRY_POLL_LIMIT = 12
 export const REWARD_POLL_INTERVAL_MS = 4000
 export const REWARD_POLL_LIMIT = 30
 export const CAMPAIGN_POLL_INTERVAL_MS = 60_000
+export const ENTRIES_LIST_POLL_INTERVAL_MS = 60_000
 
 export type BoardState = 'live' | 'upcoming' | 'ended-won' | 'ended-none' | 'missing'
 
@@ -239,6 +240,22 @@ function winnerNoteOf(campaign: ShieldWinCampaign): string {
 
 function usdLabel(amount: string): string {
   return amount.startsWith('$') ? amount : `$${amount}`
+}
+
+const ENTRY_USD = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
+
+export function formatEntryUsd(amount: string): string {
+  if (!ENTRY_USD.test(amount)) return amount.startsWith('$') ? amount : `$${amount}`
+  const [whole = '0', fraction = ''] = amount.split('.')
+  // Compare the original amount. A positive value under one cent stays below $0.01
+  // even when half-up rounding would otherwise lift it to $0.01.
+  if (whole === '0' && /[1-9]/.test(fraction) && !/[1-9]/.test(fraction.slice(0, 2))) {
+    return '< $0.01'
+  }
+  const digits = `${fraction}000`.slice(0, 3)
+  let cents = BigInt(whole) * 100n + BigInt(digits.slice(0, 2))
+  if (digits.charAt(2) >= '5') cents += 1n
+  return `$${cents / 100n}.${(cents % 100n).toString().padStart(2, '0')}`
 }
 
 function countdown(endTimeSeconds: number, nowMs: number): string {

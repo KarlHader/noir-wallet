@@ -13,6 +13,7 @@ import {
 import { assetInfo, assetLabel, getAssetLabels } from '../src/shield-and-win/asset-label.ts'
 import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../src/shield-and-win/claim.ts'
 import {
+  ENTRIES_LIST_POLL_INTERVAL_MS,
   ENTRY_POLL_INTERVAL_MS,
   ENTRY_POLL_LIMIT,
   REWARD_POLL_INTERVAL_MS,
@@ -23,6 +24,7 @@ import {
   deadlineLabel,
   entryCopy,
   entryView,
+  formatEntryUsd,
   latestEntry,
   rewardTransactionUrl,
   sortedEntries,
@@ -217,6 +219,7 @@ test('the board is built from campaign fields and hardcodes only the draw odds',
 })
 
 test('entry views describe the latest result without a draw number or confirmation count', () => {
+  assert.equal(ENTRIES_LIST_POLL_INTERVAL_MS, 60_000)
   assert.equal(ENTRY_POLL_INTERVAL_MS, 4000)
   assert.equal(ENTRY_POLL_LIMIT, 12)
   assert.equal(REWARD_POLL_INTERVAL_MS, 4000)
@@ -665,6 +668,108 @@ test('missing catalog icons are filled from the Rhea chain list', async () => {
   assert.equal(kept.get('nep141:base-usdc.omft.near')?.network, 'Base')
 })
 
+test('entry USD values show two decimals and mark sub-cent amounts', () => {
+  assert.equal(formatEntryUsd('0.94725794'), '$0.95')
+  assert.equal(formatEntryUsd('0.62118355'), '$0.62')
+  assert.equal(formatEntryUsd('0.75205424'), '$0.75')
+  assert.equal(formatEntryUsd('0.54194357'), '$0.54')
+  assert.equal(formatEntryUsd('0.75485608'), '$0.75')
+  assert.equal(formatEntryUsd('1.54920033'), '$1.55')
+  assert.equal(formatEntryUsd('0'), '$0.00')
+  assert.equal(formatEntryUsd('0.00'), '$0.00')
+  assert.equal(formatEntryUsd('0.009'), '< $0.01')
+  assert.equal(formatEntryUsd('0.005'), '< $0.01')
+  assert.equal(formatEntryUsd('0.01'), '$0.01')
+  assert.equal(formatEntryUsd('0.5'), '$0.50')
+  assert.equal(formatEntryUsd('25.50'), '$25.50')
+  assert.equal(formatEntryUsd('9.995'), '$10.00')
+  assert.equal(formatEntryUsd('1.005'), '$1.01')
+  assert.equal(formatEntryUsd('not-a-number'), '$not-a-number')
+  assert.equal(formatEntryUsd('$1.2'), '$1.2')
+})
+
+test('missing Rhea icons are filled from CoinGecko by coingecko id', async () => {
+  const bnb = 'nep141:bnb.omdep.near'
+  const pol = 'nep141:pol.omdep.near'
+  const bad = 'nep141:bad.near'
+  const custom = 'nep141:custom.near'
+  const kept = 'nep141:eth.omft.near'
+  const calls = []
+  const labels = await getAssetLabels(
+    undefined,
+    async url => {
+      calls.push(url)
+      if (url === 'https://1click.chaindefuser.com/v0/tokens') {
+        return jsonResponse([
+          { assetId: bnb, blockchain: 'bsc', symbol: 'BNB', coingeckoId: 'binancecoin' },
+          {
+            assetId: pol,
+            blockchain: 'pol',
+            symbol: 'POL',
+            coingeckoId: 'polygon-ecosystem-token'
+          },
+          { assetId: bad, blockchain: 'near', symbol: 'BAD', coingeckoId: 'not-a-coin' },
+          { assetId: custom, blockchain: 'near', symbol: 'CST', coingeckoId: 'custom:cst' },
+          {
+            assetId: kept,
+            blockchain: 'eth',
+            symbol: 'ETH',
+            icon: 'https://assets.example/eth.png',
+            coingeckoId: 'ethereum'
+          }
+        ])
+      }
+      if (url.startsWith('https://api.rhea.finance/')) return jsonResponse([])
+      return jsonResponse([
+        {
+          id: 'binancecoin',
+          image:
+            'https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png?1696501970'
+        },
+        { id: 'polygon-ecosystem-token', image: 'http://evil.example/pol.png' },
+        {
+          id: 'polygon-ecosystem-token',
+          image: 'https://coin-images.coingecko.com/coins/images/32440/large/pol.png?1759114181'
+        },
+        { id: 'not-a-coin', image: 'https://example.com/not-coingecko.png' }
+      ])
+    },
+    [bnb, pol, bad, custom, kept]
+  )
+  assert.equal(
+    labels.get(bnb)?.tokenIconUrl,
+    'https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png?1696501970'
+  )
+  assert.equal(
+    labels.get(pol)?.tokenIconUrl,
+    'https://coin-images.coingecko.com/coins/images/32440/large/pol.png?1759114181'
+  )
+  assert.equal(labels.get(bad)?.tokenIconUrl, null)
+  assert.equal(labels.get(custom)?.tokenIconUrl, null)
+  assert.equal(labels.get(kept)?.tokenIconUrl, 'https://assets.example/eth.png')
+  const gecko = calls.find(url => url.startsWith('https://api.coingecko.com/'))
+  assert.equal(typeof gecko, 'string')
+  const query = new URL(gecko).searchParams
+  assert.equal(query.get('vs_currency'), 'usd')
+  assert.equal(query.get('sparkline'), 'false')
+  assert.equal(query.get('ids'), 'binancecoin,polygon-ecosystem-token,not-a-coin')
+
+  const failed = await getAssetLabels(
+    undefined,
+    async url => {
+      if (url.startsWith('https://api.coingecko.com/')) throw new Error('offline')
+      if (url.startsWith('https://api.rhea.finance/')) return jsonResponse([])
+      return jsonResponse([
+        { assetId: bnb, blockchain: 'bsc', symbol: 'BNB', coingeckoId: 'binancecoin' }
+      ])
+    },
+    [bnb]
+  )
+  assert.equal(failed.get(bnb)?.tokenIconUrl, null)
+  assert.equal(failed.get(bnb)?.symbol, 'BNB')
+  assert.equal(failed.get(bnb)?.network, 'BNB Chain')
+})
+
 test('all entries loads every page and rejects a stalled pagination response', async () => {
   const pages = []
   const list = await getAllEntries(
@@ -874,6 +979,7 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   )
   assert.equal((page.match(/<EntriesRefreshButton/g) ?? []).length, 2)
   assert.match(page, /const ENTRY_REFRESH_COOLDOWN_MS = 60_000/)
+  assert.match(page, /setInterval\(refreshEntries, ENTRIES_LIST_POLL_INTERVAL_MS\)/)
   const participate = page.slice(page.indexOf('function onParticipate()'))
   const participateBody = participate.slice(0, participate.indexOf('\n  }'))
   assert.equal(participateBody.includes('startEntryPoll'), false)

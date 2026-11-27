@@ -18,6 +18,7 @@ import {
 import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../shield-and-win/claim'
 import {
   CAMPAIGN_POLL_INTERVAL_MS,
+  ENTRIES_LIST_POLL_INTERVAL_MS,
   ENTRY_POLL_INTERVAL_MS,
   ENTRY_POLL_LIMIT,
   REWARD_POLL_INTERVAL_MS,
@@ -28,6 +29,7 @@ import {
   deadlineLabel,
   entryCopy,
   entryView,
+  formatEntryUsd,
   latestEntry,
   rewardTransactionUrl,
   sortedEntries,
@@ -250,7 +252,7 @@ function EntryRow({
           </div>
         </div>
         <b className="block truncate text-sm leading-[18px] font-medium text-[#f2f4f3]">
-          ${entry.usd_value}
+          {formatEntryUsd(entry.usd_value)}
         </b>
         <b className="block truncate text-xs leading-[18px] font-normal text-[#f2f4f3] max-[760px]:col-span-full">
           {completedLabel(entry.shield_completed_at)}
@@ -522,8 +524,8 @@ function RulesCopy({
         <li>
           <b>How to join:</b> install Noir Wallet, create or import a wallet, then make a shield
           transfer of <b>{minimum} or more</b> into <b>NEAR Confidential</b> from your Public or
-          Shield account (in the wallet: Shield → NEAR Confidential). Use the latest version of Noir
-          Wallet.
+          Incognito account (in the wallet: Shield → NEAR Confidential). Use the latest version of
+          Noir Wallet.
         </li>
         <li>
           We count the USD value credited after network, bridge and protocol fees. Smaller transfers
@@ -1003,6 +1005,27 @@ export default function ShieldAndWinPage() {
       }
     }
     // loadWalletData and startEntryPoll read the latest address and campaign through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, campaign])
+
+  useEffect(() => {
+    if (!address || !campaign) return
+    let stopped = false
+    let controller = new AbortController()
+    const refreshEntries = () => {
+      controller.abort()
+      controller = new AbortController()
+      void loadWalletData(controller.signal).catch(error => {
+        if (stopped || isAbortError(error)) return
+      })
+    }
+    const timer = window.setInterval(refreshEntries, ENTRIES_LIST_POLL_INTERVAL_MS)
+    return () => {
+      stopped = true
+      controller.abort()
+      window.clearInterval(timer)
+    }
+    // loadWalletData reads the current wallet and campaign through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, campaign])
 
@@ -1792,9 +1815,11 @@ export default function ShieldAndWinPage() {
                   Earlier wins
                 </h2>
                 <EntryColumns />
-                <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                  {historicalWins.map(renderEntry)}
-                </ul>
+                <div className="earlier-card-entries pt-1 pb-1 px-1 w-full">
+                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                    {historicalWins.map(renderEntry)}
+                  </ul>
+                </div>
               </section>
             ) : null}
 
