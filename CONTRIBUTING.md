@@ -8,7 +8,7 @@ Use synthetic data or published test vectors. Do not put real recovery phrases, 
 
 ## Licensing
 
-Wallet contributions are provided under the [root license](./LICENSE), including its scheduled Apache License 2.0 grant. Contributions under `packages/sdk/` remain under the SDK's [MIT license](./packages/sdk/LICENSE). Preserve notices and licenses for third-party material.
+Wallet contributions are provided under the [Apache License 2.0](./LICENSE). Contributions under `packages/sdk/` remain under the SDK's [MIT license](./packages/sdk/LICENSE). Preserve notices and licenses for third-party material.
 
 ## Development Practice
 

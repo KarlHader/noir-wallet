@@ -348,4 +348,4 @@ For parameter definitions, return types, privacy considerations, and provider RP
 
 ## License
 
-The SDK and its example are licensed under [MIT](./LICENSE). The wallet application is licensed separately under [Business Source License 1.1](https://github.com/NoirWallet/noir-wallet/blob/main/LICENSE).
+The SDK and its example are licensed under [MIT](./LICENSE). The wallet application is licensed separately under the [Apache License 2.0](https://github.com/NoirWallet/noir-wallet/blob/main/LICENSE).
