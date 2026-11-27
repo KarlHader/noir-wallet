@@ -1568,7 +1568,7 @@ export default function ShieldAndWinPage() {
 
       <main className="flex-1 px-[clamp(16px,4vw,64px)] max-[760px]:px-3">
         <section
-          className="relative isolate mx-auto grid max-w-[1360px] grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)] items-center gap-[clamp(32px,5vw,80px)] overflow-hidden rounded-[30px] border border-[#262626] bg-[linear-gradient(155deg,#1c1c1c_0%,#141414_55%,#0e0e10_100%)] p-[clamp(36px,5vw,80px)] max-[1040px]:grid-cols-1 max-[760px]:gap-7 max-[760px]:rounded-3xl max-[760px]:px-[18px] max-[760px]:pt-7 max-[760px]:pb-[22px]"
+          className="relative isolate mx-auto grid max-w-[1360px] grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)] items-start gap-[clamp(32px,5vw,80px)] overflow-hidden rounded-[30px] border border-[#262626] bg-[linear-gradient(155deg,#1c1c1c_0%,#141414_55%,#0e0e10_100%)] p-[clamp(36px,5vw,80px)] max-[1040px]:grid-cols-1 max-[760px]:gap-7 max-[760px]:rounded-3xl max-[760px]:px-[18px] max-[760px]:pt-7 max-[760px]:pb-[22px]"
           aria-labelledby="title"
           aria-busy={campaignState === 'loading'}
         >
@@ -1819,103 +1819,105 @@ export default function ShieldAndWinPage() {
           </div>
 
           <aside
-            className="relative min-w-0 rounded-3xl border border-[rgba(61,255,190,0.3)] bg-[linear-gradient(180deg,rgba(20,22,30,0.94),rgba(13,14,20,0.97))] p-[clamp(22px,2.4vw,32px)] shadow-[0_0_0_4px_rgba(61,255,190,0.04),0_30px_80px_rgba(0,0,0,0.5)] max-[1040px]:max-w-[560px] max-[760px]:px-[18px] max-[760px]:py-5"
+            className="min-w-0 min-[1040px]:max-w-[560px] pt-12"
             aria-label="Campaign progress"
           >
-            <div className="flex items-center justify-between gap-3 text-[15px] text-[#a7a9ad]">
-              {campaignState === 'loading' ? (
-                <>
-                  <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[34px] w-[196px] rounded-[17px] max-[760px]:h-8" />
-                  <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[15px] w-[112px] rounded-lg max-[760px]:hidden" />
-                </>
-              ) : (
-                <>
-                  <span
-                    className={
-                      board.state === 'live'
-                        ? 'inline-flex h-[34px] items-center gap-2 rounded-[17px] border border-[rgba(61,255,190,0.35)] bg-[rgba(0,209,138,0.1)] px-3.5 text-[15px] font-medium whitespace-nowrap text-[#3dffbe] max-[760px]:h-8 max-[760px]:px-3 max-[760px]:text-sm'
-                        : 'inline-flex h-[34px] items-center gap-2 rounded-[17px] border border-[#3a3a3a] bg-white/5 px-3.5 text-[15px] font-medium whitespace-nowrap text-[#a7a9ad] max-[760px]:h-8 max-[760px]:px-3 max-[760px]:text-sm'
-                    }
-                  >
-                    <i
+            <div className="relative min-w-0 rounded-3xl border border-[rgba(61,255,190,0.3)] bg-[linear-gradient(180deg,rgba(20,22,30,0.94),rgba(13,14,20,0.97))] p-[clamp(22px,2.4vw,32px)] shadow-[0_0_0_4px_rgba(61,255,190,0.04),0_30px_80px_rgba(0,0,0,0.5)] w-full max-[760px]:px-[18px] max-[760px]:py-5">
+              <div className="flex items-center justify-between gap-3 text-[15px] text-[#a7a9ad]">
+                {campaignState === 'loading' ? (
+                  <>
+                    <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[34px] w-[196px] rounded-[17px] max-[760px]:h-8" />
+                    <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[15px] w-[112px] rounded-lg max-[760px]:hidden" />
+                  </>
+                ) : (
+                  <>
+                    <span
                       className={
                         board.state === 'live'
-                          ? 'size-2 rounded-full bg-[#3dffbe] shadow-[0_0_8px_#3dffbe]'
-                          : 'size-2 rounded-full bg-[#666]'
+                          ? 'inline-flex h-[34px] items-center gap-2 rounded-[17px] border border-[rgba(61,255,190,0.35)] bg-[rgba(0,209,138,0.1)] px-3.5 text-[15px] font-medium whitespace-nowrap text-[#3dffbe] max-[760px]:h-8 max-[760px]:px-3 max-[760px]:text-sm'
+                          : 'inline-flex h-[34px] items-center gap-2 rounded-[17px] border border-[#3a3a3a] bg-white/5 px-3.5 text-[15px] font-medium whitespace-nowrap text-[#a7a9ad] max-[760px]:h-8 max-[760px]:px-3 max-[760px]:text-sm'
                       }
-                    />
-                    <span>{board.pill}</span>
-                  </span>
-                  {board.winnerNote ? (
-                    <span className="max-[760px]:hidden">{board.winnerNote}</span>
-                  ) : null}
-                </>
-              )}
-            </div>
-            {campaignState === 'loading' ? (
-              <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
-                <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none size-[clamp(64px,6.5vw,96px)] shrink-0 rounded-full" />
-                <div className="w-[240px] max-w-[calc(100%-clamp(78px,8vw,118px))] shrink-0">
-                  <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[clamp(44px,5vw,72px)] w-[180px] max-w-full rounded-xl" />
-                  <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2.5 h-[calc(clamp(15px,1.2vw,18px)*1.55)] w-[240px] max-w-full rounded-lg" />
-                </div>
-              </div>
-            ) : prizeReady ? (
-              <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
-                <img
-                  className="aspect-square h-auto w-[clamp(64px,6.5vw,96px)]"
-                  src="/shield-and-win/zec.svg"
-                  alt=""
-                />
-                <div>
-                  <b className="block text-[clamp(44px,5vw,72px)] leading-none font-semibold tracking-[-0.02em] text-white">
-                    {board.prizeAmount} {board.prizeAsset}
-                  </b>
-                  {board.prizePoolLabel ? (
-                    <span className="mt-2.5 block text-[clamp(15px,1.2vw,18px)] text-[#bcbcc8]">
-                      {board.prizePoolLabel}
+                    >
+                      <i
+                        className={
+                          board.state === 'live'
+                            ? 'size-2 rounded-full bg-[#3dffbe] shadow-[0_0_8px_#3dffbe]'
+                            : 'size-2 rounded-full bg-[#666]'
+                        }
+                      />
+                      <span>{board.pill}</span>
                     </span>
-                  ) : null}
-                </div>
+                    {board.winnerNote ? (
+                      <span className="max-[760px]:hidden">{board.winnerNote}</span>
+                    ) : null}
+                  </>
+                )}
               </div>
-            ) : null}
-            {campaignState === 'loading' || typeof board.drawsSoFar === 'number' ? (
-              <div className="mt-[clamp(18px,2.6vh,26px)]">
-                <span className="text-[15px] text-[#a7a9ad]">Draws so far</span>
-                <span className="mt-2.5 block font-['Doto',ui-monospace,monospace] text-[clamp(56px,min(6.4vw,11vh),104px)] leading-none font-bold text-[#3dffbe] [text-shadow:0_0_26px_rgba(61,255,190,0.35)]">
-                  {(typeof board.drawsSoFar === 'number' ? board.drawsSoFar : 0).toLocaleString(
-                    'en-US'
-                  )}
-                </span>
-              </div>
-            ) : null}
-            {campaignState === 'loading' ? (
-              <div className="mt-[clamp(16px,2.6vh,24px)] grid grid-cols-2 gap-3.5 max-[440px]:grid-cols-1">
-                <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
-                  <span className="block text-sm text-[#a7a9ad]">Odds per draw</span>
-                  <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2 h-[clamp(24px,2.3vw,36px)] w-[120px] max-w-full rounded-lg" />
+              {campaignState === 'loading' ? (
+                <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
+                  <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none size-[clamp(64px,6.5vw,96px)] shrink-0 rounded-full" />
+                  <div className="w-[240px] max-w-[calc(100%-clamp(78px,8vw,118px))] shrink-0">
+                    <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[clamp(44px,5vw,72px)] w-[180px] max-w-full rounded-xl" />
+                    <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2.5 h-[calc(clamp(15px,1.2vw,18px)*1.55)] w-[240px] max-w-full rounded-lg" />
+                  </div>
                 </div>
-                <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
-                  <span className="block text-sm text-[#a7a9ad]">Ends in</span>
-                  <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2 h-[clamp(24px,2.3vw,36px)] w-[120px] max-w-full rounded-lg" />
+              ) : prizeReady ? (
+                <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
+                  <img
+                    className="aspect-square h-auto w-[clamp(64px,6.5vw,96px)]"
+                    src="/shield-and-win/zec.svg"
+                    alt=""
+                  />
+                  <div>
+                    <b className="block text-[clamp(44px,5vw,72px)] leading-none font-semibold tracking-[-0.02em] text-white">
+                      {board.prizeAmount} {board.prizeAsset}
+                    </b>
+                    {board.prizePoolLabel ? (
+                      <span className="mt-2.5 block text-[clamp(15px,1.2vw,18px)] text-[#bcbcc8]">
+                        {board.prizePoolLabel}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ) : campaignState === 'ready' && campaign ? (
-              <div className="mt-[clamp(16px,2.6vh,24px)] grid grid-cols-2 gap-3.5 max-[440px]:grid-cols-1">
-                <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
-                  <span className="block text-sm text-[#a7a9ad]">{board.oddsLabel}</span>
-                  <b className="mt-2 block max-w-full font-['Doto',ui-monospace,monospace] text-[clamp(15px,12.5cqi,36px)] leading-[1.1] font-bold whitespace-nowrap text-white max-[440px]:mt-0 max-[440px]:text-[clamp(14px,11cqi,26px)]">
-                    {board.oddsValue}
-                  </b>
+              ) : null}
+              {campaignState === 'loading' || typeof board.drawsSoFar === 'number' ? (
+                <div className="mt-[clamp(18px,2.6vh,26px)]">
+                  <span className="text-[15px] text-[#a7a9ad]">Draws so far</span>
+                  <span className="mt-2.5 block font-['Doto',ui-monospace,monospace] text-[clamp(56px,min(6.4vw,11vh),104px)] leading-none font-bold text-[#3dffbe] [text-shadow:0_0_26px_rgba(61,255,190,0.35)]">
+                    {(typeof board.drawsSoFar === 'number' ? board.drawsSoFar : 0).toLocaleString(
+                      'en-US'
+                    )}
+                  </span>
                 </div>
-                <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
-                  <span className="block text-sm text-[#a7a9ad]">{board.endsLabel}</span>
-                  <b className="mt-2 block max-w-full font-['Doto',ui-monospace,monospace] text-[clamp(15px,12.5cqi,36px)] leading-[1.1] font-bold whitespace-nowrap text-white max-[440px]:mt-0 max-[440px]:text-[clamp(14px,11cqi,26px)]">
-                    {board.endsValue}
-                  </b>
+              ) : null}
+              {campaignState === 'loading' ? (
+                <div className="mt-[clamp(16px,2.6vh,24px)] grid grid-cols-2 gap-3.5 max-[440px]:grid-cols-1">
+                  <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
+                    <span className="block text-sm text-[#a7a9ad]">Odds per draw</span>
+                    <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2 h-[clamp(24px,2.3vw,36px)] w-[120px] max-w-full rounded-lg" />
+                  </div>
+                  <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
+                    <span className="block text-sm text-[#a7a9ad]">Ends in</span>
+                    <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2 h-[clamp(24px,2.3vw,36px)] w-[120px] max-w-full rounded-lg" />
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : campaignState === 'ready' && campaign ? (
+                <div className="mt-[clamp(16px,2.6vh,24px)] grid grid-cols-2 gap-3.5 max-[440px]:grid-cols-1">
+                  <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
+                    <span className="block text-sm text-[#a7a9ad]">{board.oddsLabel}</span>
+                    <b className="mt-2 block max-w-full font-['Doto',ui-monospace,monospace] text-[clamp(15px,12.5cqi,36px)] leading-[1.1] font-bold whitespace-nowrap text-white max-[440px]:mt-0 max-[440px]:text-[clamp(14px,11cqi,26px)]">
+                      {board.oddsValue}
+                    </b>
+                  </div>
+                  <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
+                    <span className="block text-sm text-[#a7a9ad]">{board.endsLabel}</span>
+                    <b className="mt-2 block max-w-full font-['Doto',ui-monospace,monospace] text-[clamp(15px,12.5cqi,36px)] leading-[1.1] font-bold whitespace-nowrap text-white max-[440px]:mt-0 max-[440px]:text-[clamp(14px,11cqi,26px)]">
+                      {board.endsValue}
+                    </b>
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </aside>
         </section>
       </main>
