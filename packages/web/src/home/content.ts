@@ -191,11 +191,9 @@ export const HARDWARE_STEPS: {
   }
 ]
 
-/**
- * Where "Read the audit report" goes. No public report link exists yet, so the Audited card
- * shows no link until this is set.
- */
-const AUDIT_REPORT_URL: string | null = null
+/** BlockSec's signed audit report of the Zcash wallet WASM (June 2026). */
+const AUDIT_REPORT_URL =
+  'https://github.com/blocksecteam/audit-reports/blob/main/rust/blocksec_noirwallet_zcash_wallet_wasm_signed_20260609.pdf'
 
 /** Your Key Open Code: four points, each with a large, blurred icon on the right. */
 export const TRUST_POINTS: {
@@ -218,9 +216,7 @@ export const TRUST_POINTS: {
     icon: 'audit',
     title: 'Audited',
     body: 'Noir has been independently audited.',
-    ...(AUDIT_REPORT_URL
-      ? { link: { label: 'Read the audit report', href: AUDIT_REPORT_URL } }
-      : {})
+    link: { label: 'Read the audit report', href: AUDIT_REPORT_URL }
   },
   {
     icon: 'code',
