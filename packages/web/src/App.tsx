@@ -13,8 +13,17 @@ function normalizePath(path: string): string {
   return path
 }
 
+/**
+ * Pages that moved within the site. Old links (posts, the wallet) still open them, and the address
+ * bar switches to the new path without a reload.
+ */
+const MOVED_PATHS: Readonly<Record<string, string>> = {
+  '/shield-and-win': '/campaign'
+}
+
 export default function App() {
-  const path = normalizePath(window.location.pathname)
+  const requestedPath = normalizePath(window.location.pathname)
+  const path = MOVED_PATHS[requestedPath] ?? requestedPath
   const redirectUrl =
     path === '/github'
       ? __WALLET_REPOSITORY_URL__
@@ -27,6 +36,13 @@ export default function App() {
       window.location.replace(redirectUrl)
     }
   }, [redirectUrl])
+
+  useEffect(() => {
+    if (path !== requestedPath) {
+      const { search, hash } = window.location
+      window.history.replaceState(window.history.state, '', `${path}${search}${hash}`)
+    }
+  }, [path, requestedPath])
 
   if (redirectUrl) {
     return null
@@ -45,7 +61,7 @@ export default function App() {
         <V2BetaPage />
       </Suspense>
     )
-  } else if (path === '/shield-and-win') {
+  } else if (path === '/campaign') {
     page = (
       <Suspense fallback={<div style={{ minHeight: '100vh', background: '#000' }} />}>
         <ShieldAndWinPage />

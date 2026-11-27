@@ -1,4 +1,4 @@
-/* Tailwind styles for /frost, /v2/beta, and /shield-and-win. The home page has its own stylesheet in src/home. */
+/* Tailwind styles for /frost, /v2/beta, and /campaign. The home page has its own stylesheet in src/home. */
 @import 'tailwindcss';
 @source not './home';
 
