@@ -1,6 +1,6 @@
 /**
- * Copy and image assets for the home page. The copy follows the design mock, and the wallet
- * screenshots are images exported from it.
+ * Copy and image assets for the home page. The copy follows the design mock (Figma "Noir
+ * Landingpage", the November 27 version), and the wallet screenshots are images exported from it.
  */
 import type { CSSProperties } from 'react'
 
@@ -18,7 +18,10 @@ export const IMG = {
   arbChip: `${DIR}imgGroup1948761781.svg`,
   bnbChip: `${DIR}imgGroup1948761777.svg`,
   // Shield glyph in the middle of How Noir Wallet Works
-  shieldGlyph: `${DIR}imgGroup1948763176.svg`
+  shieldGlyph: `${DIR}imgGroup1948763176.svg`,
+  // Hardware wallet marks, the same files the extension uses
+  ledger: `${DIR}ledger.svg`,
+  keystone: `${DIR}keystone.png`
 } as const
 
 /** Width of the phone frame in the design mock (CSS px). */
@@ -42,22 +45,10 @@ export const PHONES = {
   /** Hero: the Shield account home screen. */
   hero: { src: `${DIR}hero-wallet.webp`, width: 435, height: 754, frame: { x: 30, y: 30 } },
   /**
-   * Send Privately: home screen with the Send / Receive buttons called out (the callout extends
-   * left past the phone frame).
+   * The same home screen with the Send / Receive buttons called out (the callout extends left
+   * past the phone frame). The hero shows it on phones, and Key Features shows it first.
    */
-  send: { src: `${DIR}send-privately.webp`, width: 464, height: 667, frame: { x: 79, y: 10 } },
-  /** Receive Privately: receiving address screen; the QR code and the address are blurred. */
-  receive: {
-    src: `${DIR}receive-privately.webp`,
-    width: 395,
-    height: 667,
-    frame: { x: 10, y: 10 }
-  },
-  /**
-   * Shield & Unshield: Public account, with the ZEC row and its one-click Shield button called
-   * out (the callout extends past both sides of the phone frame).
-   */
-  shieldToken: { src: `${DIR}shield-token.webp`, width: 558, height: 754, frame: { x: 96, y: 30 } }
+  send: { src: `${DIR}send-privately.webp`, width: 464, height: 667, frame: { x: 79, y: 10 } }
 } as const satisfies Record<string, PhoneShot>
 
 /**
@@ -75,48 +66,61 @@ export function frameStyle(shot: PhoneShot): CSSProperties {
 }
 
 export const SHOTS = {
-  /**
-   * Wallet + DApp page + the connecting line between them, 1000 × 716.5 overall (the wallet takes
-   * the left 355).
-   */
-  defi: { src: `${DIR}defi-access.webp`, width: 1000, height: 716.5 },
   statue: { src: `${DIR}statue.webp`, width: 2294, height: 1106 }
 } as const
 
-export type TransferTab = {
-  id: 'send' | 'receive'
-  title: string
-  body: string
-  shot: keyof typeof PHONES
-  alt: string
+/**
+ * Key Features: the cards on the right, and the picture each one shows on the left. Pictures
+ * are placed on the design mock's 434 × 647 stage: x and y are the image's top-left corner
+ * relative to the stage (CSS px), w × h its size; clip cuts the image off at that height.
+ */
+export type FeatureLayer = {
+  src: string
+  x: number
+  y: number
+  w: number
+  h: number
+  clip?: number
+  blur?: boolean
 }
 
-export const TRANSFER_TABS: TransferTab[] = [
+export type Feature = {
+  id: 'transfer' | 'shield' | 'defi'
+  title: string
+  body: string
+  alt: string
+  layers: FeatureLayer[]
+}
+
+export const FEATURES: Feature[] = [
   {
-    id: 'send',
-    title: 'Send Privately',
+    id: 'transfer',
+    title: 'Send & Receive Privately',
     body: 'Send tokens in seconds without revealing who sent what to whom.',
-    shot: 'send',
-    alt: 'Noir Wallet home on the Shield account, $4,489.21 across privacy providers, with the Send and Receive buttons called out.'
+    alt: 'Noir Wallet home on the Shield account, $4,489.21 across privacy providers, with the Send and Receive buttons called out.',
+    layers: [{ src: PHONES.send.src, x: -20, y: -10, w: 464, h: 667 }]
   },
   {
-    id: 'receive',
-    title: 'Receive Privately',
-    body: 'Receive tokens on a shielded address that hides your balance and identity.',
-    shot: 'receive',
-    alt: 'Receiving Address screen for ZEC on a NEAR Confidential address: send at least $2 of ZEC. The QR code and the one-time address are blurred.'
+    id: 'shield',
+    title: 'Shield Funds Easily',
+    body: 'Move funds in and out of your private balance in one click, across multiple privacy providers.',
+    alt: 'Noir Wallet on the Public account, $1,406.56, with the ZEC row and its one-click Shield button called out.',
+    layers: [{ src: `${DIR}shield-token.webp`, x: -37, y: -30, w: 558, h: 754, clip: 685 }]
+  },
+  {
+    id: 'defi',
+    title: 'Use Defi Privately',
+    body: 'Smoothly switch private account to access DApps',
+    alt: 'Noir Wallet on the Incognito account, $1,232.06, connected to app.aave.com, in front of the app it is connected to.',
+    layers: [
+      { src: `${DIR}defi-dapp.webp`, x: -11, y: 136, w: 510, h: 374, blur: true },
+      { src: `${DIR}defi-wallet.webp`, x: 28, y: 19, w: 317, h: 549 }
+    ]
   }
 ]
 
-export const SHIELD_POINTS = [
-  'One-click shield tokens',
-  'Shield tokens from wallet',
-  'Unshield tokens to wallet',
-  'Integrate multiple shield providers'
-]
-
-/** Supported Shield Tools: the first two are integrated, the rest are coming soon. */
-export const TOOLS: { name: string; icon: string; soon?: boolean }[] = [
+/** Supported privacy providers: the first two are integrated, the rest are coming soon. */
+export const PROVIDERS: { name: string; icon: string; soon?: boolean }[] = [
   { name: 'Zcash Shield', icon: `${DIR}imgGroup1948762866.svg` },
   { name: 'Near Confidential', icon: `${DIR}imgImage1037.png` },
   { name: 'Railgun', icon: `${DIR}imgGroup1948763189.svg`, soon: true },
@@ -125,3 +129,108 @@ export const TOOLS: { name: string; icon: string; soon?: boolean }[] = [
 ]
 
 export const DEFI_LEAVES = ['Lending', 'Perps', 'Cash Out']
+
+/** Choose How Visible Each Move Is: the three accounts every wallet has. */
+export const ACCOUNTS: {
+  id: 'public' | 'shield' | 'incognito'
+  name: string
+  intro: string
+  detail: string
+  who: string
+  when: string
+}[] = [
+  {
+    id: 'public',
+    name: 'Public',
+    intro: 'Receive at your usual address and make regular transfers.',
+    detail: 'Your main account. Create it in Noir or import a wallet you already use.',
+    who: 'Anyone who knows your address can look up its onchain activity.',
+    when: 'You want to keep the address people already pay.'
+  },
+  {
+    id: 'shield',
+    name: 'Shield',
+    intro: 'Hold funds privately, pay someone privately, or receive a private payment.',
+    detail:
+      'Your combined private balance across supported privacy rails, including the Zcash shielded pool and NEAR Confidential Intents.',
+    who: 'Your balance stays inside the privacy rails that hold it.',
+    when: 'Available routes depend on the asset and network.'
+  },
+  {
+    id: 'incognito',
+    name: 'Incognito',
+    intro: 'Use DeFi without connecting your main address.',
+    detail: 'A separate address derived from the same recovery phrase and funded through Shield.',
+    who: 'Apps see your Incognito address. Funding through Shield avoids a direct onchain link to Public.',
+    when: 'Activity across apps on one Incognito address can be viewed together.'
+  }
+]
+
+/** Ledger Supported: three steps, each with its own icon. */
+export const HARDWARE_STEPS: {
+  icon: 'usb' | 'shield' | 'transfer'
+  title: string
+  body: string
+}[] = [
+  {
+    icon: 'usb',
+    title: 'Connect Your Ledger',
+    body: 'Add wallet by clicking [Connect a hardware wallet], connect your ledger and select networks.'
+  },
+  {
+    icon: 'shield',
+    title: 'Shield Funds',
+    body: 'Choose your available assets and move it into Shield wallet.'
+  },
+  {
+    icon: 'transfer',
+    title: 'Transfer Privately',
+    body: 'You can always use ledger to initiate private transactions from your shield wallet when you need.'
+  }
+]
+
+/**
+ * Where "Read the audit report" goes. No public report link exists yet, so the Audited card
+ * shows no link until this is set.
+ */
+const AUDIT_REPORT_URL: string | null = null
+
+/** Your Key Open Code: four points, each with a large, blurred icon on the right. */
+export const TRUST_POINTS: {
+  icon: 'custody' | 'backup' | 'audit' | 'code'
+  title: string
+  body: string
+  link?: { label: string; href: string }
+}[] = [
+  {
+    icon: 'custody',
+    title: 'Self-Custody',
+    body: 'Your keys stay with you. Noir never holds your funds or recovery phrase.'
+  },
+  {
+    icon: 'backup',
+    title: 'One Backup',
+    body: 'Incognito is derived from the same recovery phrase using HDwallet technology, so there is no second phrase to store.'
+  },
+  {
+    icon: 'audit',
+    title: 'Audited',
+    body: 'Noir has been independently audited.',
+    ...(AUDIT_REPORT_URL
+      ? { link: { label: 'Read the audit report', href: AUDIT_REPORT_URL } }
+      : {})
+  },
+  {
+    icon: 'code',
+    title: 'Open Source',
+    body: 'The code is public, so anyone can check what the wallet does.',
+    link: { label: 'View on GitHub', href: __WALLET_REPOSITORY_URL__ }
+  }
+]
+
+/** Footer links, in the design mock's order. */
+export const SOCIAL: { name: 'x' | 'telegram' | 'github'; label: string; href: string }[] = [
+  { name: 'x', label: 'Noir Wallet on X', href: 'https://x.com/noir_wallet' },
+  { name: 'telegram', label: 'Noir Wallet on Telegram', href: 'https://t.me/noirprivacy' },
+  { name: 'github', label: 'Noir Wallet on GitHub', href: __WALLET_REPOSITORY_URL__ }
+]

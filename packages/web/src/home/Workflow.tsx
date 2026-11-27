@@ -1,12 +1,12 @@
 /**
- * How Noir Wallet Works (the flow diagram from the design mock): Public Accounts →
- * Shield Balance → Private Accounts → DeFi.
- * On desktop it is laid out on the design mock's 1154 × 440 canvas and scales down
+ * How Noir Wallet Works (the flow diagram from the design mock): Public Account →
+ * Shield Balance → Incognito Account → DeFi, followed by the supported privacy providers.
+ * On desktop the diagram is laid out on the design mock's 1154 × 440 canvas and scales down
  * proportionally as a whole when the container narrows; on phones it becomes vertical.
- * A highlight runs along the connecting lines, from the public accounts all the way to DeFi.
+ * A highlight runs along the connecting lines, from the public account all the way to DeFi.
  */
 import { type CSSProperties, type RefObject, useEffect, useRef, useState } from 'react'
-import { DEFI_LEAVES, IMG } from './content'
+import { DEFI_LEAVES, IMG, PROVIDERS } from './content'
 import { Icon } from './Icon'
 
 const CANVAS_W = 1154
@@ -34,14 +34,17 @@ export function Workflow() {
   const k = useFit(fitRef)
 
   return (
-    <section className="sec works-sec" id="workflow" aria-labelledby="workflow-title">
-      <div className="wrap">
-        <h2 className="sec-title" id="workflow-title">
+    <section className="works-sec" id="workflow" aria-labelledby="workflow-title">
+      <div className="wrap-n">
+        <p className="eyebrow">Privacy Providers Aggregation</p>
+        <h2 className="h2" id="workflow-title">
           How Noir Wallet Works
         </h2>
+      </div>
+      <div className="wrap">
         <div ref={fitRef} className="works-fit" style={{ '--k': k } as CSSProperties}>
           <div className="works">
-            <div className="wk-box wk-pub">Public Accounts</div>
+            <div className="wk-box wk-pub">Public Account</div>
             <span className="wk-wire" aria-hidden="true">
               <i />
             </span>
@@ -63,7 +66,7 @@ export function Workflow() {
             <span className="wk-wire is-late" aria-hidden="true">
               <i />
             </span>
-            <div className="wk-box wk-priv">Private Accounts</div>
+            <div className="wk-box wk-priv">Incognito Account</div>
             {/* Fork to the three DeFi leaves: two curved lines + a straight line in the middle */}
             <svg className="wk-fan" viewBox="0 0 52 172" aria-hidden="true">
               <path className="wk-fan-line" d="M0 86H5C17 86 27 76 27 64V23C27 11 37 1 49 1H52" />
@@ -98,6 +101,20 @@ export function Workflow() {
               </span>
             </div>
           </div>
+        </div>
+
+        {/* The integrated providers come first; the upcoming ones are dimmed and tagged Soon. */}
+        <div className="providers">
+          <h3>Supported Privacy Providers</h3>
+          <ul>
+            {PROVIDERS.map(provider => (
+              <li key={provider.name} className={`provider${provider.soon ? ' is-soon' : ''}`}>
+                <img src={provider.icon} width={30} height={30} alt="" loading="lazy" />
+                <b>{provider.name}</b>
+                {provider.soon && <em>Soon</em>}
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </section>

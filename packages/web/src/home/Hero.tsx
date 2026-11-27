@@ -4,19 +4,18 @@
  * Every few seconds a scan wave goes out from the wallet's Shield balance card: dots flash as
  * it passes, and the chain marks pick up a shield one after another, then fade back to their
  * original color.
- * Hovering the grid shows each dot's number; clicking the wallet image, like "Try the extension",
- * opens the interactive extension demo.
+ * Hovering the grid shows each dot's number; clicking the wallet image opens the interactive
+ * extension demo. Below the grid runs the "Backed by YZi Labs" band, with the wallet over it.
  */
-import { useEffect, useRef, useState } from 'react'
-import { walletLinkProps } from './walletStore'
+import { type CSSProperties, useEffect, useRef, useState } from 'react'
+import { docsLinkProps, walletLinkProps } from './walletStore'
 import { PHONE_WIDTH, PHONES, frameStyle } from './content'
 import { loadDemo } from './demoLoader'
-import { DeskNote } from './DeskNote'
 import { Icon } from './Icon'
 import { prefersReducedMotion, useInView } from './motion'
-import { TryExtension } from './TryExtension'
 
-type Tone = 'blue' | 'gold' | 'base'
+/** Each chain is drawn in its own color (see .tone-* in site.css). */
+type Tone = 'eth' | 'zec' | 'arb' | 'bnb' | 'base'
 type Kind = 'wide' | 'mid' | 'band'
 
 /**
@@ -36,18 +35,18 @@ const MARKS: {
   mid?: { fx: number; dr: number }
   band: { fx: number; dr: number }
 }[] = [
-  { name: 'Ethereum', tone: 'blue', wide: { fx: 0.583, row: 4 }, band: { fx: 0.6, dr: 3 } },
-  { name: 'Zcash', tone: 'gold', wide: { fx: 0.94, row: 9 }, band: { fx: 0.08, dr: 7 } },
+  { name: 'Ethereum', tone: 'eth', wide: { fx: 0.583, row: 4 }, band: { fx: 0.6, dr: 3 } },
+  { name: 'Zcash', tone: 'zec', wide: { fx: 0.94, row: 9 }, band: { fx: 0.08, dr: 7 } },
   {
     name: 'Arbitrum',
-    tone: 'blue',
+    tone: 'arb',
     wide: { dx: -93, row: 26 },
     mid: { fx: 0.02, dr: 3 },
     band: { fx: 0.64, dr: 11 }
   },
   {
     name: 'BNB Chain',
-    tone: 'gold',
+    tone: 'bnb',
     wide: { fx: 0.487, row: 31 },
     mid: { fx: 0.5, dr: 7 },
     band: { fx: 0.1, dr: 15 }
@@ -134,6 +133,13 @@ function createField({ stage, canvas, tip, marks, column, phone }: Parts, reduce
     cols = kind === 'band' ? (viewport < 760 ? 44 : 72) : 101
     width = canvas.clientWidth
     cell = width / cols
+    // Phones hide the grid (the mobile design mock has none): nothing to lay out or draw.
+    if (width === 0) {
+      rows = 0
+      total = 0
+      height = 0
+      return
+    }
 
     const box = canvas.getBoundingClientRect()
     const measure = (selector: string) =>
@@ -326,6 +332,20 @@ function createField({ stage, canvas, tip, marks, column, phone }: Parts, reduce
   }
 }
 
+/** Frame alignment for the hero image and, on phones, the callout image (see .hero-phone img). */
+function frameVars(): CSSProperties {
+  const wide = frameStyle(PHONES.hero)
+  const phone = frameStyle(PHONES.send)
+  return {
+    '--fw': wide.width,
+    '--fx': wide.marginLeft,
+    '--fy': wide.marginTop,
+    '--fw-m': phone.width,
+    '--fx-m': phone.marginLeft,
+    '--fy-m': phone.marginTop
+  } as CSSProperties
+}
+
 export function Hero({ onTry }: { onTry: () => void }) {
   const [reduced] = useState(prefersReducedMotion)
   // Chain marks get a shield as the scan wave passes, then fade back to their original color
@@ -393,9 +413,11 @@ export function Hero({ onTry }: { onTry: () => void }) {
                 <a className="btn" {...walletLinkProps}>
                   Get Noir Wallet
                 </a>
-                <TryExtension variant="cta" onOpen={onTry} />
+                <a className="btn btn-ghost" {...docsLinkProps}>
+                  Docs
+                  <Icon name="external" className="ext" />
+                </a>
               </div>
-              <DeskNote />
             </div>
           </div>
         </div>
@@ -424,30 +446,44 @@ export function Hero({ onTry }: { onTry: () => void }) {
       <div className="hero-phone-layer">
         <div className="hero-wrap">
           <div ref={phoneRef} className="hero-phone">
-            <img
-              src={PHONES.hero.src}
-              width={PHONES.hero.width}
-              height={PHONES.hero.height}
-              style={frameStyle(PHONES.hero)}
-              fetchPriority="high"
-              alt="Noir Wallet home: a Shield balance of $4,489.21 across privacy providers, with $1,406.56 available to shield, above the Public and Incognito accounts."
-            />
-            {/* Clicking the wallet image also opens the demo (mouse and touch only): keyboard and
-                screen-reader users use the button next to the copy, so this adds no duplicate
-                and never takes focus. */}
-            <div
+            {/* Phones get the same home screen with the Send / Receive callout, as in the mobile
+                design mock; the frame variables line each image up with the phone frame. */}
+            <picture>
+              <source
+                media="(max-width: 759px)"
+                srcSet={PHONES.send.src}
+                width={PHONES.send.width}
+                height={PHONES.send.height}
+              />
+              <img
+                src={PHONES.hero.src}
+                width={PHONES.hero.width}
+                height={PHONES.hero.height}
+                style={frameVars()}
+                fetchPriority="high"
+                alt="Noir Wallet home: a Shield balance of $4,489.21 across privacy providers, with $1,406.56 available to shield, above the Public and Incognito accounts."
+              />
+            </picture>
+            {/* The wallet image opens the demo: the hint shows on hover and on keyboard focus. */}
+            <button
+              type="button"
               className="hero-phone-hit"
-              aria-hidden="true"
               onClick={onTry}
               onPointerEnter={warm}
+              onFocus={warm}
             >
               <span className="hero-phone-hint">
                 <Icon name="pointer" />
                 Try the extension
               </span>
-            </div>
+            </button>
           </div>
         </div>
+      </div>
+
+      <div className="band">
+        <span>Backed by</span>
+        <span className="band-logo">YZi Labs</span>
       </div>
     </section>
   )
