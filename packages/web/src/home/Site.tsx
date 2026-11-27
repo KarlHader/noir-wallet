@@ -18,7 +18,6 @@ import { loadDemo } from './demoLoader'
 import { useReveals, useSpotlight } from './motion'
 import { Security } from './Security'
 import { Statue } from './Statue'
-import { TypeIn } from './TypeIn'
 import { Workflow } from './Workflow'
 
 const ExtensionDemo = lazy(loadDemo)
@@ -53,8 +52,10 @@ function Journey() {
   return (
     <section className="end" id="downloads" aria-labelledby="end-title">
       <div className="wrap">
-        <h2 id="end-title" data-reveal="type">
-          <TypeIn text={'Start Your\nPrivate On-Chain Journey.'} />
+        <h2 id="end-title" data-reveal="up">
+          Start Your
+          <br />
+          Private On-Chain Journey.
         </h2>
         <div className="cta-row" data-reveal="up">
           <a className="btn" {...walletLinkProps}>

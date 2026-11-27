@@ -4,7 +4,6 @@
  * tilted), what the account is for, then who can see it and when to use it.
  */
 import { ACCOUNTS } from './content'
-import { TypeIn } from './TypeIn'
 
 export function Accounts() {
   return (
@@ -13,8 +12,8 @@ export function Accounts() {
         <p className="eyebrow" data-reveal="up">
           Noir Wallet Types
         </p>
-        <h2 className="h2" id="accounts-title" data-reveal="type">
-          <TypeIn text="Choose How Visible Each Move Is" />
+        <h2 className="h2" id="accounts-title" data-reveal="up">
+          Choose How Visible Each Move Is
         </h2>
         <p className="sec-lede" data-reveal="up">
           Every Noir wallet has three accounts. Each one has its own job, and each shows a different

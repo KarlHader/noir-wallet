@@ -8,7 +8,6 @@
 import { type CSSProperties, type RefObject, useEffect, useRef, useState } from 'react'
 import { DEFI_LEAVES, IMG, PROVIDERS } from './content'
 import { Icon } from './Icon'
-import { TypeIn } from './TypeIn'
 
 const CANVAS_W = 1154
 
@@ -40,8 +39,8 @@ export function Workflow() {
         <p className="eyebrow" data-reveal="up">
           Privacy Providers Aggregation
         </p>
-        <h2 className="h2" id="workflow-title" data-reveal="type">
-          <TypeIn text="How Noir Wallet Works" />
+        <h2 className="h2" id="workflow-title" data-reveal="up">
+          How Noir Wallet Works
         </h2>
       </div>
       <div className="wrap">

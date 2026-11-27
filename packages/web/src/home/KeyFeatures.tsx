@@ -6,7 +6,6 @@
 import { type CSSProperties, type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { FEATURES, type FeatureLayer } from './content'
 import { prefersReducedMotion, useInView } from './motion'
-import { TypeIn } from './TypeIn'
 
 /** How long each card stays selected while they take turns. */
 const ROTATE_MS = 6000
@@ -108,8 +107,8 @@ export function KeyFeatures() {
         </div>
 
         <div className="kf-side">
-          <h2 className="kf-title" id="kf-title" data-reveal="type">
-            <TypeIn text="Key Features" />
+          <h2 className="kf-title" id="kf-title" data-reveal="up">
+            Key Features
           </h2>
           <div
             className="kf-tabs"

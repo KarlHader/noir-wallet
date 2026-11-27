@@ -6,7 +6,6 @@
  */
 import type { ReactNode } from 'react'
 import { HARDWARE_STEPS, IMG } from './content'
-import { TypeIn } from './TypeIn'
 
 const MINT = '#00d18a'
 const CARD = '#16161d'
@@ -86,8 +85,8 @@ export function Hardware() {
             <p className="eyebrow" data-reveal="up">
               Hardware Wallets
             </p>
-            <h2 className="h2" id="hardware-title" data-reveal="type">
-              <TypeIn text="Ledger Supported" />
+            <h2 className="h2" id="hardware-title" data-reveal="up">
+              Ledger Supported
             </h2>
           </div>
           <ul className="hw-brands" aria-label="Supported hardware wallets">

@@ -5,7 +5,6 @@
  */
 import { type ReactNode, useId } from 'react'
 import { TRUST_POINTS } from './content'
-import { TypeIn } from './TypeIn'
 
 const SHAPES: Record<(typeof TRUST_POINTS)[number]['icon'], (paint: string) => ReactNode> = {
   custody: paint => (
@@ -69,8 +68,8 @@ export function Security() {
         <p className="eyebrow" data-reveal="up">
           Security and Trust
         </p>
-        <h2 className="h2" id="trust-title" data-reveal="type">
-          <TypeIn text="Your Key Open Code" />
+        <h2 className="h2" id="trust-title" data-reveal="up">
+          Your Key Open Code
         </h2>
         <ul className="trust-grid">
           {TRUST_POINTS.map(point => (

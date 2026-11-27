@@ -1829,31 +1829,33 @@
 
 /* ---------- Motion: scroll reveals and typed headings (useReveals in motion.ts, TypeIn.tsx).
    The root only has .reveals when motion is allowed; without it everything simply shows. ---------- */
+/* A soft fade with a short rise: long and gently eased, so nothing seems to jump */
 :root.reveals [data-reveal='up']:not([data-in]) {
   opacity: 0;
-  translate: 0 32px;
+  translate: 0 14px;
 }
 :root.reveals [data-reveal='up'][data-in] {
-  animation: reveal-up 0.9s cubic-bezier(0.22, 1, 0.36, 1) calc(var(--order, 0) * 90ms) backwards;
+  animation: reveal-up 1.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) calc(var(--order, 0) * 110ms)
+    backwards;
 }
 @keyframes reveal-up {
   from {
     opacity: 0;
-    translate: 0 32px;
+    translate: 0 14px;
   }
 }
 /* Typed headings (.tc is one typed character, .tc-last the final one): the characters appear in
    turn with a mint caret after the newest one; the caret blinks twice on the last character and
    goes */
 [data-reveal='type'] {
-  --type-step: 28ms;
+  --type-step: 17ms;
 }
 :root.reveals [data-reveal='type'] .tc {
   opacity: 0;
 }
 :root.reveals [data-reveal='type'][data-in] .tc {
   animation: type-ch var(--type-step) linear
-    calc(var(--order, 0) * 90ms + var(--c) * var(--type-step)) forwards;
+    calc(var(--order, 0) * 110ms + var(--c) * var(--type-step)) forwards;
 }
 :root.reveals [data-reveal='type'][data-in] .tc-last {
   animation-name: type-end;
