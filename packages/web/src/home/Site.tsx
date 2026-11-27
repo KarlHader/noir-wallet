@@ -15,8 +15,10 @@ import { Hero } from './Hero'
 import { Icon, SocialIcon } from './Icon'
 import { KeyFeatures } from './KeyFeatures'
 import { loadDemo } from './demoLoader'
+import { useReveals, useSpotlight } from './motion'
 import { Security } from './Security'
 import { Statue } from './Statue'
+import { TypeIn } from './TypeIn'
 import { Workflow } from './Workflow'
 
 const ExtensionDemo = lazy(loadDemo)
@@ -51,12 +53,10 @@ function Journey() {
   return (
     <section className="end" id="downloads" aria-labelledby="end-title">
       <div className="wrap">
-        <h2 id="end-title">
-          Start Your
-          <br />
-          Private On-Chain Journey.
+        <h2 id="end-title" data-reveal="type">
+          <TypeIn text={'Start Your\nPrivate On-Chain Journey.'} />
         </h2>
-        <div className="cta-row">
+        <div className="cta-row" data-reveal="up">
           <a className="btn" {...walletLinkProps}>
             <Icon name="download" />
             Install Wallet
@@ -76,7 +76,7 @@ function SiteFooter({ inert }: { inert: boolean }) {
   return (
     <footer className="site-foot" inert={inert}>
       <Statue />
-      <ul className="social">
+      <ul className="social" data-reveal="up">
         {SOCIAL.map(link => (
           <li key={link.name}>
             <a href={link.href} target="_blank" rel="noopener noreferrer" aria-label={link.label}>
@@ -85,8 +85,10 @@ function SiteFooter({ inert }: { inert: boolean }) {
           </li>
         ))}
       </ul>
-      <p className="foot-copy">© 2026 Noir Privacy Terminal. All rights reserved.</p>
-      <p className="wordmark" aria-hidden="true">
+      <p className="foot-copy" data-reveal="up">
+        © 2026 Noir Privacy Terminal. All rights reserved.
+      </p>
+      <p className="wordmark" aria-hidden="true" data-reveal="up">
         Noir Wallet
       </p>
     </footer>
@@ -98,6 +100,8 @@ export function Site() {
   // After it closes, focus returns to whatever opened it.
   const [demo, setDemo] = useState(false)
   const trigger = useRef<HTMLElement | null>(null)
+  useReveals()
+  useSpotlight()
   const openDemo = () => {
     trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setDemo(true)

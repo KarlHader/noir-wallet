@@ -13,6 +13,7 @@ import { IMG, PHONE_WIDTH, PHONES, frameStyle } from './content'
 import { loadDemo } from './demoLoader'
 import { Icon } from './Icon'
 import { prefersReducedMotion, useInView } from './motion'
+import { TypeIn } from './TypeIn'
 
 /** Each chain is drawn in its own color (see .tone-* in site.css). */
 type Tone = 'eth' | 'zec' | 'arb' | 'bnb' | 'base'
@@ -405,13 +406,15 @@ export function Hero({ onTry }: { onTry: () => void }) {
         <div className="hero-copy">
           <div ref={columnRef} className="hero-wrap">
             <div className="inner" data-dim="26">
-              <h1 id="hero-title">The Privacy-first Multichain Wallet</h1>
-              <p className="lede">
+              <h1 id="hero-title" data-reveal="type">
+                <TypeIn text="The Privacy-first Multichain Wallet" />
+              </h1>
+              <p className="lede" data-reveal="up">
                 Noir Wallet is the privacy-first multichain wallet. Send funds and use DeFi without
                 exposing your balance, positions, or on-chain identity. Live on Zcash and major
                 EVMs.
               </p>
-              <div className="cta-row">
+              <div className="cta-row" data-reveal="up">
                 <a className="btn" {...walletLinkProps}>
                   Get Noir Wallet
                 </a>

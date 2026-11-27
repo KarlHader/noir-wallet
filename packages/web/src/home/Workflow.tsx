@@ -8,6 +8,7 @@
 import { type CSSProperties, type RefObject, useEffect, useRef, useState } from 'react'
 import { DEFI_LEAVES, IMG, PROVIDERS } from './content'
 import { Icon } from './Icon'
+import { TypeIn } from './TypeIn'
 
 const CANVAS_W = 1154
 
@@ -36,13 +37,20 @@ export function Workflow() {
   return (
     <section className="works-sec" id="workflow" aria-labelledby="workflow-title">
       <div className="wrap-n">
-        <p className="eyebrow">Privacy Providers Aggregation</p>
-        <h2 className="h2" id="workflow-title">
-          How Noir Wallet Works
+        <p className="eyebrow" data-reveal="up">
+          Privacy Providers Aggregation
+        </p>
+        <h2 className="h2" id="workflow-title" data-reveal="type">
+          <TypeIn text="How Noir Wallet Works" />
         </h2>
       </div>
       <div className="wrap">
-        <div ref={fitRef} className="works-fit" style={{ '--k': k } as CSSProperties}>
+        <div
+          ref={fitRef}
+          className="works-fit"
+          data-reveal="up"
+          style={{ '--k': k } as CSSProperties}
+        >
           <div className="works">
             <div className="wk-box wk-pub">Public Account</div>
             <span className="wk-wire" aria-hidden="true">
@@ -105,10 +113,14 @@ export function Workflow() {
 
         {/* The integrated providers come first; the upcoming ones are dimmed and tagged Soon. */}
         <div className="providers">
-          <h3>Supported Privacy Providers</h3>
+          <h3 data-reveal="up">Supported Privacy Providers</h3>
           <ul>
             {PROVIDERS.map(provider => (
-              <li key={provider.name} className={`provider${provider.soon ? ' is-soon' : ''}`}>
+              <li
+                key={provider.name}
+                className={`provider${provider.soon ? ' is-soon' : ''}`}
+                data-reveal="up"
+              >
                 <img src={provider.icon} width={30} height={30} alt="" loading="lazy" />
                 <b>{provider.name}</b>
                 {provider.soon && <em>Soon</em>}

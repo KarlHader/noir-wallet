@@ -6,6 +6,7 @@
  */
 import type { ReactNode } from 'react'
 import { HARDWARE_STEPS, IMG } from './content'
+import { TypeIn } from './TypeIn'
 
 const MINT = '#00d18a'
 const CARD = '#16161d'
@@ -82,17 +83,19 @@ export function Hardware() {
       <div className="wrap-n">
         <div className="hw-head">
           <div>
-            <p className="eyebrow">Hardware Wallets</p>
-            <h2 className="h2" id="hardware-title">
-              Ledger Supported
+            <p className="eyebrow" data-reveal="up">
+              Hardware Wallets
+            </p>
+            <h2 className="h2" id="hardware-title" data-reveal="type">
+              <TypeIn text="Ledger Supported" />
             </h2>
           </div>
           <ul className="hw-brands" aria-label="Supported hardware wallets">
-            <li>
+            <li data-reveal="up">
               <img src={IMG.ledger} width={36} height={30} alt="" loading="lazy" />
               Ledger
             </li>
-            <li>
+            <li data-reveal="up">
               <img src={IMG.keystone} width={42} height={42} alt="" loading="lazy" />
               Keystone
             </li>
@@ -100,7 +103,7 @@ export function Hardware() {
         </div>
         <ol className="hw-steps">
           {HARDWARE_STEPS.map(step => (
-            <li key={step.title}>
+            <li key={step.title} className="spot" data-reveal="up">
               <svg className="hw-icon" viewBox="0 0 48 42" aria-hidden="true">
                 {ICONS[step.icon]}
               </svg>

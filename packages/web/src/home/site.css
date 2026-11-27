@@ -600,7 +600,8 @@
   font-weight: 300;
   line-height: 1.5;
 }
-/* Panels and cells: dark fill with a 1 px border that fades from gray to dark gray downward */
+/* Panels and cells: dark fill with a 1 px border that fades from gray to dark gray downward.
+   Under a mouse pointer the border turns mint around it (--spot, see the card hover styles). */
 .acct-body,
 .hw-steps li,
 .trust-grid li {
@@ -608,6 +609,12 @@
   border-radius: 2px;
   background:
     linear-gradient(#16161d, #16161d) padding-box,
+    radial-gradient(
+        300px circle at var(--mx, 50%) var(--my, 50%),
+        rgb(61 255 190 / calc(var(--spot, 0) * 0.95)),
+        transparent 70%
+      )
+      border-box,
     linear-gradient(180deg, #696969, #343434) border-box;
 }
 
@@ -629,11 +636,10 @@
   padding: 70px clamp(0px, 1.7vw, 26px) 8px clamp(0px, 4.2vw, 64px);
 }
 /* The pictures sit on the mock's 434 × 647 stage in percentages (KeyFeatures.tsx), so the stage
-   scales as a whole; the address chip sizes itself in container units for the same reason. */
+   scales as a whole */
 .kf-stage {
   position: relative;
   aspect-ratio: 434 / 647;
-  container-type: inline-size;
 }
 .kf-shot {
   position: absolute;
@@ -653,44 +659,6 @@
   width: 100%;
   height: auto;
   max-width: none;
-}
-/* The app behind the Incognito wallet: rounded, faded and blurred, edges included, as in the mock */
-.kf-layer.is-blur {
-  border-radius: 4.6cqw;
-  opacity: 0.65;
-  filter: blur(1.3cqw);
-}
-.kf-chip {
-  position: absolute;
-  left: 69.8%;
-  top: 18.1%;
-  width: 40.8%;
-  aspect-ratio: 177 / 63;
-  display: flex;
-  align-items: center;
-  padding: 0 2.3cqw;
-  border-radius: 3.5cqw;
-  background: #fff;
-  box-shadow: 0 1cqw 4cqw rgba(0, 0, 0, 0.25);
-}
-.kf-chip-pill {
-  display: flex;
-  align-items: center;
-  gap: 2.3cqw;
-  width: 100%;
-  height: 70%;
-  padding: 0 3cqw;
-  border: 1px solid #e8e8e8;
-  border-radius: 2.4cqw;
-  color: #000;
-  font-size: 3.7cqw;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.kf-chip-pill svg {
-  flex: none;
-  width: 5.6cqw;
-  height: 5.6cqw;
 }
 .kf-side {
   padding-top: 8px;
@@ -1846,6 +1814,157 @@
   }
 }
 
+/* Text for screen readers only (TypeIn keeps a heading's plain text here) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Motion: scroll reveals and typed headings (useReveals in motion.ts, TypeIn.tsx).
+   The root only has .reveals when motion is allowed; without it everything simply shows. ---------- */
+:root.reveals [data-reveal='up']:not([data-in]) {
+  opacity: 0;
+  translate: 0 32px;
+}
+:root.reveals [data-reveal='up'][data-in] {
+  animation: reveal-up 0.9s cubic-bezier(0.22, 1, 0.36, 1) calc(var(--order, 0) * 90ms) backwards;
+}
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    translate: 0 32px;
+  }
+}
+/* Typed headings (.tc is one typed character, .tc-last the final one): the characters appear in
+   turn with a mint caret after the newest one; the caret blinks twice on the last character and
+   goes */
+[data-reveal='type'] {
+  --type-step: 28ms;
+}
+:root.reveals [data-reveal='type'] .tc {
+  opacity: 0;
+}
+:root.reveals [data-reveal='type'][data-in] .tc {
+  animation: type-ch var(--type-step) linear
+    calc(var(--order, 0) * 90ms + var(--c) * var(--type-step)) forwards;
+}
+:root.reveals [data-reveal='type'][data-in] .tc-last {
+  animation-name: type-end;
+  animation-duration: 1.6s;
+}
+/* Linear, with the caret switched off in explicit keyframes: a step timing function can end a
+   few characters on their first frame in Chrome, which leaves a caret behind */
+@keyframes type-ch {
+  0%,
+  95% {
+    opacity: 1;
+    box-shadow: 0.06em 0 0 var(--mint);
+  }
+  100% {
+    opacity: 1;
+    box-shadow: 0.06em 0 0 transparent;
+  }
+}
+@keyframes type-end {
+  0%,
+  24%,
+  50%,
+  74% {
+    opacity: 1;
+    box-shadow: 0.06em 0 0 var(--mint);
+  }
+  25%,
+  49%,
+  75%,
+  100% {
+    opacity: 1;
+    box-shadow: 0.06em 0 0 transparent;
+  }
+}
+@media print {
+  :root.reveals [data-reveal]:not([data-in]),
+  :root.reveals [data-reveal='type'] .tc {
+    opacity: 1;
+    translate: none;
+  }
+}
+
+/* ---------- Cards under a mouse pointer: a soft mint glow and a brighter edge follow it
+   (useSpotlight in motion.ts sets --mx and --my); some cards also lift or move their icon ---------- */
+@property --spot {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+.spot {
+  position: relative;
+  isolation: isolate;
+  transition:
+    --spot 0.35s ease,
+    transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.spot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(
+    420px circle at var(--mx, 50%) var(--my, 50%),
+    rgb(61 255 190 / 0.13),
+    transparent 70%
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+.trust-icon {
+  transition:
+    opacity 0.45s ease,
+    filter 0.45s ease,
+    transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.hw-icon {
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.provider {
+  transition:
+    transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 0.25s ease,
+    background-color 0.25s ease;
+}
+@media (hover: hover) {
+  .spot:hover {
+    --spot: 1;
+  }
+  .spot:hover::before {
+    opacity: 1;
+  }
+  .trust-grid li:hover {
+    transform: translateY(-4px);
+  }
+  .trust-grid li:hover .trust-icon {
+    opacity: 0.5;
+    filter: blur(2px);
+    transform: scale(1.06) rotate(-4deg);
+  }
+  .hw-steps li:hover .hw-icon {
+    transform: translateY(-3px) scale(1.06);
+  }
+  .provider:hover {
+    transform: translateY(-3px);
+    border-color: rgb(61 255 190 / 0.55);
+    background-color: rgb(255 255 255 / 0.09);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   :where(:root[data-page='home']) {
     scroll-behavior: auto;
@@ -1863,7 +1982,18 @@
   .chain-mark::after,
   .chain-mark > span,
   .kf-shot,
-  .acct-card {
+  .acct-card,
+  .spot,
+  .spot::before,
+  .trust-icon,
+  .hw-icon,
+  .provider {
     transition: none;
+  }
+  .trust-grid li:hover,
+  .trust-grid li:hover .trust-icon,
+  .hw-steps li:hover .hw-icon,
+  .provider:hover {
+    transform: none;
   }
 }

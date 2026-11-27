@@ -83,7 +83,6 @@ export type FeatureLayer = {
   w: number
   h: number
   clip?: number
-  blur?: boolean
 }
 
 export type Feature = {
@@ -107,17 +106,15 @@ export const FEATURES: Feature[] = [
     title: 'Shield Funds Easily',
     body: 'Move funds in and out of your private balance in one click, across multiple privacy providers.',
     alt: 'Noir Wallet on the Public account, $1,406.56, with the ZEC row and its one-click Shield button called out.',
-    layers: [{ src: `${DIR}shield-token.webp`, x: -37, y: -30, w: 558, h: 754, clip: 685 }]
+    layers: [{ src: `${DIR}shield-token.webp`, x: -37, y: -30, w: 558, h: 708, clip: 685 }]
   },
   {
     id: 'defi',
     title: 'Use Defi Privately',
     body: 'Smoothly switch private account to access DApps',
-    alt: 'Noir Wallet on the Incognito account, $1,232.06, connected to app.aave.com, in front of the app it is connected to.',
-    layers: [
-      { src: `${DIR}defi-dapp.webp`, x: -11, y: 136, w: 510, h: 374, blur: true },
-      { src: `${DIR}defi-wallet.webp`, x: 28, y: 19, w: 317, h: 549 }
-    ]
+    alt: 'Noir Wallet on the Incognito account, $1,232.06, connected to app.aave.com as 0x69...a8f4, in front of the app it is connected to.',
+    // One picture: the wallet, the blurred app behind it and the address callout
+    layers: [{ src: `${DIR}defi.webp`, x: -41, y: 18, w: 570, h: 577 }]
   }
 ]
 

@@ -6,6 +6,7 @@
 import { type CSSProperties, type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { FEATURES, type FeatureLayer } from './content'
 import { prefersReducedMotion, useInView } from './motion'
+import { TypeIn } from './TypeIn'
 
 /** How long each card stays selected while they take turns. */
 const ROTATE_MS = 6000
@@ -21,22 +22,6 @@ function layerStyle(layer: FeatureLayer): CSSProperties {
     width: `${(layer.w / STAGE.w) * 100}%`,
     aspectRatio: `${layer.w} / ${layer.clip ?? layer.h}`
   }
-}
-
-/** The connected address shown next to the Incognito wallet (a fixed sample, like the rest). */
-function AddressChip() {
-  return (
-    <div className="kf-chip" aria-hidden="true">
-      <span className="kf-chip-pill">
-        <svg viewBox="0 0 10 10">
-          <circle cx="5" cy="5" r="5" fill="#9fd65a" />
-          <path d="M3 2h4v2H3zM2 4h1v3H2zM7 4h1v3H7zM4 5h2v3H4z" fill="#2f74e8" />
-          <path d="M3 4h1v1H3zM6 4h1v1H6zM2 7h2v1H2zM6 7h2v1H6z" fill="#8f7cf0" />
-        </svg>
-        0x69...a8f4
-      </span>
-    </div>
-  )
 }
 
 export function KeyFeatures() {
@@ -97,6 +82,7 @@ export function KeyFeatures() {
       >
         <div
           className="kf-stage"
+          data-reveal="up"
           id="kf-panel"
           role="tabpanel"
           aria-labelledby={`kf-tab-${current.id}`}
@@ -112,23 +98,18 @@ export function KeyFeatures() {
                 aria-hidden={on ? undefined : true}
               >
                 {feature.layers.map(layer => (
-                  <div
-                    key={layer.src}
-                    className={`kf-layer${layer.blur ? ' is-blur' : ''}`}
-                    style={layerStyle(layer)}
-                  >
+                  <div key={layer.src} className="kf-layer" style={layerStyle(layer)}>
                     <img src={layer.src} width={layer.w} height={layer.h} loading="lazy" alt="" />
                   </div>
                 ))}
-                {feature.id === 'defi' && <AddressChip />}
               </div>
             )
           })}
         </div>
 
         <div className="kf-side">
-          <h2 className="kf-title" id="kf-title">
-            Key Features
+          <h2 className="kf-title" id="kf-title" data-reveal="type">
+            <TypeIn text="Key Features" />
           </h2>
           <div
             className="kf-tabs"
@@ -148,6 +129,7 @@ export function KeyFeatures() {
                   role="tab"
                   id={`kf-tab-${feature.id}`}
                   className={`kf-tab${on ? ' on' : ''}`}
+                  data-reveal="up"
                   aria-selected={on}
                   aria-controls="kf-panel"
                   tabIndex={on ? 0 : -1}

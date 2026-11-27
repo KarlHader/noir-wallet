@@ -4,22 +4,25 @@
  * tilted), what the account is for, then who can see it and when to use it.
  */
 import { ACCOUNTS } from './content'
+import { TypeIn } from './TypeIn'
 
 export function Accounts() {
   return (
     <section className="sec-n accounts" aria-labelledby="accounts-title">
       <div className="wrap-n">
-        <p className="eyebrow">Noir Wallet Types</p>
-        <h2 className="h2" id="accounts-title">
-          Choose How Visible Each Move Is
+        <p className="eyebrow" data-reveal="up">
+          Noir Wallet Types
+        </p>
+        <h2 className="h2" id="accounts-title" data-reveal="type">
+          <TypeIn text="Choose How Visible Each Move Is" />
         </h2>
-        <p className="sec-lede">
+        <p className="sec-lede" data-reveal="up">
           Every Noir wallet has three accounts. Each one has its own job, and each shows a different
           amount to the outside world.
         </p>
         <ul className="acct-grid">
           {ACCOUNTS.map(account => (
-            <li key={account.id} className={`acct acct-${account.id}`}>
+            <li key={account.id} className={`acct acct-${account.id}`} data-reveal="up">
               <div className="acct-card" aria-hidden="true">
                 <i className="acct-dot" />
                 <span className="acct-name">{account.name}</span>
@@ -32,7 +35,7 @@ export function Accounts() {
                   <i />
                 </span>
               </div>
-              <div className="acct-body">
+              <div className="acct-body spot">
                 <h3>{account.name}</h3>
                 <div className="acct-about">
                   <p>{account.intro}</p>
