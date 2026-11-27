@@ -1470,6 +1470,14 @@
   line-height: 1.2;
   text-transform: capitalize;
 }
+/* Other pages' footer (FeedbackRewards.tsx): no statue, so nothing to overlap */
+.site-foot.is-plain {
+  margin-top: 0;
+  padding-top: clamp(88px, 9vw, 140px);
+}
+.site-foot.is-plain .social {
+  margin-top: 0;
+}
 .wordmark {
   margin-top: -15px;
   /* The page ends partway through the letters, as in the mock */

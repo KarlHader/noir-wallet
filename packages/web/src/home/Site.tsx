@@ -25,18 +25,26 @@ const ExtensionDemo = lazy(loadDemo)
 // over.
 const Campaign = lazy(() => import('./Campaign'))
 
-function SiteHeader({ inert }: { inert: boolean }) {
+/**
+ * The site header. Other pages (FeedbackRewards.tsx) pass base="/", so the brand and the section
+ * links lead back to the home page.
+ */
+export function SiteHeader({ inert = false, base = '' }: { inert?: boolean; base?: '' | '/' }) {
   return (
     <header className="site-head" inert={inert}>
       <div className="wrap-head">
-        <a className="brand" href="#top" aria-label="Noir Wallet, back to top">
+        <a
+          className="brand"
+          href={base || '#top'}
+          aria-label={base ? 'Noir Wallet home page' : 'Noir Wallet, back to top'}
+        >
           <img src={IMG.logo} alt="" />
           <span>Noir Wallet</span>
         </a>
         <nav className="site-nav" aria-label="Site">
-          <a href="#features">Features</a>
-          <a href="#workflow">Workflow</a>
-          <a href="#downloads">Downloads</a>
+          <a href={`${base}#features`}>Features</a>
+          <a href={`${base}#workflow`}>Workflow</a>
+          <a href={`${base}#downloads`}>Downloads</a>
           <a {...docsLinkProps}>Docs</a>
         </nav>
         <a className="btn btn-sm" {...walletLinkProps}>
@@ -73,10 +81,17 @@ function Journey() {
   )
 }
 
-function SiteFooter({ inert }: { inert: boolean }) {
+/** The site footer. Other pages leave out the statue (statue={false}). */
+export function SiteFooter({
+  inert = false,
+  statue = true
+}: {
+  inert?: boolean
+  statue?: boolean
+}) {
   return (
-    <footer className="site-foot" inert={inert}>
-      <Statue />
+    <footer className={statue ? 'site-foot' : 'site-foot is-plain'} inert={inert}>
+      {statue && <Statue />}
       <ul className="social" data-reveal="up">
         {SOCIAL.map(link => (
           <li key={link.name}>

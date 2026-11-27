@@ -5,6 +5,7 @@ import { Site } from './home/Site'
 const FrostVotePage = lazy(() => import('./pages/FrostVotePage'))
 const V2BetaPage = lazy(() => import('./pages/V2BetaPage'))
 const ShieldAndWinPage = lazy(() => import('./pages/ShieldAndWinPage'))
+const FeedbackRewards = lazy(() => import('./home/FeedbackRewards'))
 
 function normalizePath(path: string): string {
   if (path.length > 1 && path.endsWith('/')) {
@@ -65,6 +66,12 @@ export default function App() {
     page = (
       <Suspense fallback={<div style={{ minHeight: '100vh', background: '#000' }} />}>
         <ShieldAndWinPage />
+      </Suspense>
+    )
+  } else if (path === '/feedback-rewards') {
+    page = (
+      <Suspense fallback={<div style={{ minHeight: '100vh', background: '#000' }} />}>
+        <FeedbackRewards />
       </Suspense>
     )
   }
