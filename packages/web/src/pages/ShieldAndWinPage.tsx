@@ -54,6 +54,7 @@ import {
   type NoirEthereumProvider
 } from '../shield-and-win/wallet'
 import { Tooltip } from '../components/Tooltip'
+import { CAMPAIGN } from '../seo'
 import '../tailwind.css'
 
 const FONT_HREF =
@@ -831,7 +832,7 @@ export default function ShieldAndWinPage() {
 
   useEffect(() => {
     const previous = document.title
-    document.title = 'Shield & Win · Noir Wallet'
+    document.title = CAMPAIGN.title
     return () => {
       document.title = previous
     }

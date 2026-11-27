@@ -6,6 +6,7 @@
 import './feedback-rewards.css'
 import { useEffect, type ReactNode } from 'react'
 import { openZendeskChat } from '../lib/zendesk'
+import { FEEDBACK_REWARDS } from '../seo'
 import { DeskNote } from './DeskNote'
 import {
   BUG_BOUNTY_URL,
@@ -492,7 +493,7 @@ export default function FeedbackRewards() {
 
   useEffect(() => {
     const previous = document.title
-    document.title = 'Community Feedback Rewards · Noir Wallet'
+    document.title = FEEDBACK_REWARDS.title
     return () => {
       document.title = previous
     }
