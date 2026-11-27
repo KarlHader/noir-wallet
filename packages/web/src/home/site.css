@@ -1199,10 +1199,16 @@
   border: 1px solid transparent;
   border-radius: 16px;
   color: #fff;
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Cards sit straight; pointing at a column lifts its card and tilts it, which is the state the
+   mock shows for Public */
+@media (hover: hover) {
+  .acct:hover .acct-card {
+    transform: translateY(-45px) rotate(-6.9deg);
+  }
 }
 .acct-public .acct-card {
-  top: -100px;
-  transform: rotate(-6.9deg);
   background:
     linear-gradient(118deg, #fff 8%, #a8a8c9 100%) padding-box,
     linear-gradient(180deg, #fff, #999) border-box;
@@ -1930,7 +1936,8 @@
   .chain-mark::before,
   .chain-mark::after,
   .chain-mark > span,
-  .kf-shot {
+  .kf-shot,
+  .acct-card {
     transition: none;
   }
 }
