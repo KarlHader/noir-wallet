@@ -624,6 +624,11 @@
   margin-top: 25px;
   background: #16161d;
   overflow: hidden;
+  /* Clips the same, but does not make the band a scroll container, so the box can pin */
+  overflow: clip;
+}
+.kf-travel {
+  display: none;
 }
 .kf-box {
   display: grid;
@@ -717,6 +722,36 @@
 }
 .kf-tab.on span {
   color: #fff;
+}
+/* Wide screens: the box pins right under the 83 px header while the band scrolls on for another
+   140vh, in which the features follow one another (KeyFeatures.tsx); then the page moves on. On
+   short windows the picture and the cards shrink so the pinned box still fits. */
+@media (min-width: 1100px) {
+  @supports (overflow: clip) {
+    .kf-box {
+      position: sticky;
+      top: 83px;
+      padding-top: clamp(24px, calc(100vh - 784px), 70px);
+    }
+    .kf-stage {
+      width: min(434px, calc((100vh - 131px) * 434 / 647));
+    }
+    .kf-travel {
+      display: block;
+      height: 140vh;
+    }
+  }
+}
+@media (min-width: 1100px) and (max-height: 760px) {
+  .kf-tabs {
+    gap: 14px;
+    margin-top: 20px;
+  }
+  .kf-tab {
+    min-height: 0;
+    gap: 12px;
+    padding: 22px 28px 16px;
+  }
 }
 
 /* ---------- How Noir Wallet Works: the design mock's 1154 × 440 canvas, scaled down as a whole
