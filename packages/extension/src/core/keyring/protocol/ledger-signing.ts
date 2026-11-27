@@ -84,6 +84,8 @@ export type LedgerDeviceSigningResponse =
   | LedgerSolanaSigningResponse
   | LedgerNearSigningResponse
 
+export type LedgerConfidentialSigningPurpose = 'confidential-session' | 'confidential-order-status'
+
 export interface LedgerPendingSigning {
   readonly requestId: string
   readonly request: LedgerDeviceSigningRequest
@@ -95,6 +97,7 @@ export interface LedgerPendingSigning {
   readonly payloadFingerprint: { readonly algorithm: 'sha256'; readonly digestHex: string }
   readonly expiresAt: number
   readonly origin?: string
+  readonly purpose?: LedgerConfidentialSigningPurpose
   readonly summary: SigningSummary
   readonly requestDigest: string
   readonly tabId?: number
@@ -239,7 +242,7 @@ export function parseLedgerPendingSigning(value: unknown, now = Date.now()): Led
       'summary',
       'requestDigest'
     ],
-    ['origin', 'tabId'],
+    ['origin', 'purpose', 'tabId'],
     'Ledger pending signing'
   )
   const requestId = bounded(item.requestId, 'Ledger request ID', 128)
@@ -249,6 +252,14 @@ export function parseLedgerPendingSigning(value: unknown, now = Date.now()): Led
   assertExactKeys(scope, ['keyDomainId', 'accountId', 'chainId'], [], 'Ledger signing scope')
   const chainId = parseChainId(bounded(scope.chainId, 'Ledger chain ID', 64)).id
   const parsedRequest = request(item.request, chainId)
+  const purpose = item.purpose
+  if (
+    purpose !== undefined &&
+    ((purpose !== 'confidential-session' && purpose !== 'confidential-order-status') ||
+      parsedRequest.kind !== 'personal-sign' ||
+      item.origin !== undefined)
+  )
+    throw new Error('Invalid Ledger Confidential signing purpose')
   const fingerprint = readRecord(item.payloadFingerprint, 'Ledger payload fingerprint')
   assertExactKeys(fingerprint, ['algorithm', 'digestHex'], [], 'Ledger payload fingerprint')
   if (
@@ -306,6 +317,7 @@ export function parseLedgerPendingSigning(value: unknown, now = Date.now()): Led
     payloadFingerprint: Object.freeze({ algorithm: 'sha256', digestHex: fingerprint.digestHex }),
     expiresAt,
     ...(origin === undefined ? {} : { origin }),
+    ...(purpose === undefined ? {} : { purpose }),
     summary: parsedSummary,
     requestDigest,
     ...(tabId === undefined ? {} : { tabId })

@@ -128,6 +128,7 @@ export function createBackgroundConfidentialFundingCoordinator(
     api: new ConfidentialFundingApi(config, near.rpcUrl, __RHEA_SWAP_ACCESS_TOKEN__),
     queryOneClickOrderStatus,
     store,
+    getActiveGenerationId: async () => (await storage.getActivePointer())?.generationId ?? null,
     signer: new ConfidentialFundingSigner(
       signerClient,
       chainId => loadActiveEvmPortfolioContext(storage, chainId),

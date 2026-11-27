@@ -117,10 +117,10 @@ export function formatShieldQuoteTime(seconds: number): string {
 }
 
 function confidentialHolding(
-  model: PortfolioReadModel,
+  model: PortfolioReadModel | null,
   protocolAssetId: string
 ): NonNullable<PortfolioReadModel['confidential']>['assets'][number] | undefined {
-  return model.confidential?.status === 'ready'
+  return model?.confidential?.status === 'ready'
     ? model.confidential.assets.find(asset => asset.protocolAssetId === protocolAssetId)
     : undefined
 }
@@ -138,7 +138,7 @@ export function shieldPortfolioBalances(
 }
 
 function fundingAssetView(
-  model: PortfolioReadModel,
+  model: PortfolioReadModel | null,
   managed: ShieldTransferAsset & Readonly<{ symbol: string; decimals: number; iconUrl?: string }>,
   name: string,
   holding: ReturnType<typeof confidentialHolding>
@@ -157,7 +157,7 @@ function fundingAssetView(
       (holding.decimals !== undefined && holding.decimals !== managed.decimals))
   )
     return null
-  const publicAsset = model.assets.find(asset => asset.asset.id === managed.assetId)
+  const publicAsset = model?.assets.find(asset => asset.asset.id === managed.assetId)
   if (publicAsset) {
     return publicAsset.metadata.decimals === managed.decimals ? publicAsset : null
   }
@@ -198,15 +198,16 @@ export function listShieldFundingAssets(
   model: PortfolioReadModel | null,
   managedAssets: readonly IntentsManagedAsset[],
   catalogTokens: readonly SwapToken[],
-  network: Network
+  network: Network,
+  options?: Readonly<{ zcashOnly: boolean }>
 ): readonly ShieldFundingAsset[] {
-  if (!model) return []
+  if (!model && !options?.zcashOnly) return []
   const tokensByAssetId = new Map<string, SwapToken>()
   for (const token of catalogTokens) {
     if (!tokensByAssetId.has(token.assetId)) tokensByAssetId.set(token.assetId, token)
   }
   const chains = new Map<string, PortfolioChainView>(
-    model.chains.map(chain => [chain.chain.id, chain])
+    model?.chains.map(chain => [chain.chain.id, chain])
   )
   const productChains = createInitialProductChainRegistry(network)
   const bundled = createAssetRegistry(
@@ -243,6 +244,7 @@ export function listShieldFundingAssets(
   const catalog = [...managedAssets.filter(asset => asset.management === 'evm'), ...native]
   const seen = new Set<string>()
   return catalog.flatMap(managed => {
+    if (options?.zcashOnly && managed.chainId !== zcashChainId) return []
     if (seen.has(managed.protocolAssetId)) return []
     const chain =
       chains.get(managed.chainId) ??

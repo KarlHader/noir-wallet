@@ -1,10 +1,18 @@
 ---
 title: Wallet Guide
-description: Learn every important Noir Wallet workflow, from setup to private transactions and account security.
+description: Use Public, Shield, and Incognito balances in Noir Wallet.
 icon: WalletCards
 ---
 
-Noir Wallet combines standard wallet actions with Zcash privacy choices. The most important distinction is whether an address or funding source is **transparent** or **shielded**.
+## Wallet modes
+
+Select a balance card on Home before choosing an action. The cards and actions available depend on the account, enabled networks, and hardware support.
+
+| Mode | What it holds | Where to start |
+| --- | --- | --- |
+| **Public** | Transparent ZEC and public EVM balances | Use **Send** or **Receive** for standard on-chain transfers. |
+| **Shield** | Native shielded ZEC and eligible NEAR Confidential assets | Use **Receive** or open **Providers** to choose a [Shield provider](/wallet-guide/shielded-funds). |
+| **Incognito** | A separate EVM account for eligible software wallets | Select **+ Incognito** to set it up, then use **Deposit** or **Withdraw** to move funds between Public and Incognito. A direct transfer can publicly link the addresses. |
 
 <Cards>
   <Card title="Install and set up" href="/wallet-guide/install-and-setup" />
@@ -20,15 +28,3 @@ Noir Wallet combines standard wallet actions with Zcash privacy choices. The mos
 ## Help and project information
 
 Open **Settings > Help** to export diagnostic logs or contact support. **Settings > About** shows the installed version, build date, and package license. GitHub, X, and Telegram links are available in About and at the bottom of Settings.
-
-## Before moving funds
-
-1. Confirm that wallet synchronization is current.
-2. Verify the complete destination address.
-3. Check whether the transaction uses transparent or shielded funds.
-4. Review the amount, fee, and destination again on the approval screen.
-
-<Callout type="warn">
-  Confirmed blockchain transactions are irreversible. For pending EVM transactions, see
-  [cancellation options](/faq#can-i-cancel-or-reverse-a-transaction).
-</Callout>

@@ -3,6 +3,7 @@ import {
   getNoirWallet,
   publicKeyToAddress,
   verifyMessageSignature,
+  type Caip25Session,
   type ZcashAddress,
   type ZcashAccount,
   type ZcashAccountBalance,
@@ -109,6 +110,15 @@ function formatBalance(value: string): string {
 
 function isTransparentRecipient(address: string): boolean {
   return /^t[13m]/.test(address.trim())
+}
+
+function logAccountEvent(event: string, accounts: unknown): void {
+  const summary = Array.isArray(accounts)
+    ? { accountCount: accounts.length }
+    : accounts == null || accounts === ''
+      ? null
+      : { accountCount: 1 }
+  console.info(`[Noir SDK Demo] ${event}`, summary)
 }
 
 function App() {
@@ -240,11 +250,42 @@ function App() {
 
   useEffect(() => {
     if (!noirWallet) return
+    const { zcash, ethereum, bitcoin, solana, near, multichain } = noirWallet
+    const onZcash = (accounts: unknown) => logAccountEvent('zcash.accountsChanged', accounts)
+    const onEvm = (accounts: unknown) => logAccountEvent('ethereum.accountsChanged', accounts)
+    const onBitcoin = (accounts: unknown) => logAccountEvent('bitcoin.accountsChanged', accounts)
+    const onSolana = (accounts: unknown) => logAccountEvent('solana.accountsChanged', accounts)
+    const onNear = (account: unknown) => logAccountEvent('near.accountChanged', account)
+    const onSession = (session: Caip25Session) => {
+      const accountCounts = Object.fromEntries(
+        Object.entries(session.scopes).map(([chainId, scope]) => [chainId, scope.accounts.length])
+      )
+      console.info('[Noir SDK Demo] multichain.wallet_sessionChanged', accountCounts)
+    }
+
+    zcash.on('accountsChanged', onZcash)
+    ethereum?.on('accountsChanged', onEvm)
+    bitcoin?.on('accountsChanged', onBitcoin)
+    solana?.on('accountsChanged', onSolana)
+    near?.on('accountChanged', onNear)
+    multichain?.on('wallet_sessionChanged', onSession)
+    return () => {
+      zcash.removeListener('accountsChanged', onZcash)
+      ethereum?.removeListener('accountsChanged', onEvm)
+      bitcoin?.removeListener('accountsChanged', onBitcoin)
+      solana?.removeListener('accountsChanged', onSolana)
+      near?.removeListener('accountChanged', onNear)
+      multichain?.removeListener('wallet_sessionChanged', onSession)
+    }
+  }, [noirWallet])
+
+  useEffect(() => {
+    if (!noirWallet) return
 
     const zcash = noirWallet.zcash
 
-    const onAccountsChanged = async (accounts: ZcashAddress | null) => {
-      if (!accounts) {
+    const onAccountsChanged = async (accounts: ZcashAddress | [] | null) => {
+      if (!accounts || Array.isArray(accounts)) {
         setConnected(false)
         setAddresses(null)
         setBalance(null)

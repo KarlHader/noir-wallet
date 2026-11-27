@@ -138,23 +138,39 @@ export class OneClickStatusClient {
     }
   }
 
-  private async getToken(scope: OneClickTokenScope): Promise<string | null> {
+  private async getToken(
+    scope: OneClickTokenScope,
+    resolveSigner = this.options.resolveSigner
+  ): Promise<string | null> {
     const key = oneClickTokenKey(scope)
     const pending = this.auth.get(key)
-    if (pending) return pending.run(() => this.authorize(scope))
+    if (pending) return pending.run(() => this.authorize(scope, resolveSigner))
     const task = new DedupPromise<string | null>()
     this.auth.set(key, task)
     try {
-      return await task.run(() => this.authorize(scope))
+      return await task.run(() => this.authorize(scope, resolveSigner))
     } finally {
       this.auth.delete(key)
     }
   }
 
-  private async authorize(scope: OneClickTokenScope): Promise<string | null> {
+  async authorizeOwner(
+    scope: OneClickTokenScope,
+    sign: NonNullable<Awaited<ReturnType<Options['resolveSigner']>>>
+  ): Promise<boolean> {
+    const resolveSigner = async () => sign
+    return Boolean(
+      (await this.getToken(scope, resolveSigner)) ?? (await this.getToken(scope, resolveSigner))
+    )
+  }
+
+  private async authorize(
+    scope: OneClickTokenScope,
+    resolveSigner: Options['resolveSigner']
+  ): Promise<string | null> {
     const cached = await this.options.tokens.read(scope)
     if (cached) return cached
-    const sign = await this.options.resolveSigner(scope)
+    const sign = await resolveSigner(scope)
     if (!sign) return null
     const authUrl = new URL('/api/1click/status/auth/', scope.endpoint)
     const post = (path: string, body: unknown) =>

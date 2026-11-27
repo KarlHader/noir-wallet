@@ -28,9 +28,12 @@ Noir Wallet can hold multiple wallets and accounts. A connected dApp may request
 
 Open the wallet selector and choose **Add Wallet**. Choose **Import Wallet** for a **Secret Recovery Phrase** or **Private Key**, **Create New Wallet** for a new recovery phrase, or **Connect Hardware Wallet** to select **Ledger** or **Keystone**. Selecting a hardware wallet opens its connection flow in a browser tab.
 
-Recovery-phrase wallets and hardware wallets each have their own group. Accounts imported from individual private keys appear together under **Imported Private Key** and have no **Add Account** action. Each imported account keeps its own credentials and removal action.
+Use **Add Account** on a recovery-phrase wallet to derive another account. Individual private-key accounts appear under **Imported Private Key**.
 
-Hover over a wallet or account name and select the edit icon to rename it in place. Use **Add Account** on a recovery-phrase wallet to derive another account.
+## Hardware wallets
+
+- **Ledger** supports Zcash and eligible EVM operations. Select the network during setup and approve transactions on the device.
+- **Keystone** uses **Cypherpunk 3.2.2 or newer** for Zcash and **Multi-Coin** for EVM. Follow the QR prompts to connect and sign. Keystone can sign supported sends from shielded ZEC. Use a wallet that supports transparent ZEC spending when you need to send or shield transparent funds.
 
 ## Synchronization
 

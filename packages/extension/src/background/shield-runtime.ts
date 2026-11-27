@@ -48,11 +48,7 @@ export function createBackgroundShieldFundingRuntime(deps: {
       const coordinator = deps.getPortfolioCoordinator()
       if (!coordinator) return
       if (target.balanceUpdated) {
-        const model = await coordinator.readCachedActive()
-        if (
-          model?.scope.keyDomainId === target.keyDomainId &&
-          model.scope.accountId === target.accountId
-        ) {
+        if (await coordinator.isActiveAccount(target)) {
           await chrome.runtime
             .sendMessage({
               type: 'PORTFOLIO_UPDATED',

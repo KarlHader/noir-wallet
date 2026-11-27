@@ -195,9 +195,13 @@ export function getAssetProtocolSourceMappings(
       ) {
         protocolAssetId = getEvmNativeProtocolAssetId(evm.chainId)
       } else if (
-        evm?.usdcContract &&
+        evm &&
         asset.namespace === 'erc20' &&
-        asset.reference.toLowerCase() === evm.usdcContract.toLowerCase()
+        (asset.reference === evm.usdcContract?.toLowerCase() ||
+          (entry.source === 'bundled' &&
+            evm.bundledErc20Assets?.some(
+              token => token.symbol === 'USDC' && token.contract.toLowerCase() === asset.reference
+            )))
       ) {
         protocolAssetId = EVM_USDC_PROTOCOL_ASSET_BY_CHAIN_ID[evm.chainId] ?? null
       } else if (

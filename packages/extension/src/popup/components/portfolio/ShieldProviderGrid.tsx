@@ -4,7 +4,6 @@ import { getZcashChainId } from '@/core/chains/registry'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import type { Network } from '@/types'
-import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import { useSwapTokenCatalog } from '@/popup/hooks/useSwapTokenCatalog'
 import { useNavigate } from '@/popup/provider/Router'
 import type { AccountNetworksView } from '@/popup/services/account-networks-client'
@@ -33,7 +32,8 @@ export function HomeShieldProviders({
   prices,
   pricesLoading,
   balancesHidden,
-  actions: { near, canManageNear, hasZcash }
+  loadingShieldBalances,
+  actions: { near, hasZcash }
 }: {
   readonly network: Network
   readonly account: AccountNetworksView | null
@@ -43,24 +43,9 @@ export function HomeShieldProviders({
   readonly prices: AssetPriceReadModel | null
   readonly pricesLoading: boolean
   readonly balancesHidden: boolean
-  readonly actions: Pick<
-    ReturnType<typeof selectShieldActions>,
-    'near' | 'canManageNear' | 'hasZcash'
-  >
+  readonly loadingShieldBalances: boolean
+  readonly actions: Pick<ReturnType<typeof selectShieldActions>, 'near' | 'hasZcash'>
 }) {
-  const {
-    loading: loadingShieldBalances,
-    error,
-    refreshBalances
-  } = useShieldBalances({
-    hardware: account?.walletSource.kind === 'hardware',
-    authorizationPath: '/shield-provider?provider=near-confidential',
-    active: true,
-    authorizeOnMount: false,
-    enabled: canManageNear && near.status !== 'ready',
-    scopeKey: `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`,
-    scope: account ? { network, keyDomainId: account.walletId, accountId: account.accountId } : null
-  })
   const zcash = model
     ? buildShieldProviderGroups(model, prices).find(group => group.id === 'zcash-shield')
     : undefined
@@ -104,11 +89,11 @@ export function HomeShieldProviders({
 
   return (
     <div className="px-4 pt-5 pb-5">
-      {(error || status === 'error') && (
+      {status === 'error' && (
         <button
           type="button"
           className="mb-2 ml-auto block text-xs text-primary"
-          onClick={() => void (error ? refreshBalances(true) : refresh(true))}
+          onClick={() => void refresh(true)}
         >
           Retry
         </button>

@@ -31,6 +31,12 @@ export function LedgerSign() {
   const abort = useRef<AbortController | null>(null)
   const terminal = useRef(false)
   const signing = useRef(false)
+  const purposeTitle =
+    view?.purpose === 'confidential-session'
+      ? 'Authorize NEAR Confidential'
+      : view?.purpose === 'confidential-order-status'
+        ? 'Authorize swap status tracking'
+        : undefined
   useEffect(() => {
     let disposed = false
     const query = new URLSearchParams(location.hash.split('?')[1] ?? '')
@@ -107,20 +113,26 @@ export function LedgerSign() {
   const sign = async (transport: LedgerTransport) => {
     if (!view || signing.current || terminal.current || Date.now() >= view.expiresAt) return
     signing.current = true
-    abort.current = new AbortController()
+    const controller = new AbortController()
+    abort.current = controller
+    setError('')
     setInteraction(`Open the ${ledgerRequestDeviceApp(view.request)} app on your Ledger`)
     setStep('signing')
     let stage = 'device signing'
     try {
       const response = await signLedgerDeviceRequest(view.request, {
         transport,
-        signal: abort.current.signal,
+        signal: controller.signal,
         onInteraction: () => setInteraction('Review and confirm on your Ledger')
       })
-      abort.current.signal.throwIfAborted()
+      controller.signal.throwIfAborted()
       stage = 'submission'
       await submitLedgerSigningView(view, response)
       terminal.current = true
+      if (view.purpose) {
+        window.close()
+        return
+      }
       if (view.family === 'evm' && view.transactionId) {
         const continuation = await swapApprovalContinuationClient
           .get(view.transactionId)
@@ -131,6 +143,12 @@ export function LedgerSign() {
     } catch (cause) {
       const message = formatHardwareSigningError(cause)
       logger.error(`[Hardware signing] Ledger ${stage} failed: ${message}`)
+      if (terminal.current || controller.signal.aborted) return
+      if (view.purpose && stage === 'device signing' && Date.now() < view.expiresAt) {
+        setError('Could not sign. Check your Ledger and try again.')
+        setStep('device')
+        return
+      }
       setError(message)
       setStep('error')
     } finally {
@@ -166,13 +184,17 @@ export function LedgerSign() {
             ? { kind: 'dapp', domain: new URL(view.origin).hostname, pageUrl: view.origin }
             : { kind: 'wallet' }
         }
+        walletTitle={purposeTitle}
         onReject={() => void close()}
-        onConfirm={() => setStep('device')}
+        onConfirm={() => {
+          setError('')
+          setStep('device')
+        }}
       />
     )
   return (
     <div className="page-container page-container--tab">
-      <PageHeader title="Sign with Ledger" />
+      <PageHeader title={purposeTitle ?? 'Sign with Ledger'} />
       {step === 'loading' ? (
         <div
           role="status"
@@ -203,6 +225,11 @@ export function LedgerSign() {
             <>
               <Icon icon="lucide:usb" width={32} />
               <p>Open the {ledgerRequestDeviceApp(view.request)} app</p>
+              {error && (
+                <p role="alert" className="text-sm text-danger">
+                  {error}
+                </p>
+              )}
               {view.request.kind === 'bip322-simple' && (
                 <p className="text-sm text-muted">
                   Your Ledger will display a zero-amount transaction for this message signature.

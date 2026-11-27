@@ -56,6 +56,7 @@ import type { AssetPriceReadModel } from '@/core/prices'
 import { summarizePortfolioFiat } from '@/popup/services/portfolio-prices'
 import { useActiveAccountNetworks } from '../hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '../hooks/useHomePortfolio'
+import { useShieldBalances } from '../hooks/useShieldBalances'
 import { useHomeScrollPosition } from '../hooks/useHomeScrollPosition'
 import { getAssetDomainRaw } from '../services/asset-domains'
 import { useSettingsStore } from '@/store/settings-store'
@@ -335,16 +336,43 @@ export function Home() {
     account: storageV2Account,
     network: currentNetwork
   })
+  const shieldBalanceScope =
+    !accountContextChanging &&
+    effectiveWalletId &&
+    effectiveAccountId &&
+    storageV2Account?.walletId === effectiveWalletId &&
+    storageV2Account.accountId === effectiveAccountId
+      ? { network: currentNetwork, keyDomainId: effectiveWalletId, accountId: effectiveAccountId }
+      : null
+  const shieldBalances = useShieldBalances({
+    active: isShieldView && shieldBalanceScope !== null,
+    enabled: shieldActions.canManageNear,
+    scopeKey: modeScopeKey,
+    scope: shieldBalanceScope,
+    hardware: hardwareWallet,
+    authorizationPath: '/shield-provider?provider=near-confidential'
+  })
+  const showShieldBalanceLoading = shieldBalances.balances === null && shieldBalances.loading
+  const shieldBalanceAction =
+    shieldBalances.balances === null && !shieldBalances.loading
+      ? shieldBalances.errorCode === 'authorization_required' && hardwareWallet
+        ? 'Sign to load balances'
+        : shieldBalances.errorCode === 'balance_unavailable' ||
+            shieldBalances.errorCode === 'authorization_required'
+          ? 'Retry balances'
+          : null
+      : null
   const canMoveEvm =
     evmOperationsEnabled &&
     getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
   const canSwapShield = shieldActions.providersFor('swap').length > 0
-  const canSwapNativeZec = canSwapNativeShieldZec({
+  const nativeZecSwapContext = {
     account: storageV2Account,
     network: currentNetwork,
     enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__,
     keySource: currentWallet?.keySource
-  })
+  }
+  const canSwapNativeZec = canSwapNativeShieldZec(nativeZecSwapContext)
   const openSend = () => {
     const sendPath = isShieldView ? buildShieldActionPath('send') : '/send?mode=public'
     navigate.navigate(sendPath, {
@@ -747,7 +775,12 @@ export function Home() {
     multichainPortfolio !== null &&
     multichainPortfolio.assets.every(asset => getAssetDomainRaw(asset, 'shield') === '0') &&
     !multichainPortfolio.confidential?.assets.some(asset => BigInt(asset.availableRaw) > 0n)
-  const showShieldEmpty = isShieldView && quickShield.eligible && shieldPortfolioEmpty
+  const showShieldEmpty =
+    isShieldView &&
+    quickShield.eligible &&
+    shieldPortfolioEmpty &&
+    !showShieldBalanceLoading &&
+    !shieldBalances.errorCode
   const showProviders = isShieldView
   const dappModeControl =
     !hardwareWallet && supportsEvmDAppExecutionMode
@@ -1074,6 +1107,19 @@ export function Home() {
                   )}
                 </div>
               )}
+              {isShieldView &&
+                (activeTab === 'assets' || activeTab === 'providers') &&
+                (showShieldBalanceLoading ? (
+                  <p role="status" className="px-5 pt-3 text-xs text-wallet-secondary">
+                    Loading Shield balances…
+                  </p>
+                ) : shieldBalanceAction ? (
+                  <div className="px-5 pt-3">
+                    <Button size="wallet" onClick={() => void shieldBalances.refreshBalances()}>
+                      {shieldBalanceAction}
+                    </Button>
+                  </div>
+                ) : null)}
               {showProviders ? (
                 <TabsContent value="providers" className="mt-0">
                   {activeTab === 'providers' && (
@@ -1086,6 +1132,7 @@ export function Home() {
                       prices={assetPrices}
                       pricesLoading={assetPriceStatus === 'loading'}
                       balancesHidden={balancesHidden}
+                      loadingShieldBalances={showShieldBalanceLoading}
                       actions={shieldActions}
                     />
                   )}

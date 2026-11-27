@@ -47,6 +47,7 @@ export interface SigningSummaryReviewProps {
   readonly confirmDisabled?: boolean
   readonly feeControl?: ReactNode
   readonly notice?: ReactNode
+  readonly walletTitle?: string
   readonly evmPresentation?: EvmReviewPresentationOptions
   readonly onReject: () => void
   readonly onConfirm: () => void
@@ -428,6 +429,7 @@ export function SigningSummaryReview({
   confirmDisabled = false,
   feeControl,
   notice,
+  walletTitle,
   evmPresentation,
   onReject,
   onConfirm
@@ -498,7 +500,7 @@ export function SigningSummaryReview({
         ) : (
           <ApprovalRequestHeader
             chain={chainName}
-            title={model.title}
+            title={walletTitle ?? model.title}
             description={model.description}
             badge={isBlocked ? 'Blocked' : isCaution ? 'Extra review required' : 'Decoded request'}
             tone={requestTone}

@@ -139,6 +139,24 @@ test('1Click replaces a rejected token once without re-signing for missing order
   assert.equal(harness.signatures(), 2)
 })
 
+test('1Click polls with explicit device authorization without invoking the device again', async () => {
+  const harness = fixture()
+  const client = harness.client(true)
+  const signedChallenges = []
+  assert.equal(await client.query(scope, order), null)
+  assert.equal(
+    await client.authorizeOwner(scope, async input => {
+      signedChallenges.push(input.message)
+      return { signature: 'test-signature' }
+    }),
+    true
+  )
+  assert.deepEqual(await harness.client(true).query(scope, order), { status: 'SUCCESS' })
+  harness.reject('token-0')
+  assert.equal(await client.query(scope, order), null)
+  assert.deepEqual(signedChallenges, [message])
+})
+
 test('1Click signs only the documented challenge and decodes a NEAR nonce without rewriting the message', () => {
   const withMessage = value => ({ data: { ...challenge, signingInput: { message: value } } })
   assert.throws(() => parseOneClickChallenge(withMessage(`${message}\nTransfer funds`), 'evm', now))

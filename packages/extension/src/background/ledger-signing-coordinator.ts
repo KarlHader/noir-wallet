@@ -19,6 +19,7 @@ export interface LedgerSigningBinding {
   readonly payloadFingerprint: LedgerPendingSigning['payloadFingerprint']
   readonly expiresAt: number
   readonly origin?: string
+  readonly purpose?: LedgerPendingSigning['purpose']
   readonly summary: LedgerPendingSigning['summary']
   readonly validate: () => Promise<void>
   readonly signal?: AbortSignal
@@ -126,6 +127,7 @@ export async function requestLedgerSignature(
     payloadFingerprint: binding.payloadFingerprint,
     expiresAt: binding.expiresAt,
     ...(binding.origin ? { origin: binding.origin } : {}),
+    ...(binding.purpose ? { purpose: binding.purpose } : {}),
     summary: parseSigningSummary(binding.summary, {
       ...SCHEMA_EXPECTATIONS[binding.summary.schema],
       chainId: parseChainId(binding.scope.chainId).id

@@ -717,14 +717,24 @@ export class ChromeConfidentialFundingStore {
     )
   }
 
-  async putPlan(plan: ConfidentialFundingPlan): Promise<void> {
+  async putPlan(plan: ConfidentialFundingPlan, assertCurrent?: () => Promise<void>): Promise<void> {
     const parsed = serializeConfidentialFundingPlan(plan)
     await withUndeletedWalletAccountMetadata(
       parsed.keyDomainId,
       parsed.accountId,
       parsed.network,
-      () => chrome.storage.local.set({ [this.planKey(parsed.planId)]: parsed })
+      async () => {
+        await assertCurrent?.()
+        await chrome.storage.local.set({ [this.planKey(parsed.planId)]: parsed })
+      }
     )
+  }
+
+  async deletePreparedPlansForWallets(walletIds: ReadonlySet<string>): Promise<void> {
+    const keys = (await this.listPlans())
+      .filter(plan => plan.phase === 'prepared' && walletIds.has(plan.keyDomainId))
+      .map(plan => this.planKey(plan.planId))
+    if (keys.length > 0) await chrome.storage.local.remove(keys)
   }
 
   async deletePlan(planId: string): Promise<void> {

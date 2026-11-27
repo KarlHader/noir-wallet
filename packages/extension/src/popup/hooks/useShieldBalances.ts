@@ -13,8 +13,7 @@ export function useShieldBalances({
   scopeKey,
   scope,
   hardware,
-  authorizationPath,
-  authorizeOnMount = true
+  authorizationPath
 }: Readonly<{
   active: boolean
   enabled: boolean
@@ -22,7 +21,6 @@ export function useShieldBalances({
   scope: BalanceScope | null
   hardware: boolean
   authorizationPath?: string
-  authorizeOnMount?: boolean
 }>) {
   const { pathname, search } = useLocation()
   const connectPath = authorizationPath ?? `${pathname}${search}`
@@ -37,8 +35,11 @@ export function useShieldBalances({
   })
   const lifecycleKey = JSON.stringify([scopeKey, snapshotKey])
   const [connecting, setConnecting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [errorCode, setErrorCode] = useState<ConfidentialBalanceErrorCode | null>(null)
+  const [failure, setFailure] = useState<{
+    key: string
+    message: string
+    code: ConfidentialBalanceErrorCode
+  } | null>(null)
   const [autoRecoveringKey, setAutoRecoveringKey] = useState<string | null>(null)
   const currentKey = useRef(lifecycleKey)
   const currentActive = useRef(active && enabled)
@@ -73,8 +74,7 @@ export function useShieldBalances({
 
   useEffect(() => {
     setConnecting(false)
-    setError(null)
-    setErrorCode(null)
+    setFailure(null)
     lastErrorCode.current = null
   }, [lifecycleKey])
 
@@ -83,8 +83,7 @@ export function useShieldBalances({
     if (!active || !enabled) {
       autoAttemptedKey.current = null
       setConnecting(false)
-      setError(null)
-      setErrorCode(null)
+      setFailure(null)
       lastErrorCode.current = null
     }
     return () => {
@@ -107,14 +106,13 @@ export function useShieldBalances({
       const operationId = ++activeRequest.current
       const request = (async () => {
         setConnecting(true)
-        setError(null)
-        setErrorCode(null)
-        lastErrorCode.current = null
         try {
           if (authorize && needsShieldHardwareTab(hardware)) {
             await openShieldHardwareTab(connectPath)
             return false
           }
+          setFailure(null)
+          lastErrorCode.current = null
           const refreshed = await refreshSource({
             source: 'near-confidential',
             authorize,
@@ -139,8 +137,11 @@ export function useShieldBalances({
             activeRequest.current === operationId
           ) {
             lastErrorCode.current = classifiedCode
-            setError(cause instanceof Error ? cause.message : 'Shield balance unavailable')
-            setErrorCode(classifiedCode)
+            setFailure({
+              key: lifecycleKey,
+              message: cause instanceof Error ? cause.message : 'Shield balance unavailable',
+              code: classifiedCode
+            })
           }
           return false
         } finally {
@@ -177,7 +178,6 @@ export function useShieldBalances({
       !active ||
       !enabled ||
       !scope ||
-      !authorizeOnMount ||
       !settled ||
       balances ||
       autoAttemptedKey.current === lifecycleKey
@@ -219,17 +219,10 @@ export function useShieldBalances({
       void attempt(!hardware)
     })
     return stop
-  }, [
-    active,
-    enabled,
-    authorizeOnMount,
-    hardware,
-    settled,
-    Boolean(balances),
-    lifecycleKey,
-    refreshBalances
-  ])
+  }, [active, enabled, hardware, settled, Boolean(balances), lifecycleKey, refreshBalances])
 
+  const currentFailure =
+    active && enabled && !autoRecovering && failure?.key === lifecycleKey ? failure : null
   return {
     balances,
     spendableBalances,
@@ -241,10 +234,10 @@ export function useShieldBalances({
       (!settled ||
         connecting ||
         autoRecovering ||
-        (authorizeOnMount && !balances && autoAttemptedKey.current !== lifecycleKey)),
+        (!balances && autoAttemptedKey.current !== lifecycleKey)),
     connecting: connecting || autoRecovering,
-    error: autoRecovering ? null : error,
-    errorCode: autoRecovering ? null : errorCode,
+    error: currentFailure?.message ?? null,
+    errorCode: currentFailure?.code ?? null,
     refreshBalances
   }
 }

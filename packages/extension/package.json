@@ -1,9 +1,9 @@
 {
   "name": "@noir-wallet/extension",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Noir Wallet is a self-custodial crypto wallet designed to support privacy-preserving on-chain activity.",
   "type": "module",
-  "license": "BUSL-1.1",
+  "license": "Apache-2.0",
   "scripts": {
     "dev": "EXTENSION_DEV_SERVER=1 vite --config vite.config.ts",
     "dev:extension": "pnpm run dev",

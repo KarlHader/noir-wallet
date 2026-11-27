@@ -5,6 +5,7 @@ import type { AccountNetworksView } from './account-networks-client'
 import { summarizeNearConfidentialHoldings } from './near-confidential-holdings'
 import { getShieldTransferChainIds } from './shield-transfer'
 import type { ShieldProvider } from './asset-domains'
+import { shieldSwapZecSourceParam, type ShieldSwapZecSourceKind } from './shield-swap-zec-sources'
 
 export const SHIELD_ACTIONS = [
   { action: 'send', label: 'Send' },
@@ -21,9 +22,10 @@ export function buildShieldActionPath(
     readonly assetId?: string | null
     readonly account?: { readonly walletId: string; readonly accountId: string } | null
     readonly originPath?: string
+    readonly shieldZecSource?: ShieldSwapZecSourceKind
   } = {}
 ): string {
-  const { provider, assetId, account, originPath } = options
+  const { provider, assetId, account, originPath, shieldZecSource } = options
   const query = new URLSearchParams()
   if (provider) query.set('provider', provider)
   if (assetId) query.set(action === 'swap' ? 'source' : 'assetId', assetId)
@@ -41,7 +43,8 @@ export function buildShieldActionPath(
     return `/send?${query}`
   }
   query.set('balanceDomain', 'shield')
-  if (provider === 'zcash-shield') query.set('shieldZecSource', 'native')
+  const zecSource = shieldZecSource ?? (provider === 'zcash-shield' ? 'native-shielded' : null)
+  if (zecSource) query.set('shieldZecSource', shieldSwapZecSourceParam(zecSource))
   return `/swap?${query}`
 }
 

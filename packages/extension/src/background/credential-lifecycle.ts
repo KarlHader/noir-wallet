@@ -31,7 +31,10 @@ import {
   type LedgerHardwareProvisioningInput,
   type LedgerHardwareProvisioningResult
 } from '@/infrastructure/keyring/ledger-hardware-provisioning-coordinator'
-import { isNativeHardwareWalletId } from '@/core/wallet/native-hardware-identity'
+import {
+  isNativeHardwareWalletId,
+  isNativeV2CredentialKeyDomain
+} from '@/core/wallet/native-hardware-identity'
 import type { ActiveWalletSetMode } from '@/core/wallet/wallet-unlock-path'
 import {
   PrivateKeyProvisioningCoordinator,
@@ -83,8 +86,10 @@ import { parseRawExportedPrivateKey } from '@/infrastructure/keyring/multichain/
 import {
   detachIncompatibleRetainedHardwareWallet,
   isStoredAccountNetworkEnabled,
+  reconcileReimportedNativeWallets,
   WALLET_STATE_KEY
 } from '@/lib/wallet-metadata-storage'
+import { ChromeConfidentialFundingStore } from './confidential-funding-store'
 
 // This migration-only profile anchors identities; it does not enable chain runtime capabilities.
 function getProvisioningChainProfile(): RetainedV1MigrationChainProfile {
@@ -412,12 +417,14 @@ export class CredentialLifecycleCoordinator {
   provisionKeystoneHardware(
     input: KeystoneHardwareProvisioningInput
   ): Promise<KeystoneHardwareProvisioningResult> {
-    const operation = this.synchronizationQueue.then(async () =>
-      this.hardwareProvisioning.provision({
+    const operation = this.synchronizationQueue.then(async () => {
+      const result = await this.hardwareProvisioning.provision({
         ...input,
         evmChainIds: await this.readPersistedEvmNetworkChainIds()
       })
-    )
+      await this.reconcileNativeWalletDeletions(result.keyDomainId)
+      return result
+    })
     this.synchronizationQueue = operation.then(
       () => undefined,
       () => undefined
@@ -426,12 +433,14 @@ export class CredentialLifecycleCoordinator {
   }
 
   provisionPrivateKey(input: PrivateKeyProvisioningInput): Promise<PrivateKeyProvisioningResult> {
-    const operation = this.synchronizationQueue.then(async () =>
-      this.privateKeyProvisioning.provision({
+    const operation = this.synchronizationQueue.then(async () => {
+      const result = await this.privateKeyProvisioning.provision({
         ...input,
         evmChainIds: await this.readPersistedEvmNetworkChainIds()
       })
-    )
+      await this.reconcileNativeWalletDeletions(result.keyDomainId)
+      return result
+    })
     this.synchronizationQueue = operation.then(
       () => undefined,
       () => undefined
@@ -442,17 +451,56 @@ export class CredentialLifecycleCoordinator {
   provisionLedgerHardware(
     input: LedgerHardwareProvisioningInput
   ): Promise<LedgerHardwareProvisioningResult> {
-    const operation = this.synchronizationQueue.then(async () =>
-      this.ledgerProvisioning.provision({
+    const operation = this.synchronizationQueue.then(async () => {
+      const result = await this.ledgerProvisioning.provision({
         ...input,
         evmChainIds: await this.readPersistedEvmNetworkChainIds()
       })
-    )
+      await this.reconcileNativeWalletDeletions(result.keyDomainId)
+      return result
+    })
     this.synchronizationQueue = operation.then(
       () => undefined,
       () => undefined
     )
     return operation
+  }
+
+  reconcileNativeWalletDeletions(targetWalletId?: string): Promise<void> {
+    return reconcileReimportedNativeWallets(async deleted => {
+      if (targetWalletId !== undefined && !deleted.has(targetWalletId)) return []
+      const pointer = await this.storageRepository.getActivePointer()
+      if (!pointer) return []
+      const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
+      if (
+        !snapshot ||
+        snapshot.manifest.status !== 'verified' ||
+        snapshot.manifest.generationId !== pointer.generationId ||
+        snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint
+      ) {
+        return []
+      }
+      const verified: string[] = []
+      for (const domain of snapshot.keyDomains) {
+        if (
+          !deleted.has(domain.id) ||
+          (targetWalletId !== undefined && domain.id !== targetWalletId) ||
+          !isNativeV2CredentialKeyDomain(domain) ||
+          !snapshot.accounts.some(account => account.keyDomainId === domain.id)
+        ) {
+          continue
+        }
+        const credential = await this.credentialRepository.validateForActivation(
+          domain.credentialRef,
+          domain.id
+        )
+        if (credential.status === 'active') verified.push(domain.id)
+      }
+      if (verified.length > 0) {
+        await new ChromeConfidentialFundingStore().deletePreparedPlansForWallets(new Set(verified))
+      }
+      return verified
+    })
   }
 
   previewPrivateKey(input: PrivateKeyPreviewInput): Promise<PrivateKeyPreviewResult> {

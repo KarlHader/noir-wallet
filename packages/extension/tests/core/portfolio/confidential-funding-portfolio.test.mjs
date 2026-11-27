@@ -31,6 +31,7 @@ import {
 import { hidePortfolioAssets } from '../../../src/core/portfolio/portfolio-visibility.ts'
 import { buildPortfolioReadModel, parsePortfolioReadModel } from '../../../src/core/portfolio/index.ts'
 import { findAssetPrice } from '../../../src/core/prices/asset-price.ts'
+import { getAssetProtocolSourceMappings } from '../../../src/core/prices/asset-market-mappings.ts'
 import { listStandaloneNearConfidentialHoldings } from '../../../src/popup/services/near-confidential-holdings.ts'
 import { withConfidentialAssetPrices } from '../../../src/popup/services/portfolio-prices.ts'
 import { getAssetDetailCategories } from '../../../src/popup/services/asset-detail-balance.ts'
@@ -128,6 +129,37 @@ test('projects Shield-only holdings independently of Public assets and preserves
       'testnet'
     )
   ).toEqual([])
+})
+
+test('keeps funded Ethereum and BNB Chain USDC visible with no protocol catalog', () => {
+  const chains = createInitialProductChainRegistry('mainnet')
+  const assets = createAssetRegistry(chains, getBundledInitialProductAssetDefinitions('mainnet'))
+  const ethereum = 'a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
+  const bnb = '8ac76a51cc950d9822d68b83fe1ad97b32cd580d'
+  const view = buildConfidentialPortfolioView(
+    [
+      { tokenId: `nep141:eth-0x${ethereum}.omft.near`, available: '1695414' },
+      { tokenId: `nep141:bnb-0x${bnb}.omdep.near`, available: '999789000210000000' }
+    ],
+    [],
+    [],
+    getAssetProtocolSourceMappings('mainnet', assets),
+    assets
+  )
+  expect(view.assets).toEqual([
+    expect.objectContaining({
+      assetId: `eip155:1/erc20:0x${ethereum}`,
+      symbol: 'USDC',
+      decimals: 6,
+      availableRaw: '1695414'
+    }),
+    expect.objectContaining({
+      assetId: `eip155:56/erc20:0x${bnb}`,
+      symbol: 'USDC',
+      decimals: 18,
+      availableRaw: '999789000210000000'
+    })
+  ])
 })
 
 test('only counts the verified treasury token as Shield balance', () => {
@@ -526,16 +558,9 @@ test('notifies Portfolio only after a successful Confidential refresh for the ac
     storage: { local: storage, session: storage },
     runtime: { sendMessage: async message => updates.push(message) }
   }
-  const { useWalletStore } = await import('../../../src/store/wallet-store.ts')
   const { getConfidentialFundingMessageHandler } = await import(
     '../../../src/background/confidential-funding-messages.ts'
   )
-  const wallet = useWalletStore.getState()
-  const previousScope = {
-    currentNetwork: wallet.currentNetwork,
-    currentWalletId: wallet.currentWalletId,
-    currentAccountId: wallet.currentAccountId
-  }
   const scope = { network: 'mainnet', keyDomainId: 'wallet:one', accountId: 'account:one' }
   const message = { scope, authorize: true }
   const handler = getConfidentialFundingMessageHandler('REFRESH_CONFIDENTIAL_BALANCES')
@@ -543,22 +568,39 @@ test('notifies Portfolio only after a successful Confidential refresh for the ac
     '../../../src/background/account-context-transition.ts'
   )
   const accountContextTransition = new AccountContextTransitionCoordinator()
-  const context = refreshBalances => ({
-    coordinator: { refreshBalances },
+  let activeAccount = scope.accountId
+  const context = getBalances => ({
+    coordinator: new ConfidentialFundingCoordinator({
+      network: scope.network,
+      evmNetworks: [{ chainId: 'eip155:1', rpcUrl: 'https://rpc.example.test' }],
+      signer: {
+        resolveIdentity: () => accountContextTransition.runActiveOperation(async () => ({
+          context: { chainAccount: { scope } }
+        }))
+      },
+      store: {
+        getSession: async () => ({ accessToken: 'token', expiresAt: 1_000_000 }),
+        putBalances: async () => {}
+      },
+      api: { getBalances },
+      now: () => 1000,
+      refreshPortfolio: async target => {
+        if (target.balanceUpdated && target.accountId === activeAccount) {
+          await chrome.runtime.sendMessage({
+            type: 'PORTFOLIO_UPDATED', walletId: target.keyDomainId, accountId: target.accountId
+          })
+        }
+      }
+    }),
     accountContextTransition
   })
   try {
-    Object.assign(wallet, {
-      currentNetwork: 'mainnet',
-      currentWalletId: scope.keyDomainId,
-      currentAccountId: scope.accountId
-    })
     const balances = [{ tokenId: 'token', available: '1', source: 'api' }]
     // A refresh may authorize through the signer, which serializes its own
     // account validation/signature. It must not wait behind its caller.
     expect(
       await handler(
-        context(() => accountContextTransition.runActiveOperation(async () => balances)),
+        context(async () => balances),
         message
       )
     ).toBe(balances)
@@ -582,7 +624,7 @@ test('notifies Portfolio only after a successful Confidential refresh for the ac
 
     await handler(
       context(async () => {
-        wallet.currentAccountId = 'account:two'
+        activeAccount = 'account:two'
         return balances
       }),
       message
@@ -590,7 +632,6 @@ test('notifies Portfolio only after a successful Confidential refresh for the ac
     expect(updates).toEqual([])
 
   } finally {
-    Object.assign(wallet, previousScope)
     if (previousChrome === undefined) delete globalThis.chrome
     else globalThis.chrome = previousChrome
   }

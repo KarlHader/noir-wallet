@@ -127,23 +127,11 @@ const handlers = {
     try {
       // Authorization acquires the account queue inside the signer. Holding it
       // here would deadlock that signature and block all subsequent mode reads.
-      const balances = await coordinator.refreshBalances(message.scope, message.authorize)
-      const { currentNetwork, currentWalletId, currentAccountId } = useWalletStore.getState()
-      if (
-        message.notifyPortfolio !== false &&
-        currentNetwork === message.scope.network &&
-        currentWalletId === message.scope.keyDomainId &&
-        currentAccountId === message.scope.accountId
-      ) {
-        void chrome.runtime
-          .sendMessage({
-            type: 'PORTFOLIO_UPDATED',
-            walletId: message.scope.keyDomainId,
-            accountId: message.scope.accountId
-          })
-          .catch(() => {})
-      }
-      return balances
+      return await coordinator.refreshBalances(
+        message.scope,
+        message.authorize,
+        message.notifyPortfolio !== false
+      )
     } catch (error) {
       const cause = error instanceof Error ? error : new Error('Shield balance unavailable')
       Object.assign(cause, { balanceErrorCode: classifyBalanceReadError(error) })

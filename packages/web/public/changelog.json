@@ -1,6 +1,18 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "2.1.2": {
+      "notifyUpdate": true,
+      "changes": [
+        "Swap transparent ZEC into NEAR Confidential from Shield on supported Ledger accounts.",
+        "Complete required Ledger signatures during swap confirmation.",
+        "Load Shield balances and authorize Ledger balance access from Home.",
+        "Follow Shield, Unshield, and Swap progress in Activity.",
+        "Review Shield transactions again after reimporting a private-key wallet.",
+        "Keep connected dApps in sync with wallet account changes.",
+        "Find log downloads, Telegram, and Support in Settings > Help."
+      ]
+    },
     "2.1.1": {
       "notifyUpdate": true,
       "changes": [

@@ -31,10 +31,11 @@ import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
 
 export function useSwapState(
   preferenceScope: string | null,
-  options: SwapInitialCatalogOptions,
+  options: SwapInitialCatalogOptions & { readonly allowSameZecAssetPair?: boolean },
   network: Network,
   prices: AssetPriceReadModel | null
 ) {
+  const allowSameZecAssetPair = options.allowSameZecAssetPair === true
   const enabledChainKey = options.enabledChains?.map(chain => chain.id).join('|')
   const catalogScope = options.catalogScope === undefined ? preferenceScope : options.catalogScope
   const initializedCatalogContext = useRef<string | null>(null)
@@ -143,10 +144,16 @@ export function useSwapState(
   }, [preferenceScope])
 
   useEffect(() => {
-    if (preferenceScope && tokenIn && tokenOut && tokenIn.assetId === tokenOut.assetId) {
+    if (
+      preferenceScope &&
+      tokenIn &&
+      tokenOut &&
+      tokenIn.assetId === tokenOut.assetId &&
+      !(allowSameZecAssetPair && isZecToken(tokenIn) && tokenOut.sources.includes('near-intents'))
+    ) {
       setTokenOut(null)
     }
-  }, [preferenceScope, tokenIn, tokenOut])
+  }, [allowSameZecAssetPair, preferenceScope, tokenIn, tokenOut])
 
   useEffect(() => {
     let cancelled = false

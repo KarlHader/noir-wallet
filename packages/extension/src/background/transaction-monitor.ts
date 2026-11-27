@@ -226,18 +226,23 @@ export class TransactionMonitor {
     const wallet = useWalletStore
       .getState()
       .wallets.find(candidate => candidate.id === scope.walletId)
-    if (!wallet || wallet.keySource === 'ledger' || wallet.keySource === 'keystone') return false
+    if (!wallet || wallet.keySource === 'keystone') return false
     if (binding.provider !== 'near-intents' || !binding.refundTo) {
       return (
-        binding.oneClickOrder?.depositAddress === depositAddress && !!binding.oneClickOrder.viewer
+        wallet.keySource !== 'ledger' &&
+        binding.oneClickOrder?.depositAddress === depositAddress &&
+        !!binding.oneClickOrder.viewer
       )
     }
     try {
       const viewer = readNativeZecIntentsStatusViewer(binding, transaction.network)
       if (!viewer) return false
-      if (viewer.signingMode === 'derived') return true
       const account = wallet.accounts.find(candidate => candidate.id === scope.accountId)
       const addresses = account?.networkAddresses?.[transaction.network] ?? account?.addresses
+      if (wallet.keySource === 'ledger') {
+        return viewer.chainFamily === 'evm' && addresses?.transparent === binding.refundTo
+      }
+      if (viewer.signingMode === 'derived') return true
       return addresses?.transparent === viewer.walletAddress
     } catch {
       return false

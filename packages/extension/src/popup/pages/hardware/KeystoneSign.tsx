@@ -27,7 +27,7 @@ import {
 import type { LedgerPcztSignatures, LedgerSigningPayload } from '@/core/worker/types'
 import {
   clearHardwareSignRequest,
-  HARDWARE_SIGN_REQUEST_TTL_MS,
+  hardwareSignRequestDeadline,
   isHardwareSignRequestFresh,
   readHardwareSignRequest,
   type HardwareSignRequest
@@ -172,7 +172,7 @@ export function KeystoneSign() {
         step !== 'failed')
     )
       return
-    const deadline = request.createdAt + HARDWARE_SIGN_REQUEST_TTL_MS
+    const deadline = hardwareSignRequestDeadline(request)
     const timer = window.setTimeout(expire, Math.max(0, deadline - Date.now()))
     return () => window.clearTimeout(timer)
   }, [request, step, expire])
@@ -268,6 +268,10 @@ export function KeystoneSign() {
         if (invalidated.current) return
         const message = formatHardwareSigningError(e)
         logger.error(`[Hardware signing] Build failed: ${message}`)
+        if (!isHardwareSignRequestFresh(req)) {
+          expire()
+          return
+        }
         if (message.includes('SAPLING_UNSUPPORTED')) setRetryable(false)
         setError(message)
         recordHardwareSignFailure(req.kind, 'build')
@@ -646,6 +650,8 @@ export function KeystoneSign() {
           ? 'Swap'
           : 'Send'
   const title = deviceName ? `${operation} with ${deviceName}` : operation
+  const confidentialLedgerSwap =
+    vendor === 'ledger' && request?.quoteBinding?.recipientType === 'CONFIDENTIAL_INTENTS'
 
   return (
     <div className="page-container page-container--tab">
@@ -665,7 +671,14 @@ export function KeystoneSign() {
       {step === 'building' && (
         <>
           <div className="page-content space-y-5 pt-5">
-            <HardwareSigningProgress title="Building transaction">
+            <HardwareSigningProgress
+              title={confidentialLedgerSwap ? 'Preparing Ledger swap' : 'Building transaction'}
+            >
+              {confidentialLedgerSwap && (
+                <p role="status" className="text-center text-sm text-muted">
+                  Follow any prompts to authorize with the Ethereum app.
+                </p>
+              )}
               {request ? (
                 <HardwareTransactionSummary
                   request={request}
@@ -742,7 +755,7 @@ export function KeystoneSign() {
               ledgerDisplayAddress={ledgerDisplayAddress ?? undefined}
             />
             <p className="mt-4 text-xs text-muted text-center">
-              Requires Ledger Zcash app{' '}
+              {confidentialLedgerSwap ? 'Open the Ledger Zcash app' : 'Requires Ledger Zcash app'}{' '}
               {minimumLedgerZcashAppVersion(
                 ledgerZcashTransactionBranchId(ledgerPayload.transaction)
               )}{' '}

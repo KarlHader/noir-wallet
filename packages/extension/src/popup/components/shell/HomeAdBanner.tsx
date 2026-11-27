@@ -19,7 +19,7 @@ export function HomeAdBanner() {
   if (!ad || dismissed) return null
 
   return (
-    <div className="relative mx-4 mb-3 shrink-0 overflow-hidden rounded-xl bg-black">
+    <div className="relative mx-4 mb-3 shrink-0 overflow-hidden rounded-xl">
       <a
         href={ad.jumpUrl}
         target="_blank"

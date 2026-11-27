@@ -15,11 +15,11 @@ import {
 import { baseOptions, chromeWebStoreUrl } from '@/lib/layout.shared'
 
 export const meta: MetaFunction = () => [
-  { title: 'Noir Wallet Docs — Private Zcash Wallet' },
+  { title: 'Noir Wallet Docs' },
   {
     name: 'description',
     content:
-      'Learn how to install and use Noir Wallet, or integrate private Zcash payments with the Noir Wallet SDK.'
+      'Use Noir Wallet with Zcash and supported EVM networks, or connect your dApp with the SDK.'
   },
   { property: 'og:title', content: 'Noir Wallet Documentation' },
   {
@@ -32,24 +32,21 @@ export const meta: MetaFunction = () => [
 const destinations = [
   {
     title: 'Install Noir Wallet',
-    description:
-      'Install the Chrome extension, create a wallet, and make your first private Zcash transaction.',
+    description: 'Install the Chrome extension and create or restore a wallet.',
     href: '/get-started',
     icon: Chrome,
     label: 'Start here'
   },
   {
     title: 'Use the Wallet',
-    description:
-      'Learn addresses, shielded funds, swaps, lending, dApp connections, and account security.',
-    href: '/wallet-guide/install-and-setup',
+    description: 'Use Public, Shield, and Incognito balances to receive, send, and swap assets.',
+    href: '/wallet-guide',
     icon: WalletCards,
     label: 'Wallet guide'
   },
   {
     title: 'Build with Noir',
-    description:
-      'Connect your dApp, query accounts and balances, and request private Zcash transactions.',
+    description: 'Connect accounts and request Zcash or EVM transactions with the SDK.',
     href: '/noir-sdk-integration',
     icon: Code2,
     label: 'Developer docs'
@@ -64,15 +61,11 @@ export default function HomePage() {
           <div className="hero-grid" aria-hidden="true" />
 
           <div className="hero-copy">
-            <div className="eyebrow">Private by design. Open to build on.</div>
+            <div className="eyebrow">Documentation</div>
             <h1>
-              Your guide to the
-              <span> private Zcash economy.</span>
+              Noir <span>Wallet</span>
             </h1>
-            <p>
-              Set up Noir Wallet, move ZEC privately, or bring shielded payments into your dApp with
-              a typed SDK.
-            </p>
+            <p>Manage Zcash and supported EVM assets in a self-custodial browser wallet.</p>
             <div className="hero-actions">
               <Link className="button button-primary" to="/get-started">
                 Get started
@@ -117,10 +110,8 @@ export default function HomePage() {
         <section className="destination-section" aria-labelledby="explore-title">
           <div className="section-heading">
             <div>
-              <span className="section-kicker">Explore the docs</span>
-              <h2 id="explore-title">One home for users and builders</h2>
+              <h2 id="explore-title">Guides</h2>
             </div>
-            <p>Practical guides for wallet users, accurate references for developers.</p>
           </div>
 
           <div className="destination-grid">

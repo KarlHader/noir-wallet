@@ -14,7 +14,6 @@ interface DiagnosticExportResponse {
 
 export function Help() {
   const [isDownloading, setIsDownloading] = useState(false)
-  const [isOpeningSupport, setIsOpeningSupport] = useState(false)
 
   const handleDownload = async () => {
     if (isDownloading) return
@@ -54,63 +53,51 @@ export function Help() {
     }
   }
 
-  const handleSupport = async () => {
-    if (isOpeningSupport) return
-    setIsOpeningSupport(true)
-    try {
-      await chrome.tabs.create({ url: TELEGRAM_SUPPORT_URL })
-    } catch (error) {
-      toast.error(
-        'Could not open support',
-        error instanceof Error ? error.message : 'Open Telegram and visit @noirprivacy'
-      )
-    } finally {
-      setIsOpeningSupport(false)
-    }
-  }
-
   return (
     <div className="page-container">
       <PageHeader title="Help" showBack />
 
       <div className="page-content">
-        <div className="rounded-lg bg-card p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <Icon icon="lucide:life-buoy" width={18} height={18} className="text-primary" />
-            <h2 className="text-sm font-medium">Get support</h2>
-          </div>
+        <div className="space-y-3 rounded-lg bg-card p-4">
           <p className="text-xs leading-relaxed text-muted">
             Download recent technical logs to help Noir Support investigate an issue.
           </p>
-          <p className="mt-3 text-xs leading-relaxed text-muted">
+          <p className="text-xs leading-relaxed text-muted">
             Logs stay on this device and never include recovery phrases, private keys, passwords,
             addresses, balances, or transaction amounts. Up to 500 entries from the last 24 hours
             are kept.
           </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            isLoading={isDownloading}
+            onClick={handleDownload}
+          >
+            {!isDownloading && <Icon icon="lucide:download" width={16} height={16} />}
+            {isDownloading ? 'Preparing' : 'Download Logs'}
+          </Button>
         </div>
       </div>
 
       <div className="page-footer grid grid-cols-2 gap-3">
-        <Button
-          type="button"
-          className="h-[45px] min-w-0 px-3"
-          isLoading={isDownloading}
-          onClick={handleDownload}
-        >
-          {!isDownloading && <Icon icon="lucide:download" width={16} height={16} />}
-          {isDownloading ? 'Preparing' : 'Download Logs'}
+        <Button asChild variant="outline" className="h-[45px] min-w-0 px-3">
+          <a
+            href={TELEGRAM_SUPPORT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-analytics-outbound="social_telegram"
+            data-analytics-domain="t.me"
+          >
+            <Icon icon="lucide:send" width={16} height={16} />
+            Telegram
+          </a>
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className="h-[45px] min-w-0 px-3"
-          isLoading={isOpeningSupport}
-          onClick={handleSupport}
-          data-analytics-outbound="social_telegram"
-          data-analytics-domain="t.me"
-        >
-          {!isOpeningSupport && <Icon icon="lucide:send" width={16} height={16} />}
-          Support
+        <Button asChild className="h-[45px] min-w-0 px-3">
+          <a href="https://app.zknoir.com/?zendesk=1" target="_blank" rel="noopener noreferrer">
+            <Icon icon="lucide:life-buoy" width={16} height={16} />
+            Support
+          </a>
         </Button>
       </div>
     </div>

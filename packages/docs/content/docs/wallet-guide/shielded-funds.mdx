@@ -1,42 +1,24 @@
 ---
 title: Shielded funds
-description: Move transparent ZEC into Noir Wallet's shielded balance and understand what shielding protects.
+description: Receive and move funds with Zcash Shield and NEAR Confidential.
 icon: ShieldCheck
 ---
 
-Shielding creates a transaction from your transparent balance into the Zcash shielded pool. Future transactions funded from the shielded balance can provide stronger privacy.
+Select **Shield** on Home, then open **Providers**. The available providers depend on the account and network.
 
-## Shield transparent ZEC
+## Zcash Shield
 
-<Steps>
-  <Step>
-    ### Select **Shield**
+Use this provider for native shielded ZEC. Select **Shield** to move transparent ZEC into the Zcash shielded pool, or **Unshield** to move shielded ZEC to a transparent address. Review the amount and fee, then follow the transaction in **Activity**.
 
-    On Home, select the **Shield** card, choose **Shield**, then select **ZEC** and the native Zcash provider.
-
-  </Step>
-  <Step>
-    ### Review the transaction
-
-    Review the amount and network fee before confirming.
-
-  </Step>
-  <Step>
-    ### Approve and wait for confirmation
-
-    The transparent source remains visible on-chain. Wait for the shield transaction to confirm
-    before spending the resulting shielded funds.
-
-  </Step>
-</Steps>
-
-## What shielding does not do
-
-- It cannot remove a transparent transaction that is already on-chain.
-- It does not protect information shared outside the wallet.
-- It does not make unrelated browser activity anonymous.
+To receive shielded ZEC, choose **Receive > ZEC > Zcash Shield**. Confirm that the sender supports shielded Zcash addresses.
 
 <Callout type="info">
-  For the strongest Zcash privacy, receive to a shielded address and spend from shielded funds
-  whenever the other service supports it.
+  Shielding leaves the original transparent source visible on-chain. Transfers between shielded
+  addresses protect the addresses and amount on-chain.
 </Callout>
+
+## NEAR Confidential
+
+Use this provider for eligible assets on mainnet. To fund from Public, select **Shield**, choose the asset and **NEAR Confidential**, and review the quote. To receive funds externally, choose **Receive**, then select the token, network, and provider before copying the deposit address.
+
+Use the exact token and network shown for an external deposit. To move funds back to a public address, select **Unshield** and verify the destination network, amount, and fee. Follow settlement in **Activity**.

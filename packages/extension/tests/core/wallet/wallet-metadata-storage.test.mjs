@@ -2,13 +2,16 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import {
   commitWalletMetadataDeletion,
+  completeWalletMetadataDeletion,
   getWalletDeletionRecord,
   markWalletBackupVerified,
   migrateRetainedV1NetworkSelections,
   readWalletMetadata,
+  reconcileReimportedNativeWallets,
   renameRetainedAccountMetadata,
   renameRetainedWalletMetadata,
   setAccountNetworkSelection,
+  withUndeletedWalletAccountMetadata,
   writeWalletMetadata
 } from '../../../src/lib/wallet-metadata-storage.ts'
 import { V1_MIGRATION_FIXTURES } from '../../fixtures/v1-migration-fixtures.mjs'
@@ -168,6 +171,44 @@ test.describe('Wallet metadata persistence', () => {
       expect((await readWalletMetadata()).state.wallets).toEqual([])
       expect(storage.values.wallet_deleted_ids).toContain(wallet.id)
       expect(await getWalletDeletionRecord(wallet.id)).toEqual(['account:0'])
+    } finally {
+      storage.restore()
+    }
+  })
+
+  test('a verified native wallet can save reviews after reimport but never during deletion', async () => {
+    const restoredWalletId = 'wallet:private-key-v2:restored'
+    const accountId = 'account:0'
+    const storage = mockStorage({ wallet_deleted_ids: [wallet.id] })
+    const saveReview = () =>
+      withUndeletedWalletAccountMetadata(
+        restoredWalletId,
+        accountId,
+        'mainnet',
+        async () => 'saved'
+      )
+    const recover = () =>
+      reconcileReimportedNativeWallets(async completed =>
+        completed.has(restoredWalletId) ? [restoredWalletId] : []
+      )
+    try {
+      await commitWalletMetadataDeletion(restoredWalletId, [accountId])
+      await recover()
+      await expect(saveReview()).rejects.toThrow('Wallet Account metadata is unavailable')
+
+      await completeWalletMetadataDeletion(restoredWalletId)
+      await reconcileReimportedNativeWallets(async () => [])
+      await expect(saveReview()).rejects.toThrow('Wallet Account metadata is unavailable')
+
+      await recover()
+      await expect(saveReview()).resolves.toBe('saved')
+      await expect(
+        withUndeletedWalletAccountMetadata(wallet.id, accountId, 'mainnet', async () => 'saved')
+      ).rejects.toThrow('Wallet Account metadata is unavailable')
+
+      await commitWalletMetadataDeletion(restoredWalletId, [accountId])
+      await recover()
+      await expect(saveReview()).rejects.toThrow('Wallet Account metadata is unavailable')
     } finally {
       storage.restore()
     }
