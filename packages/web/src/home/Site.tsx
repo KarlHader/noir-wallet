@@ -1,18 +1,21 @@
 /**
- * The home page (second version of the design mock): hero dot grid, three feature sections,
- * flow diagram, privacy tools and the closing statue.
+ * The home page (the November 27 design mock): hero dot grid with the "Backed by" band, Key
+ * Features, the flow diagram with the privacy providers, the three account types, hardware
+ * wallets, security, and the closing statue.
  */
 import './site.css'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { docsLinkProps, walletLinkProps } from './walletStore'
-import { IMG, TOOLS } from './content'
+import { IMG, SOCIAL } from './content'
+import { Accounts } from './Accounts'
 import { DeskNote } from './DeskNote'
-import { DefiAccess, PrivateTransfers, ShieldUnshield } from './Features'
+import { Hardware } from './Hardware'
 import { Hero } from './Hero'
-import { Icon } from './Icon'
+import { Icon, SocialIcon } from './Icon'
+import { KeyFeatures } from './KeyFeatures'
 import { loadDemo } from './demoLoader'
+import { Security } from './Security'
 import { Statue } from './Statue'
-import { TryExtension } from './TryExtension'
 import { Workflow } from './Workflow'
 
 const ExtensionDemo = lazy(loadDemo)
@@ -38,7 +41,7 @@ function CampaignBar({ inert }: { inert: boolean }) {
 function SiteHeader({ inert }: { inert: boolean }) {
   return (
     <header className="site-head" inert={inert}>
-      <div className="wrap">
+      <div className="wrap-head">
         <a className="brand" href="#top" aria-label="Noir Wallet, back to top">
           <img src={IMG.logo} alt="" />
           <span>Noir Wallet</span>
@@ -58,35 +61,7 @@ function SiteHeader({ inert }: { inert: boolean }) {
   )
 }
 
-/**
- * Supported privacy providers: the title takes the first cell, the two integrated ones sit to
- * its right, and the upcoming ones are grayed out and tagged Soon.
- */
-function ShieldTools() {
-  return (
-    <section className="tools-sec" aria-labelledby="tools-title">
-      <div className="tools">
-        <h2 className="tools-title" id="tools-title">
-          Supported
-          <br />
-          Shield Tools
-        </h2>
-        {/* The list itself takes no grid cell; its cards go straight into the outer grid */}
-        <ul className="tools-list">
-          {TOOLS.map(tool => (
-            <li key={tool.name} className={`tool${tool.soon ? ' is-soon' : ''}`}>
-              <img src={tool.icon} width={60} height={60} alt="" loading="lazy" />
-              <b>{tool.name}</b>
-              {tool.soon && <em>Soon</em>}
-            </li>
-          ))}
-        </ul>
-      </div>
-    </section>
-  )
-}
-
-function Journey({ onTry }: { onTry: () => void }) {
+function Journey() {
   return (
     <section className="end" id="downloads" aria-labelledby="end-title">
       <div className="wrap">
@@ -100,10 +75,9 @@ function Journey({ onTry }: { onTry: () => void }) {
             <Icon name="download" />
             Install Wallet
           </a>
-          <TryExtension variant="ghost" onOpen={onTry} />
           <a className="btn btn-ghost" {...docsLinkProps}>
             Docs
-            <Icon name="external" />
+            <Icon name="external" className="ext" />
           </a>
         </div>
         <DeskNote />
@@ -116,6 +90,15 @@ function SiteFooter({ inert }: { inert: boolean }) {
   return (
     <footer className="site-foot" inert={inert}>
       <Statue />
+      <ul className="social">
+        {SOCIAL.map(link => (
+          <li key={link.name}>
+            <a href={link.href} target="_blank" rel="noopener noreferrer" aria-label={link.label}>
+              <SocialIcon name={link.name} />
+            </a>
+          </li>
+        ))}
+      </ul>
       <p className="foot-copy">© 2026 Noir Privacy Terminal. All rights reserved.</p>
       <p className="wordmark" aria-hidden="true">
         Noir Wallet
@@ -125,8 +108,8 @@ function SiteFooter({ inert }: { inert: boolean }) {
 }
 
 export function Site() {
-  // "Try the extension" demo: its chunk loads only once clicked. After it closes, focus returns
-  // to the button that opened it.
+  // "Try the extension" demo (opened from the hero wallet): its chunk loads only once clicked.
+  // After it closes, focus returns to whatever opened it.
   const [demo, setDemo] = useState(false)
   const trigger = useRef<HTMLElement | null>(null)
   const openDemo = () => {
@@ -146,12 +129,12 @@ export function Site() {
       <SiteHeader inert={demo} />
       <main id="top" inert={demo}>
         <Hero onTry={openDemo} />
-        <PrivateTransfers />
-        <ShieldUnshield />
-        <DefiAccess />
+        <KeyFeatures />
         <Workflow />
-        <ShieldTools />
-        <Journey onTry={openDemo} />
+        <Accounts />
+        <Hardware />
+        <Security />
+        <Journey />
       </main>
       <SiteFooter inert={demo} />
       {demo && (
