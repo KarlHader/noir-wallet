@@ -1869,8 +1869,11 @@ export default function ShieldAndWinPage() {
                     alt=""
                   />
                   <div>
-                    <b className="block text-[clamp(44px,5vw,72px)] leading-none font-semibold tracking-[-0.02em] text-white">
-                      {board.prizeAmount} {board.prizeAsset}
+                    <b className="block whitespace-nowrap text-[clamp(44px,5vw,72px)] leading-none font-semibold tracking-[-0.02em] text-white">
+                      {board.prizeAmount} {board.prizeAsset}{' '}
+                      <span className="text-[clamp(15px,1.2vw,18px)] font-normal tracking-normal text-[#bcbcc8]">
+                        per winner
+                      </span>
                     </b>
                     {board.prizePoolLabel ? (
                       <span className="mt-2.5 block text-[clamp(15px,1.2vw,18px)] text-[#bcbcc8]">

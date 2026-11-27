@@ -125,7 +125,7 @@ test('the board is built from campaign fields and hardcodes only the draw odds',
     }
     assert.equal(/\bparseFloat\b|\btoFixed\b|\bNumber\(/.test(source), false, name)
   }
-  assert.equal(shieldWinApiBase(), 'https://apinoir.refburrow.top/v1/shield-win')
+  assert.equal(shieldWinApiBase(), 'https://api.zknoir.com/v1/shield-win')
 
   const live = boardView(campaign(), 1_762_600_000 * 1000 - 3661 * 1000)
   assert.equal(live.state, 'live')
