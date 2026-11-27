@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react'
+import { ZendeskControls } from './components/ZendeskControls'
 import { Site } from './home/Site'
 
 const FrostVotePage = lazy(() => import('./pages/FrostVotePage'))
@@ -31,29 +32,31 @@ export default function App() {
     return null
   }
 
+  let page = <Site />
   if (path === '/frost') {
-    return (
+    page = (
       <Suspense fallback={<div className="min-h-screen bg-bg" />}>
         <FrostVotePage />
       </Suspense>
     )
-  }
-
-  if (path === '/v2/beta') {
-    return (
+  } else if (path === '/v2/beta') {
+    page = (
       <Suspense fallback={<div className="min-h-screen bg-bg" />}>
         <V2BetaPage />
       </Suspense>
     )
-  }
-
-  if (path === '/shield-and-win') {
-    return (
+  } else if (path === '/shield-and-win') {
+    page = (
       <Suspense fallback={<div style={{ minHeight: '100vh', background: '#000' }} />}>
         <ShieldAndWinPage />
       </Suspense>
     )
   }
 
-  return <Site />
+  return (
+    <>
+      {page}
+      <ZendeskControls />
+    </>
+  )
 }

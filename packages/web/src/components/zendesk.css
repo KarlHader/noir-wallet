@@ -1,0 +1,63 @@
+iframe[title='Button to launch messaging window'],
+iframe[title='Number of unread messages'],
+iframe[title='Messaging window'],
+iframe#launcher,
+#launcher {
+  z-index: 60 !important;
+}
+
+iframe[title='Button to launch messaging window'],
+iframe[title='Number of unread messages'],
+iframe#launcher,
+#launcher {
+  right: 16px !important;
+  bottom: 16px !important;
+}
+
+/* Replace the native launcher while expanded so its edges cannot leak around the custom button. */
+html[data-zendesk-open]
+  :is(
+    #launcher,
+    iframe#launcher,
+    iframe[title='Button to launch messaging window'],
+    iframe[title='Number of unread messages']
+  ) {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.zendesk-minimize {
+  position: fixed;
+  z-index: 61;
+  right: 16px;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: #191919;
+  color: #fff;
+  font-family: 'DM Sans', 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.zendesk-minimize svg {
+  width: 16px;
+  height: 16px;
+}
+
+.zendesk-minimize:hover {
+  background: #12121c;
+}
+
+.zendesk-minimize:focus-visible {
+  outline: 2px solid #3dffbe;
+  outline-offset: 2px;
+}
