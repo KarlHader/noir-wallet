@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Noir Wallet are documented in this file.
 
+## [2.1.2] - 2026-11-27
+
+- Swap transparent ZEC into NEAR Confidential from Shield on supported Ledger accounts. Complete required signatures during confirmation.
+- Load Shield balances on Home and authorize Ledger balance access from the same screen.
+- Restore status tracking for Shield, Unshield, and Swap, and stop retrying expired Shield intents.
+- Restore Shield transaction review after removing and reimporting a private-key wallet.
+- Keep connected dApps in sync with account changes while limiting events to authorized networks.
+- Find log downloads, Telegram, and a direct support link in Settings > Help.
+
 ## [2.1.1] - 2026-11-26
 
 - Prepare Shield quotes and native Zcash fees before showing the confirmation screen.

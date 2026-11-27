@@ -1,17 +1,17 @@
 ---
 title: Overview
-description: A self-custodial browser wallet for private Zcash payments and the apps built around them.
+description: A self-custodial Chrome wallet for Zcash and supported EVM networks.
 icon: Sparkles
 ---
 
-Noir Wallet is a self-custodial Zcash wallet for Chrome. It keeps wallet credentials encrypted on your device while making shielded ZEC practical for everyday wallet use and dApp integrations.
+Noir Wallet is a self-custodial Chrome wallet for Zcash and supported EVM networks. It encrypts wallet credentials on your device.
 
 <Cards>
   <Card title="Install Noir Wallet" href="/get-started" icon="Chrome">
     Install the extension and create or restore a wallet.
   </Card>
-  <Card title="Use private ZEC" href="/wallet-guide/shielded-funds" icon="ShieldCheck">
-    Understand transparent and shielded balances before moving funds.
+  <Card title="Choose a wallet mode" href="/wallet-guide#wallet-modes" icon="ShieldCheck">
+    Find the right balance and receiving address for your transaction.
   </Card>
   <Card title="Integrate the SDK" href="/noir-sdk-integration" icon="Code2">
     Connect accounts and request transactions from a web app.
@@ -20,29 +20,12 @@ Noir Wallet is a self-custodial Zcash wallet for Chrome. It keeps wallet credent
 
 ## What you can do
 
-- Create or restore multiple wallets and accounts.
-- Send and receive ZEC with transparent or shielded addresses.
-- Shield transparent funds inside the wallet.
-- On mainnet, swap supported assets and access lending flows.
-- Connect supported dApps through the injected Noir provider.
-- Use a Keystone or Ledger hardware wallet for supported Zcash transaction flows.
-
-## Privacy model
-
-Zcash privacy depends on the address and funding source used for a transaction. Shielded addresses and shielded funds provide the strongest privacy. Transparent transactions are visible on-chain and can reveal relationships between addresses.
+- Send and receive ZEC and supported EVM assets.
+- Use native Zcash shielding or NEAR Confidential for eligible assets.
+- Swap supported assets, access lending on mainnet, and connect to supported dApps.
+- Connect [Ledger or Keystone](/wallet-guide/install-and-setup#hardware-wallets) for supported operations.
 
 <Callout type="warn" title="Self-custody means responsibility">
   Noir Wallet cannot recover your seed phrase. Store it offline and never share it with a website,
   support account, or person.
 </Callout>
-
-## Choose your path
-
-<Cards>
-  <Card title="I use Noir Wallet" href="/get-started">
-    Learn the wallet interface, privacy choices, swaps, lending, and security.
-  </Card>
-  <Card title="I build dApps" href="/noir-sdk-integration">
-    Read the SDK guide, provider API, account model, and integration practices.
-  </Card>
-</Cards>
