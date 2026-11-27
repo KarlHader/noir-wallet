@@ -2,7 +2,7 @@
  * Shield & Win campaign entry on the home page, per the design mock ("Go Private, Win …"). The
  * prize, minimum and dates come from the campaign API, the same data the campaign page shows.
  * Desktop: a countdown ticket in the bottom-right corner (clear of the support chat) opens a
- * sheet with the three steps and Join Now. Phones cannot run the extension, so once per visit a
+ * sheet with the three steps and Join Now. Phones cannot run the extension, so on every visit a
  * sheet sends people to a computer and offers the site link to copy.
  */
 import './campaign.css'
@@ -16,8 +16,6 @@ const SITE_LINK = 'https://www.zknoir.com'
 // The mock's 3D coin, also used on the campaign page
 const COIN = '/shield-and-win/zec-coin.png'
 const PHONE = '(max-width: 759px)'
-/** Phones see their sheet once per browser session. */
-const SEEN_KEY = 'noir:campaign-sheet-seen'
 
 type Phase = { readonly kind: 'upcoming' | 'live'; readonly target: number }
 
@@ -142,14 +140,10 @@ export default function Campaign({ inert }: { inert: boolean }) {
   const phase = campaign ? phaseOf(campaign, now) : null
   const running = phase !== null
 
-  // Phones: open the "use a computer" sheet once per session, shortly after the page settles.
+  // Phones: open the "use a computer" sheet on every visit, even if it was closed last time,
+  // shortly after the page settles.
   useEffect(() => {
     if (!running || !window.matchMedia(PHONE).matches) return
-    try {
-      if (window.sessionStorage.getItem(SEEN_KEY)) return
-    } catch {
-      // Storage blocked: show the sheet anyway.
-    }
     const timer = window.setTimeout(() => openSheet(phoneRef.current), 1200)
     return () => window.clearTimeout(timer)
   }, [running])
@@ -163,14 +157,6 @@ export default function Campaign({ inert }: { inert: boolean }) {
       ? `Starts ${dateLabel(campaign.start_time)}`
       : `Ends ${dateLabel(campaign.end_time)}`
   const minimum = minimumOf(campaign)
-
-  const markSeen = () => {
-    try {
-      window.sessionStorage.setItem(SEEN_KEY, '1')
-    } catch {
-      // Storage blocked: it may show again next time.
-    }
-  }
 
   const copyLink = () => {
     const done = () => setCopied(true)
@@ -253,7 +239,6 @@ export default function Campaign({ inert }: { inert: boolean }) {
         className="cw-phone"
         tabIndex={-1}
         aria-labelledby="cw-phone-title"
-        onClose={markSeen}
         onClick={closeOnBackdrop}
       >
         <div className="cw-phone-in">
