@@ -7,6 +7,14 @@ const PATHS = {
   download: <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />,
   external: <path d="M8 16 16 8M9.5 8H16v6.5" />,
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  close: <path d="M6 6l12 12M18 6 6 18" />,
+  // Lucide copy
+  copy: (
+    <>
+      <rect width="14" height="14" x="8" y="8" rx="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </>
+  ),
   // Lucide mouse-pointer-click: "click to try"
   pointer: (
     <>

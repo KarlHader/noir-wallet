@@ -160,65 +160,6 @@
   color: var(--mint);
 }
 
-/* ---------- Shield & Win campaign bar: a full-width link above the sticky header ---------- */
-.promo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  min-height: 40px;
-  padding: 8px var(--gutter);
-  border-bottom: 1px solid rgba(0, 209, 138, 0.22);
-  background: rgba(0, 209, 138, 0.1);
-  color: #d9d9d9;
-  font-size: 14px;
-  line-height: 1.3;
-  text-decoration: none;
-  transition: background-color 0.15s;
-}
-.promo:hover {
-  background: rgba(0, 209, 138, 0.16);
-}
-.promo:focus-visible {
-  outline: 2px solid var(--mint);
-  outline-offset: -2px;
-}
-.promo-live {
-  width: 8px;
-  height: 8px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 0 4px rgba(0, 209, 138, 0.18);
-}
-.promo-name {
-  color: var(--mint);
-  font-family: 'Doto', ui-monospace, monospace;
-  font-size: 15px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.promo-text {
-  min-width: 0;
-}
-.promo-go {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-  color: #fff;
-  font-weight: 500;
-  white-space: nowrap;
-  transition: color 0.15s;
-}
-.promo-go svg {
-  width: 15px;
-  height: 15px;
-}
-.promo:hover .promo-go {
-  color: var(--mint);
-}
-
 /* ---------- buttons ---------- */
 .btn {
   display: inline-flex;
@@ -299,18 +240,14 @@
 .hero {
   position: relative;
   display: grid;
-  grid-template-rows: auto 1fr;
   padding-top: 18px;
   overflow: hidden;
 }
 /* The dot grid and the wallet share one grid cell, so the hero is as tall as the taller of the
    two (the wallet is longer than the grid and fades out toward the bottom). */
-.hero-stage {
-  grid-area: 1 / 1;
-}
-/* The wallet spans both rows: over the grid, then over the "Backed by" band in the second row */
+.hero-stage,
 .hero-phone-layer {
-  grid-area: 1 / 1 / 3 / 2;
+  grid-area: 1 / 1;
 }
 /* Hero content column: narrower than the page's content width; the copy and the wallet both
    align to it. */
@@ -565,16 +502,19 @@
 }
 /* "Backed by" band, 31 px under the dot grid; its text lines up with the buttons (x = 212 at
    1512). The wallet passes over it. */
+/* The band always shows on the first screen: 31 px under the dot grid as in the mock (Hero.tsx
+   puts the grid's height in --field-h), rising to the bottom edge of a shorter window (83 px
+   header with its border + 100 px band), but never over the copy and buttons. */
 .band {
-  position: relative;
+  position: absolute;
   z-index: 1;
-  grid-area: 2 / 1;
-  align-self: start;
+  left: 0;
+  right: 0;
+  top: max(380px, min(calc(49px + var(--field-h, 622px)), calc(100svh - 183px)));
   display: flex;
   align-items: center;
   gap: 12px;
   height: 100px;
-  margin-top: 31px;
   padding-left: max(var(--gutter), calc((100% - 1088px) / 2));
   background: #ebba37;
   color: #000;
@@ -1596,30 +1536,16 @@
     display: none;
   }
   .band {
-    order: 3;
     z-index: 4;
-    align-self: stretch;
+    top: max(380px, min(calc(100% - 80px), calc(100svh - 163px)));
     justify-content: center;
     height: 80px;
-    margin-top: -56px;
     padding: 0;
   }
 }
 @media (max-width: 759px) {
   .site-nav {
     display: none;
-  }
-  .promo {
-    justify-content: flex-start;
-    gap: 10px;
-    font-size: 13px;
-  }
-  .promo-more,
-  .promo-go-label {
-    display: none;
-  }
-  .promo-go {
-    margin-left: auto;
   }
   .wrap-head {
     grid-template-columns: auto auto;
@@ -1670,9 +1596,9 @@
     margin-top: var(--fy-m);
   }
   .band {
+    top: max(380px, min(calc(100% - 64px), calc(100svh - 147px)));
     gap: 8px;
     height: 64px;
-    margin-top: -70px;
   }
   .band > span:first-child {
     font-size: 16px;

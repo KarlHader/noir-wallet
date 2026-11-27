@@ -1,7 +1,8 @@
 /**
  * The home page (the November 27 design mock): hero dot grid with the "Backed by" band, Key
  * Features, the flow diagram with the privacy providers, the three account types, hardware
- * wallets, security, and the closing statue.
+ * wallets, security, and the closing statue. The Shield & Win campaign entry (Campaign.tsx)
+ * loads separately on top.
  */
 import './site.css'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
@@ -19,24 +20,9 @@ import { Statue } from './Statue'
 import { Workflow } from './Workflow'
 
 const ExtensionDemo = lazy(loadDemo)
-
-/** Entry to the Shield & Win campaign page, above the header. Remove it when the campaign ends. */
-function CampaignBar({ inert }: { inert: boolean }) {
-  return (
-    <a className="promo" href="/shield-and-win" inert={inert}>
-      <span className="promo-live" aria-hidden="true" />
-      <span className="promo-name">Shield &amp; Win</span>
-      <span className="promo-text">
-        Go shield, win ZEC
-        <span className="promo-more">. Try a shield transfer for an instant draw.</span>
-      </span>
-      <span className="promo-go">
-        <span className="promo-go-label">Join now</span>
-        <Icon name="arrow" />
-      </span>
-    </a>
-  )
-}
+// The Shield & Win entry loads on its own, after the page; it shows nothing once the campaign is
+// over.
+const Campaign = lazy(() => import('./Campaign'))
 
 function SiteHeader({ inert }: { inert: boolean }) {
   return (
@@ -125,7 +111,6 @@ export function Site() {
   // screen readers only read the overlay.
   return (
     <>
-      <CampaignBar inert={demo} />
       <SiteHeader inert={demo} />
       <main id="top" inert={demo}>
         <Hero onTry={openDemo} />
@@ -137,6 +122,9 @@ export function Site() {
         <Journey />
       </main>
       <SiteFooter inert={demo} />
+      <Suspense fallback={null}>
+        <Campaign inert={demo} />
+      </Suspense>
       {demo && (
         <Suspense
           fallback={

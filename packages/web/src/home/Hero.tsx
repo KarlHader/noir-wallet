@@ -166,6 +166,8 @@ function createField({ stage, canvas, tip, marks, column, phone }: Parts, reduce
     canvas.width = Math.round(width * ratio)
     canvas.height = Math.round(height * ratio)
     canvas.style.height = `${height}px`
+    // The "Backed by" band sits under the grid (see .band in site.css)
+    stage.parentElement?.style.setProperty('--field-h', `${height}px`)
     dims = measure('[data-dim]').filter(d => d.y1 > 0 && d.y0 < height)
 
     const col = column.getBoundingClientRect()
