@@ -34,10 +34,13 @@
   margin: 0;
   background: #000;
   color: #fff;
-  font:
-    400 16px/1.55 'DM Sans',
-    system-ui,
-    sans-serif;
+  /* Longhands, not the `font` shorthand: the shorthand resets font-variation-settings, and a CSS
+     minifier that reorders declarations (Vite 8's Lightning CSS does) can move it after the opsz
+     below and drop it. */
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.55;
   /* The design mock (Figma) always uses optical size 14 for DM Sans, so large text comes out
      wider than the browser's automatic choice. */
   font-variation-settings: 'opsz' 14;
