@@ -10,7 +10,7 @@ import {
   selectCampaign,
   shieldWinApiBase
 } from '../src/shield-and-win/api.ts'
-import { assetLabel, getAssetLabels } from '../src/shield-and-win/asset-label.ts'
+import { assetInfo, assetLabel, getAssetLabels } from '../src/shield-and-win/asset-label.ts'
 import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../src/shield-and-win/claim.ts'
 import {
   ENTRY_POLL_INTERVAL_MS,
@@ -561,18 +561,101 @@ test('the token catalog resolves network and symbol by exact asset ID with a saf
     assert.equal(options.method, undefined)
     return jsonResponse([
       { assetId: 'nep141:usdt.tether-token.near', blockchain: 'near', symbol: 'USDT' },
-      { assetId: 'nep141:eth.omft.near', blockchain: 'eth', symbol: 'ETH' },
+      {
+        assetId: 'nep141:eth.omft.near',
+        blockchain: 'eth',
+        symbol: 'ETH',
+        icon: 'https://assets.example/eth.png',
+        coingeckoIcon: 'https://coin-images.coingecko.com/coins/images/279/large/ethereum.png'
+      },
+      {
+        assetId: 'nep141:base-usdc.omft.near',
+        blockchain: 'base',
+        symbol: 'USDC',
+        icon: 'http://evil.example/usdc.png',
+        coingeckoIcon: 'https://coin-images.coingecko.com/coins/images/6319/large/usdc.png'
+      },
       { assetId: 'bad', blockchain: 'near' }
     ])
   })
+  assert.deepEqual(labels.get('nep141:usdt.tether-token.near'), {
+    symbol: 'USDT',
+    network: 'NEAR',
+    tokenIconUrl: null,
+    chainIconUrl: 'https://assets.zknoir.com/chain/near.svg'
+  })
   assert.equal(assetLabel('nep141:usdt.tether-token.near', labels), 'NEAR · USDT')
-  assert.equal(assetLabel('nep141:eth.omft.near', labels), 'Ethereum · ETH')
+  assert.deepEqual(labels.get('nep141:eth.omft.near'), {
+    symbol: 'ETH',
+    network: 'Ethereum',
+    tokenIconUrl: 'https://assets.example/eth.png',
+    chainIconUrl: 'https://assets.zknoir.com/chain/ethereum.svg'
+  })
+  assert.equal(
+    labels.get('nep141:base-usdc.omft.near')?.tokenIconUrl,
+    'https://coin-images.coingecko.com/coins/images/6319/large/usdc.png'
+  )
+  assert.equal(
+    labels.get('nep141:base-usdc.omft.near')?.chainIconUrl,
+    'https://assets.zknoir.com/chain/base.svg'
+  )
   assert.equal(assetLabel('nep141:unknown.near', labels), 'nep141:unknown.near')
+  assert.equal(assetInfo('nep141:unknown.near', labels).tokenIconUrl, null)
   assert.equal(labels.has('bad'), false)
   await assert.rejects(
     () => getAssetLabels(undefined, async () => jsonResponse({ list: [] })),
     /invalid/
   )
+})
+
+test('missing catalog icons are filled from the Rhea chain list', async () => {
+  const assetId = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near'
+  const calls = []
+  const labels = await getAssetLabels(
+    undefined,
+    async url => {
+      calls.push(url)
+      if (url === 'https://1click.chaindefuser.com/v0/tokens') {
+        return jsonResponse([
+          { assetId, blockchain: 'base', symbol: 'USDC', icon: null, coingeckoIcon: null },
+          {
+            assetId: 'nep141:eth.omft.near',
+            blockchain: 'eth',
+            symbol: 'ETH',
+            icon: 'https://assets.example/eth.png'
+          }
+        ])
+      }
+      return jsonResponse([
+        { assetId, icon: 'http://evil.example/usdc.png' },
+        {
+          assetId,
+          icon: 'https://ref-new-1.s3.amazonaws.com/token/76c6fe8560fc7f0dc487edfe08cc5fbc.png'
+        }
+      ])
+    },
+    [assetId, 'nep141:eth.omft.near']
+  )
+  assert.deepEqual(calls, [
+    'https://1click.chaindefuser.com/v0/tokens',
+    'https://api.rhea.finance/get_multichain_lending_tokens_data?chains=base'
+  ])
+  assert.equal(
+    labels.get(assetId)?.tokenIconUrl,
+    'https://ref-new-1.s3.amazonaws.com/token/76c6fe8560fc7f0dc487edfe08cc5fbc.png'
+  )
+  assert.equal(labels.get('nep141:eth.omft.near')?.tokenIconUrl, 'https://assets.example/eth.png')
+
+  const kept = await getAssetLabels(
+    undefined,
+    async url => {
+      if (url.startsWith('https://api.rhea.finance/')) throw new Error('offline')
+      return jsonResponse([{ assetId: 'nep141:base-usdc.omft.near', blockchain: 'base', symbol: 'USDC' }])
+    },
+    ['nep141:base-usdc.omft.near']
+  )
+  assert.equal(kept.get('nep141:base-usdc.omft.near')?.tokenIconUrl, null)
+  assert.equal(kept.get('nep141:base-usdc.omft.near')?.network, 'Base')
 })
 
 test('all entries loads every page and rejects a stalled pagination response', async () => {
@@ -718,12 +801,8 @@ test('revokeAccount drops only the eth_accounts permission', async () => {
 
 test('the campaign page reserves a skeleton and keeps rules on the interface', () => {
   const page = readFileSync(new URL('../src/pages/ShieldAndWinPage.tsx', import.meta.url), 'utf8')
-  const css = readFileSync(
-    new URL('../src/shield-and-win/shield-and-win.css', import.meta.url),
-    'utf8'
-  )
-  assert.match(page, /sk-prize-amt/)
-  assert.match(page, /sk-prize-sub/)
+  assert.match(page, /h-\[clamp\(44px,5vw,72px\)\]/)
+  assert.match(page, /h-\[calc\(clamp\(15px,1\.2vw,18px\)\*1\.55\)\]/)
   assert.match(page, /Connect to see your entry and result on this page\./)
   const installAction = page.slice(page.indexOf('const showInstall'), page.indexOf('const showTry'))
   const tryAction = page.slice(page.indexOf('const showTry'), page.indexOf('const showConnect'))
@@ -749,12 +828,17 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
     page.indexOf('function SupportLink()')
   )
   assert.equal(entryRow.includes('<RefreshIcon'), false)
-  assert.match(entryRow, /<span>USD value<\/span>[\s\S]*<span>Completed<\/span>/)
+  assert.equal(entryRow.includes('<span>USD value</span>'), false)
+  assert.equal(entryRow.includes('<span>Completed</span>'), false)
+  assert.match(
+    page,
+    /function EntryColumns\([\s\S]*<span>Asset<\/span>[\s\S]*<span>USD value<\/span>[\s\S]*<span>Completed<\/span>/
+  )
   assert.match(entryRow, /view === 'notwon' \? 'Draw result' : 'Reward status'/)
   assert.match(entryRow, /const transactionUrl = rewardTransactionUrl\(entry\)/)
   assert.match(
     entryRow,
-    /className="entry-tx"[\s\S]*target="_blank"[\s\S]*rel="noopener noreferrer"/
+    /className="inline-flex w-11[\s\S]*target="_blank"[\s\S]*rel="noopener noreferrer"/
   )
   assert.equal((page.match(/<EntriesRefreshButton/g) ?? []).length, 2)
   assert.match(page, /const ENTRY_REFRESH_COOLDOWN_MS = 60_000/)
@@ -777,23 +861,21 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   assert.match(page, /readTransparentAddress/)
   assert.match(page, /Zcash · Transparent/)
   assert.match(page, /Claim \{rewardText\(claimTarget\)\}/)
-  assert.match(css, /dialog\.rules\.claim/)
-  assert.match(css, /min\(360px, calc\(100% - 32px\)\)/)
-  assert.match(css, /dialog\.rules\[open\]/)
-  assert.match(css, /\.rules-scroll/)
-  assert.match(css, /overflow:\s*hidden/)
+  assert.match(page, /w-\[min\(360px,calc\(100%-32px\)\)\]/)
+  assert.match(page, /open:flex/)
+  assert.match(page, /overflow-auto/)
+  assert.match(page, /overflow-hidden/)
 })
 
 test('the portal tooltip does not inherit the home page tip positioning', () => {
   const component = readFileSync(new URL('../src/components/Tooltip.tsx', import.meta.url), 'utf8')
-  const css = readFileSync(new URL('../src/components/tooltip.css', import.meta.url), 'utf8')
   const homeCss = readFileSync(new URL('../src/home/site.css', import.meta.url), 'utf8')
   assert.match(homeCss, /^\.tip \{/m)
-  assert.match(component, /className="noir-tooltip-anchor"/)
   assert.match(component, /useLayoutEffect/)
-  assert.match(css, /\.noir-tooltip \{\s*position: fixed;/)
-  assert.match(css, /\.noir-tooltip\[data-side='top'\] \{/)
-  assert.equal(/(^|\n)\.tip(?:\s|[.:[{])/.test(css), false)
+  assert.match(component, /fixed z-\[80\]/)
+  assert.match(component, /data-\[side=top\]:-translate-y-\[calc\(100%\+10px\)\]/)
+  assert.equal(component.includes('tooltip.css'), false)
+  assert.equal(component.includes('.tip'), false)
 })
 
 test('wallet helpers use the existing EVM provider and keep rejection text', async () => {

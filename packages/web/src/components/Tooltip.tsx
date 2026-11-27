@@ -8,7 +8,7 @@ import {
   type ReactNode
 } from 'react'
 import { createPortal } from 'react-dom'
-import './tooltip.css'
+import '../tailwind.css'
 
 type TooltipSide = 'top' | 'bottom'
 
@@ -16,10 +16,17 @@ interface TooltipProps {
   readonly content: ReactNode
   readonly side?: TooltipSide
   readonly variant?: 'text' | 'plain'
+  readonly className?: string
   readonly children: ReactElement<{ 'aria-describedby'?: string }>
 }
 
-export function Tooltip({ content, side = 'top', variant = 'text', children }: TooltipProps) {
+export function Tooltip({
+  content,
+  side = 'top',
+  variant = 'text',
+  className,
+  children
+}: TooltipProps) {
   const tooltipId = useId()
   const anchorRef = useRef<HTMLSpanElement>(null)
   const [open, setOpen] = useState(false)
@@ -54,7 +61,7 @@ export function Tooltip({ content, side = 'top', variant = 'text', children }: T
   return (
     <span
       ref={anchorRef}
-      className="noir-tooltip-anchor"
+      className={className ? `inline-flex max-w-full ${className}` : 'inline-flex max-w-full'}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => {
         setOpen(false)
@@ -76,8 +83,8 @@ export function Tooltip({ content, side = 'top', variant = 'text', children }: T
               role="tooltip"
               className={
                 variant === 'plain'
-                  ? 'noir-tooltip noir-tooltip-plain'
-                  : 'noir-tooltip noir-tooltip-text'
+                  ? 'pointer-events-none fixed z-[80] data-[side=bottom]:translate-y-2.5 data-[side=bottom]:-translate-x-1/2 data-[side=top]:-translate-x-1/2 data-[side=top]:-translate-y-[calc(100%+10px)] [&_img]:block [&_img]:h-auto [&_img]:w-[min(280px,calc(100vw-24px))] [&_img]:[filter:drop-shadow(0_16px_32px_rgba(0,0,0,0.45))]'
+                  : "pointer-events-none fixed z-[80] data-[side=bottom]:translate-y-2.5 data-[side=bottom]:-translate-x-1/2 data-[side=top]:-translate-x-1/2 data-[side=top]:-translate-y-[calc(100%+10px)] w-max max-w-[min(280px,calc(100vw-24px))] rounded-lg border border-[#3a3a3a] bg-[#1c1c1c] px-3 py-2 text-center font-['DM_Sans',system-ui,sans-serif] text-[13px] leading-[1.45] font-medium whitespace-normal text-white"
               }
               data-side={side}
               style={{ left: point.left, top: point.top }}

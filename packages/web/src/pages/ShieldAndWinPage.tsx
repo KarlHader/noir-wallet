@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import {
   ShieldWinApiError,
   claimReward,
@@ -9,7 +9,7 @@ import {
   type ShieldWinCampaign,
   type ShieldWinEntry
 } from '../shield-and-win/api'
-import { assetLabel, getAssetLabels } from '../shield-and-win/asset-label'
+import { assetInfo, getAssetLabels, type ShieldWinAsset } from '../shield-and-win/asset-label'
 import {
   clearCachedCampaign,
   readCachedCampaign,
@@ -47,7 +47,7 @@ import {
   type NoirEthereumProvider
 } from '../shield-and-win/wallet'
 import { Tooltip } from '../components/Tooltip'
-import '../shield-and-win/shield-and-win.css'
+import '../tailwind.css'
 
 const FONT_HREF =
   'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,900&family=Doto:wght@400;700&display=swap'
@@ -136,33 +136,6 @@ function mergeEntries(
   return [...map.values()]
 }
 
-function chipTone(view: EntryViewState): string {
-  switch (view) {
-    case 'won':
-    case 'claiming':
-    case 'sending':
-    case 'claimed':
-      return 'gold'
-    case 'failed':
-      return 'warn'
-    default:
-      return ''
-  }
-}
-
-function entryTone(view: EntryViewState): string {
-  switch (view) {
-    case 'won':
-    case 'claiming':
-    case 'sending':
-    case 'claimed':
-    case 'failed':
-      return `is-${view}`
-    default:
-      return ''
-  }
-}
-
 function completedLabel(timestamp: number): string {
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
@@ -171,6 +144,60 @@ function completedLabel(timestamp: number): string {
     hour: '2-digit',
     minute: '2-digit'
   }).format(new Date(timestamp))
+}
+
+function EntryColumns({ dialog = false }: { dialog?: boolean }) {
+  return (
+    <div
+      className={
+        dialog
+          ? 'entries-dialog grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_160px_50px] items-center gap-4 max-[760px]:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] shrink-0 border-b border-[#303333] bg-[#141414] px-[26px] py-2.5 text-[11px] leading-[18px] font-medium text-[#a1a5a5] max-[760px]:[&>span:last-child]:col-span-full'
+          : 'entries-not-dialog grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_160px_50px] items-center gap-4 max-[760px]:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] shrink-0 border-b border-[#303333] px-6 py-2.5 text-[11px] leading-[18px] font-medium text-[#a1a5a5] max-[760px]:[&>span:last-child]:col-span-full'
+      }
+    >
+      <span>Asset</span>
+      <span>USD value</span>
+      <span>Completed</span>
+    </div>
+  )
+}
+
+function AssetMark({ asset }: { asset: ShieldWinAsset }) {
+  const [failedToken, setFailedToken] = useState<string | null>(null)
+  const [failedChain, setFailedChain] = useState<string | null>(null)
+  const tokenUrl = asset.tokenIconUrl
+  const chainUrl = asset.chainIconUrl
+  const letter = asset.symbol.trim().charAt(0).toUpperCase() || '?'
+  return (
+    <span className="relative size-6 shrink-0">
+      <span
+        className="relative block size-6 overflow-hidden rounded-full bg-[#34343f] text-center text-[10px] leading-6 font-bold text-white/80"
+        aria-hidden="true"
+      >
+        {letter}
+        {tokenUrl && failedToken !== tokenUrl ? (
+          <img
+            className="absolute inset-0 size-6 rounded-full object-cover"
+            src={tokenUrl}
+            alt=""
+            onError={() => {
+              if (tokenUrl) setFailedToken(tokenUrl)
+            }}
+          />
+        ) : null}
+      </span>
+      {chainUrl && failedChain !== chainUrl ? (
+        <img
+          className="absolute top-3.5 left-3.5 size-2.5 rounded-[20%] object-cover"
+          src={chainUrl}
+          alt=""
+          onError={() => {
+            if (chainUrl) setFailedChain(chainUrl)
+          }}
+        />
+      ) : null}
+    </span>
+  )
 }
 
 function EntryRow({
@@ -183,42 +210,68 @@ function EntryRow({
   entry: ShieldWinEntry
   phone: boolean
   claimBusy: boolean
-  assetLabels: ReadonlyMap<string, string>
+  assetLabels: ReadonlyMap<string, ShieldWinAsset>
   onClaim: (entry: ShieldWinEntry) => void
 }) {
   const view = entryView(entry)
   const copy = entryCopy(view, entry)
-  const chipClass = chipTone(view)
   const transactionUrl = rewardTransactionUrl(entry)
+  const asset = assetInfo(entry.destination_asset, assetLabels)
   return (
-    <li className={`entry-row ${entryTone(view)}`}>
-      <div className="entry-details">
-        <div>
-          <span>Asset</span>
-          <b title={entry.destination_asset}>{assetLabel(entry.destination_asset, assetLabels)}</b>
+    <li
+      className={
+        view === 'won' || view === 'claiming' || view === 'sending' || view === 'claimed'
+          ? 'flex min-w-0 flex-col gap-2.5 rounded-lg border border-[#303333] bg-[#24271f] px-5 py-4'
+          : 'flex min-w-0 flex-col gap-2.5 rounded-lg border border-[#303333] bg-[#232525] px-5 py-4'
+      }
+    >
+      <div className="entries-row grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_160px_50px] items-center gap-4 max-[760px]:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <div className="flex h-8 min-w-0 items-center gap-2">
+          <AssetMark asset={asset} />
+          <div className="min-w-0">
+            <b
+              className="block truncate text-xs leading-[18px] font-medium text-[#f2f4f3]"
+              title={entry.destination_asset}
+            >
+              {asset.symbol}
+            </b>
+            {asset.network ? (
+              <span className="block truncate text-[10px] leading-[14px] font-normal text-[#a1a5a5]">
+                {asset.network}
+              </span>
+            ) : null}
+          </div>
         </div>
-        <div>
-          <span>USD value</span>
-          <b>${entry.usd_value}</b>
-        </div>
-        <div>
-          <span>Completed</span>
-          <b>{completedLabel(entry.shield_completed_at)}</b>
-        </div>
+        <b className="block truncate text-sm leading-[18px] font-medium text-[#f2f4f3]">
+          ${entry.usd_value}
+        </b>
+        <b className="block truncate text-xs leading-[18px] font-normal text-[#f2f4f3] max-[760px]:col-span-full">
+          {completedLabel(entry.shield_completed_at)}
+        </b>
       </div>
-      <div className="entry-result">
-        <div>
-          <span className="entry-k">
-            {view === 'notwon' ? 'Draw result' : 'Reward status'} &nbsp;
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-[11px] leading-[18px] text-[#a1a5a5]">
+            {view === 'notwon' ? 'Draw result' : 'Reward status'}
           </span>
-          <span className={chipClass ? `chip ${chipClass}` : 'chip'}>{copy.title}</span>
-          {!!copy.body && <p>{copy.body}</p>}
-          {view === 'won' ? <small>{rewardText(entry)}</small> : null}
+          <span
+            className={
+              view === 'claimed'
+                ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[#3b3420] text-[#f0cb45]'
+                : view === 'won' || view === 'claiming' || view === 'sending'
+                  ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[rgba(255,204,0,0.12)] text-[#ffcc00]'
+                  : view === 'failed'
+                    ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[rgba(255,161,0,0.12)] text-[#ffc04d]'
+                    : 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[#2b2e2e] text-[#c4c8c7]'
+            }
+          >
+            {copy.title}
+          </span>
         </div>
         {view === 'won' && !phone ? (
           <button
             type="button"
-            className="btn primary"
+            className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-[28px] shrink-0 rounded border-transparent bg-[#00d18a] px-3.5 text-[13px] text-black hover:bg-[#1ee3a0] hover:text-black"
             disabled={claimBusy}
             onClick={() => onClaim(entry)}
           >
@@ -228,7 +281,7 @@ function EntryRow({
           <SupportLink />
         ) : transactionUrl ? (
           <a
-            className="entry-tx"
+            className="inline-flex w-11 shrink-0 items-center justify-end gap-1 text-[11px] leading-[18px] font-medium whitespace-nowrap !text-[#1ee3a0] no-underline hover:text-white hover:underline hover:underline-offset-[3px]"
             href={transactionUrl}
             target="_blank"
             rel="noopener noreferrer"
@@ -238,10 +291,18 @@ function EntryRow({
           </a>
         ) : null}
       </div>
+      {copy.body ? <p className="text-[11px] leading-[18px] text-[#bbc1bc]">{copy.body}</p> : null}
+      {view === 'won' ? (
+        <small className="text-xs text-[#ffcc00]">{rewardText(entry)}</small>
+      ) : null}
       {view === 'claiming' || view === 'sending' ? (
-        <span className="dots" aria-hidden="true">
+        <span className="mt-2.5 flex gap-1.5" aria-hidden="true">
           {Array.from({ length: 8 }, (_, index) => (
-            <i key={index} style={{ '--k': index } as CSSProperties} />
+            <i
+              key={index}
+              className="size-1.5 animate-shield-run rounded-full bg-white/14 motion-reduce:animate-none"
+              style={{ animationDelay: `${index * 120}ms` }}
+            />
           ))}
         </span>
       ) : null}
@@ -251,7 +312,12 @@ function EntryRow({
 
 function SupportLink() {
   return (
-    <a className="textlink" href={SUPPORT_URL} target="_blank" rel="noopener noreferrer">
+    <a
+      className="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[length:inherit] leading-[inherit] text-[#bcbcc8] underline decoration-white/30 underline-offset-[3px] hover:text-white"
+      href={SUPPORT_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
       Contact support
     </a>
   )
@@ -323,9 +389,14 @@ function DisconnectIcon() {
   )
 }
 
-function RefreshIcon() {
+function RefreshIcon({ spinning }: { spinning: boolean }) {
   return (
     <svg
+      className={
+        spinning
+          ? 'size-4 animate-spin [animation-duration:700ms] motion-reduce:animate-none'
+          : 'size-4'
+      }
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -356,14 +427,18 @@ function EntriesRefreshButton({
   return (
     <button
       type="button"
-      className={busy ? 'entry-refresh is-busy' : 'entry-refresh'}
+      className={
+        busy
+          ? 'inline-flex size-7 cursor-default items-center justify-center rounded-lg border-0 bg-transparent p-0 text-[#8b8e93] [&_svg]:size-4'
+          : 'inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-[#8b8e93] enabled:hover:text-white disabled:cursor-default disabled:opacity-[0.35] [&_svg]:size-4'
+      }
       aria-label="Refresh your entries"
       title={cooling ? 'Available again in one minute' : 'Refresh entries'}
       aria-busy={busy}
       disabled={busy || cooling || blocked}
       onClick={onRefresh}
     >
-      <RefreshIcon />
+      <RefreshIcon spinning={busy} />
     </button>
   )
 }
@@ -463,7 +538,9 @@ function RulesCopy({
           Winning isn&apos;t guaranteed.
         </li>
       </ul>
-      <p className="rules-foot">zknoir.com reserves the right to interpret this campaign.</p>
+      <p className="border-t border-[#232323] px-[22px] pt-3 pb-[22px] text-[13px] text-[#8b8e93]">
+        zknoir.com reserves the right to interpret this campaign.
+      </p>
     </>
   )
 }
@@ -509,7 +586,7 @@ export default function ShieldAndWinPage() {
   const [liveText, setLiveText] = useState('')
   const [entryRefreshBusy, setEntryRefreshBusy] = useState(false)
   const [entryRefreshCooling, setEntryRefreshCooling] = useState(false)
-  const [assetLabels, setAssetLabels] = useState<ReadonlyMap<string, string>>(new Map())
+  const [assetLabels, setAssetLabels] = useState<ReadonlyMap<string, ShieldWinAsset>>(new Map())
 
   const addressRef = useRef(address)
   const campaignRef = useRef(campaign)
@@ -941,13 +1018,16 @@ export default function ShieldAndWinPage() {
     setEntryRefreshCooling(false)
   }, [scopeKey])
 
-  const hasEntries = entries.length > 0 || wins.length > 0
+  const assetKey = [...new Set([...entries, ...wins].map(entry => entry.destination_asset))]
+    .filter(assetId => assetId.length > 0)
+    .sort()
+    .join('\n')
   useEffect(() => {
     setAssetLabels(new Map())
-    if (!address || !entriesReady || !hasEntries) return
+    if (!address || !entriesReady || !assetKey) return
     const controller = new AbortController()
     const timer = window.setTimeout(() => controller.abort(), 8_000)
-    void getAssetLabels(controller.signal).then(
+    void getAssetLabels(controller.signal, fetch, assetKey.split('\n')).then(
       labels => {
         if (!controller.signal.aborted) setAssetLabels(labels)
       },
@@ -957,7 +1037,7 @@ export default function ShieldAndWinPage() {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [address, entriesReady, hasEntries])
+  }, [address, entriesReady, assetKey])
 
   useEffect(() => {
     if (!allEntriesOpen || allEntriesLoaded.current) return
@@ -1315,27 +1395,44 @@ export default function ShieldAndWinPage() {
   )
 
   return (
-    <div className="shield-win">
-      <header className="top">
-        <a className="brand" href="/">
-          <img src="/shield-and-win/logo.jpg" alt="" />
-          <span>Noir Wallet</span>
+    <div className="flex min-h-screen min-h-dvh flex-col overflow-x-hidden bg-black font-['DM_Sans',system-ui,sans-serif] text-base leading-[1.55] text-white antialiased scheme-dark [&_img]:block [&_img]:max-w-full **:focus-visible:outline-2 **:focus-visible:outline-offset-[3px] **:focus-visible:outline-[#3dffbe]">
+      <header className="flex h-[72px] items-center justify-between gap-3 px-[clamp(16px,4vw,64px)] max-[760px]:h-16">
+        <a
+          className="flex min-w-0 items-center gap-2.5 text-xl font-medium text-white no-underline"
+          href="/"
+        >
+          <img
+            className="size-7 shrink-0 rounded-full object-cover"
+            src="/shield-and-win/logo.jpg"
+            alt=""
+          />
+          <span className="truncate">Noir Wallet</span>
         </a>
-        <div className="top-actions">
-          <a className="home-btn" href="/">
+        <div className="flex shrink-0 items-center gap-2">
+          <a
+            className="cursor-pointer inline-flex h-10 items-center rounded border border-[#3a3a3a] bg-black px-4 text-[15px] font-medium text-white no-underline hover:border-[#666]"
+            href="/"
+          >
             Home
           </a>
-          <button type="button" className="rules-btn" onClick={() => setRulesOpen(true)}>
+          <button
+            type="button"
+            className="cursor-pointer inline-flex h-10 items-center rounded border border-[#3a3a3a] bg-black px-4 text-[15px] font-medium text-white no-underline hover:border-[#666]"
+            onClick={() => setRulesOpen(true)}
+          >
             Rules
           </button>
           {address ? (
             <>
-              <span className="wallet-addr" title={address}>
+              <span
+                className="text-sm leading-none font-medium whitespace-nowrap text-[#bcbcc8]"
+                title={address}
+              >
                 {shortAddress(address)}
               </span>
               <button
                 type="button"
-                className="disconnect"
+                className="cursor-pointer grid size-10 shrink-0 place-items-center rounded border border-[#3a3a3a] bg-black text-white hover:border-[#666] [&_svg]:size-[18px]"
                 aria-label="Disconnect"
                 onClick={() => void onDisconnect()}
               >
@@ -1346,23 +1443,45 @@ export default function ShieldAndWinPage() {
         </div>
       </header>
 
-      <main>
-        <section className="stage" aria-labelledby="title" aria-busy={campaignState === 'loading'}>
-          <div className="lead">
+      <main className="flex-1 px-[clamp(16px,4vw,64px)] max-[760px]:px-3">
+        <section
+          className="relative isolate mx-auto grid max-w-[1360px] grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)] items-center gap-[clamp(32px,5vw,80px)] overflow-hidden rounded-[30px] border border-[#262626] bg-[linear-gradient(155deg,#1c1c1c_0%,#141414_55%,#0e0e10_100%)] p-[clamp(36px,5vw,80px)] max-[1040px]:grid-cols-1 max-[760px]:gap-7 max-[760px]:rounded-3xl max-[760px]:px-[18px] max-[760px]:pt-7 max-[760px]:pb-[22px]"
+          aria-labelledby="title"
+          aria-busy={campaignState === 'loading'}
+        >
+          <div
+            className="pointer-events-none absolute inset-0 z-[-1] bg-[radial-gradient(circle,rgba(61,255,190,0.32)_1.4px,transparent_2px)] [background-size:18px_18px] [mask-image:radial-gradient(60%_75%_at_85%_100%,#000_0%,rgba(0,0,0,0.4)_45%,transparent_75%)] [-webkit-mask-image:radial-gradient(60%_75%_at_85%_100%,#000_0%,rgba(0,0,0,0.4)_45%,transparent_75%)]"
+            aria-hidden="true"
+          />
+          <div>
             {campaignState === 'loading' ? (
-              <div className="sk sk-eyebrow" aria-hidden="true" />
+              <div
+                className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[18px] w-[148px] rounded-lg max-[760px]:h-[15px]"
+                aria-hidden="true"
+              />
             ) : (
-              <p className="eyebrow doto">{campaign?.name || 'Shield & Win'}</p>
+              <p className="font-['Doto',ui-monospace,monospace] text-lg leading-none font-normal tracking-[0.06em] text-[#3dffbe] uppercase max-[760px]:text-[15px]">
+                {campaign?.name || 'Shield & Win'}
+              </p>
             )}
             {showFixedWin ? (
-              <h1 id="title">
+              <h1
+                id="title"
+                className="mt-[clamp(18px,3vh,28px)] text-[clamp(48px,min(6vw,10vh),96px)] leading-[1.02] font-semibold tracking-[-0.035em] max-[760px]:text-[clamp(44px,13vw,60px)]"
+              >
                 Go Shield,
                 <br />
                 {'Win'}
                 {prizeReady ? (
                   <>
                     {' '}
-                    <span className={campaignStart.reveal ? 'hl reveal' : 'hl'}>
+                    <span
+                      className={
+                        campaignStart.reveal
+                          ? 'text-[#3dffbe] animate-shield-fade motion-reduce:animate-none'
+                          : 'text-[#3dffbe]'
+                      }
+                    >
                       {board.prizeAmount}
                       {'\u00A0'}
                       {board.prizeAsset}
@@ -1371,17 +1490,32 @@ export default function ShieldAndWinPage() {
                 ) : null}
               </h1>
             ) : (
-              <h1 id="title">Shield & Win</h1>
+              <h1
+                id="title"
+                className="mt-[clamp(18px,3vh,28px)] text-[clamp(48px,min(6vw,10vh),96px)] leading-[1.02] font-semibold tracking-[-0.035em] max-[760px]:text-[clamp(44px,13vw,60px)]"
+              >
+                Shield & Win
+              </h1>
             )}
             {campaignState === 'error' ? (
-              <p className="sub">{CAMPAIGN_ERROR}</p>
+              <p className="mt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
+                {CAMPAIGN_ERROR}
+              </p>
             ) : campaignState === 'ready' && !prizeReady ? (
-              <p className="sub">No campaign is available right now.</p>
+              <p className="mt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
+                No campaign is available right now.
+              </p>
             ) : (
-              <p className="sub">
+              <p className="mt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
                 {'Try a shield transfer'}
                 {board.minimumValue ? (
-                  <span className={campaignStart.reveal ? 'reveal' : undefined}>
+                  <span
+                    className={
+                      campaignStart.reveal
+                        ? 'animate-shield-fade motion-reduce:animate-none'
+                        : undefined
+                    }
+                  >
                     {` (min ${board.minimumValue})`}
                   </span>
                 ) : null}
@@ -1389,16 +1523,20 @@ export default function ShieldAndWinPage() {
               </p>
             )}
 
-            <div className="actions">
+            <div className="mt-[clamp(24px,4vh,40px)] flex min-h-14 flex-wrap gap-3.5 max-[760px]:flex-col">
               {actionsReady && phone ? (
-                <button type="button" className="btn primary" onClick={() => void sharePage()}>
+                <button
+                  type="button"
+                  className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
+                  onClick={() => void sharePage()}
+                >
                   {canShare ? 'Send link to your computer' : copied ? 'Link copied' : 'Copy link'}
                 </button>
               ) : null}
               {actionsReady && !phone && claimable.length > 0 ? (
                 <button
                   type="button"
-                  className="btn primary"
+                  className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
                   disabled={claimBusy}
                   onClick={() => void openClaim(claimable[0])}
                 >
@@ -1407,7 +1545,7 @@ export default function ShieldAndWinPage() {
               ) : null}
               {showInstall ? (
                 <a
-                  className="btn primary"
+                  className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
                   href={CHROME_STORE_URL}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -1417,10 +1555,18 @@ export default function ShieldAndWinPage() {
                 </a>
               ) : null}
               {showTry ? (
-                <Tooltip content={TOOLBAR_HINT} side="top">
+                <Tooltip
+                  className="max-[760px]:flex max-[760px]:w-full"
+                  content={TOOLBAR_HINT}
+                  side="top"
+                >
                   <button
                     type="button"
-                    className={claimable.length > 0 ? 'btn ghost' : 'btn primary'}
+                    className={
+                      claimable.length > 0
+                        ? "inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-[#3a3a3a] bg-[#0b0b0b] text-white hover:border-[#6a6a6a] hover:text-white"
+                        : "inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
+                    }
                     onClick={onParticipate}
                   >
                     Try a shield transfer
@@ -1428,18 +1574,30 @@ export default function ShieldAndWinPage() {
                 </Tooltip>
               ) : null}
               {showExplore ? (
-                <a className="btn ghost" href="/">
+                <a
+                  className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-[#3a3a3a] bg-[#0b0b0b] text-white hover:border-[#6a6a6a] hover:text-white"
+                  href="/"
+                >
                   Explore Noir Wallet
                 </a>
               ) : null}
               {showConnect ? (
                 connectLoading ? (
-                  <button type="button" className="btn ghost" disabled aria-busy="true">
-                    <span className="btn-spin" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-[#3a3a3a] bg-[#0b0b0b] text-white hover:border-[#6a6a6a] hover:text-white"
+                    disabled
+                    aria-busy="true"
+                  >
+                    <span
+                      className="size-4 animate-spin rounded-full border-2 border-white/35 border-t-white [animation-duration:700ms] motion-reduce:animate-none"
+                      aria-hidden="true"
+                    />
                     Connect Wallet
                   </button>
                 ) : (
                   <Tooltip
+                    className="max-[760px]:flex max-[760px]:w-full"
                     content={
                       <img
                         src={PUBLIC_TOOLTIP_SRC}
@@ -1449,22 +1607,36 @@ export default function ShieldAndWinPage() {
                     side="top"
                     variant="plain"
                   >
-                    <button type="button" className="btn ghost" onClick={() => void onConnect()}>
+                    <button
+                      type="button"
+                      className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-[#3a3a3a] bg-[#0b0b0b] text-white hover:border-[#6a6a6a] hover:text-white"
+                      onClick={() => void onConnect()}
+                    >
                       Connect Wallet
                     </button>
                   </Tooltip>
                 )
               ) : null}
             </div>
-            <p className={hintWarn ? 'hint warn' : 'hint'} aria-live="polite">
+            <p
+              className={
+                hintWarn
+                  ? 'mt-3 max-w-[36em] text-sm leading-normal text-[#ffc04d] empty:hidden'
+                  : 'mt-3 max-w-[36em] text-sm leading-normal text-[#8b8e93] empty:hidden'
+              }
+              aria-live="polite"
+            >
               {hint}
             </p>
 
             {showEntry ? (
-              <section className="entries-card" aria-label="Your entries">
-                <div className="entries-head">
-                  <h2>Your entries</h2>
-                  <div className="entries-tools">
+              <section
+                className="mt-[22px] max-w-[520px] overflow-hidden rounded-xl border border-[#303333] bg-[#1d1e1e]"
+                aria-label="Your entries"
+              >
+                <div className="flex items-center justify-between gap-3 border-b border-[#303333] bg-[#202222] px-5 py-4">
+                  <h2 className="text-base leading-6 font-semibold text-[#f2f4f3]">Your entries</h2>
+                  <div className="flex shrink-0 items-center gap-2">
                     <EntriesRefreshButton
                       busy={entryRefreshBusy}
                       cooling={entryRefreshCooling}
@@ -1473,7 +1645,7 @@ export default function ShieldAndWinPage() {
                     />
                     <button
                       type="button"
-                      className="entries-all"
+                      className="cursor-pointer inline-flex items-center gap-1.5 text-xs leading-[18px] font-medium whitespace-nowrap text-[#52e4b3] hover:text-white"
                       onClick={() => setAllEntriesOpen(true)}
                     >
                       View all <span aria-hidden="true">→</span>
@@ -1481,71 +1653,109 @@ export default function ShieldAndWinPage() {
                   </div>
                 </div>
                 {orderedEntries.length > 0 ? (
-                  <ul className="entries-list">{orderedEntries.slice(0, 3).map(renderEntry)}</ul>
+                  <>
+                    <EntryColumns />
+                    <div className="card-entries pt-1 pb-1 px-1 w-full">
+                      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                        {orderedEntries.slice(0, 3).map(renderEntry)}
+                      </ul>
+                    </div>
+                  </>
                 ) : (
-                  <div className="entry-empty">
+                  <div className="px-5 py-4 text-[13px] text-[#bcbcc8]">
                     <p>{copy.body}</p>
                   </div>
                 )}
               </section>
             ) : null}
-            <p className="sr" aria-live="polite">
+            <p className="sr-only" aria-live="polite">
               {liveText}
             </p>
 
             {historicalWins.length > 0 ? (
-              <section className="wins" aria-label="Your wins">
-                <h2>Earlier wins</h2>
-                <ul className="entries-list">{historicalWins.map(renderEntry)}</ul>
+              <section
+                className="mt-4 max-w-[520px] overflow-hidden rounded-xl border border-[#303333] bg-[#1d1e1e]"
+                aria-label="Your wins"
+              >
+                <h2 className="border-b border-[#303333] px-5 py-4 text-base leading-6 font-semibold text-[#f2f4f3]">
+                  Earlier wins
+                </h2>
+                <EntryColumns />
+                <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                  {historicalWins.map(renderEntry)}
+                </ul>
               </section>
             ) : null}
 
-            <p className="assure">
+            <p className="mt-[clamp(22px,3.5vh,34px)] pt-2 flex items-center gap-2.5 text-[15px] text-[#a7a9ad] [&_svg]:size-5 [&_svg]:shrink-0 [&_svg]:text-[#3dffbe]">
               <AssureIcon />
               Your shield transfer lands in your own shield balance. The money stays yours.
             </p>
           </div>
 
-          <aside className="board" aria-label="Campaign progress">
-            <div className="board-top">
+          <aside
+            className="relative min-w-0 rounded-3xl border border-[rgba(61,255,190,0.3)] bg-[linear-gradient(180deg,rgba(20,22,30,0.94),rgba(13,14,20,0.97))] p-[clamp(22px,2.4vw,32px)] shadow-[0_0_0_4px_rgba(61,255,190,0.04),0_30px_80px_rgba(0,0,0,0.5)] max-[1040px]:max-w-[560px] max-[760px]:px-[18px] max-[760px]:py-5"
+            aria-label="Campaign progress"
+          >
+            <div className="flex items-center justify-between gap-3 text-[15px] text-[#a7a9ad]">
               {campaignState === 'loading' ? (
                 <>
-                  <span className="sk sk-pill" />
-                  <span className="sk sk-note muted" />
+                  <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[34px] w-[196px] rounded-[17px] max-[760px]:h-8" />
+                  <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[15px] w-[112px] rounded-lg max-[760px]:hidden" />
                 </>
               ) : (
                 <>
-                  <span className={board.state === 'live' ? 'pill' : 'pill ended'}>
-                    <i />
+                  <span
+                    className={
+                      board.state === 'live'
+                        ? 'inline-flex h-[34px] items-center gap-2 rounded-[17px] border border-[rgba(61,255,190,0.35)] bg-[rgba(0,209,138,0.1)] px-3.5 text-[15px] font-medium whitespace-nowrap text-[#3dffbe] max-[760px]:h-8 max-[760px]:px-3 max-[760px]:text-sm'
+                        : 'inline-flex h-[34px] items-center gap-2 rounded-[17px] border border-[#3a3a3a] bg-white/5 px-3.5 text-[15px] font-medium whitespace-nowrap text-[#a7a9ad] max-[760px]:h-8 max-[760px]:px-3 max-[760px]:text-sm'
+                    }
+                  >
+                    <i
+                      className={
+                        board.state === 'live'
+                          ? 'size-2 rounded-full bg-[#3dffbe] shadow-[0_0_8px_#3dffbe]'
+                          : 'size-2 rounded-full bg-[#666]'
+                      }
+                    />
                     <span>{board.pill}</span>
                   </span>
-                  {board.winnerNote ? <span className="muted">{board.winnerNote}</span> : null}
+                  {board.winnerNote ? (
+                    <span className="max-[760px]:hidden">{board.winnerNote}</span>
+                  ) : null}
                 </>
               )}
             </div>
             {campaignState === 'loading' ? (
-              <div className="prize">
-                <div className="sk sk-coin" />
-                <div className="prize-copy">
-                  <div className="sk sk-prize-amt" />
-                  <div className="sk sk-prize-sub" />
+              <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
+                <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none size-[clamp(64px,6.5vw,96px)] shrink-0 rounded-full" />
+                <div className="w-[240px] max-w-[calc(100%-clamp(78px,8vw,118px))] shrink-0">
+                  <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none h-[clamp(44px,5vw,72px)] w-[180px] max-w-full rounded-xl" />
+                  <div className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2.5 h-[calc(clamp(15px,1.2vw,18px)*1.55)] w-[240px] max-w-full rounded-lg" />
                 </div>
               </div>
             ) : prizeReady ? (
-              <div className="prize">
-                <img src="/shield-and-win/zec.svg" alt="" />
+              <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
+                <img
+                  className="aspect-square h-auto w-[clamp(64px,6.5vw,96px)]"
+                  src="/shield-and-win/zec.svg"
+                  alt=""
+                />
                 <div>
-                  <b>
+                  <b className="block text-[clamp(44px,5vw,72px)] leading-none font-semibold tracking-[-0.02em] text-white">
                     {board.prizeAmount} {board.prizeAsset}
                   </b>
-                  <span>{board.prizeDestination}</span>
+                  <span className="mt-2.5 block text-[clamp(15px,1.2vw,18px)] text-[#bcbcc8]">
+                    {board.prizeDestination}
+                  </span>
                 </div>
               </div>
             ) : null}
             {campaignState === 'loading' || typeof board.drawsSoFar === 'number' ? (
-              <div className="draws">
-                <span className="k">Draws so far</span>
-                <span className="big doto">
+              <div className="mt-[clamp(18px,2.6vh,26px)]">
+                <span className="text-[15px] text-[#a7a9ad]">Draws so far</span>
+                <span className="mt-2.5 block font-['Doto',ui-monospace,monospace] text-[clamp(56px,min(6.4vw,11vh),104px)] leading-none font-bold text-[#3dffbe] [text-shadow:0_0_26px_rgba(61,255,190,0.35)]">
                   {(typeof board.drawsSoFar === 'number' ? board.drawsSoFar : 0).toLocaleString(
                     'en-US'
                   )}
@@ -1553,30 +1763,34 @@ export default function ShieldAndWinPage() {
               </div>
             ) : null}
             {campaignState === 'loading' ? (
-              <div className="tiles">
-                <div className="tile">
-                  <span>Odds per draw</span>
-                  <span className="sk sk-tile-v" />
+              <div className="mt-[clamp(16px,2.6vh,24px)] grid grid-cols-2 gap-3.5 max-[440px]:grid-cols-1">
+                <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
+                  <span className="block text-sm text-[#a7a9ad]">Odds per draw</span>
+                  <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2 h-[clamp(24px,2.3vw,36px)] w-[120px] max-w-full rounded-lg" />
                 </div>
-                <div className="tile">
-                  <span>Ends in</span>
-                  <span className="sk sk-tile-v" />
+                <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
+                  <span className="block text-sm text-[#a7a9ad]">Ends in</span>
+                  <span className="block animate-shield-sk bg-white/12 motion-reduce:animate-none mt-2 h-[clamp(24px,2.3vw,36px)] w-[120px] max-w-full rounded-lg" />
                 </div>
               </div>
             ) : campaignState === 'ready' && campaign ? (
-              <div className="tiles">
-                <div className="tile">
-                  <span>{board.oddsLabel}</span>
-                  <b className="doto">{board.oddsValue}</b>
+              <div className="mt-[clamp(16px,2.6vh,24px)] grid grid-cols-2 gap-3.5 max-[440px]:grid-cols-1">
+                <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
+                  <span className="block text-sm text-[#a7a9ad]">{board.oddsLabel}</span>
+                  <b className="mt-2 block max-w-full font-['Doto',ui-monospace,monospace] text-[clamp(15px,12.5cqi,36px)] leading-[1.1] font-bold whitespace-nowrap text-white max-[440px]:mt-0 max-[440px]:text-[clamp(14px,11cqi,26px)]">
+                    {board.oddsValue}
+                  </b>
                 </div>
-                <div className="tile">
-                  <span>{board.endsLabel}</span>
-                  <b className="doto">{board.endsValue}</b>
+                <div className="@container min-w-0 rounded-[14px] border border-[#2a2a33] bg-white/[0.03] px-[18px] py-4 max-[760px]:p-3.5 max-[440px]:flex max-[440px]:items-baseline max-[440px]:justify-between max-[440px]:gap-3">
+                  <span className="block text-sm text-[#a7a9ad]">{board.endsLabel}</span>
+                  <b className="mt-2 block max-w-full font-['Doto',ui-monospace,monospace] text-[clamp(15px,12.5cqi,36px)] leading-[1.1] font-bold whitespace-nowrap text-white max-[440px]:mt-0 max-[440px]:text-[clamp(14px,11cqi,26px)]">
+                    {board.endsValue}
+                  </b>
                 </div>
               </div>
             ) : null}
             {campaignState === 'loading' || (campaignState === 'ready' && campaign) ? (
-              <p className="indep">
+              <p className="pt-3.5 text-[13px] leading-[1.5] text-[#8b8e93]">
                 Every draw is independent. More draws don’t make the next one more likely to win.
               </p>
             ) : null}
@@ -1584,44 +1798,54 @@ export default function ShieldAndWinPage() {
         </section>
       </main>
 
-      <footer className="foot">
+      <footer className="px-4 pt-[22px] pb-[26px] text-center text-[13px] leading-[1.6] text-[#8b8e93]">
         {prizeReady ? (
           <p>
             {board.prizeAmount} {board.prizeAsset}. The campaign ends when it is no longer active.
             Fees may apply.{' '}
-            <button type="button" className="textlink" onClick={() => setRulesOpen(true)}>
+            <button
+              type="button"
+              className="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[length:inherit] leading-[inherit] text-[#bcbcc8] underline decoration-white/30 underline-offset-[3px] hover:text-white"
+              onClick={() => setRulesOpen(true)}
+            >
               Rules
             </button>
           </p>
         ) : (
           <p>
-            <button type="button" className="textlink" onClick={() => setRulesOpen(true)}>
+            <button
+              type="button"
+              className="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[length:inherit] leading-[inherit] text-[#bcbcc8] underline decoration-white/30 underline-offset-[3px] hover:text-white"
+              onClick={() => setRulesOpen(true)}
+            >
               Rules
             </button>
           </p>
         )}
-        <p>© 2026 Noir Privacy Terminal. All Rights Reserved.</p>
+        <p className="mt-1 text-[#5d5d66]">© 2026 Noir Privacy Terminal. All Rights Reserved.</p>
       </footer>
 
       <dialog
         ref={rulesRef}
-        className="rules"
+        className="m-auto max-h-[min(82dvh,760px)] overflow-hidden border border-[#333] bg-[#141414] p-0 text-white open:flex open:flex-col [&::backdrop]:bg-black/74 w-[min(560px,calc(100%-32px))] rounded-[10px] [&_b]:font-medium [&_b]:text-white [&_ul]:m-0 [&_ul]:list-none [&_ul]:px-[22px] [&_ul]:py-0 [&_li]:relative [&_li]:border-t [&_li]:border-[#232323] [&_li]:py-3 [&_li]:pl-5 [&_li]:text-[15px] [&_li]:leading-[1.55] [&_li]:text-[#bcbcc8] [&_li]:[overflow-wrap:anywhere] [&_li]:before:absolute [&_li]:before:top-[21px] [&_li]:before:left-0.5 [&_li]:before:size-1.5 [&_li]:before:rounded-full [&_li]:before:bg-[#3dffbe] [&_li]:before:content-['']"
         aria-labelledby="rules-title"
         onClose={() => setRulesOpen(false)}
         onClick={event => closeOnBackdrop(event, () => setRulesOpen(false))}
       >
-        <div className="rules-head">
-          <h2 id="rules-title">Rules</h2>
+        <div className="flex shrink-0 items-center justify-between gap-3 bg-[#141414] px-[22px] pt-5 pb-3">
+          <h2 id="rules-title" className="text-xl font-semibold text-white">
+            Rules
+          </h2>
           <button
             type="button"
-            className="x"
+            className="grid size-10 cursor-pointer place-items-center rounded-lg border border-[#333] bg-transparent text-white [&_svg]:size-[18px]"
             aria-label="Close"
             onClick={() => setRulesOpen(false)}
           >
             <CloseIcon />
           </button>
         </div>
-        <div className="rules-scroll">
+        <div className="min-h-0 flex-1 overflow-auto px-3">
           {campaign && campaignState === 'ready' ? (
             <RulesCopy campaign={campaign} minimumValue={board.minimumValue} />
           ) : (
@@ -1636,17 +1860,19 @@ export default function ShieldAndWinPage() {
 
       <dialog
         ref={entriesRef}
-        className="rules entries-dialog"
+        className="m-auto max-h-[min(82dvh,760px)] overflow-hidden border border-[#333] bg-[#141414] p-0 text-white open:flex open:flex-col [&::backdrop]:bg-black/74 w-[min(680px,calc(100%-32px))] rounded-[10px] [&_li]:px-[22px]"
         aria-labelledby="entries-title"
         onClose={() => setAllEntriesOpen(false)}
         onClick={event => closeOnBackdrop(event, () => setAllEntriesOpen(false))}
       >
-        <div className="rules-head">
+        <div className="flex shrink-0 items-center justify-between gap-3 bg-[#141414] px-[22px] pt-5 pb-3">
           <div>
-            <h2 id="entries-title">Your entries</h2>
-            <span className="entries-count">{entryTotal} entries</span>
+            <h2 id="entries-title" className="text-xl font-semibold text-white">
+              Your entries
+            </h2>
+            <span className="text-xs text-[#8b8e93]">{entryTotal} entries</span>
           </div>
-          <div className="entries-tools">
+          <div className="flex shrink-0 items-center gap-2">
             <EntriesRefreshButton
               busy={entryRefreshBusy}
               cooling={entryRefreshCooling}
@@ -1655,7 +1881,7 @@ export default function ShieldAndWinPage() {
             />
             <button
               type="button"
-              className="x"
+              className="grid size-10 cursor-pointer place-items-center rounded-lg border border-[#333] bg-transparent text-white [&_svg]:size-[18px]"
               aria-label="Close"
               onClick={() => setAllEntriesOpen(false)}
             >
@@ -1663,18 +1889,19 @@ export default function ShieldAndWinPage() {
             </button>
           </div>
         </div>
-        <div className="rules-scroll">
+        {orderedEntries.length > 0 ? <EntryColumns dialog /> : null}
+        <div className="min-h-0 flex-1 overflow-auto pt-1 pb-2 px-1">
           {allEntriesLoading ? (
-            <p className="entries-message" role="status">
+            <p className="px-[22px] py-4 text-[13px] text-[#bcbcc8]" role="status">
               Loading all entries…
             </p>
           ) : null}
           {allEntriesError ? (
-            <div className="entries-message" role="alert">
+            <div className="px-[22px] py-4 text-[13px] text-[#bcbcc8]" role="alert">
               Could not load all entries.{' '}
               <button
                 type="button"
-                className="textlink"
+                className="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[length:inherit] leading-[inherit] text-[#bcbcc8] underline decoration-white/30 underline-offset-[3px] hover:text-white"
                 onClick={() => setAllEntriesRetry(value => value + 1)}
               >
                 Retry
@@ -1682,16 +1909,18 @@ export default function ShieldAndWinPage() {
             </div>
           ) : null}
           {orderedEntries.length > 0 ? (
-            <ul className="entries-list">{orderedEntries.map(renderEntry)}</ul>
+            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+              {orderedEntries.map(renderEntry)}
+            </ul>
           ) : !allEntriesLoading ? (
-            <p className="entries-message">No entries yet.</p>
+            <p className="px-[22px] py-4 text-[13px] text-[#bcbcc8]">No entries yet.</p>
           ) : null}
         </div>
       </dialog>
 
       <dialog
         ref={claimRef}
-        className="rules claim"
+        className="m-auto max-h-[min(82dvh,760px)] overflow-hidden border border-[#333] bg-[#141414] p-0 text-white open:flex open:flex-col [&::backdrop]:bg-black/74 w-[min(360px,calc(100%-32px))] rounded-[10px]"
         aria-labelledby="claim-title"
         onCancel={event => {
           if (claimBusy) event.preventDefault()
@@ -1703,40 +1932,59 @@ export default function ShieldAndWinPage() {
       >
         {claimTarget && payoutAddress ? (
           <>
-            <div className="rules-head">
-              <h2 id="claim-title">Claim {rewardText(claimTarget)}</h2>
+            <div className="flex shrink-0 items-center justify-between gap-3 bg-[#141414] px-5 pt-[22px] pb-1">
+              <h2 id="claim-title" className="text-xl font-semibold text-white">
+                Claim {rewardText(claimTarget)}
+              </h2>
             </div>
-            <div className="rules-scroll">
-              <div className="claim-body">
-                <div className="claim-prize">
-                  <img src="/shield-and-win/zec.svg" alt="" />
-                  <span className="doto">{rewardText(claimTarget)}</span>
-                  <small>
+            <div className="min-h-0 flex-1 overflow-auto">
+              <div className="px-5 pt-2 pb-5">
+                <div className="flex flex-col items-center gap-1.5 px-0 pt-2 pb-3.5 text-center">
+                  <img className="size-11" src="/shield-and-win/zec.svg" alt="" />
+                  <span className="font-['Doto',ui-monospace,monospace] text-[34px] leading-none font-normal text-[#ffcc00]">
+                    {rewardText(claimTarget)}
+                  </span>
+                  <small className="text-xs leading-[1.45] text-[#a7a9ad]">
                     Network fee paid by Noir. You receive the full {rewardText(claimTarget)}.
                   </small>
                 </div>
-                <p className="claim-label">Send to</p>
-                <div className="claim-addr">
-                  <img src="/shield-and-win/zec.svg" alt="" />
-                  <div>
-                    <b>Zcash · Transparent</b>
-                    <small aria-label={payoutAddress}>{shortPayoutAddress(payoutAddress)}</small>
+                <p className="mx-0.5 pb-1.5 text-xs leading-[1.4] text-[#8b8e93]">Send to</p>
+                <div className="flex w-full items-center gap-2.5 rounded-xl border border-[rgba(61,255,190,0.45)] bg-[#1c1c22] px-3 py-2.5">
+                  <img
+                    className="size-[30px] shrink-0 rounded-lg"
+                    src="/shield-and-win/zec.svg"
+                    alt=""
+                  />
+                  <div className="min-w-0 flex-1">
+                    <b className="block font-medium text-white">Zcash · Transparent</b>
+                    <small
+                      className="block truncate text-xs leading-[1.4] text-[#8b8e93]"
+                      aria-label={payoutAddress}
+                    >
+                      {shortPayoutAddress(payoutAddress)}
+                    </small>
                   </div>
-                  <span className="claim-radio" aria-hidden="true" />
+                  <span
+                    className="grid size-[18px] shrink-0 place-items-center rounded-full border border-[#3dffbe] after:size-[9px] after:rounded-full after:bg-[#3dffbe] after:content-['']"
+                    aria-hidden="true"
+                  />
                 </div>
-                <p className="claim-fine">
+                <p className="mx-0.5 pt-3 pb-3.5 text-xs leading-normal text-[#a7a9ad]">
                   We ask for this address only because you won, and we don&apos;t link it to your
                   Public or Shield accounts.
                 </p>
                 {claimError ? (
-                  <p className="form-error" id="shield-win-claim-error">
+                  <p
+                    className="mx-0.5 mb-3.5 text-sm leading-normal text-[#ffc04d]"
+                    id="shield-win-claim-error"
+                  >
                     {claimError}
                   </p>
                 ) : null}
-                <div className="claim-actions">
+                <div className="flex flex-col gap-2">
                   <button
                     type="button"
-                    className="btn primary"
+                    className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-[46px] w-full rounded-[10px] px-7 text-[15px] border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
                     disabled={claimBusy || !address}
                     aria-describedby={claimError ? 'shield-win-claim-error' : undefined}
                     onClick={() => void onSign()}
@@ -1745,7 +1993,7 @@ export default function ShieldAndWinPage() {
                   </button>
                   <button
                     type="button"
-                    className="btn ghost"
+                    className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-[46px] w-full rounded-[10px] px-7 text-[15px] border-transparent bg-[#2a2a32] text-white hover:border-transparent hover:bg-[#34343d] hover:text-white"
                     disabled={claimBusy}
                     onClick={() => setClaimOpen(false)}
                   >
