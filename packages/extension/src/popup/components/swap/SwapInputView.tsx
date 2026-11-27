@@ -154,6 +154,7 @@ interface SwapInputViewProps {
   onSwitchTokens: () => void
   onRetryTokenCatalog: () => void
   onRetryQuote?: () => void
+  retryQuoteLabel?: string
   onGetQuote: () => void
 }
 
@@ -643,6 +644,7 @@ export function SwapInputView({
   onSwitchTokens,
   onRetryTokenCatalog,
   onRetryQuote,
+  retryQuoteLabel,
   onGetQuote
 }: SwapInputViewProps) {
   const amountErrorId = useId()
@@ -942,6 +944,7 @@ export function SwapInputView({
             message={quoteNotice ?? quoteError}
             tone={quoteNotice ? 'muted' : onRetryQuote ? 'warning' : 'error'}
             onRetry={onRetryQuote}
+            retryLabel={retryQuoteLabel}
             className="mt-2"
           />
         ) : null}

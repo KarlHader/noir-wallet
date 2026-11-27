@@ -53,6 +53,12 @@ test('uses the 1Click route and refund owner for all basic confidential quotes a
   const usdcAddress = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
   const depositAddress = '0x4444444444444444444444444444444444444444'
   const usdc = { assetId: `nep141:base-${usdcAddress}.omft.near`, symbol: 'USDC', decimals: 6 }
+  const arbitrumAddress = '0xaf88d065e77c8cc2239327c5edb3a432268e5831'
+  const arbitrumUsdc = {
+    assetId: `nep141:arb-${arbitrumAddress}.omft.near`,
+    symbol: 'USDC',
+    decimals: 6
+  }
   const sol = { assetId: 'nep141:sol.omft.near', blockchain: 'sol', symbol: 'SOL', decimals: 9 }
   const solRecipient = 'A7eWgQaB7C5qS3kfLWmBp4fPJg8gVd5m6kPmMRYn3ntH'
   const asset = { chain: '8453', address: usdcAddress, symbol: 'USDC', decimals: 6 }
@@ -78,6 +84,8 @@ test('uses the 1Click route and refund owner for all basic confidential quotes a
   let destination = usdc
   let repeatFeeInBaseline = false
   let repeatFeeInBuild = false
+  let shieldRefundAddress
+  let wrongBuildRefund = false
   globalThis.fetch = async (url, init) => {
     expect(url).toBe(`${config.oneClickApiUrl}/quote`)
     const body = JSON.parse(init.body)
@@ -86,16 +94,20 @@ test('uses the 1Click route and refund owner for all basic confidential quotes a
       originAsset: usdc.assetId,
       destinationAsset: destination.assetId,
       amount: request.amountIn,
-      refundTo: request.sender,
+      refundTo: shieldRefundAddress ?? request.sender,
+      refundType: shieldRefundAddress ? 'CONFIDENTIAL_INTENTS' : 'ORIGIN_CHAIN',
       recipient: destination === sol ? solRecipient : request.recipient,
       recipientType: 'DESTINATION_CHAIN',
       confidentiality: 'basic'
     })
-    if (body.dry || referral === 'noir_swap') {
+    if (body.dry) {
       expect(body.user).toBeUndefined()
       expect(body.userChainFamily).toBeUndefined()
     } else {
-      expect(body).toMatchObject({ user: request.sender, userChainFamily: 'evm' })
+      expect(body).toMatchObject({
+        user: shieldRefundAddress ?? request.sender,
+        userChainFamily: 'evm'
+      })
     }
     if (referral === 'noir_swap') expect(body.appFees).toBeUndefined()
     else if (body.appFees) expect(body.appFees).toEqual(fees)
@@ -108,7 +120,11 @@ test('uses the 1Click route and refund owner for all basic confidential quotes a
         : (body.appFees ?? [])
     return Response.json({
       correlationId: 'public-confidential-quote',
-      quoteRequest: { ...body, appFees },
+      quoteRequest: {
+        ...body,
+        appFees,
+        ...(!body.dry && wrongBuildRefund ? { refundTo: request.sender } : {})
+      },
       quote: {
         amountIn: body.amount,
         amountOut: body.appFees ? '999800' : '1000000',
@@ -127,7 +143,9 @@ test('uses the 1Click route and refund owner for all basic confidential quotes a
         reads.push(input)
         return status
       },
-      async () => [usdc, sol]
+      async () => [usdc, sol, arbitrumUsdc],
+      undefined,
+      async () => '0x5555555555555555555555555555555555555555'
     )
     const client = new RheaSwapCatalogClient({
       baseUrl: config.rheaSwapApiUrl,
@@ -203,6 +221,46 @@ test('uses the 1Click route and refund owner for all basic confidential quotes a
       })
     }
     referral = 'noir_swap'
+    shieldRefundAddress = '0x5555555555555555555555555555555555555555'
+    for (const crossChain of [false, true]) {
+      destination = crossChain ? arbitrumUsdc : usdc
+      const quote = await service.quote(
+        {
+          ...request,
+          ...(crossChain
+            ? {
+                toChain: '42161',
+                tokenOut: { ...asset, chain: '42161', address: arbitrumAddress }
+              }
+            : {})
+        },
+        undefined,
+        { ...scope, purpose: crossChain ? 'private-cross-chain-withdraw' : 'private-transfer' }
+      )
+      wrongBuildRefund = true
+      await expect(service.prepare(quote.quoteHandle)).rejects.toThrow('funding route')
+      wrongBuildRefund = false
+      await service.prepare(quote.quoteHandle)
+      const prepared = await service.readPreparedBuild(quote.quoteHandle)
+      expect(prepared.deposit?.viewer).toEqual({
+        chainFamily: 'evm',
+        walletAddress: shieldRefundAddress,
+        signingMode: 'public'
+      })
+      await expect(service.readEvmTransactionPlan(quote.quoteHandle)).resolves.toMatchObject({
+        transaction: { from: request.sender }
+      })
+      await service.recordTransactionSubmission(quote.quoteHandle, `0x${'30'.repeat(32)}`)
+      const restarted = new RheaSwapService(client, sessions)
+      status = { status: 'REFUNDED' }
+      await restarted.reportSubmission(quote.quoteHandle)
+      await expect(restarted.getOrderStatus(quote.quoteHandle)).resolves.toMatchObject({
+        status: 'refunded'
+      })
+      expect(reads.at(-1).order.viewer.walletAddress).toBe(shieldRefundAddress)
+    }
+
+    shieldRefundAddress = undefined
     destination = sol
     const crossChainQuote = await service.quote(
       {

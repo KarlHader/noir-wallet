@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Noir Wallet are documented in this file.
 
+## [2.1.3] - 2026-11-27
+
+- Resume eligible EVM swaps after token approval for imported private-key and recovery-phrase accounts while honoring the reviewed network fee limits.
+- Offer a lower fee option when the current network fee exceeds the available balance for an eligible Public Swap.
+
 ## [2.1.2] - 2026-11-27
 
 - Swap transparent ZEC into NEAR Confidential from Shield on supported Ledger accounts. Complete required signatures during confirmation.

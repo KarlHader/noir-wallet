@@ -1,4 +1,5 @@
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
+import type { ActivityItem } from '@/core/activity'
 import { supportsEvmConfidentialShield } from '@/core/chains/evm'
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 import type { SwapToken } from '@/core/services/intents-api'
@@ -611,6 +612,66 @@ export function shieldQuoteFeeRaw(review: ConfidentialFundingReview): string | n
   return difference.toString()
 }
 
+export function getShieldFundsNotice(
+  plan: ConfidentialFundingPlan | null,
+  item?: ActivityItem
+): string | null {
+  if (
+    plan?.operation === 'cluster' &&
+    plan.phase === 'failed' &&
+    (!plan.requiresDeposit || plan.preparedDeposit?.transactionHash)
+  ) {
+    if (plan.errorStatus === 'QUOTE_CHANGED' && !hasShieldWithdrawSubmission(plan)) {
+      return 'Your funds are in your Shield account. Start a new transfer from Shield.'
+    }
+    if (
+      plan.errorStatus === 'APP_FEE_REJECTED_2002' ||
+      plan.errorStatus === 'HISTORY_AUTH_REJECTED'
+    ) {
+      return 'Your funds are still in your Shield account.'
+    }
+  }
+
+  const protocol = item?.snapshot?.protocol
+  if (item && protocol?.provider === 'rhea-cross-chain-dex' && protocol.refundDomain === 'shield') {
+    if (item.segments.some(segment => segment.role === 'refund' && segment.status === 'final')) {
+      return 'Your funds were returned to your Shield account.'
+    }
+    if (
+      item.status === 'failed' &&
+      item.segments.some(segment => segment.role === 'relay' && segment.status === 'failed')
+    ) {
+      return 'Any refund will go to your Shield account.'
+    }
+  }
+
+  const operation = plan?.operation ?? item?.snapshot?.shield?.operation
+  if (operation !== 'withdraw' && operation !== 'cluster') return null
+  if (item?.status !== 'failed' && plan?.phase !== 'partial' && plan?.phase !== 'refunded')
+    return null
+
+  const observedWithdraws = item?.segments.filter(segment => segment.role === 'destination')
+  const withdraws = plan?.withdraws.length
+    ? plan.withdraws.map(row => row.status.trim().toUpperCase() === 'REFUNDED')
+    : observedWithdraws?.map(segment => segment.failureCode === 'refunded')
+  if (withdraws?.some(Boolean)) {
+    return withdraws.every(Boolean)
+      ? 'Your funds were returned to your Shield account.'
+      : 'The refunded portion was returned to your Shield account.'
+  }
+  return null
+}
+
+function hasShieldWithdrawSubmission(plan: ConfidentialFundingPlan): boolean {
+  return Boolean(
+    plan.batchSubmissionAttemptedAt ||
+    plan.orderId ||
+    plan.requestFingerprint ||
+    plan.frozenRequest ||
+    plan.withdraws.some(row => row.signedPayload || row.intentHash)
+  )
+}
+
 export function hasShieldTransferStarted(plan: ConfidentialFundingPlan): boolean {
   if (plan.operation === 'deposit')
     return Boolean(plan.preparedDeposit?.transactionHash || plan.preparedDeposit?.rawTransaction)
@@ -621,13 +682,9 @@ export function hasShieldTransferStarted(plan: ConfidentialFundingPlan): boolean
     plan.operation === 'confidential-transfer'
   )
     return Boolean(
-      plan.batchSubmissionAttemptedAt ||
-      plan.orderId ||
       plan.preparedDeposit?.transactionHash ||
       plan.preparedDeposit?.rawTransaction ||
-      plan.requestFingerprint ||
-      plan.frozenRequest ||
-      plan.withdraws.some(row => row.signedPayload || row.intentHash)
+      hasShieldWithdrawSubmission(plan)
     )
   return false
 }

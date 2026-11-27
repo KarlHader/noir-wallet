@@ -151,14 +151,21 @@ test('protected Intents quote requires a matching request echo', async () => {
       amount: '1000000',
       refundTo: '0x1111111111111111111111111111111111111111',
       recipient: 'u1destination',
-      validateQuoteRequest: true
+      validateQuoteRequest: true,
+      viewer: { chainFamily: 'zcash', walletAddress: 't1viewer', signingMode: 'transparent' }
     }
+    const { viewer, ...withoutViewer } = request
+    expect((await fetchQuote(withoutViewer)).quoteStatus).toBe('error')
+    expect(requestedBody).toBeUndefined()
     expect((await fetchQuote(request)).quoteStatus).toBe('error')
     globalThis.fetch = async () =>
       new Response(
         JSON.stringify({ ...response(), quoteRequest: { ...requestedBody, recipient: 't1other' } }),
         { status: 200, headers: { 'content-type': 'application/json' } }
       )
+    expect((await fetchQuote(request)).quoteStatus).toBe('error')
+    globalThis.fetch = async () =>
+      Response.json({ ...response(), quoteRequest: { ...requestedBody, user: 't1other' } })
     expect((await fetchQuote(request)).quoteStatus).toBe('error')
     globalThis.fetch = async () =>
       new Response(JSON.stringify({ ...response(), quoteRequest: requestedBody }), {

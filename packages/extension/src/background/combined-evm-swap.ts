@@ -27,6 +27,24 @@ const ALLOWANCE_WAIT_MS = 60_000
 const SWAP_FEE_REVIEW_MESSAGE =
   'Token approved. The Swap fee changed. Review the Swap again to continue.'
 
+export class CombinedEvmSwapReviewError extends Error {
+  constructor(
+    readonly reason:
+      | 'invalid-input'
+      | 'account-changed'
+      | 'no-active-session'
+      | 'approval-unavailable'
+      | 'approval-changed'
+      | 'quote-expired-or-changed'
+      | 'swap-plan-changed'
+      | 'approval-plan-changed'
+      | 'fee-budget-changed'
+      | 'runtime-unavailable'
+  ) {
+    super('Swap review is unavailable. Review the Swap again.')
+  }
+}
+
 export type CombinedEvmSwapProgress = {
   readonly approvalId: string
   readonly approvalHash?: string
@@ -81,7 +99,7 @@ interface Options {
 }
 
 function parseInput(value: unknown): CombinedEvmSwapInput {
-  if (!value || typeof value !== 'object') throw new Error('Invalid Swap review')
+  if (!value || typeof value !== 'object') throw new CombinedEvmSwapReviewError('invalid-input')
   const input = value as Partial<CombinedEvmSwapInput>
   if (
     typeof input.approvalFingerprint !== 'string' ||
@@ -92,7 +110,7 @@ function parseInput(value: unknown): CombinedEvmSwapInput {
       input.executionMode !== 'main' &&
       input.executionMode !== 'private')
   )
-    throw new Error('Invalid Swap review')
+    throw new CombinedEvmSwapReviewError('invalid-input')
   return {
     approvalId: parseTransactionId(input.approvalId),
     approvalFingerprint: input.approvalFingerprint,
@@ -135,20 +153,20 @@ export class CombinedEvmSwap {
       const existing = await this.read(input.approvalId)
       if (existing) {
         if (!matchesAccount(existing, await this.options.readAccount()))
-          throw new Error('Active account changed')
+          throw new CombinedEvmSwapReviewError('account-changed')
         return existing.progress
       }
       const router = this.options.router()
-      if (!router) throw new Error('EVM transfer is unavailable')
+      if (!router) throw new CombinedEvmSwapReviewError('runtime-unavailable')
       const account = await this.options.readAccount()
+      if (!account.unlockEpoch) throw new CombinedEvmSwapReviewError('no-active-session')
       const pending = await router.getPendingApproval(input.approvalId)
+      if (!pending) throw new CombinedEvmSwapReviewError('approval-unavailable')
       if (
-        !account.unlockEpoch ||
-        !pending ||
         pending.graph.root.kind !== 'approve' ||
         pending.review.payloadFingerprint.digestHex !== input.approvalFingerprint
       ) {
-        throw new Error('Token approval needs to be reviewed again')
+        throw new CombinedEvmSwapReviewError('approval-changed')
       }
       const draft = {
         scope: pending.graph.root.scope,
@@ -158,7 +176,7 @@ export class CombinedEvmSwap {
         createdAt: Date.now(),
         progress: { status: 'approving' as const, approvalId: input.approvalId }
       }
-      if (!matchesAccount(draft, account)) throw new Error('Active account changed')
+      if (!matchesAccount(draft, account)) throw new CombinedEvmSwapReviewError('account-changed')
       const feeLimit = await this.readReviewedPlan(input, pending.review.summary)
       const record = { ...draft, feeLimit }
       await this.options.schedule()
@@ -223,35 +241,45 @@ export class CombinedEvmSwap {
 
   private async readReviewedPlan(input: CombinedEvmSwapInput, summary: SigningSummary) {
     const { quote } = this.options
-    if (!quote || summary.schema !== 'evm.transaction.v1')
-      throw new Error('Swap review is unavailable')
+    if (!quote) throw new CombinedEvmSwapReviewError('runtime-unavailable')
+    if (summary.schema !== 'evm.transaction.v1') {
+      throw new CombinedEvmSwapReviewError('approval-plan-changed')
+    }
     const view = await quote.readQuoteView(input.binding.quoteHandle)
     const build = await quote.readPreparedBuild(input.binding.quoteHandle)
     const plan = await quote.readEvmTransactionPlan(input.binding.quoteHandle)
     const expected = plan.approval?.transaction
     if (
-      !expected ||
       plan.executionId !== input.binding.executionId ||
-      getRheaSwapQuoteDeadline(view) !== input.binding.expiresAt ||
-      input.binding.origin.chainId !== summary.chainId ||
+      getRheaSwapQuoteDeadline(view) !== input.binding.expiresAt
+    ) {
+      throw new CombinedEvmSwapReviewError('quote-expired-or-changed')
+    }
+    if (
       input.binding.originAmountRaw !== build.amountIn ||
+      build.minAmountOut !== input.binding.destination.minimumAmountRaw ||
+      build.estimatedOut !== input.binding.destination.expectedAmountRaw ||
+      plan.transaction.to.toLowerCase() !== input.binding.sourceTarget.toLowerCase()
+    ) {
+      throw new CombinedEvmSwapReviewError('swap-plan-changed')
+    }
+    if (
+      !expected ||
+      input.binding.origin.chainId !== summary.chainId ||
       summary.fields.maximumFeeWei === '0' ||
       summary.fields.from.toLowerCase() !== input.binding.sender.toLowerCase() ||
       summary.chainId !== `eip155:${expected.chainId}` ||
       summary.fields.to?.toLowerCase() !== expected.to.toLowerCase() ||
       summary.fields.calldata.encoding !== 'hex' ||
       summary.fields.calldata.value.toLowerCase() !== expected.data.toLowerCase() ||
-      summary.fields.valueWei !== expected.value ||
-      build.minAmountOut !== input.binding.destination.minimumAmountRaw ||
-      build.estimatedOut !== input.binding.destination.expectedAmountRaw ||
-      plan.transaction.to.toLowerCase() !== input.binding.sourceTarget.toLowerCase()
+      summary.fields.valueWei !== expected.value
     ) {
-      throw new Error('Token approval does not match the reviewed Swap')
+      throw new CombinedEvmSwapReviewError('approval-plan-changed')
     }
     await this.options.validateQuote(input.binding, input.executionMode ?? 'main')
     const limit = getCombinedSwapFeeLimit(plan.transaction, summary.fields, input.feeBudgetWei)
     if (!limit || limit.approvalFeeWei + limit.swapFeeWei !== BigInt(input.feeBudgetWei)) {
-      throw new Error('Swap fee needs to be reviewed again')
+      throw new CombinedEvmSwapReviewError('fee-budget-changed')
     }
     return {
       maxFeePerGasWei: limit.maxFeePerGasWei.toString(),
@@ -418,7 +446,10 @@ export class CombinedEvmSwap {
         input.binding,
         input.executionMode ?? 'main',
         undefined,
-        BigInt(feeLimit.maxFeePerGasWei)
+        {
+          maxFeePerGas: BigInt(feeLimit.maxFeePerGasWei),
+          maximumFee: BigInt(feeLimit.swapFeeWei)
+        }
       )
     } catch (error) {
       if (error instanceof EvmTransactionError) {

@@ -32,6 +32,8 @@ import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
 import { TransactionProgressSteps } from './TransactionProgressSteps'
 import { TransactionReferenceValue } from './TransactionReferenceValue'
+import { TransactionNotice } from './TransactionNotice'
+import { getShieldFundsNotice } from '@/popup/services/shield-transfer'
 import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
 import {
   getActivityApprovalDetails,
@@ -72,6 +74,7 @@ export interface ActivityTransactionFallback {
 
 export interface ActivityTransactionView {
   readonly item: ActivityItem
+  readonly shieldFundsNotice: string | null
   readonly network: Network
   readonly swap: ActivitySwap | null
   readonly status: ActivityStatus
@@ -351,6 +354,7 @@ export function buildActivityTransactionView(input: {
     isShieldSend,
     isMove,
     isRefunded: input.refunded === true || item.failureCode === 'refunded',
+    shieldFundsNotice: getShieldFundsNotice(confidentialPlan, item),
     actionSide: action.side
   }
 }
@@ -1031,6 +1035,7 @@ export function ActivityTransactionBody({
         {view.clusterPlan && <ActivityClusterTransfers plan={view.clusterPlan} />}
       </div>
       <ActivityTransactionProgress view={view} precedingProgress={precedingProgress} />
+      <TransactionNotice className="mt-4" message={view.shieldFundsNotice} tone="warning" />
     </>
   )
 }

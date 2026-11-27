@@ -19,7 +19,11 @@ import {
   parseSelectedNetworkFamilies
 } from '@/core/wallet/account-network-selection'
 import { setAccountNetworkSelection } from '@/lib/wallet-metadata-storage'
-import { COMBINED_EVM_SWAP_ALARM, CombinedEvmSwap } from './combined-evm-swap'
+import {
+  COMBINED_EVM_SWAP_ALARM,
+  CombinedEvmSwap,
+  CombinedEvmSwapReviewError
+} from './combined-evm-swap'
 import {
   saveSwapApprovalContinuation,
   readSwapApprovalContinuation,
@@ -217,6 +221,7 @@ import { getSafeRheaSwapRuntimeErrorMessage } from '@/core/services/rhea-swap/rh
 import {
   assertPrivateQuoteRoute,
   getPrivateWithdrawAsset,
+  isPrivateWithdrawPurpose,
   RHEA_SWAP_CHAIN_CATALOG,
   parseRheaSwapQuoteRequest,
   toRheaSwapProtocolRequest,
@@ -535,14 +540,15 @@ subscribeTransactionPortfolioInvalidations(async ({ scope, chainIds }) => {
   }
 })
 let activityCoordinator!: ReturnType<typeof createBackgroundActivityCoordinator>
-const activityStorageRepository = new IndexedDbStorageV2Repository()
+const walletStorageRepository = new IndexedDbStorageV2Repository()
+async function readActiveWalletScope() {
+  if (networkRestartRequired) return null
+  const active = (await readActiveStorageV2Snapshot(walletStorageRepository))?.manifest
+    .activeAccount
+  return active ? { ...active, network: DEFAULT_NETWORK } : null
+}
 const activityNotifications = new ActivityNotifications({
-  activeScope: async () => {
-    if (networkRestartRequired) return null
-    const active = (await readActiveStorageV2Snapshot(activityStorageRepository))?.manifest
-      .activeAccount
-    return active ? { ...active, network: DEFAULT_NETWORK } : null
-  },
+  activeScope: readActiveWalletScope,
   hasUnlockSession: () =>
     walletLockCleanupPending ? Promise.resolve(false) : credentialSession.hasUnlockSession(),
   assetMetadata: assetId =>
@@ -554,7 +560,7 @@ const activityNotifications = new ActivityNotifications({
     await rehydrateWalletStore()
     const { network, keyDomainId, accountId } = scope
     const account = useWalletStore.getState().getAccount(keyDomainId, accountId)
-    const snapshot = await readActiveStorageV2Snapshot(activityStorageRepository)
+    const snapshot = await readActiveStorageV2Snapshot(walletStorageRepository)
     const storedChains = (snapshot?.chainAccounts ?? [])
       .filter(
         chain => chain.scope.keyDomainId === keyDomainId && chain.scope.accountId === accountId
@@ -632,20 +638,22 @@ const assetPriceRefreshes = new Map<
   { service: typeof assetPriceService; operation: ReturnType<typeof assetPriceService.refresh> }
 >()
 let assetMarketHistoryService = createBackgroundAssetMarketHistoryService()
-const rheaSwapService = DEFAULT_NETWORK === 'mainnet' ? createBackgroundRheaSwapService() : null
+const rheaSwapService =
+  DEFAULT_NETWORK === 'mainnet'
+    ? createBackgroundRheaSwapService(resolvePrivateWithdrawRefundAddress)
+    : null
 const combinedSwapRepository = new IndexedDbTransactionRepository()
 const combinedEvmSwap = new CombinedEvmSwap({
   router: () => evmTransferRouter,
   quote: rheaSwapService,
   readAccount: async () => {
-    await rehydrateWalletStore()
-    const state = useWalletStore.getState()
+    const active = await readActiveWalletScope()
     return {
-      network: state.currentNetwork,
-      walletId: state.currentWalletId,
-      accountId: state.currentAccountId,
+      network: DEFAULT_NETWORK,
+      walletId: active?.keyDomainId ?? null,
+      accountId: active?.accountId ?? null,
       unlockEpoch:
-        networkRestartRequired || walletLockCleanupPending
+        !active || networkRestartRequired || walletLockCleanupPending
           ? null
           : await credentialSession.getUnlockEpoch()
     }
@@ -713,6 +721,17 @@ let additionalReceiveTargetsCoordinator!: ReturnType<
 >
 let accountNetworksCoordinator!: ReturnType<typeof createBackgroundAccountNetworksCoordinator>
 
+async function resolvePrivateWithdrawRefundAddress(scope: {
+  readonly walletId: string
+  readonly accountId: string
+}) {
+  if (!confidentialFundingCoordinator) throw new Error('Shield refund account is unavailable')
+  return confidentialFundingCoordinator.resolveShieldAccountAddress({
+    keyDomainId: scope.walletId,
+    accountId: scope.accountId
+  })
+}
+
 async function requireCurrentPrivateSwapQuote(
   quoteHandle: string,
   executionMode?: 'main' | 'private',
@@ -758,7 +777,7 @@ async function requireCurrentPrivateSwapQuote(
   if (binding) {
     const isCrossChainWithdraw = quote.scope.purpose === 'private-cross-chain-withdraw'
     const isSameChainWithdraw = quote.scope.purpose === 'private-transfer'
-    const isWithdraw = isCrossChainWithdraw || isSameChainWithdraw
+    const isWithdraw = isPrivateWithdrawPurpose(quote.scope.purpose)
     if (
       binding.quoteHandle !== quoteHandle ||
       binding.sender.toLowerCase() !== quote.request.sender.toLowerCase() ||
@@ -788,7 +807,19 @@ async function requireCurrentPrivateSwapQuote(
     ) {
       throw new Error('Private quote execution does not match its reviewed route.')
     }
-    return isWithdraw ? Object.freeze({ ...binding, balanceTransfer: 'withdraw' }) : binding
+    if (!isWithdraw) return binding
+    const build = await rheaSwapService.readPreparedBuild(quoteHandle)
+    const viewer = build.deposit?.viewer
+    const refundAddress = await resolvePrivateWithdrawRefundAddress(quote.scope)
+    if (
+      build.executionId !== binding.executionId ||
+      viewer?.chainFamily !== 'evm' ||
+      viewer.signingMode !== 'public' ||
+      viewer.walletAddress.toLowerCase() !== refundAddress.toLowerCase()
+    ) {
+      throw new Error('Withdraw refund account changed. Get a new quote.')
+    }
+    return Object.freeze({ ...binding, balanceTransfer: 'withdraw', refundDomain: 'shield' })
   }
 }
 const bitcoinAddressBalancesCoordinator = createBackgroundBitcoinAddressBalancesCoordinator()
@@ -3164,7 +3195,16 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       )
       .then(
         result => sendResponse({ result }),
-        () => sendResponse({ error: 'Swap review is unavailable. Review the Swap again.' })
+        error => {
+          if (runtimeMessage.type === 'START_COMBINED_EVM_SWAP') {
+            const reason =
+              error instanceof CombinedEvmSwapReviewError
+                ? error.reason
+                : mapEvmWalletRuntimeError(error).code
+            logger.warn(`[Swap] ${runtimeMessage.type} failed (${reason})`)
+          }
+          sendResponse({ error: 'Swap review is unavailable. Review the Swap again.' })
+        }
       )
     return true
   }

@@ -14,6 +14,7 @@ import {
   parseEvmFeeSelection,
   parseEvmTransferIntent,
   type EvmFeeSelection,
+  type EvmReviewedFeeBudget,
   type EvmFeeEstimate,
   type EvmNonceRecoveryState,
   type ActiveEvmPortfolioContext,
@@ -393,7 +394,7 @@ export class BackgroundEvmTransferController {
     executionAccount?: PeaEvmExecutionAccount,
     executionModeValue: unknown = 'main',
     debugRequestId?: string,
-    reviewedMaxFeePerGas?: bigint
+    reviewedFeeBudget?: EvmReviewedFeeBudget
   ): Promise<BackgroundEvmTransferReview> {
     const intent = parseEvmContractCallIntent(intentValue)
     const rheaSwapBinding =
@@ -437,7 +438,7 @@ export class BackgroundEvmTransferController {
             chainAccount: context.chainAccount,
             intent,
             feeSelection,
-            reviewedMaxFeePerGas,
+            reviewedFeeBudget,
             ...(scopedRheaSwapBinding === undefined
               ? {}
               : { rheaSwapBinding: scopedRheaSwapBinding }),

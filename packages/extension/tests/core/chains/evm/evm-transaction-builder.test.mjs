@@ -729,7 +729,7 @@ test.describe('EVM transfer builder', () => {
   test('keeps a reviewed fee cap when the automatic estimate rises and the cap still covers fees', async () => {
     const polygon = parseChainId('eip155:137').id
     const reviewedMaxFeePerGas = 527_926_228_682n
-    const prepare = baseFeePerGas =>
+    const prepare = (baseFeePerGas, estimatedGas = '273625', gasBudget = 500_000n) =>
       buildEvmContractCall({
         chainId: polygon,
         chainAccount: { ...account, scope: { ...account.scope, chainId: polygon } },
@@ -740,9 +740,12 @@ test.describe('EVM transfer builder', () => {
           valueRaw: '0',
           calldata: '0x12345678'
         },
-        reviewedMaxFeePerGas,
+        reviewedFeeBudget: {
+          maxFeePerGas: reviewedMaxFeePerGas,
+          maximumFee: gasBudget * reviewedMaxFeePerGas
+        },
         rpc: transactionRpc({
-          estimateGas: async () => '273625',
+          estimateGas: async () => estimatedGas,
           getLatestBlockFee: async () => ({ blockNumber: '100', baseFeePerGas }),
           getMaximumPriorityFeePerGas: async () => '30000000000'
         })
@@ -755,6 +758,18 @@ test.describe('EVM transfer builder', () => {
       maxPriorityFeePerGas: '30000000000'
     })
     expect((await prepare('240000000000')).transaction.maxFeePerGas).toBe('510000000000')
+    const limitedGas = await prepare('249275567411', '460000')
+    expect(limitedGas.transaction.gasLimit).toBe('500000')
+    expect(limitedGas.transaction.maxFeePerGas).toBe(reviewedMaxFeePerGas.toString())
+
+    const largerEstimate = await prepare('249275567411', '550000')
+    expect(BigInt(largerEstimate.transaction.gasLimit)).toBeGreaterThanOrEqual(550_000n)
+    expect(
+      BigInt(largerEstimate.transaction.gasLimit) * BigInt(largerEstimate.transaction.maxFeePerGas)
+    ).toBeLessThanOrEqual(500_000n * reviewedMaxFeePerGas)
+    await expect(prepare('249275567411', '1000000')).rejects.toMatchObject({
+      code: 'reviewed-fee-cap-too-low'
+    })
     await expect(prepare('500000000000')).rejects.toMatchObject({
       code: 'reviewed-fee-cap-too-low'
     })

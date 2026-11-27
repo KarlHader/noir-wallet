@@ -67,6 +67,11 @@ export function isRpcEndpointError(error: unknown): boolean {
 }
 
 const ERROR_MAPPINGS: ErrorMapping[] = [
+  {
+    pattern: /^Swap review is unavailable\. Review the Swap again\.$/i,
+    message: 'Get a new quote and review it again.',
+    retryable: true
+  },
   // --- Network / gRPC ---
   {
     pattern: /gRPC|grpc|StatusCode::|UNAVAILABLE|transport error|connect error/i,

@@ -265,7 +265,7 @@ export class RheaSwapService {
         throw new Error('Swap funding source does not match the quoted Zcash account.')
       }
     }
-    const quote = await this.client.quote(request, { signal })
+    const quote = await this.client.quote(request, { signal, scope: privateSwapScope })
     this.assertQuoteMatchesRequest(quote, request)
     const quoteHandle = `rhea-quote:${this.createHandle()}`
     const record: RheaSwapQuoteSessionRecord = Object.freeze({

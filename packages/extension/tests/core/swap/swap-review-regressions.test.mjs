@@ -185,7 +185,7 @@ function combinedSwapFixture(t, executionMode) {
         ? { status: 'signed-pending-broadcast', graph: setStatus(id, 'swap', 'signed', swapHash) }
         : { status: 'broadcast', graph: setStatus(id, 'swap', 'broadcast', swapHash) }
     },
-    prepareContractCall: async (_intent, _fee, reviewedBinding, mode, _debugId, reviewedCap) => {
+    prepareContractCall: async (_intent, _fee, reviewedBinding, mode, _debugId, reviewedBudget) => {
       assert.equal(mode, executionMode ?? 'main')
       assert.equal(reviewedBinding.sender, owner)
       calls.push('prepare-swap')
@@ -194,7 +194,7 @@ function combinedSwapFixture(t, executionMode) {
         graph: setStatus(swapId, 'swap', 'prepared'),
         review: {
           payloadFingerprint: { digestHex: 'b'.repeat(64) },
-          summary: summary(transaction, '450000', reviewedCap?.toString() ?? '2')
+          summary: summary(transaction, '450000', reviewedBudget?.maxFeePerGas.toString() ?? '2')
         }
       }
     },
@@ -263,6 +263,9 @@ function combinedSwapFixture(t, executionMode) {
     },
     changeUnlock: () => {
       account.unlockEpoch = 'different'
+    },
+    switchAccount: () => {
+      account.accountId = 'account:other'
     }
   }
 }
@@ -296,6 +299,20 @@ it('resumes an approved swap from background storage and retries only the same s
       ])
     })
   }
+})
+
+it('stops a combined swap from continuing after the active account changes', async t => {
+  const fixture = combinedSwapFixture(t)
+  const combined = fixture.create()
+  await combined.start(fixture.input)
+  fixture.approveOnchain()
+  fixture.setAllowance()
+  fixture.switchAccount()
+
+  assert.equal(await combined.get(fixture.input.approvalId), null)
+  await assert.rejects(combined.start(fixture.input))
+  await combined.poll()
+  assert.deepEqual(fixture.calls, ['approve-token'])
 })
 
 it('stops before signing when authorization, quote or transaction preparation requires another review', async t => {

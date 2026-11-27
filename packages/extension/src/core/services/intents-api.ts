@@ -23,7 +23,11 @@ import Big from 'big.js'
 import { formatUnits } from 'viem'
 import type { QuoteBinding } from '@/types/wallet'
 import { parseOneClickDepositMemo, type OneClickViewer } from './near-intents/one-click-order'
-import { requestOneClickQuote } from './near-intents/one-click-quote'
+import {
+  createOneClickQuoteRequest,
+  matchesOneClickQuoteViewer,
+  requestOneClickQuote
+} from './near-intents/one-click-quote'
 
 const COINGECKO_MARKETS_API = 'https://api.coingecko.com/api/v3/coins/markets'
 const WALLET_TOKEN_BLOCKCHAINS = new Set(['sol', 'near'])
@@ -54,7 +58,7 @@ export interface QuoteParams {
   recipient: string
   slippageTolerance?: number
   validateQuoteRequest?: boolean
-  viewer?: OneClickViewer
+  viewer: OneClickViewer | null
   signal?: AbortSignal
 }
 
@@ -707,7 +711,7 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
   try {
     const oneClickApiUrl = getConfidentialFundingNetworkConfig('mainnet')?.oneClickApiUrl
     if (!oneClickApiUrl) throw new Error('Near Intents quote is unavailable')
-    const requestBody = {
+    const requestBody = createOneClickQuoteRequest({
       originAsset: params.originAsset,
       destinationAsset: params.destinationAsset,
       amount: params.amount,
@@ -718,12 +722,10 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
       refundType: 'ORIGIN_CHAIN',
       recipientType: 'DESTINATION_CHAIN',
       depositType: 'ORIGIN_CHAIN',
-      deadline: new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(),
       referral: NOIR_SWAP_REFERRAL,
-      quoteWaitingTimeMs: 3000,
       slippageTolerance: params.slippageTolerance ?? 50,
       appFees: NOIR_SWAP_APP_FEES
-    }
+    })
 
     const response = await requestOneClickQuote(
       oneClickApiUrl,
@@ -755,6 +757,7 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
           ].some(key => echoed[key] !== requestBody[key as keyof typeof requestBody]) ||
           !sameAddress(echoed.refundTo, requestBody.refundTo) ||
           !sameAddress(echoed.recipient, requestBody.recipient) ||
+          !matchesOneClickQuoteViewer(echoed, params.viewer) ||
           Number(echoed.slippageTolerance) !== requestBody.slippageTolerance
         ) {
           throw new Error('Near Intents quote changed its request')

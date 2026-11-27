@@ -17,6 +17,7 @@ import { mapTransactionGraphToActivityItem } from '../../../src/core/activity/ac
 import { prepareRheaSwapZcashDestinationCatchUp } from '../../../src/background/rhea-swap-zcash-sync.ts'
 import { EvmTransactionMonitor } from '../../../src/infrastructure/chains/evm/evm-transaction-monitor.ts'
 import { getRheaSwapProgressStatus } from '../../../src/lib/swap-progress.ts'
+import { getShieldFundsNotice } from '../../../src/popup/services/shield-transfer.ts'
 
 const scope = { keyDomainId: 'wallet:near', accountId: 'account:near' }
 const sourceHashes = ['1'.repeat(32), `${'1'.repeat(31)}2`]
@@ -150,6 +151,44 @@ test('marks same-chain signed orders failed for backend terminal outcomes', asyn
     assert.equal((await repository.get(scope, initial.root.id)).root.status, 'failed')
     assert.deepEqual(notifications, [status === 'refunded' ? 'REFUNDED' : 'FAILED'])
   }
+})
+
+test('shows the Shield refund only for a withdrawal with a verified Shield destination', async () => {
+  const repository = new InMemoryTransactionRepository()
+  const binding = sameChainBinding()
+  const initial = sameChainGraph(true, {
+    ...binding,
+    userAction: 'transfer',
+    balanceTransfer: 'withdraw',
+    refundDomain: 'shield',
+    destination: { ...binding.destination, ...binding.origin }
+  })
+  await repository.create(initial)
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return { status: 'refunded' }
+      },
+      async retireReportedSubmission() {}
+    },
+    { notifyStatus: () => {} }
+  )
+  monitor.repository = repository
+
+  assert.equal(getShieldFundsNotice(null, mapTransactionGraphToActivityItem(initial)), null)
+  assert.equal(await monitor.checkGraph(initial), true)
+  const graph = await repository.get(scope, initial.root.id)
+  const item = mapTransactionGraphToActivityItem(graph)
+  assert.equal(getShieldFundsNotice(null, item), 'Your funds were returned to your Shield account.')
+  const { refundDomain, ...legacyBinding } = item.snapshot.protocol
+  assert.equal(
+    getShieldFundsNotice(null, {
+      ...item,
+      snapshot: { ...item.snapshot, protocol: legacyBinding }
+    }),
+    null
+  )
 })
 
 async function prepareConfirmedSameChainSource(binding, evidence) {

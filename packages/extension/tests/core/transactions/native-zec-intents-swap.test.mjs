@@ -522,10 +522,10 @@ test('native ZEC Confidential destination binds the internal ZEC asset and activ
     )
     expect(transparentQuote).toMatchObject({
       referral: 'noir_swap',
-      appFees: [{ recipient: 'noir_swap.near', fee: 2 }]
+      appFees: [{ recipient: 'noir_swap.near', fee: 2 }],
+      user: refundAddress,
+      userChainFamily: 'zcash'
     })
-    expect(transparentQuote).not.toHaveProperty('user')
-    expect(transparentQuote).not.toHaveProperty('userChainFamily')
     expect(
       quoteRequests.find(quote => !quote.dry && quote.refundTo === shieldedRefundAddress)
     ).toMatchObject({

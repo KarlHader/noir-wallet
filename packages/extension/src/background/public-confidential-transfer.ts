@@ -15,6 +15,7 @@ import { isEvmNativeQuoteAddress, resolveRheaSwapCanonicalAssetId } from '@/core
 import type { PublicConfidentialBuildScope } from '@/core/services/rhea-swap/rhea-swap-catalog-client'
 import {
   getRheaSwapTokenRouteAddress,
+  isPrivateWithdrawPurpose,
   publicConfidentialRefundViewer,
   RHEA_SWAP_CHAIN_CATALOG
 } from '@/core/services/rhea-swap/rhea-swap-model'
@@ -33,6 +34,9 @@ import {
 import type { queryOneClickOrderStatus, resolveZcashOneClickViewer } from './one-click-status'
 
 const ROUTER = 'nearintents'
+export type ResolvePrivateWithdrawRefundAddress = (
+  scope: Pick<PublicConfidentialBuildScope, 'walletId' | 'accountId'>
+) => Promise<string>
 
 function resolveAsset(asset: AssetRef, tokens: readonly SwapToken[]): SwapToken {
   const evm = /^[1-9]\d*$/.test(asset.chain)
@@ -78,16 +82,22 @@ export class PublicConfidentialTransfer {
     private readonly api: Pick<ConfidentialFundingApi, 'quote'>,
     private readonly queryStatus: typeof queryOneClickOrderStatus,
     private readonly getTokens: () => Promise<readonly SwapToken[]> = fetchSwapTokens,
-    private readonly resolveZcashViewer?: typeof resolveZcashOneClickViewer
+    private readonly resolveZcashViewer?: typeof resolveZcashOneClickViewer,
+    private readonly resolvePrivateWithdrawRefundAddress?: ResolvePrivateWithdrawRefundAddress
   ) {}
 
-  async quote(request: QuoteRequest, signal?: AbortSignal): Promise<SwapQuoteDataRaw> {
+  async quote(
+    request: QuoteRequest,
+    signal?: AbortSignal,
+    scope?: PublicConfidentialBuildScope
+  ): Promise<SwapQuoteDataRaw> {
     const { origin, destination } = await this.resolveAssets(request, signal)
     const result = await this.requestQuote(
       request,
       origin.assetId,
       destination.assetId,
-      true,
+      { dry: true },
+      scope,
       signal
     )
     return {
@@ -123,11 +133,9 @@ export class PublicConfidentialTransfer {
     ) {
       throw new Error('Confidential transfer assets changed. Get a new quote.')
     }
-    const directViewer = publicConfidentialRefundViewer(
-      quote.fromChain,
-      request.sender,
-      scope?.purpose
-    )
+    const directViewer = isPrivateWithdrawPurpose(scope?.purpose)
+      ? undefined
+      : publicConfidentialRefundViewer(quote.fromChain, request.sender, scope?.purpose)
     const refundScheme =
       quote.fromChain === 'zcash' ? parseZcashAddress(request.sender, 'mainnet').scheme : undefined
     const viewer =
@@ -150,9 +158,9 @@ export class PublicConfidentialTransfer {
       },
       origin.assetId,
       destination.assetId,
-      false,
-      signal,
-      viewer
+      { dry: false, viewer: viewer ?? null },
+      scope,
+      signal
     )
     const { amountIn, amountOut, minAmountOut, depositAddress, depositMemo, timeEstimate } =
       result.quote
@@ -173,7 +181,11 @@ export class PublicConfidentialTransfer {
       amountIn,
       estimatedOut: amountOut,
       minAmountOut,
-      deposit: { depositAddress, ...(viewer === undefined ? {} : { viewer }), timeEstimate },
+      deposit: {
+        depositAddress,
+        ...(result.oneClickOrder?.viewer ? { viewer: result.oneClickOrder.viewer } : {}),
+        timeEstimate
+      },
       tx
     }
   }
@@ -201,13 +213,13 @@ export class PublicConfidentialTransfer {
     }
   }
 
-  private requestQuote(
+  private async requestQuote(
     request: QuoteRequest,
     originAsset: string,
     destinationAsset: string,
-    dry: boolean,
-    signal?: AbortSignal,
-    viewer?: OneClickViewer
+    ownership: { dry: true } | { dry: false; viewer: OneClickViewer | null },
+    scope?: PublicConfidentialBuildScope,
+    signal?: AbortSignal
   ) {
     const referral = request.extensions?.referral
     if (
@@ -218,23 +230,42 @@ export class PublicConfidentialTransfer {
     ) {
       throw new Error('Confidential transfer route is invalid')
     }
+    const binding = {
+      referral,
+      originAsset,
+      destinationAsset,
+      recipient: /^[1-9]\d*$/.test(request.toChain)
+        ? request.recipient.toLowerCase()
+        : request.recipient,
+      amountRaw: request.amountIn,
+      depositType: 'ORIGIN_CHAIN',
+      recipientType: 'DESTINATION_CHAIN',
+      slippageBps: request.slippageBps
+    } as const
+    if (scope && isPrivateWithdrawPurpose(scope.purpose)) {
+      const refundAddress = await this.resolvePrivateWithdrawRefundAddress?.(scope)
+      if (!refundAddress || refundAddress.toLowerCase() === request.sender.toLowerCase()) {
+        throw new Error('Shield refund account is unavailable')
+      }
+      signal?.throwIfAborted()
+      return this.api.quote(
+        {
+          ...binding,
+          signerId: refundAddress.toLowerCase(),
+          dry: ownership.dry,
+          refundType: 'CONFIDENTIAL_INTENTS',
+          settlement: 'private-withdrawal'
+        },
+        signal
+      )
+    }
     return this.api.quote(
       {
-        referral,
-        originAsset,
-        destinationAsset,
+        ...binding,
         signerId: request.fromChain === 'zcash' ? request.sender : request.sender.toLowerCase(),
-        recipient: /^[1-9]\d*$/.test(request.toChain)
-          ? request.recipient.toLowerCase()
-          : request.recipient,
-        amountRaw: request.amountIn,
-        depositType: 'ORIGIN_CHAIN',
         refundType: 'ORIGIN_CHAIN',
-        recipientType: 'DESTINATION_CHAIN',
-        slippageBps: request.slippageBps,
-        dry,
-        ...(referral === NOIR_SWAP_REFERRAL ? { settlement: 'onchain-transfer' as const } : {}),
-        ...(viewer === undefined ? {} : { viewer })
+        ...ownership,
+        ...(referral === NOIR_SWAP_REFERRAL ? { settlement: 'onchain-transfer' as const } : {})
       },
       signal
     )

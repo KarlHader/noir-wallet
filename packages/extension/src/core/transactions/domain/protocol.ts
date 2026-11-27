@@ -53,6 +53,7 @@ export interface RheaSwapTransactionBinding {
   readonly kind: 'swap'
   readonly userAction?: 'transfer'
   readonly balanceTransfer?: 'withdraw'
+  readonly refundDomain?: 'shield'
   readonly quoteHandle: string
   readonly executionId: string
   readonly router: string
@@ -276,7 +277,8 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
       'origin',
       'destination',
       ...(value.userAction === undefined ? [] : ['userAction']),
-      ...(value.balanceTransfer === undefined ? [] : ['balanceTransfer'])
+      ...(value.balanceTransfer === undefined ? [] : ['balanceTransfer']),
+      ...(value.refundDomain === undefined ? [] : ['refundDomain'])
     ],
     'RHEA Swap binding'
   )
@@ -287,6 +289,8 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
     (value.userAction !== undefined && value.userAction !== 'transfer') ||
     (value.balanceTransfer !== undefined &&
       (value.balanceTransfer !== 'withdraw' || value.userAction !== 'transfer')) ||
+    (value.refundDomain !== undefined &&
+      (value.refundDomain !== 'shield' || value.balanceTransfer !== 'withdraw')) ||
     !Number.isSafeInteger(value.expiresAt) ||
     (value.expiresAt as number) <= 0 ||
     typeof value.isCrossChain !== 'boolean'
@@ -311,6 +315,7 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
     kind: 'swap',
     ...(value.userAction === undefined ? {} : { userAction: 'transfer' as const }),
     ...(value.balanceTransfer === 'withdraw' ? { balanceTransfer: 'withdraw' as const } : {}),
+    ...(value.refundDomain === 'shield' ? { refundDomain: 'shield' as const } : {}),
     quoteHandle: parseString(value.quoteHandle, 'RHEA Swap quote handle'),
     executionId: parseString(value.executionId, 'RHEA Swap execution ID'),
     router: parseString(value.router, 'RHEA Swap router'),

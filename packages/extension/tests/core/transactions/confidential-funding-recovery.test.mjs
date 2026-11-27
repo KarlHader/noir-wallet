@@ -19,6 +19,7 @@ import { confidentialPrivateTokenId } from '../../../src/core/services/confident
 import { ZCASH_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
 import { createConfidentialFundingClient } from '../../../src/popup/services/confidential-funding-client.ts'
 import { getActivityAction } from '../../../src/popup/services/activity-action-label.ts'
+import { getShieldFundsNotice } from '../../../src/popup/services/shield-transfer.ts'
 import {
   getActivityDetailTitle,
   getActivityRouteTitle
@@ -367,7 +368,9 @@ async function harness(
       ...(depositBacked ? { transactionHash: depositTransactionHash } : {})
     },
     destination: { ...initial.destination, expectedAmountRaw: initial.expectedOutputRaw },
-    withdrawDepositAddresses: withdraws.map(row => row.depositAddress),
+    withdrawDepositAddresses: withdraws.map(row =>
+      phase === 'signing-withdraws' ? null : row.depositAddress
+    ),
     requiresDeposit: depositBacked,
     signedWithdrawFingerprint: initial.requestFingerprint,
     now
@@ -404,7 +407,7 @@ async function harness(
         state.refreshTargets.push(target ?? null)
       }
     })
-  return { initial, state, store, repository, restart }
+  return { initial, state, store, repository, restart, api, signer }
 }
 
 function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
@@ -2941,6 +2944,90 @@ test.describe('confidential funding persisted recovery', () => {
     expect(h.state.refreshes).toBe(6)
   })
 
+  for (const refreshedMinimum of ['980', '979']) {
+    test(`only submits a re-quoted funded Cluster when the new minimum is covered (${refreshedMinimum})`, async () => {
+      const h = await harness('signing-withdraws', false, true, true)
+      await h.store.putPlan({
+        ...h.initial,
+        frozenRequest: undefined,
+        requestFingerprint: undefined,
+        withdraws: h.initial.withdraws.map(({ signedPayload, oneClickOrder, ...row }) => ({
+          ...row,
+          depositAddress: '',
+          status: 'PREPARED'
+        }))
+      })
+      const quoted = new Map()
+      const quotedSlippages = []
+      const deadline = new Date(60_000).toISOString()
+      const generated = []
+      h.api.quote = async input => {
+        const depositAddress = `quote-${quoted.size}.near`
+        quoted.set(depositAddress, input)
+        quotedSlippages.push(input.slippageBps)
+        return {
+          correlationId: depositAddress,
+          quoteRequest: {
+            ...input,
+            amount: input.amountRaw,
+            refundTo: input.signerId,
+            swapType: 'EXACT_INPUT',
+            confidentiality: 'basic',
+            slippageTolerance: input.slippageBps
+          },
+          quote: {
+            amountIn: input.amountRaw,
+            amountOut: '989',
+            minAmountOut: input.slippageBps === 100 ? '979' : refreshedMinimum,
+            depositAddress,
+            deadline
+          }
+        }
+      }
+      h.api.generateIntent = async ({ depositAddress }) => {
+        const input = quoted.get(depositAddress)
+        generated.push(depositAddress)
+        return {
+          intent: {
+            standard: 'erc191',
+            payload: JSON.stringify({
+              verifying_contract: 'intents.far',
+              signer_id: input.signerId,
+              deadline,
+              nonce: Buffer.alloc(32, generated.length).toString('base64'),
+              intents: [
+                {
+                  intent: 'transfer',
+                  receiver_id: depositAddress,
+                  tokens: { [confidentialPrivateTokenId(input.originAsset)]: input.amountRaw }
+                }
+              ]
+            })
+          }
+        }
+      }
+      h.signer.signMessage = async ({ payload }) => {
+        h.state.intentSignatures += 1
+        return { standard: 'erc191', payload, signature: 'test-signature' }
+      }
+
+      const result = await h.restart().continuePlan(h.initial.planId)
+      expect(quotedSlippages).toEqual([100, 100, 100, 91, 91, 91])
+      expect(h.state.depositSignatures).toBe(0)
+      if (refreshedMinimum === '980') {
+        expect(result).toMatchObject({ minimumOutputRaw: '2940', orderId: 'order-one' })
+        expect(generated).toEqual(['quote-3.near', 'quote-4.near', 'quote-5.near'])
+        expect(h.state.intentSignatures).toBe(3)
+        expect(h.state.batchSubmissions).toBe(1)
+      } else {
+        expect(result).toMatchObject({ phase: 'failed', errorStatus: 'QUOTE_CHANGED' })
+        expect(generated).toEqual([])
+        expect(h.state.intentSignatures).toBe(0)
+        expect(h.state.batchSubmissions).toBe(0)
+      }
+    })
+  }
+
   test('reopens a failed Cluster read-only and resumes late refunds after worker restart', async () => {
     const h = await harness('processing', false, true)
     h.state.statuses = ['FAILED', 'FAILED', 'FAILED']
@@ -2957,6 +3044,7 @@ test.describe('confidential funding persisted recovery', () => {
     await h.restart().resumeAll()
     const refunded = await h.store.getPlan(h.initial.planId)
     expect(refunded.phase).toBe('refunded')
+    expect(getShieldFundsNotice(refunded)).toBe('Your funds were returned to your Shield account.')
     expect(refunded.withdraws.map(row => row.status)).toEqual(['REFUNDED', 'REFUNDED', 'REFUNDED'])
     expect((await h.repository.get(scope, h.initial.transactionId)).root.status).toBe('failed')
     h.state.now += 60_000
@@ -2986,6 +3074,7 @@ test.describe('confidential funding persisted recovery', () => {
     h.state.originStatus = 'REFUNDED'
     const refunded = await h.restart().getPlan(h.initial.planId)
     expect(refunded.phase).toBe('refunded')
+    expect(getShieldFundsNotice(refunded)).toBeNull()
     expect(refunded.withdraws.every(row => row.status === 'SIGNED')).toBe(true)
     expect(h.state.statusRequests.every(address => address === 'origin-deposit.near')).toBe(true)
     expect(h.state.batchSubmissions).toBe(0)
@@ -3089,6 +3178,7 @@ test.describe('confidential funding persisted recovery', () => {
     )
     const rejected = await h.restart().continuePlan(h.initial.planId)
     expect(rejected.phase).toBe('failed')
+    expect(getShieldFundsNotice(rejected)).toBe('Your funds are still in your Shield account.')
     expect(rejected.errorStatus).toBe('APP_FEE_REJECTED_2002')
     expect(rejected.batchSubmissionAttemptedAt).toBe(now)
     expect(rejected.frozenRequest).toEqual(h.initial.frozenRequest)
