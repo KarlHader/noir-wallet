@@ -5,6 +5,7 @@
  */
 import './feedback-rewards.css'
 import { useEffect, type ReactNode } from 'react'
+import { openZendeskChat } from '../lib/zendesk'
 import { DeskNote } from './DeskNote'
 import {
   BUG_BOUNTY_URL,
@@ -18,14 +19,13 @@ import {
   ROUND_COUNT,
   ROUND_POOL,
   RULES,
-  SUBMIT_URL,
   byRank,
   programState,
   roundPhase,
   roundSpan,
   roundsFrom,
   statusLine,
-  submitLinkFor,
+  submitNote,
   totalPoints,
   type ProgramState,
   type Round,
@@ -62,7 +62,17 @@ function External({
   )
 }
 
-function Hero({ state, submitUrl }: { state: ProgramState; submitUrl: string | null }) {
+/** Opens the Zendesk support chat, where all feedback goes (its launcher sits at the bottom right). */
+function ChatButton({ className, children }: { className: string; children: ReactNode }) {
+  return (
+    <button type="button" className={className} onClick={() => openZendeskChat()}>
+      <Icon name="chat" />
+      {children}
+    </button>
+  )
+}
+
+function Hero({ state }: { state: ProgramState }) {
   return (
     <section className="fr-hero" aria-labelledby="fr-title">
       <div className="wrap-n fr-hero-grid">
@@ -83,10 +93,8 @@ function Hero({ state, submitUrl }: { state: ProgramState; submitUrl: string | n
             {statusLine(state)}
           </p>
           <div className="cta-row" data-reveal="up">
-            {submitUrl ? (
-              <External className="btn" href={submitUrl}>
-                Submit Feedback
-              </External>
+            {state.phase === 'live' ? (
+              <ChatButton className="btn">Submit Feedback</ChatButton>
             ) : (
               <a className="btn" {...walletLinkProps}>
                 <Icon name="download" />
@@ -344,17 +352,15 @@ function Rules() {
   )
 }
 
-function Submit({ state, submitUrl }: { state: ProgramState; submitUrl: string | null }) {
-  const closedNote =
-    state.phase === 'over'
-      ? 'The trial has ended, so new feedback no longer counts toward a round.'
-      : 'The submission link will be posted here when Round 1 opens.'
+function Submit({ state }: { state: ProgramState }) {
+  const note = submitNote(state)
   return (
     <section className="fr-sec" id="submit" aria-labelledby="submit-title">
       <div className="wrap-n fr-split">
         <div>
           <SectionHead id="submit-title" eyebrow="Submit" title="How to Send Feedback">
-            Send all feedback through the official feedback channel. A good report includes:
+            Send all feedback through our support chat, the chat button at the bottom right of this
+            page. A good report includes:
           </SectionHead>
           <ul className="fr-checklist" data-reveal="up">
             {REPORT_CHECKLIST.map(item => (
@@ -365,13 +371,8 @@ function Submit({ state, submitUrl }: { state: ProgramState; submitUrl: string |
             ))}
           </ul>
           <div className="fr-submit" data-reveal="up">
-            {submitUrl ? (
-              <External className="btn" href={submitUrl}>
-                Submit Feedback
-              </External>
-            ) : (
-              <p className="fr-fine">{closedNote}</p>
-            )}
+            <ChatButton className="btn">Contact Us</ChatButton>
+            {note && <p className="fr-fine">{note}</p>}
           </div>
         </div>
         <div className="fr-callouts">
@@ -456,7 +457,7 @@ function Review() {
   )
 }
 
-function Closing({ submitUrl }: { submitUrl: string | null }) {
+function Closing({ live }: { live: boolean }) {
   return (
     <section className="end fr-end" aria-labelledby="fr-end-title">
       <div className="wrap">
@@ -470,10 +471,8 @@ function Closing({ submitUrl }: { submitUrl: string | null }) {
             <Icon name="download" />
             Install Wallet
           </a>
-          {submitUrl ? (
-            <External className="btn btn-ghost" href={submitUrl}>
-              Submit Feedback
-            </External>
+          {live ? (
+            <ChatButton className="btn btn-ghost">Submit Feedback</ChatButton>
           ) : (
             <a className="btn btn-ghost" {...docsLinkProps}>
               Docs
@@ -502,20 +501,19 @@ export default function FeedbackRewards() {
   const now = new Date()
   const rounds = roundsFrom(FIRST_ROUND_START)
   const state = programState(rounds, now)
-  const submitUrl = submitLinkFor(SUBMIT_URL, state)
 
   return (
     <>
       <SiteHeader base="/" />
       <main className="fr">
-        <Hero state={state} submitUrl={submitUrl} />
+        <Hero state={state} />
         <Schedule rounds={rounds} now={now} />
         <Points />
         <Ranking />
         <Rules />
-        <Submit state={state} submitUrl={submitUrl} />
+        <Submit state={state} />
         <Review />
-        <Closing submitUrl={submitUrl} />
+        <Closing live={state.phase === 'live'} />
       </main>
       <SiteFooter statue={false} />
     </>

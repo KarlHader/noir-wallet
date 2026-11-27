@@ -98,6 +98,27 @@ export function zendeskLaunchCommand(
   return { command: 'open', state: { lastAutoOpenedHref: href } }
 }
 
+export interface ZendeskPage {
+  zE?: ZendeskApi
+  location: { href: string }
+  history: { state: unknown; replaceState(state: unknown, unused: string, url: string): void }
+}
+
+/**
+ * Opens the chat from a button on the page. While the widget is still loading, it asks for the
+ * chat in the URL instead (`?zendesk=1`), so the chat opens as soon as the widget connects.
+ */
+export function openZendeskChat(page?: ZendeskPage): void {
+  const target = page ?? (window as unknown as ZendeskPage)
+  if (target.zE) {
+    target.zE('messenger', 'open')
+    return
+  }
+  const url = new URL(target.location.href)
+  url.searchParams.set('zendesk', '1')
+  target.history.replaceState(target.history.state, '', url.href)
+}
+
 export function createZendeskSession(options: {
   getApi: () => ZendeskApi | undefined
   getHref: () => string

@@ -9,6 +9,8 @@ const PATHS = {
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
   check: <path d="M5 12.5 9.5 17 19 7.5" />,
+  // Lucide message-circle: the support chat
+  chat: <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />,
   // Lucide triangle-alert
   alert: (
     <>

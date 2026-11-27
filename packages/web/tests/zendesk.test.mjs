@@ -4,7 +4,8 @@ import {
   ZENDESK_SNIPPET_SRC,
   ZENDESK_Z_INDEX,
   createZendeskSession,
-  installZendeskSnippet
+  installZendeskSnippet,
+  openZendeskChat
 } from '../src/lib/zendesk.ts'
 
 test('the website loads the same Zendesk snippet as the dashboard', () => {
@@ -106,4 +107,25 @@ test('the same support link opens once and a later visit can open it again', () 
   page.navigate(support)
   assert.deepEqual(page.commands(), ['close', 'open', 'open'])
   page.dispose()
+})
+
+test('a chat button opens the chat, or asks for it while the widget is loading', () => {
+  const calls = []
+  const urls = []
+  const page = zE => ({
+    zE,
+    location: { href: 'https://www.zknoir.com/feedback-rewards#submit' },
+    history: { state: null, replaceState: (state, unused, url) => urls.push(url) }
+  })
+  openZendeskChat(page((...args) => calls.push(args)))
+  assert.deepEqual(calls, [['messenger', 'open']])
+  assert.deepEqual(urls, [])
+
+  openZendeskChat(page(undefined))
+  assert.deepEqual(urls, ['https://www.zknoir.com/feedback-rewards?zendesk=1#submit'])
+  // The widget opens the chat for that URL when it connects
+  const loading = harness(urls[0], false)
+  loading.load()
+  assert.deepEqual(loading.commands(), ['open'])
+  loading.dispose()
 })

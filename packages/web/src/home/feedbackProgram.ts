@@ -4,15 +4,13 @@
  * as a trial of two two-week rounds. This is a product-feedback program, not the security bug
  * bounty: vulnerabilities go to HackenProof.
  *
- * Fill in the settings below as they are announced. Until then the page says the dates and the
- * submission link are still to come.
+ * Feedback goes through the site's Zendesk support chat, the launcher at the bottom right of every
+ * page. Fill in the round start below once it is announced; until then the page says the dates
+ * are still to come.
  */
 
 /** When round 1 opens, as an ISO time with its zone, for example '2026-12-01T16:00:00Z'. */
 export const FIRST_ROUND_START: string | null = null
-
-/** The official feedback channel that every report goes through. */
-export const SUBMIT_URL: string | null = null
 
 /** The HackenProof bug bounty, where security issues are reported instead. */
 export const BUG_BOUNTY_URL: string | null = 'https://hackenproof.com/programs/noirwallet'
@@ -210,10 +208,16 @@ export function statusLine(state: ProgramState): string {
   }
 }
 
-/**
- * The feedback link, while feedback is being collected: during a round, or before the dates are
- * set once the link exists. Before round 1 and after the trial the page says so instead.
- */
-export function submitLinkFor(url: string | null, state: ProgramState): string | null {
-  return url && (state.phase === 'live' || state.phase === 'unscheduled') ? url : null
+/** The line under the chat button, saying when feedback counts; none while a round is open. */
+export function submitNote(state: ProgramState): string | null {
+  switch (state.phase) {
+    case 'unscheduled':
+      return 'Feedback starts counting when Round 1 opens.'
+    case 'upcoming':
+      return `Feedback starts counting when Round 1 opens on ${utcMoment(state.round.start)}.`
+    case 'live':
+      return null
+    case 'over':
+      return 'The trial has ended, so new feedback no longer counts toward a round.'
+  }
 }

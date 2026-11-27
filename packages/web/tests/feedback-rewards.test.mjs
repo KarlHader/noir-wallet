@@ -8,13 +8,12 @@ import {
   PRIZES,
   ROUND_COUNT,
   ROUND_POOL,
-  SUBMIT_URL,
   byRank,
   programState,
   roundSpan,
   roundsFrom,
   statusLine,
-  submitLinkFor,
+  submitNote,
   totalPoints
 } from '../src/home/feedbackProgram.ts'
 
@@ -28,7 +27,7 @@ test('the configured first round start, once set, is a valid time', () => {
 
 // A link without its scheme would turn into a path on this site
 test('the configured links, once set, are full https addresses', () => {
-  for (const url of [SUBMIT_URL, BUG_BOUNTY_URL, LEADERBOARD.href]) {
+  for (const url of [BUG_BOUNTY_URL, LEADERBOARD.href]) {
     if (url !== null) assert.equal(new URL(url).protocol, 'https:')
   }
 })
@@ -67,14 +66,19 @@ test('the program moves from upcoming through both rounds to over', () => {
   assert.equal(at('2026-12-29T16:00:00Z').phase, 'over')
 })
 
-test('the feedback link shows only while feedback counts', () => {
-  const url = 'https://example.com/form'
+test('the note under the chat button says when feedback counts', () => {
   const rounds = roundsFrom(START)
-  assert.equal(submitLinkFor(null, { phase: 'unscheduled' }), null)
-  assert.equal(submitLinkFor(url, { phase: 'unscheduled' }), url)
-  assert.equal(submitLinkFor(url, programState(rounds, new Date('2026-11-30T00:00:00Z'))), null)
-  assert.equal(submitLinkFor(url, programState(rounds, new Date('2026-12-20T00:00:00Z'))), url)
-  assert.equal(submitLinkFor(url, programState(rounds, new Date('2027-01-05T00:00:00Z'))), null)
+  const at = iso => submitNote(programState(rounds, new Date(iso)))
+  assert.equal(submitNote({ phase: 'unscheduled' }), 'Feedback starts counting when Round 1 opens.')
+  assert.equal(
+    at('2026-11-30T00:00:00Z'),
+    'Feedback starts counting when Round 1 opens on Dec 1, 16:00 UTC.'
+  )
+  assert.equal(at('2026-12-20T00:00:00Z'), null)
+  assert.equal(
+    at('2027-01-05T00:00:00Z'),
+    'The trial has ended, so new feedback no longer counts toward a round.'
+  )
 })
 
 test('the prizes add up to the round pool', () => {
