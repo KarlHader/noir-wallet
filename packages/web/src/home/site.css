@@ -1949,7 +1949,11 @@
 }
 /* Typed headings (.tc is one typed character, .tc-last the final one): the characters appear in
    turn with a mint caret after the newest one; the caret blinks twice on the last character and
-   goes */
+   goes. Each character is drawn from its data-ch, so the heading's text (its .sr-only copy) is in
+   the page once. */
+.tc::before {
+  content: attr(data-ch);
+}
 [data-reveal='type'] {
   --type-step: 17ms;
 }
