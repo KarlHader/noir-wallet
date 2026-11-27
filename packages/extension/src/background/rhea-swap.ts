@@ -31,7 +31,10 @@ import type { FundingSource, QuoteBinding } from '@/types/wallet'
 import { safeBig } from '@/lib/big'
 import { PersistentRheaSwapCatalogCache } from '@/infrastructure/persistence/rhea-swap-catalog-cache'
 import { ConfidentialFundingApi } from './confidential-funding-api'
-import { PublicConfidentialTransfer } from './public-confidential-transfer'
+import {
+  PublicConfidentialTransfer,
+  type ResolvePrivateWithdrawRefundAddress
+} from './public-confidential-transfer'
 
 export async function readRheaZcashTransferDeadline(
   binding: QuoteBinding | undefined,
@@ -520,7 +523,9 @@ export async function recoverRheaWithdrawActivity(
 
 let service: RheaSwapService | null | undefined
 
-export function createBackgroundRheaSwapService(): RheaSwapService | null {
+export function createBackgroundRheaSwapService(
+  resolvePrivateWithdrawRefundAddress?: ResolvePrivateWithdrawRefundAddress
+): RheaSwapService | null {
   if (service !== undefined) return service
   const accessToken = __RHEA_SWAP_ACCESS_TOKEN__.trim()
   if (!accessToken) {
@@ -540,7 +545,8 @@ export function createBackgroundRheaSwapService(): RheaSwapService | null {
             async input => (await import('./one-click-status')).queryOneClickOrderStatus(input),
             undefined,
             async (...input) =>
-              (await import('./one-click-status')).resolveZcashOneClickViewer(...input)
+              (await import('./one-click-status')).resolveZcashOneClickViewer(...input),
+            resolvePrivateWithdrawRefundAddress
           )
         }
       : {})

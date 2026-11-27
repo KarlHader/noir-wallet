@@ -56,6 +56,10 @@ export function rheaSwapReferral(purpose?: PrivateQuotePurpose): string {
   return NOIR_SWAP_REFERRAL
 }
 
+export function isPrivateWithdrawPurpose(purpose?: PrivateQuotePurpose): boolean {
+  return purpose === 'private-transfer' || purpose === 'private-cross-chain-withdraw'
+}
+
 export function publicConfidentialRefundViewer(
   fromChain: ChainRef,
   walletAddress: string,

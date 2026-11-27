@@ -24,6 +24,8 @@ import type { ConfidentialFundingPlan } from '@/core/services/confidential-fundi
 import type { Network } from '@/types'
 import { getActivityStatusPresentation } from '@/popup/services/multichain-activity-presentation'
 import { EvmPendingTransactionActions } from '../evm/EvmPendingTransactionActions'
+import { getShieldFundsNotice } from '@/popup/services/shield-transfer'
+import { TransactionNotice } from './TransactionNotice'
 
 export interface ConfidentialActivityTarget {
   readonly network: Network
@@ -238,7 +240,6 @@ export function ConfidentialActivityView({
       ? activity
       : null
   const scopedPlan =
-    scopedActivity &&
     confidentialPlan?.transactionId === plan.transactionId &&
     confidentialPlan.network === plan.network &&
     confidentialPlan.keyDomainId === plan.keyDomainId &&
@@ -348,6 +349,9 @@ export function ConfidentialActivityView({
                   (scopedPlan ? scopedPlan.depositQuote : plan.depositQuote)?.quote.deadline ?? ''
                 )}
               />
+            )}
+            {!activityView && (
+              <TransactionNotice message={getShieldFundsNotice(scopedPlan)} tone="warning" />
             )}
             {confirmed || failed || refunded ? (
               <Button onClick={onDone} className="h-[45px] w-full">

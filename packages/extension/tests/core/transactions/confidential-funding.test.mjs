@@ -1164,6 +1164,7 @@ test.describe('confidential funding safety rules', () => {
       expect(requests[1]).toMatchObject({ refundTo, refundType: 'ORIGIN_CHAIN' })
       expect(requests[1].user).toBeUndefined()
       expect(requests[1].userChainFamily).toBeUndefined()
+      expect(requests[2]).toMatchObject({ user: refundTo, userChainFamily: 'evm' })
       expect(quote.oneClickOrder).toEqual({
         depositAddress: quote.quote.depositAddress,
         depositMemo,
@@ -1249,6 +1250,7 @@ test.describe('confidential funding safety rules', () => {
     const depositAddress = '0x4444444444444444444444444444444444444444'
     const destinationHash = `0x${'ab'.repeat(32)}`
     const inactiveAt = new Date(Date.now() + 30_000).toISOString()
+    const viewer = { chainFamily: 'evm', walletAddress: sender, signingMode: 'private' }
     let changeRecipient = false
     globalThis.fetch = async (url, init) => {
       expect(url).toBe('https://example.test/1click/quote')
@@ -1263,6 +1265,12 @@ test.describe('confidential funding safety rules', () => {
         amount: '1000',
         refundTo: sender
       })
+      if (request.dry) {
+        expect(request.user).toBeUndefined()
+        expect(request.userChainFamily).toBeUndefined()
+      } else {
+        expect(request).toMatchObject({ user: sender, userChainFamily: 'evm' })
+      }
       return new Response(
         JSON.stringify({
           code: 0,
@@ -1288,10 +1296,11 @@ test.describe('confidential funding safety rules', () => {
     }
     try {
       const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', 'test-token')
-      const input = { asset, amountOutRaw: '1000', sender, recipient, slippageBps: 100 }
+      const input = { asset, amountOutRaw: '1000', sender, recipient, slippageBps: 100, viewer }
       await expect(api.quoteExactOutput(input)).resolves.toMatchObject({
         minimumInputRaw: '1010',
         expiresAt: Date.parse(inactiveAt),
+        oneClickOrder: { depositAddress, viewer },
         quote: { amountIn: '1020', amountOut: '1000', minAmountOut: '1000' }
       })
       expect(
@@ -1588,7 +1597,12 @@ test.describe('confidential funding safety rules', () => {
         refundType: 'ORIGIN_CHAIN',
         recipientType: 'CONFIDENTIAL_INTENTS',
         slippageBps: 50,
-        dry: false
+        dry: false,
+        viewer: {
+          chainFamily: 'zcash',
+          walletAddress: 't1ExampleRefundAddress',
+          signingMode: 'transparent'
+        }
       }
       const quote = await api.quote(input)
       expect(requests.map(request => request.dry)).toEqual([true, false])

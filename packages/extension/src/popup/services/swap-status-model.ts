@@ -123,9 +123,9 @@ export function getConfidentialFundingStatusCopy(
           : funding.stage === 'ready'
             ? 'Confidential funds are ready.'
             : funding.phase === 'partial'
-              ? 'Some transfers completed. Unsent funds remain in Confidential balance.'
+              ? 'Some transfers completed.'
               : funding.phase === 'refunded'
-                ? 'Funds returned to Confidential balance.'
+                ? 'The transfer was refunded.'
                 : funding.stage === 'failed'
                   ? 'Confidential funding could not be completed.'
                   : 'Preparing your transfer.',

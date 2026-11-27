@@ -17,8 +17,11 @@ import {
   type OneClickViewer
 } from '@/core/services/near-intents/one-click-order'
 import {
+  createOneClickQuoteRequest,
   matchesOneClickQuoteViewer,
-  requestOneClickQuote
+  requestOneClickQuote,
+  type OneClickQuoteOptions,
+  type OneClickQuoteRequest
 } from '@/core/services/near-intents/one-click-quote'
 import { DedupPromise } from '@/lib/async-utils'
 import { logDevelopmentError } from '@/lib/development-console'
@@ -39,10 +42,6 @@ const MAX_CONFIDENTIAL_PROVIDER_FEE_BPS = 25
 const INTENTS_CONTRACT = 'intents.near'
 const VERSIONED_NONCE_PREFIX = new Uint8Array([86, 40, 246, 198])
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
-
-type ConfidentialQuoteRequest = Readonly<Record<string, string | number | boolean>> & {
-  readonly dry: boolean
-}
 
 export interface ConfidentialSession {
   readonly accessToken: string
@@ -404,7 +403,7 @@ function base64Encode(value: Uint8Array): string {
   return btoa(binary)
 }
 
-function parseQuote(value: unknown, viewer?: OneClickViewer): ConfidentialQuote {
+function parseQuote(value: unknown, viewer: OneClickViewer | null = null): ConfidentialQuote {
   if (!isRecord(value) || !isRecord(value.quote) || !isRecord(value.quoteRequest)) {
     throw new Error('Confidential quote response is invalid')
   }
@@ -893,10 +892,20 @@ export class ConfidentialFundingApi {
       readonly refundType: 'ORIGIN_CHAIN' | 'CONFIDENTIAL_INTENTS'
       readonly recipientType: 'CONFIDENTIAL_INTENTS' | 'DESTINATION_CHAIN'
       readonly slippageBps: number
-      readonly dry: boolean
-      readonly settlement?: 'cluster' | 'onchain-transfer'
-      readonly viewer?: OneClickViewer
-    },
+      readonly settlement?: 'cluster' | 'onchain-transfer' | 'private-withdrawal'
+    } & (
+      | { readonly dry: true; readonly viewer?: never }
+      | {
+          readonly dry: false
+          readonly refundType: 'CONFIDENTIAL_INTENTS'
+          readonly viewer?: never
+        }
+      | {
+          readonly dry: false
+          readonly refundType: 'ORIGIN_CHAIN'
+          readonly viewer: OneClickViewer | null
+        }
+    ),
     signal?: AbortSignal
   ): Promise<ConfidentialQuote> {
     const isWithdrawal =
@@ -911,6 +920,15 @@ export class ConfidentialFundingApi {
     const isPublicTransfer =
       isOnchainRoute && isNoirPublicConfidentialTransferReferral(input.referral)
     const isOnchainTransfer = input.settlement === 'onchain-transfer'
+    const isPrivateWithdrawal =
+      input.settlement === 'private-withdrawal' &&
+      input.referral === NOIR_SWAP_REFERRAL &&
+      input.depositType === 'ORIGIN_CHAIN' &&
+      input.refundType === 'CONFIDENTIAL_INTENTS' &&
+      input.recipientType === 'DESTINATION_CHAIN' &&
+      input.refundTo === undefined &&
+      isAddress(input.signerId) &&
+      !/^0x0{40}$/i.test(input.signerId)
     const isInternalSwap =
       input.depositType === 'CONFIDENTIAL_INTENTS' &&
       input.refundType === 'CONFIDENTIAL_INTENTS' &&
@@ -927,16 +945,18 @@ export class ConfidentialFundingApi {
     if (
       (isClusterWithdrawal && !isWithdrawal) ||
       (isOnchainTransfer && (!isOnchainRoute || input.referral !== NOIR_SWAP_REFERRAL)) ||
+      (input.settlement === 'private-withdrawal' && !isPrivateWithdrawal) ||
       (!isWithdrawal &&
         !isDeposit &&
         !isInternalSwap &&
         !isConfidentialAccountTransfer &&
         !isPublicTransfer &&
-        !isOnchainTransfer)
+        !isOnchainTransfer &&
+        !isPrivateWithdrawal)
     ) {
       throw new Error('Confidential quote route is invalid')
     }
-    const request = {
+    const request = createOneClickQuoteRequest({
       dry: input.dry,
       swapType: 'EXACT_INPUT',
       slippageTolerance: input.slippageBps,
@@ -948,11 +968,9 @@ export class ConfidentialFundingApi {
       refundType: input.refundType,
       recipient: input.recipient,
       recipientType: input.recipientType,
-      deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
       referral: input.referral,
-      quoteWaitingTimeMs: 0,
       confidentiality: 'basic'
-    }
+    })
     const appFees = isClusterWithdrawal
       ? await this.clusterAppFeeLookup.run(async () =>
           parseClusterAppFees(
@@ -963,7 +981,7 @@ export class ConfidentialFundingApi {
             )
           )
         )
-      : isOnchainTransfer
+      : isOnchainTransfer || isPrivateWithdrawal
         ? []
         : isInternalSwap
           ? NOIR_SWAP_APP_FEES
@@ -976,11 +994,10 @@ export class ConfidentialFundingApi {
       providerFees = baseline.fees
     }
     const viewer = input.dry
-      ? undefined
-      : (input.viewer ??
-        (input.refundType === 'CONFIDENTIAL_INTENTS'
-          ? ({ chainFamily: 'evm', walletAddress: input.signerId, signingMode: 'public' } as const)
-          : undefined))
+      ? null
+      : input.refundType === 'CONFIDENTIAL_INTENTS'
+        ? ({ chainFamily: 'evm', walletAddress: input.signerId, signingMode: 'public' } as const)
+        : input.viewer
     const quote = await this.requestQuoteWithFees(request, appFees, providerFees, {
       viewer,
       signal
@@ -997,9 +1014,9 @@ export class ConfidentialFundingApi {
     readonly signerId: string
     readonly refundTo: string
     readonly slippageBps: number
-    readonly viewer?: OneClickViewer
+    readonly viewer: OneClickViewer
   }): Promise<ConfidentialQuote> {
-    const request = {
+    const request = createOneClickQuoteRequest({
       dry: true,
       swapType: 'FLEX_INPUT',
       slippageTolerance: input.slippageBps,
@@ -1011,11 +1028,9 @@ export class ConfidentialFundingApi {
       refundType: 'ORIGIN_CHAIN',
       recipient: input.signerId,
       recipientType: 'CONFIDENTIAL_INTENTS',
-      deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
       referral: NOIR_RECEIVE_REFERRAL,
-      quoteWaitingTimeMs: 0,
       confidentiality: 'basic'
-    }
+    })
     const binding = {
       originAsset: input.originAsset,
       destinationAsset: input.originAsset,
@@ -1031,7 +1046,9 @@ export class ConfidentialFundingApi {
     let minimumInputRaw: string
     try {
       const quote = parseQuote(
-        await requestOneClickQuote(this.config.oneClickApiUrl, request, requestJson)
+        await requestOneClickQuote(this.config.oneClickApiUrl, request, requestJson, {
+          viewer: null
+        })
       )
       assertFlexibleExternalDepositQuoteBinding(quote, binding, Date.now(), true)
       minimumInputRaw = quote.quote.minAmountIn!
@@ -1069,9 +1086,9 @@ export class ConfidentialFundingApi {
     readonly sender: string
     readonly recipient: string
     readonly slippageBps: number
-    readonly viewer?: OneClickViewer
+    readonly viewer: OneClickViewer
   }): Promise<ConfidentialExactOutputQuote> {
-    const request = {
+    const request = createOneClickQuoteRequest({
       dry: false,
       swapType: 'EXACT_OUTPUT',
       slippageTolerance: input.slippageBps,
@@ -1083,11 +1100,9 @@ export class ConfidentialFundingApi {
       refundType: 'ORIGIN_CHAIN',
       recipient: input.recipient,
       recipientType: 'DESTINATION_CHAIN',
-      deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
       referral: NOIR_SEND_REFERRAL,
-      quoteWaitingTimeMs: 0,
       confidentiality: 'basic'
-    }
+    })
     const { fees: providerFees } = await this.quoteProviderFees(request)
     const value = await requestOneClickQuote(this.config.oneClickApiUrl, request, requestJson, {
       viewer: input.viewer
@@ -1129,10 +1144,10 @@ export class ConfidentialFundingApi {
   }
 
   private async requestQuoteWithFees(
-    request: ConfidentialQuoteRequest,
+    request: OneClickQuoteRequest,
     appFees: readonly IntentsAppFee[],
     providerFees: readonly IntentsAppFee[],
-    options: { viewer?: OneClickViewer; signal?: AbortSignal }
+    options: OneClickQuoteOptions
   ): Promise<ConfidentialQuote> {
     if (appFees.some(appFee => providerFees.some(fee => fee.recipient === appFee.recipient))) {
       throw new Error('Confidential provider fee quote already includes the wallet fee recipient')
@@ -1150,10 +1165,13 @@ export class ConfidentialFundingApi {
     return quote
   }
 
-  private async quoteProviderFees(request: ConfidentialQuoteRequest, signal?: AbortSignal) {
+  private async quoteProviderFees(request: OneClickQuoteRequest, signal?: AbortSignal) {
     const baseline = { ...request, dry: true }
     const quote = parseQuote(
-      await requestOneClickQuote(this.config.oneClickApiUrl, baseline, requestJson, { signal })
+      await requestOneClickQuote(this.config.oneClickApiUrl, baseline, requestJson, {
+        viewer: null,
+        signal
+      })
     )
     const fees = readConfidentialQuoteAppFees(quote)
     if (

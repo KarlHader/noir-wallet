@@ -77,14 +77,15 @@ export async function resolveZcashOneClickViewer(
   refundTo: string,
   fundingSource: 'transparent' | 'shielded'
 ): Promise<OneClickViewer | undefined> {
-  if (fundingSource === 'transparent') {
-    return zcashP2pkh(refundTo, scope)
-      ? { chainFamily: 'zcash', walletAddress: refundTo, signingMode: 'transparent' }
-      : undefined
-  }
   const owner = await loadOneClickWallet(scope)
   if (!owner || owner.wallet.keySource === 'ledger' || owner.wallet.keySource === 'keystone') {
     return undefined
+  }
+  if (fundingSource === 'transparent') {
+    const addresses = owner.account.networkAddresses?.[scope.network] ?? owner.account.addresses
+    return addresses.transparent === refundTo && zcashP2pkh(refundTo, scope)
+      ? { chainFamily: 'zcash', walletAddress: refundTo, signingMode: 'transparent' }
+      : undefined
   }
   const { withTxSyncPause } = await import('./sync-scheduler')
   const { backgroundZcashWalletRuntime } = await import('./zcash-wallet-runtime')

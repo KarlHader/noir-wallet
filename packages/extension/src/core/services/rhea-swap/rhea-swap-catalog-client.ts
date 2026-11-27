@@ -43,7 +43,11 @@ interface RheaSwapClientConfig {
   fetch?: typeof fetch
   retry?: { maxRetries?: number; baseDelayMs?: number; maxDelayMs?: number; jitter?: boolean }
   publicConfidentialTransfer?: {
-    quote(request: QuoteRequest, signal?: AbortSignal): Promise<SwapQuoteDataRaw>
+    quote(
+      request: QuoteRequest,
+      signal?: AbortSignal,
+      scope?: PublicConfidentialBuildScope
+    ): Promise<SwapQuoteDataRaw>
     build(
       quote: Quote,
       signal?: AbortSignal,
@@ -199,10 +203,17 @@ export class RheaSwapCatalogClient {
     this.publicConfidentialTransfer = config.publicConfidentialTransfer
   }
 
-  async quote(request: QuoteRequest, options: ApiRequestOptions = {}): Promise<Quote> {
+  async quote(
+    request: QuoteRequest,
+    options: ApiRequestOptions & { scope?: PublicConfidentialBuildScope } = {}
+  ): Promise<Quote> {
     const raw =
       request.confidentiality === 'basic'
-        ? await this.requirePublicConfidentialTransfer().quote(request, options.signal)
+        ? await this.requirePublicConfidentialTransfer().quote(
+            request,
+            options.signal,
+            options.scope
+          )
         : await this.api.quote(serializeQuoteRequest(request), options.signal)
     return normalizeQuote(request, raw, this.now())
   }

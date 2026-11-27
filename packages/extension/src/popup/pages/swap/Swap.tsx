@@ -907,6 +907,10 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
   const feeConfirmationInFlight = useRef(false)
   const [isPrivateFundingSubmitting, setIsPrivateFundingSubmitting] = useState(false)
   const [transferPreparationError, setTransferPreparationError] = useState<string | null>(null)
+  const [swapFeeError, setSwapFeeError] = useState<{
+    quoteHandle: string
+    message: string
+  } | null>(null)
   const [networkFeeTier, setNetworkFeeTier] = useState<NetworkFeeTier>(DEFAULT_NETWORK_FEE_TIER)
   const [customReviewFee, setCustomReviewFee] = useState<{
     scope: string
@@ -3697,6 +3701,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
       preparingReview.current = true
       setIsPreparingReview(true)
       setTransferPreparationError(null)
+      setSwapFeeError(null)
       if (feeTierOverride) setNetworkFeeTier(feeTierOverride)
       const requestSequence = ++quoteRequestSequence.current
       const requestId = createDebugRequestId('swap-prepare')
@@ -4192,6 +4197,20 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
             setIsPrivateFundingSubmitting(false)
           }
           const message = getRheaSwapErrorMessage(error)
+          if (
+            ordinarySwapRequested &&
+            executionSourceMode === 'main' &&
+            viewStep === 'input' &&
+            failedStage === 'evm-prepare-contract-call' &&
+            error instanceof EvmWalletClientError &&
+            error.code === 'insufficient-funds' &&
+            error.shortfallRaw &&
+            !newlyQuoted &&
+            resultToReview
+          ) {
+            setSwapFeeError({ quoteHandle: resultToReview.quoteHandle, message })
+            return
+          }
           if (viewStep === 'review' || lockedAssetFlowRequested || feeTierOverride)
             setTransferPreparationError(message)
           else {
@@ -7185,6 +7204,11 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         liveQuoteKey === liveQuoteRequest.key &&
         quoteResult !== null &&
         !swap.isQuoting
+    const currentSwapFeeError =
+      swapFeeError && canGetQuote && swapFeeError.quoteHandle === quoteResult?.quoteHandle
+        ? swapFeeError
+        : null
+    const canRetryWithLowFee = currentSwapFeeError !== null && networkFeeTier !== 'low'
     const feeLoading =
       swap.isZecSource &&
       !hasInsufficientFunds &&
@@ -7568,7 +7592,7 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
                                 /^\d+$/.test(privateFundingMinimumRaw) &&
                                 BigInt(quoteResult.minAmountOut) < BigInt(privateFundingMinimumRaw)
                               ? `Increase the amount to receive enough ${swap.tokenOut?.symbol ?? 'Gas'}`
-                              : (reverseError ?? swap.quoteError)
+                              : (reverseError ?? currentSwapFeeError?.message ?? swap.quoteError)
         }
         onEnableReceiveNetwork={
           ordinarySwapRequested &&
@@ -7670,16 +7694,22 @@ function SwapWorkflow({ crossChainSend }: { crossChainSend?: CrossChainSendOptio
         onRetryQuote={
           reverseError
             ? handleSwitchTokens
-            : swap.quoteError && quoteRetryable && (liveQuoteRequest || nativeIntentsRequest)
+            : canRetryWithLowFee
               ? () => {
-                  reviewAfterQuoteRefresh.current = null
-                  expiredPrepareRetryKey.current = null
-                  swap.setQuoteError(null)
-                  swap.setIsQuoting(true)
-                  setQuoteRefreshTick(current => current + 1)
+                  setNetworkFeeTier('low')
+                  void reviewLiveQuote('low').catch(() => {})
                 }
-              : undefined
+              : swap.quoteError && quoteRetryable && (liveQuoteRequest || nativeIntentsRequest)
+                ? () => {
+                    reviewAfterQuoteRefresh.current = null
+                    expiredPrepareRetryKey.current = null
+                    swap.setQuoteError(null)
+                    swap.setIsQuoting(true)
+                    setQuoteRefreshTick(current => current + 1)
+                  }
+                : undefined
         }
+        retryQuoteLabel={canRetryWithLowFee && !reverseError ? 'Try Low fee' : undefined}
         onGetQuote={() => {
           void reviewLiveQuote()
         }}

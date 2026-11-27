@@ -2293,11 +2293,15 @@ export class ConfidentialFundingCoordinator {
         : input.destination.protocolAssetId,
       amountRaw: input.source.amountRaw,
       signerId: sourceIdentity.address,
-      ...(isDeposit ? { refundTo: sourceAddress } : {}),
-      ...(isDeposit ? { viewer: evmRefundViewer(sourceAddress, sourceIdentity) } : {}),
+      ...(isDeposit
+        ? {
+            refundTo: sourceAddress,
+            refundType: 'ORIGIN_CHAIN' as const,
+            viewer: evmRefundViewer(sourceAddress, sourceIdentity)
+          }
+        : { refundType: 'CONFIDENTIAL_INTENTS' as const }),
       recipient: isDeposit ? sourceIdentity.address : destinationAddress,
       depositType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
-      refundType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
       recipientType:
         isDeposit || isSwap || isConfidentialTransfer
           ? 'CONFIDENTIAL_INTENTS'
@@ -3117,6 +3121,17 @@ export class ConfidentialFundingCoordinator {
         .getBalanceSnapshot(this.options.network, model.scope.keyDomainId, model.scope.accountId)
         .catch(() => snapshot)
     )
+  }
+
+  async resolveShieldAccountAddress(scope: Readonly<{ keyDomainId: string; accountId: string }>) {
+    const identity = await this.resolveShieldAccountIdentity()
+    if (
+      identity.context.chainAccount.scope.keyDomainId !== scope.keyDomainId ||
+      identity.context.chainAccount.scope.accountId !== scope.accountId
+    ) {
+      throw new Error('Active Wallet Account changed')
+    }
+    return identity.address
   }
 
   private async requireConfidentialSession(
@@ -4221,11 +4236,7 @@ export class ConfidentialFundingCoordinator {
     return plan
   }
 
-  private async signAndFreezeCluster(
-    plan: ConfidentialFundingPlan,
-    approvalExpiresAt?: number
-  ): Promise<ConfidentialFundingPlan> {
-    if (plan.frozenRequest) return plan
+  private async quoteClusterWithdraws(plan: ConfidentialFundingPlan, slippageBps: number) {
     const quotes = await Promise.all(
       plan.splitSourceAmounts.map(sourceAmountRaw =>
         this.options.api.quote({
@@ -4238,7 +4249,7 @@ export class ConfidentialFundingCoordinator {
           depositType: 'CONFIDENTIAL_INTENTS',
           refundType: 'CONFIDENTIAL_INTENTS',
           recipientType: 'DESTINATION_CHAIN',
-          slippageBps: plan.slippageBps,
+          slippageBps,
           settlement: 'cluster',
           dry: false
         })
@@ -4257,7 +4268,7 @@ export class ConfidentialFundingCoordinator {
           depositType: 'CONFIDENTIAL_INTENTS',
           refundType: 'CONFIDENTIAL_INTENTS',
           recipientType: 'DESTINATION_CHAIN',
-          slippageBps: plan.slippageBps
+          slippageBps
         },
         this.now()
       )
@@ -4273,19 +4284,40 @@ export class ConfidentialFundingCoordinator {
     ) {
       throw new Error('Shield withdraw fees changed. Review the transfer again.')
     }
-    const expectedOutputRaw = quotes
-      .reduce((sum, quote) => sum + BigInt(quote.quote.amountOut), 0n)
-      .toString()
-    const minimumOutputRaw = quotes
-      .reduce((sum, quote) => sum + BigInt(quote.quote.minAmountOut), 0n)
-      .toString()
+    return {
+      quotes,
+      expectedOutput: quotes.reduce((sum, quote) => sum + BigInt(quote.quote.amountOut), 0n),
+      minimumOutput: quotes.reduce((sum, quote) => sum + BigInt(quote.quote.minAmountOut), 0n)
+    }
+  }
+
+  private async signAndFreezeCluster(
+    plan: ConfidentialFundingPlan,
+    approvalExpiresAt?: number
+  ): Promise<ConfidentialFundingPlan> {
+    if (plan.frozenRequest) return plan
+    const approvedMinimum = BigInt(plan.minimumOutputRaw)
+    let batch = await this.quoteClusterWithdraws(plan, plan.slippageBps)
     if (
-      BigInt(minimumOutputRaw) < BigInt(plan.minimumOutputRaw) ||
-      BigInt(expectedOutputRaw) < BigInt(plan.minimumOutputRaw)
+      plan.requiresDeposit &&
+      batch.minimumOutput < approvedMinimum &&
+      batch.expectedOutput >= approvedMinimum &&
+      batch.expectedOutput > 0n &&
+      plan.slippageBps > 0
     ) {
+      const affordableSlippageBps = Number(
+        ((batch.expectedOutput - approvedMinimum) * 10_000n) / batch.expectedOutput
+      )
+      batch = await this.quoteClusterWithdraws(
+        plan,
+        Math.min(affordableSlippageBps, plan.slippageBps - 1)
+      )
+    }
+    if (batch.minimumOutput < approvedMinimum || batch.expectedOutput < approvedMinimum) {
       await this.applyGraphStatus(plan, 'relay', 'failed', undefined, 'relay-failed')
       return this.updatePlan(plan, { phase: 'failed', errorStatus: 'QUOTE_CHANGED' })
     }
+    const { quotes } = batch
     const bindings = await Promise.all(
       quotes.map(async (quote, sequence) => {
         const generated = await this.options.api.generateIntent({
@@ -4366,8 +4398,8 @@ export class ConfidentialFundingCoordinator {
       withdraws: Object.freeze(rows),
       frozenRequest,
       requestFingerprint,
-      expectedOutputRaw,
-      minimumOutputRaw
+      expectedOutputRaw: batch.expectedOutput.toString(),
+      minimumOutputRaw: batch.minimumOutput.toString()
     })
     await this.ensureGraph(frozen)
     await this.applyGraphStatus(frozen, 'relay', 'confirming')

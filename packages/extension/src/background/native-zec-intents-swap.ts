@@ -268,7 +268,7 @@ export function readNativeZecIntentsStatusViewer(
       network,
       getConfidentialOrderRecipient(binding)
     )
-    if (binding.oneClickOrder.viewer) return binding.oneClickOrder.viewer
+    return binding.oneClickOrder.viewer
   }
   const refund = parseZcashAddress(binding.refundTo, network)
   if (refund.scheme === 'zcash-transparent-p2pkh') {
@@ -352,7 +352,7 @@ export class NativeZecIntentsSwapCoordinator {
           signerId: string
           refundTo: string
           slippageBps: number
-          viewer?: OneClickViewer
+          viewer: OneClickViewer | null
         }>
       ) => Promise<ConfidentialQuote>
     }>
@@ -605,7 +605,6 @@ export class NativeZecIntentsSwapCoordinator {
       }
       const viewer =
         hardwareViewer ?? (await resolveViewer(scope, input.refundAddress, refundSource))
-      const quoteViewer = shieldedRefund || hardwareViewer ? viewer : undefined
       this.assertActiveAccount(input.walletId, input.accountId, input.refundAddress)
       const confidentialQuote = confidential
         ? await this.options.quoteConfidential?.({
@@ -616,7 +615,7 @@ export class NativeZecIntentsSwapCoordinator {
             signerId: recipient,
             refundTo: input.refundAddress,
             slippageBps: input.slippageBps,
-            viewer: quoteViewer
+            viewer: viewer ?? null
           })
         : undefined
       if (confidential && !confidentialQuote)
@@ -644,7 +643,7 @@ export class NativeZecIntentsSwapCoordinator {
             recipient,
             slippageTolerance: input.slippageBps,
             validateQuoteRequest: true,
-            viewer: quoteViewer
+            viewer: viewer ?? null
           })
       const quote = confidentialQuote?.quote ?? result?.quoteSuccessResult?.quote
       if (!quote || (!confidential && result?.quoteStatus !== 'success')) {

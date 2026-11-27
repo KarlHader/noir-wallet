@@ -32,6 +32,7 @@ import {
   type FreshRheaSwapCatalog
 } from '@/infrastructure/persistence/rhea-swap-catalog-cache'
 import { classifyError, isRpcEndpointError } from '@/lib/errors'
+import { EvmWalletClientError } from './evm-wallet-client'
 import {
   getSwapQuoteFailureMessage,
   isSwapQuotePriceMoved,
@@ -48,6 +49,9 @@ export class RheaSwapClientError extends Error {
 }
 
 export function getRheaSwapErrorMessage(error: unknown): string {
+  if (error instanceof EvmWalletClientError && error.code === 'network-unavailable') {
+    return 'Could not reach the source network. Please try again shortly.'
+  }
   if (isSwapQuotePriceMoved(error))
     return getSwapQuoteFailureMessage(error) ?? classifyError(error).userMessage
   if (!(error instanceof RheaSwapClientError)) return classifyError(error).userMessage

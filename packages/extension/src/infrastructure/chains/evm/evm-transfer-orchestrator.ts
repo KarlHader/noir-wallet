@@ -54,6 +54,7 @@ import {
   estimateEvmContractCallFee,
   estimateEvmTransferFee,
   type EvmContractCallIntent,
+  type EvmReviewedFeeBudget,
   type EvmFeeEstimate,
   type PeaEvmExecutionAccount,
   type EvmTransferIntent
@@ -139,7 +140,7 @@ export interface PrepareEvmTransferInput {
   readonly nearIntentsBinding?: NearIntentsTransactionBinding
   readonly rheaSwapBinding?: RheaSwapTransactionBinding
   readonly feeSelection?: EvmFeeSelection
-  readonly reviewedMaxFeePerGas?: bigint
+  readonly reviewedFeeBudget?: EvmReviewedFeeBudget
   readonly feeTier?: NetworkFeeTier
   readonly signingMode?: 'internal' | 'keystone' | 'ledger'
   readonly externalSigner?: Omit<EvmExternalSignerBinding, 'requestId'>
@@ -785,7 +786,7 @@ export class EvmTransferOrchestrator {
             ? await buildEvmContractCall({
                 ...sharedBuildInput,
                 intent: input.intent,
-                reviewedMaxFeePerGas: input.reviewedMaxFeePerGas
+                reviewedFeeBudget: input.reviewedFeeBudget
               })
             : await buildEvmTransfer({ ...sharedBuildInput, intent: input.intent })
     const expectedFingerprint = await computeEvmSigningPayloadFingerprint(prepared.transaction)

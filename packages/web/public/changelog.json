@@ -1,6 +1,13 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "2.1.3": {
+      "notifyUpdate": true,
+      "changes": [
+        "Continue eligible EVM swaps after token approval within the fees you already confirmed.",
+        "Try a lower network fee when you have insufficient funds for an eligible Public Swap."
+      ]
+    },
     "2.1.2": {
       "notifyUpdate": true,
       "changes": [
