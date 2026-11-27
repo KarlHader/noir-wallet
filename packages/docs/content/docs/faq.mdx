@@ -1,6 +1,6 @@
 ---
 title: Frequently asked questions
-description: Answers about Noir Wallet installation, Zcash addresses, privacy, synchronization, transactions, and dApp connections.
+description: Answers about Noir Wallet accounts, privacy, supported chains, addresses, syncing, swaps, fees, hardware wallets, dApps, and support.
 icon: CircleHelp
 ---
 
@@ -8,17 +8,45 @@ icon: CircleHelp
 
 ### What is Noir Wallet?
 
-Noir Wallet is a self-custodial Chrome extension for Zcash. It supports transparent and shielded balances, private transactions, swaps, lending flows, and dApp connections.
+Noir is a self-custodial privacy wallet. It gives you a normal Public account, a Shield option and an Incognito account:
 
-### Does Noir Wallet custody my funds?
+- **Public:** your everyday wallet
+- **Shield:** a private balance for funds you want to keep private
+- **Incognito:** one DeFi address across all EVM chains, never linked to you
 
-No. Wallet credentials are encrypted locally and the recovery phrase controls the wallet. Noir Wallet cannot recover a lost phrase or reverse a blockchain transaction.
+### Is Noir self-custodial?
 
-### Is a mobile app available?
+Yes. You hold your own keys. Your Public and Incognito accounts come from the same recovery phrase but use separate keys. Wallet credentials are encrypted locally, and Noir can't access, recover or move your funds.
 
-The current documented product is the Chrome extension. Only install products linked from official Noir Wallet channels.
+### What does Noir hide?
 
-## Addresses and privacy
+The link between you and your activity. To a stranger, your Public account looks like any other wallet, and for Shield they see only the deposit amount.
+
+Incognito transactions are still visible on-chain, but the Incognito account isn't linked to your Public account, which is the one people usually recognize or that you may have connected to X for campaigns. To keep the two separate, use Noir's privacy features at every step.
+
+### Is every transaction private?
+
+No. When you send from your Incognito account, or use **Send privately**, the payment takes a confidential route, so the recipient sees a bridge address instead of yours. A regular cross-chain send from your Public account may go through a public bridge, and a fast, open payment can reveal a link between your addresses. If privacy matters, use **Send privately** or send from your Incognito account.
+
+### Which chains does Noir support?
+
+Noir V2 supports Zcash and EVM networks, including Ethereum, BNB Chain, Base and Arbitrum. Bitcoin, NEAR and Solana are coming next.
+
+### Is there a mobile app?
+
+Not yet. Noir is a Chrome extension for desktop and laptop, and there's no standalone desktop or mobile app. Mobile browsers that support extensions, such as Mises or Kiwi, aren't supported, so Noir may not work correctly there and your balance may not sync.
+
+A mobile version is planned for Q1 2027. Only install Noir from links shared on Noir's official channels, such as [zknoir.com](https://www.zknoir.com).
+
+### How is Noir different from a privacy pool or mixer?
+
+Noir is a wallet, not a single privacy protocol. It sends each transaction through the right privacy partner (NEAR Intents, Zama, Zcash, Railgun or Tacit), and you keep a normal Public account alongside it.
+
+### Is Noir compliant?
+
+Noir is a self-custodial wallet that works with established privacy partners: NEAR Intents, Zama, Zcash, Railgun and Tacit. Each transaction goes through the partner best suited to it, and your Public account works like any regular wallet.
+
+## Wallet and addresses
 
 ### What is the difference between transparent and shielded addresses?
 
@@ -28,25 +56,77 @@ Transparent transactions expose public on-chain details. Zcash shielded transact
 
 No. Shielding moves funds into the shielded pool, but the original transparent transaction remains public.
 
-### Why is my available balance lower than my total balance?
+### Why did my shielded (u1) address change? Can I get the old one back?
 
-On Zcash **Send** and **Swap**, Available shows funds you can use from the selected source before this transaction's network fee. Max estimates what can be sent to the entered destination after transaction selection, fees, and dust constraints. The final amount can change if the fee or destination changes. See [Send and receive](/wallet-guide/send-and-receive#enter-the-amount) for the difference between available funds and a transaction's confirmation status.
+Zcash wallets can rotate shielded addresses to improve privacy. Noir rotates your shielded address only when you click **Rotate**. Your previous addresses still belong to the same wallet, and any funds sent to them arrive in the same balance.
 
-## Transactions
+You can also choose a previously generated address from your account's shielded-address history. Your transparent (t1) address never changes.
 
-### Why is a transaction still pending?
+### I imported my recovery phrase into another Zcash wallet and see a different address. Are my funds safe?
 
-The wallet may still be observing an origin transaction or external relay. Cross-chain swaps and lending actions can also wait for a destination transaction after the origin is complete.
+Your funds stay on-chain and are controlled by your recovery phrase. Different Zcash wallets can show different shielded addresses for the same phrase. Another wallet shows your full balance only if it uses the same derivation path and supports the same address types, and if it scans from the right birthday height, meaning the block where your wallet was created.
 
-### Can I cancel a transaction?
+### Can I import a 12-word recovery phrase?
 
-For eligible pending EVM transactions, open the transaction in **Activity** and choose **Cancel** or **Speed Up**. Both require a new approval and network fee. Cancellation only takes effect if the replacement confirms first; confirmed transactions cannot be cancelled.
+Yes. Noir supports both 12-word and 24-word recovery phrases. With a 12-word phrase, Zcash isn't selected by default, so select it in the account's networks during import if you also want a Zcash account.
+
+### What is the birthday height when I restore a wallet?
+
+The birthday height is the block where your wallet was created, so Noir knows where to start scanning. Pick the date you first used the wallet, or an earlier date if you're not sure. If the date is too late, some funds may not show up. If it's too early, syncing just takes longer.
+
+You set it with **Restore Zcash history** when you import the phrase. See [Install and set up](/wallet-guide/install-and-setup).
+
+### Why does my Incognito account have no gas?
+
+Your Incognito account starts empty, so it has none of the network's native token, such as ETH, to pay fees with. Use **Shield** to move gas into it. **Don't send to it directly from your Public account, because that links the two accounts on-chain.**
+
+## Balances, sending and swaps
+
+### Why is my balance 0, or why isn't my deposit showing?
+
+Usually your wallet hasn't finished syncing. Use Noir on a desktop or laptop, keep the browser open until the sync percentage disappears, and check that your RPC shows green in **Settings**. If the deposit still doesn't show, resync with an earlier birthday date.
 
 ### Why is my restored wallet still synchronizing?
 
 Restoring requires scanning Zcash history to discover notes and transactions. Keep the browser available until the initial scan catches up. If sync pauses, check the connection.
 
 If local sync data is quarantined because it cannot be recovered, automatic synchronization pauses until you use **Resync Zcash** under **Actions** in the current account's details or in its Zcash settings. Resync rebuilds that wallet's local Zcash scan data and leaves its credentials and other chains' data unchanged.
+
+### What does "unspendable" mean?
+
+New ZEC becomes spendable after 3 confirmations, once your wallet has finished syncing. Transfers from outside Noir can show **Confirming** until they reach 10 confirmations. Your funds are already in your wallet, so you only need to wait.
+
+### Why is my available balance lower than my total balance?
+
+On Zcash **Send** and **Swap**, Available shows funds you can use from the selected source before this transaction's network fee. Max estimates what can be sent to the entered destination after transaction selection, fees, and dust constraints. The final amount can change if the fee or destination changes. See [Send and receive](/wallet-guide/send-and-receive#enter-the-amount) for the difference between available funds and a transaction's confirmation status.
+
+### How long does a cross-chain swap take, and how do I track it?
+
+It depends on the route. Many Noir swaps use NEAR Intents, which you can track by tx hash or address at [explorer.near-intents.org](https://explorer.near-intents.org). If a swap can't be filled, it's refunded to your refund address. How long a refund takes also depends on the route.
+
+### Why is a transaction still pending?
+
+The wallet may still be observing an origin transaction or external relay. Cross-chain swaps and lending actions can also wait for a destination transaction after the origin is complete.
+
+### My shielding or transfer is stuck. What should I do?
+
+Keep the wallet open until the move finishes. If it stays on **Waiting for Intents**, open the transaction in **Activity** and press **Continue**. If **Continue** isn't available, switch to the account that started the transfer. For swaps, check the status at [explorer.near-intents.org](https://explorer.near-intents.org).
+
+### I sent the wrong token, chain or amount. What now?
+
+If you sent less than the quoted amount, the swap is usually refunded, and some routes let you send the rest. A wrong token or chain isn't refunded automatically, and recovery isn't guaranteed. Always match the token and network shown on the swap screen.
+
+### Can I send funds to an exchange?
+
+Yes. Some exchanges may treat deposits that come through bridges or privacy routes as high-risk, and they can ask for source-of-funds documents or restrict your account. For ZEC, most exchanges only accept transparent ZEC, so unshield first if needed, then send from your transparent (t1) address.
+
+### What fees will I pay?
+
+Network fees, plus a route fee on shielding, private sends and cross-chain transfers. Route fees include a fixed part, so on very small amounts they can take a large share. For example, a 0.01 USDC private send can lose about half. Check the amount you'll receive on the review screen before you confirm.
+
+### Can I cancel or reverse a transaction?
+
+No one can cancel or reverse a confirmed transaction. While an eligible EVM transaction is still pending, you can open it in **Activity** and choose **Cancel** or **Speed Up**. Both need a new approval and network fee, and a cancellation only takes effect if the replacement confirms first.
 
 ## dApps
 
@@ -62,14 +142,28 @@ No. Locking protects local access; disconnecting removes an origin's authorizati
 
 Open **Settings > Developer Settings** and switch the wallet's global network mode to Testnet. The wallet locks and reloads before the Testnet networks become available.
 
-## Security
+### How can my project integrate Noir?
 
-### Can support recover my seed phrase?
+Add Noir to your Connect Wallet options, or have Noir feature your product in its dashboard. Contact the Noir BD team to get started, and get the Noir SDK from [Noir SDK integration](/noir-sdk-integration).
 
-No. Anyone asking for the phrase is attempting to gain control of the wallet.
+## Security and support
+
+### Can Noir support recover my recovery phrase?
+
+No. Noir never sees your phrase. Anyone who asks for it is trying to steal your funds.
+
+### Someone from "Noir support" messaged me first. Is it real?
+
+No. The Noir team never DMs you first, and never asks for your recovery phrase, password or remote access. Ask in the [official group](https://t.me/noirprivacy) instead.
 
 ### What should I do if the phrase was exposed?
 
 Treat the wallet as compromised. On a trusted device, create a new wallet and move remaining funds only after independently verifying the destination.
 
-Still need help? Use the official links on [GitHub](https://zknoir.com/github) or [X](https://x.com/noir_wallet), and never send secrets in a support request.
+### Does Noir support hardware wallets?
+
+Yes, with limits that depend on the device and chain. For Zcash, Ledger supports transparent and shielded funding, while Keystone supports shielded funding only. Neither supports Zcash message signing. Hardware accounts can't use the Incognito account flow, and dApp support depends on the signing methods each dApp needs.
+
+### Where can I get help?
+
+Ask in the official [Noir Telegram group](https://t.me/noirprivacy), and include your tx hash and a screenshot. In the wallet, **Settings > Help** links to it too. For guides, see the [Wallet guide](/wallet-guide). You can also find Noir on [GitHub](https://zknoir.com/github) and [X](https://x.com/noir_wallet). Never send your recovery phrase or password in a support request.
