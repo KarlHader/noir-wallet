@@ -197,11 +197,11 @@
   height: 16px;
   flex: none;
 }
-/* The Chrome Web Store logo on the hero's install button */
-.btn .btn-store {
+/* The Chrome logo on the hero's install button (the wallet is a Chrome extension) */
+.btn .btn-chrome {
   flex: none;
-  width: 21px;
-  height: auto;
+  width: 20px;
+  height: 20px;
 }
 .btn .ext {
   width: 30px;

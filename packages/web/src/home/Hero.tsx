@@ -417,7 +417,7 @@ export function Hero({ onTry }: { onTry: () => void }) {
               </p>
               <div className="cta-row" data-reveal="up">
                 <a className="btn" {...walletLinkProps}>
-                  <img className="btn-store" src={IMG.chromeStore} width={21} height={18} alt="" />
+                  <img className="btn-chrome" src={IMG.chrome} width={20} height={20} alt="" />
                   Get Noir Wallet
                 </a>
                 <AppsComingSoon />
