@@ -585,11 +585,9 @@
   line-height: 1.5;
   text-transform: capitalize;
 }
-/* Stand-in until the YZi Labs logo file is added */
 .band-logo {
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  width: auto;
+  height: 36px;
 }
 /* The bottom of the hero fades to black under the wallet, as in the mock */
 .hero::after {
@@ -1674,7 +1672,7 @@
     font-size: 16px;
   }
   .band-logo {
-    font-size: 21px;
+    height: 30px;
   }
 
   .kf-box {

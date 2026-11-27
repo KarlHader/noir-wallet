@@ -9,7 +9,7 @@
  */
 import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { docsLinkProps, walletLinkProps } from './walletStore'
-import { PHONE_WIDTH, PHONES, frameStyle } from './content'
+import { IMG, PHONE_WIDTH, PHONES, frameStyle } from './content'
 import { loadDemo } from './demoLoader'
 import { Icon } from './Icon'
 import { prefersReducedMotion, useInView } from './motion'
@@ -483,7 +483,7 @@ export function Hero({ onTry }: { onTry: () => void }) {
 
       <div className="band">
         <span>Backed by</span>
-        <span className="band-logo">YZi Labs</span>
+        <img className="band-logo" src={IMG.yzi} width={150} height={36} alt="YZi Labs" />
       </div>
     </section>
   )

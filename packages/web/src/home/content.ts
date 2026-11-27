@@ -21,7 +21,9 @@ export const IMG = {
   shieldGlyph: `${DIR}imgGroup1948763176.svg`,
   // Hardware wallet marks, the same files the extension uses
   ledger: `${DIR}ledger.svg`,
-  keystone: `${DIR}keystone.png`
+  keystone: `${DIR}keystone.png`,
+  // "Backed by" band: the YZi Labs logo exported from the design mock (black, 150 × 36)
+  yzi: `${DIR}yzi-labs.svg`
 } as const
 
 /** Width of the phone frame in the design mock (CSS px). */
