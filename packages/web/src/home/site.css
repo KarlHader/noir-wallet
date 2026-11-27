@@ -197,6 +197,12 @@
   height: 16px;
   flex: none;
 }
+/* The Chrome Web Store logo on the hero's install button */
+.btn .btn-store {
+  flex: none;
+  width: 21px;
+  height: auto;
+}
 .btn .ext {
   width: 30px;
   height: 30px;

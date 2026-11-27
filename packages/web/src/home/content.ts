@@ -23,7 +23,9 @@ export const IMG = {
   ledger: `${DIR}ledger.svg`,
   keystone: `${DIR}keystone.png`,
   // "Backed by" band: the YZi Labs logo exported from the design mock (black, 150 × 36)
-  yzi: `${DIR}yzi-labs.svg`
+  yzi: `${DIR}yzi-labs.svg`,
+  // The Chrome Web Store logo (256 × 223), on the hero's Get Noir Wallet button
+  chromeStore: `${DIR}chrome-web-store.svg`
 } as const
 
 /** Width of the phone frame in the design mock (CSS px). */

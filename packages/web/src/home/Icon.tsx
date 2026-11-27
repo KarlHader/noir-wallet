@@ -11,15 +11,6 @@ const PATHS = {
   check: <path d="M5 12.5 9.5 17 19 7.5" />,
   // Lucide message-circle: the support chat
   chat: <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />,
-  // Chrome Web Store: a shopping bag carrying the Chrome mark
-  store: (
-    <>
-      <path d="M3.5 9h17l-1.3 10.3a2 2 0 0 1-2 1.7H6.8a2 2 0 0 1-2-1.7Z" />
-      <path d="M8 9V7.5a4 4 0 0 1 8 0V9" />
-      <circle cx="12" cy="15" r="3.3" />
-      <circle cx="12" cy="15" r="1.1" />
-    </>
-  ),
   // Lucide smartphone and monitor: the apps still to come
   mobile: (
     <>
