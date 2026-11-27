@@ -9,6 +9,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { docsLinkProps, walletLinkProps } from './walletStore'
 import { IMG, SOCIAL } from './content'
 import { Accounts } from './Accounts'
+import { AppsComingSoon } from './ComingSoon'
 import { DeskNote } from './DeskNote'
 import { Hardware } from './Hardware'
 import { Hero } from './Hero'
@@ -70,10 +71,7 @@ function Journey() {
             <Icon name="download" />
             Install Wallet
           </a>
-          <a className="btn btn-ghost" {...docsLinkProps}>
-            Docs
-            <Icon name="external" className="ext" />
-          </a>
+          <AppsComingSoon />
         </div>
         <DeskNote />
       </div>

@@ -214,6 +214,44 @@
   background: rgba(255, 255, 255, 0.12);
   border-color: #5c5c5c;
 }
+/* Apps that are not out yet (ComingSoon.tsx): greyed out, not clickable, tagged Soon like the
+   upcoming privacy providers */
+.btn-soon,
+.btn-soon:hover {
+  cursor: default;
+  color: #8b8e93;
+  background: rgba(14, 14, 14, 0.92);
+  border-color: #2e2e2e;
+}
+.btn-soon svg {
+  opacity: 0.75;
+}
+/* The hero's column is narrow: the Soon buttons size to their content so all three fit a row */
+.hero .cta-row .btn.btn-soon {
+  min-width: 0;
+  padding: 0 16px;
+}
+.btn-soon em {
+  padding: 0 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #7d8086;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 20px;
+}
+/* Phones: the install button takes its own row, the two Soon buttons share the next */
+@media (max-width: 759px) {
+  .cta-row:has(.btn-soon) > .btn:not(.btn-soon) {
+    flex: 1 1 100%;
+  }
+  .cta-row:has(.btn-soon) > .btn-soon {
+    flex: 1;
+    min-width: 0;
+    padding: 0 12px;
+  }
+}
 .btn-sm {
   min-height: 40px;
   font-size: 14px;

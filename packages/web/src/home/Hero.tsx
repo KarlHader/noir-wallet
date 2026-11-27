@@ -8,7 +8,8 @@
  * extension demo. Below the grid runs the "Backed by YZi Labs" band, with the wallet over it.
  */
 import { type CSSProperties, useEffect, useRef, useState } from 'react'
-import { docsLinkProps, walletLinkProps } from './walletStore'
+import { AppsComingSoon } from './ComingSoon'
+import { walletLinkProps } from './walletStore'
 import { IMG, PHONE_WIDTH, PHONES, frameStyle } from './content'
 import { loadDemo } from './demoLoader'
 import { Icon } from './Icon'
@@ -416,12 +417,10 @@ export function Hero({ onTry }: { onTry: () => void }) {
               </p>
               <div className="cta-row" data-reveal="up">
                 <a className="btn" {...walletLinkProps}>
+                  <Icon name="store" />
                   Get Noir Wallet
                 </a>
-                <a className="btn btn-ghost" {...docsLinkProps}>
-                  Docs
-                  <Icon name="external" className="ext" />
-                </a>
+                <AppsComingSoon />
               </div>
             </div>
           </div>
