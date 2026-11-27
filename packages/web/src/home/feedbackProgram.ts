@@ -4,8 +4,8 @@
  * as a trial of two two-week rounds. This is a product-feedback program, not the security bug
  * bounty: vulnerabilities go to HackenProof.
  *
- * Fill in the three settings below as they are announced. Until then the page says the dates and
- * the submission link are still to come.
+ * Fill in the settings below as they are announced. Until then the page says the dates and the
+ * submission link are still to come.
  */
 
 /** When round 1 opens, as an ISO time with its zone, for example '2026-12-01T16:00:00Z'. */
@@ -15,7 +15,7 @@ export const FIRST_ROUND_START: string | null = null
 export const SUBMIT_URL: string | null = null
 
 /** The HackenProof bug bounty, where security issues are reported instead. */
-export const BUG_BOUNTY_URL: string | null = null
+export const BUG_BOUNTY_URL: string | null = 'https://hackenproof.com/programs/noirwallet'
 
 /** Where the weekly leaderboard is posted. */
 export const LEADERBOARD = { handle: '@noir_wallet', href: 'https://x.com/noir_wallet' } as const

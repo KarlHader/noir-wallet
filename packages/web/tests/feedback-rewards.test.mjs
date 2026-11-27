@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  BUG_BOUNTY_URL,
   EXAMPLE,
   FIRST_ROUND_START,
+  LEADERBOARD,
   PRIZES,
   ROUND_COUNT,
   ROUND_POOL,
+  SUBMIT_URL,
   byRank,
   programState,
   roundSpan,
@@ -20,6 +23,13 @@ const START = '2026-12-01T16:00:00Z'
 test('the configured first round start, once set, is a valid time', () => {
   if (FIRST_ROUND_START !== null) {
     assert.equal(roundsFrom(FIRST_ROUND_START).length, ROUND_COUNT)
+  }
+})
+
+// A link without its scheme would turn into a path on this site
+test('the configured links, once set, are full https addresses', () => {
+  for (const url of [SUBMIT_URL, BUG_BOUNTY_URL, LEADERBOARD.href]) {
+    if (url !== null) assert.equal(new URL(url).protocol, 'https:')
   }
 })
 

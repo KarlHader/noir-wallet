@@ -99,7 +99,14 @@ function Hero({ state, submitUrl }: { state: ProgramState; submitUrl: string | n
           </div>
           <p className="fr-note" data-reveal="up">
             This is a product-feedback program, not a security bug bounty. Security issues go to{' '}
-            <a href="#security">HackenProof</a>.
+            {BUG_BOUNTY_URL ? (
+              <a href={BUG_BOUNTY_URL} target="_blank" rel="noopener noreferrer">
+                HackenProof
+              </a>
+            ) : (
+              <a href="#security">HackenProof</a>
+            )}
+            .
           </p>
         </div>
         <PrizeCard />
