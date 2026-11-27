@@ -13,6 +13,7 @@ import {
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
 import { createEvmTransferGraph } from '../../../src/infrastructure/chains/evm/evm-transaction-graph.ts'
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
+import { buildActivityReadModel } from '../../../src/core/activity/index.ts'
 import { parseTransactionGraph } from '../../../src/core/transactions/domain/index.ts'
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
 import { ZCASH_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
@@ -39,10 +40,12 @@ function ownerOrder(depositAddress, walletAddress = signerId) {
   }
 }
 
-function ownerStatus({ status, settledAmountOutRaw, transactionHash }) {
+function ownerStatus({ status, depositedAmountRaw, settledAmountOutRaw, transactionHash }) {
   return {
     status,
-    ...(settledAmountOutRaw ? { swapDetails: { amountOut: settledAmountOutRaw } } : {}),
+    ...(depositedAmountRaw || settledAmountOutRaw
+      ? { swapDetails: { depositedAmount: depositedAmountRaw, amountOut: settledAmountOutRaw } }
+      : {}),
     ...(transactionHash ? { toHash: transactionHash } : {})
   }
 }
@@ -420,6 +423,10 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     quoteCalls: [],
     quoteOverride: undefined,
     settlementStatus: undefined,
+    oneClickStatuses: [],
+    oneClickStatusRequests: 0,
+    submitError: null,
+    submissions: 0,
     lastQuoteAmountRaw: undefined,
     lastQuoteDeadline: undefined,
     session: {
@@ -500,7 +507,17 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     }
   }
   const api = {
-    getStatus: async () => state.settlementStatus ?? { status: 'PROCESSING' },
+    getStatus: async () => {
+      state.oneClickStatusRequests += 1
+      const status = state.oneClickStatuses.shift() ?? state.settlementStatus
+      if (status instanceof Error) throw status
+      return status ?? { status: 'PROCESSING' }
+    },
+    submitIntent: async () => {
+      state.submissions += 1
+      if (state.submitError) throw state.submitError
+      return { intentHash: 'intent-one', correlationId: 'submit-one' }
+    },
     getBalances: async () => balances,
     quote: async input => {
       state.lastQuoteRequest = input
@@ -567,7 +584,7 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     })
   }
   const repository = new InMemoryTransactionRepository()
-  const coordinator = new ConfidentialFundingCoordinator({
+  const options = {
     network: 'mainnet',
     getNativeZecActiveAccount,
     api,
@@ -595,7 +612,8 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     now: () => state.now,
     createId: () => `direct-${plans.size}-${state.now}`,
     scheduleMonitoring: async () => {}
-  })
+  }
+  const restart = () => new ConfidentialFundingCoordinator(options)
   const request = (amountRaw, accountId = scope.accountId) => ({
     network: 'mainnet',
     keyDomainId: scope.keyDomainId,
@@ -614,7 +632,8 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     slippageBps: 100
   })
   return {
-    coordinator,
+    coordinator: restart(),
+    restart,
     repository,
     state,
     plans,
@@ -1318,6 +1337,69 @@ test.describe('confidential funding persisted recovery', () => {
     )
     expect(h.state.formalQuotes).toBe(1)
     expect(h.state.signatures).toBe(1)
+  })
+
+  test('ends recovery for an unfunded expired Shield swap and keeps an accepted swap under observation', async () => {
+    for (const [recovery, submits, finalPhase] of [
+      ['unfunded', 1, 'cancelled'],
+      ['status-unavailable', 1, 'cancelled'],
+      ['accepted', 1, 'processing'],
+      ['funded-pending', 1, 'processing'],
+      ['stored-quote-expired', 0, 'cancelled'],
+      ['service-status-expired', 0, 'cancelled']
+    ]) {
+      const h = directPreparationHarness()
+      const review = await h.coordinator.prepare({
+        ...h.request('60'),
+        operation: 'swap',
+        destinationDomain: 'shield',
+        destination: {
+          chainId: 'eip155:1',
+          chainName: 'eth',
+          assetId: h.swapDestinationAssetId,
+          protocolAssetId: h.swapDestinationProtocolId
+        }
+      })
+      h.state.allowSigning = true
+      h.state.submitError = new ConfidentialFundingApiError('Quote has expired', 400, false)
+      const unfunded = { status: 'PENDING_DEPOSIT' }
+      h.state.settlementStatus = unfunded
+      h.state.oneClickStatuses.push(unfunded)
+      if (recovery === 'stored-quote-expired') {
+        h.state.oneClickStatuses[0] = new ConfidentialFundingApiError('unavailable', 503, true)
+      } else if (recovery === 'service-status-expired') {
+        h.state.oneClickStatuses[0] = { status: 'EXPIRED' }
+      } else if (recovery === 'status-unavailable') {
+        h.state.oneClickStatuses.push(new ConfidentialFundingApiError('unavailable', 503, true))
+      } else if (recovery === 'accepted') {
+        h.state.settlementStatus = { status: 'PROCESSING', depositedAmountRaw: '60' }
+      } else if (recovery === 'funded-pending') {
+        h.state.settlementStatus = { status: 'PENDING_DEPOSIT', depositedAmountRaw: '60' }
+      }
+
+      await h.coordinator.confirm(review.planId, review.payloadFingerprint)
+      await h.coordinator.continuePlan(review.planId)
+      if (recovery === 'stored-quote-expired') h.state.now += 61_000
+      const resumed = await h.restart().continuePlan(review.planId)
+      expect(resumed.phase, recovery).toBe(finalPhase)
+      expect(h.state.submissions).toBe(submits)
+      expect(h.state.signatures).toBe(1)
+      const requests = h.state.oneClickStatusRequests
+      if (finalPhase === 'cancelled') {
+        expect(resumed.frozenRequest).toBeUndefined()
+        expect(resumed.withdraws[0]).toMatchObject({ status: 'CANCELLED' })
+        const graph = await h.repository.get(scope, resumed.transactionId)
+        expect(buildActivityReadModel({ scope, localGraphs: [graph] }).items).toMatchObject([
+          { id: resumed.transactionId, status: 'failed', failureCode: 'cancelled' }
+        ])
+        await h.restart().resumeAll()
+        expect(h.state.oneClickStatusRequests).toBe(requests)
+      } else {
+        await h.restart().resumeAll()
+        expect(h.state.oneClickStatusRequests).toBeGreaterThan(requests)
+      }
+      expect(h.state.submissions).toBe(submits)
+    }
   })
 
   test('uses the reviewed Unshield quote for the wallet recipient without repricing', async () => {
@@ -2747,18 +2829,72 @@ test.describe('confidential funding persisted recovery', () => {
     })
   }
 
-  test('resumes settlement monitoring after authorization without creating another batch', async () => {
-    const h = await harness('processing')
-    h.state.session = null
-    const paused = await h.restart().continuePlan(h.initial.planId)
-    expect(paused.phase).toBe('needs-auth')
-    expect(paused.resumePhase).toBe('processing')
-    const coordinator = h.restart()
-    await coordinator.confirm(h.initial.planId, h.initial.approvalFingerprint)
-    expect((await coordinator.continuePlan(h.initial.planId)).phase).toBe('processing')
-    expect(h.state.submissions).toHaveLength(0)
-    expect(h.state.intentSignatures).toBe(0)
-  })
+  for (const [operation, direct, cluster] of [
+    ['withdraw', true, false],
+    ['swap', true, false],
+    ['cluster', false, true]
+  ]) {
+    test(`observes submitted ${operation} without a funding session or another submission`, async () => {
+      const h = await harness('processing', direct, cluster)
+      h.state.session = null
+      const destinationToken = 'nep141:eth-usdc.omft.near'
+      const swapWithdraws = h.initial.withdraws.map(row => ({
+        ...row,
+        destinationAddress: h.initial.signerId,
+        token: destinationToken
+      }))
+      const swapRequest = {
+        from_amount: h.initial.source.amountRaw,
+        from_chain: h.initial.source.chainName,
+        from_token: h.initial.source.protocolAssetId,
+        signer_id: h.initial.signerId,
+        mode: 'SWAP',
+        withdraws: swapWithdraws.map(row => ({
+          amount: row.amountRaw,
+          deposit_address: row.depositAddress,
+          destination_address: row.destinationAddress,
+          destination_chain: row.destinationChain,
+          execution_type: 'CONFIDENTIAL_1CLICK',
+          sequence: row.sequence,
+          signed_payload: row.signedPayload,
+          token: row.token
+        }))
+      }
+      await h.store.putPlan({
+        ...h.initial,
+        operation,
+        ...(operation === 'swap'
+          ? {
+              destinationDomain: 'shield',
+              destination: {
+                ...h.initial.destination,
+                assetId: 'eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+                protocolAssetId: destinationToken,
+                address: h.initial.signerId
+              },
+              withdraws: swapWithdraws,
+              requestFingerprint: await fingerprintConfidentialValue(swapRequest),
+              frozenRequest: swapRequest,
+              swapQuote: { quoteRequest: {}, quote: {} }
+            }
+          : {}),
+        phase: 'needs-auth',
+        resumePhase: 'processing'
+      })
+      const pending = await h.restart().continuePlan(h.initial.planId)
+      expect(pending.phase).toBe('needs-auth')
+      expect(h.state.statusRequests).toEqual(h.initial.withdraws.map(row => row.depositAddress))
+      expect(h.state.monitoring).toBeGreaterThan(0)
+
+      h.state.statuses = h.initial.withdraws.map(() => 'SUCCESS')
+      expect((await h.restart().continuePlan(h.initial.planId)).phase).toBe('ready')
+      expect(h.state.submissions).toHaveLength(0)
+      expect(h.state.batchSubmissions).toBe(0)
+      expect(h.state.intentSignatures).toBe(0)
+      expect(h.state.authSignatures).toBe(0)
+      expect(h.state.historySignatures).toBe(0)
+    })
+  }
 
   test('settles staggered children monotonically across restart and temporary RPC failure', async () => {
     const h = await harness('processing')

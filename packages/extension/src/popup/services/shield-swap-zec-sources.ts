@@ -2,7 +2,10 @@ import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { getZcashChainId } from '@/core/chains/registry'
-import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import {
+  supportsEvmPrivateExecution,
+  supportsLedgerNativeZecConfidentialSwap
+} from '@/core/chains/evm/execution-capability'
 import {
   isNewWalletFamilyEnabled,
   resolveEvmFeatureRuntimePolicy
@@ -106,8 +109,12 @@ export function hasNativeZecConfidentialSwapRoute(
   const settlementChainId = getEvmNetworkConfigs(network)[0]?.chainId
   return Boolean(
     resolveEvmFeatureRuntimePolicy(enabledFlags).newOperationsEnabled &&
-    supportsEvmPrivateExecution(account?.walletSource) &&
-    account?.networks.some(entry => entry.chain.id === settlementChainId)
+    (supportsEvmPrivateExecution(account?.walletSource)
+      ? account?.networks.some(entry => entry.chain.id === settlementChainId)
+      : network === 'mainnet' &&
+        supportsLedgerNativeZecConfidentialSwap(account?.walletSource) &&
+        account?.networks.some(entry => entry.chain.id === getZcashChainId(network)) &&
+        account.networks.some(entry => entry.chain.family === 'evm'))
   )
 }
 

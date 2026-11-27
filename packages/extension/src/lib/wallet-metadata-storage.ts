@@ -979,6 +979,43 @@ export function completeWalletMetadataDeletion(walletId: string): Promise<void> 
   })
 }
 
+export function reconcileReimportedNativeWallets(
+  resolveVerifiedWallets: (walletIds: ReadonlySet<string>) => Promise<readonly string[]>
+): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      DELETED_WALLETS_KEY,
+      DELETED_WALLET_RECORDS_KEY,
+      PENDING_ACCOUNT_CLEANUP_KEY,
+      LEGACY_PENDING_CLEANUP_KEY
+    ])
+    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    if (deleted.size === 0) return
+    const pendingWallets = parseDeletionRecords(saved[DELETED_WALLET_RECORDS_KEY])
+    const pendingAccounts = Object.keys(parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY]))
+    const legacyPending = parseDeletedIds(saved[LEGACY_PENDING_CLEANUP_KEY])
+    const completed = new Set(
+      [...deleted].filter(
+        walletId =>
+          !Object.prototype.hasOwnProperty.call(pendingWallets, walletId) &&
+          !legacyPending.has(walletId) &&
+          !pendingAccounts.some(
+            key => key.startsWith(`mainnet_${walletId}_`) || key.startsWith(`testnet_${walletId}_`)
+          )
+      )
+    )
+    if (completed.size === 0) return
+    const verified = await resolveVerifiedWallets(completed)
+    const previousCount = deleted.size
+    for (const walletId of verified) {
+      if (completed.has(walletId)) deleted.delete(walletId)
+    }
+    if (deleted.size !== previousCount) {
+      await chrome.storage.local.set({ [DELETED_WALLETS_KEY]: [...deleted] })
+    }
+  })
+}
+
 export function resetWalletMetadata(): Promise<void> {
   return withMetadataLock(async () => {
     const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])

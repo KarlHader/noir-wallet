@@ -62,6 +62,7 @@ export function getQuickShieldAssets({
         walletSource.hardware.capabilities.includes('zcash')))
   const nearZcashEnabled =
     nativeZcashEnabled &&
+    walletSource.kind !== 'hardware' &&
     nearChains.size > 0 &&
     hasNativeZecConfidentialSwapRoute(account, network, enabledFlags)
   const nearAssets = new Set(

@@ -39,6 +39,7 @@ function createHandler({
   readFirstPartySnapshot,
   readTokenList,
   openTokenManager,
+  readZcashAccounts = async () => [],
   executionAccounts = [address]
 } = {}) {
   let stored = null
@@ -104,7 +105,7 @@ function createHandler({
     zcash: {
       prepareSessionAccountSelection: async () => proposal(),
       resolveSessionAccountSelection: async (value, ids) => selectDAppSessionAccounts(value, ids),
-      getSessionAccounts: async () => [],
+      getSessionAccounts: readZcashAccounts,
       revokeAllPermissions: async () => {
         stored = null
       }
@@ -457,6 +458,7 @@ function firstPartyFixture({ executionAccounts, executionMode = 'main' } = {}) {
   const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
   const bitcoin = 'bip122:000000000019d6689c085ae165831e93'
   const state = {
+    zcashAddresses: ['u1publicfixture'],
     snapshot: {
       identity: 'unlocked-generation-1',
       executionMode,
@@ -472,6 +474,7 @@ function firstPartyFixture({ executionAccounts, executionMode = 'main' } = {}) {
   const options = {
     manager,
     readFirstPartySnapshot: async () => state.snapshot,
+    readZcashAccounts: async () => state.zcashAddresses,
     ...(executionAccounts === undefined ? {} : { executionAccounts })
   }
   return {
@@ -523,6 +526,23 @@ test('first-party session reads connect every enabled network and synchronize ac
     expect(await read()).toBeNull()
     expect(approvals).toHaveLength(0)
   }
+})
+
+test('automatic session events hide unavailable Zcash identities and preserve the grant for switching back', async () => {
+  const { handler, manager, state, other, zcash, events } = firstPartyFixture()
+  const origin = 'https://noirdevelop.refburrow.top'
+  const read = () => handler.request({ method: 'wallet_getSession' }, origin, {})
+  expect((await read()).scopes[zcash].accounts).toEqual([`${zcash}:u1publicfixture`])
+
+  state.zcashAddresses = []
+  await handler.notifyAllSessionsChanged()
+  expect(events.at(-1)[3].scopes[zcash].accounts).toEqual([])
+  expect((await read()).scopes[zcash].accounts).toEqual([])
+  expect((await manager.getChainAuthorization(origin, zcash)).accounts).toEqual([other])
+
+  state.zcashAddresses = ['u1publicfixture']
+  await handler.notifyAllSessionsChanged()
+  expect(events.at(-1)[3].scopes[zcash].accounts).toEqual([`${zcash}:u1publicfixture`])
 })
 
 test('notifications based on stored authorization update the mode address without granting accounts', async () => {

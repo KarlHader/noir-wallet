@@ -2108,6 +2108,7 @@ test('confidential account transfer freezes the signed-intent quote for the othe
   const plans = new Map()
   const quotes = []
   let intentDepositAddress = null
+  let activeGenerationId = 'generation:one'
   const deadline = new Date(120_000).toISOString()
   const repository = new InMemoryTransactionRepository()
   const coordinator = new ConfidentialFundingCoordinator({
@@ -2115,6 +2116,7 @@ test('confidential account transfer freezes the signed-intent quote for the othe
     evmNetworks: [{ chainId: 'eip155:1', rpcUrl: 'https://rpc.example.test' }],
     now: () => 1_000,
     createId: () => 'plan-transfer',
+    getActiveGenerationId: async () => activeGenerationId,
     queryOneClickOrderStatus: async () => ({ status: 'PROCESSING' }),
     scheduleMonitoring: async () => {},
     assets: {
@@ -2137,7 +2139,8 @@ test('confidential account transfer freezes the signed-intent quote for the othe
       putBalances: async () => {},
       listPlans: async () => [...plans.values()],
       getPlan: async id => plans.get(id) ?? null,
-      putPlan: async plan => {
+      putPlan: async (plan, assertCurrent) => {
+        await assertCurrent?.()
         plans.set(plan.planId, plan)
       },
       deletePlan: async id => {
@@ -2150,6 +2153,7 @@ test('confidential account transfer freezes the signed-intent quote for the othe
         peaAddress: signerId,
         addressIndex: 0,
         context: {
+          generationId: 'generation:one',
           keyDomainSource: { kind: 'software' },
           chainAccount: { scope: { keyDomainId: 'wallet:one', accountId: 'account:one' } }
         }
@@ -2255,6 +2259,13 @@ test('confidential account transfer freezes the signed-intent quote for the othe
     })
   ).rejects.toThrow('Shield recipient account is invalid.')
   expect(quotes).toEqual([])
+  activeGenerationId = 'generation:reimported'
+  await expect(coordinator.prepare(request)).rejects.toThrow(
+    'Account changed. Review the transfer again.'
+  )
+  expect(plans.size).toBe(0)
+  activeGenerationId = 'generation:one'
+  quotes.length = 0
   const ownReview = await coordinator.prepare({ ...request, confidentialRecipient: signerId })
   expect(quotes).toHaveLength(1)
   expect(quotes[0]).toMatchObject({

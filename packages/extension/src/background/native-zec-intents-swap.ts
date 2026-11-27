@@ -71,7 +71,8 @@ function assertNativeZecOrder(
   order: OneClickOrder,
   depositAddress: string,
   refundAddress: string,
-  network: Network
+  network: Network,
+  confidentialRecipient?: string
 ): void {
   const refund = parseZcashAddress(refundAddress, network)
   if (!order || typeof order !== 'object' || Array.isArray(order)) {
@@ -79,9 +80,17 @@ function assertNativeZecOrder(
   }
   const viewer = order.viewer
   if (order.depositMemo !== undefined) parseOneClickDepositMemo(order.depositMemo)
+  const recipientOwnsOrder =
+    refund.scheme === 'zcash-transparent-p2pkh' &&
+    viewer?.chainFamily === 'evm' &&
+    viewer.signingMode === 'public' &&
+    confidentialRecipient !== undefined &&
+    isAddress(confidentialRecipient) &&
+    viewer.walletAddress === confidentialRecipient
   if (
     order.depositAddress !== depositAddress ||
     (viewer !== undefined &&
+      !recipientOwnsOrder &&
       (!viewer ||
         viewer.chainFamily !== 'zcash' ||
         parseZcashAddress(viewer.walletAddress, network).scheme !== 'zcash-transparent-p2pkh' ||
@@ -91,6 +100,15 @@ function assertNativeZecOrder(
   ) {
     throw new Error('Native ZEC 1Click order binding is invalid')
   }
+}
+
+function getConfidentialOrderRecipient(binding: QuoteBinding): string | undefined {
+  return binding.recipientType === 'CONFIDENTIAL_INTENTS' &&
+    binding.userAction === 'swap' &&
+    (binding.fundingSource === 'transparent' || binding.fundingSource === 'shielded') &&
+    binding.destinationAsset === ZEC_ZCASH_ASSET
+    ? binding.recipient
+    : undefined
 }
 
 function recordKey(quoteId: string): string {
@@ -164,7 +182,8 @@ function parseRecord(value: unknown): NativeZecIntentsSwapRecord {
       record.quoteBinding.oneClickOrder,
       record.depositAddress,
       record.refundAddress,
-      record.network
+      record.network,
+      getConfidentialOrderRecipient(record.quoteBinding)
     )
   }
   parseAssetId(record.destination.assetId)
@@ -242,7 +261,13 @@ export function readNativeZecIntentsStatusViewer(
 ): OneClickViewer | undefined {
   if (binding.provider !== 'near-intents' || !binding.depositAddress || !binding.refundTo) return
   if (binding.oneClickOrder !== undefined) {
-    assertNativeZecOrder(binding.oneClickOrder, binding.depositAddress, binding.refundTo, network)
+    assertNativeZecOrder(
+      binding.oneClickOrder,
+      binding.depositAddress,
+      binding.refundTo,
+      network,
+      getConfidentialOrderRecipient(binding)
+    )
     if (binding.oneClickOrder.viewer) return binding.oneClickOrder.viewer
   }
   const refund = parseZcashAddress(binding.refundTo, network)
@@ -315,6 +340,9 @@ export class NativeZecIntentsSwapCoordinator {
       authorizeConfidentialIdentity?: (
         scope: Readonly<{ walletId: string; accountId: string; recipient: string }>
       ) => Promise<void>
+      resolveHardwareConfidentialViewer?: (
+        scope: Readonly<{ walletId: string; accountId: string; recipient: string }>
+      ) => Promise<OneClickViewer | undefined>
       quoteConfidential?: (
         input: Readonly<{
           referral: typeof NOIR_SWAP_REFERRAL | typeof NOIR_RECEIVE_REFERRAL
@@ -563,12 +591,21 @@ export class NativeZecIntentsSwapCoordinator {
       }
       const refundSource: FundingSource = shieldedRefund ? 'shielded' : 'transparent'
       const resolveViewer = this.options.resolveOneClickViewer ?? resolveZcashOneClickViewer
-      const viewer = await resolveViewer(
-        { network: input.network, walletId: input.walletId, accountId: input.accountId },
-        input.refundAddress,
-        refundSource
-      )
-      const quoteViewer = shieldedRefund ? viewer : undefined
+      const scope = { network: input.network, walletId: input.walletId, accountId: input.accountId }
+      const hardwareViewer = confidential
+        ? await this.options.resolveHardwareConfidentialViewer?.({ ...scope, recipient })
+        : undefined
+      if (
+        hardwareViewer &&
+        (input.userAction !== 'swap' ||
+          !confidentialZecDestination ||
+          refund.scheme !== 'zcash-transparent-p2pkh')
+      ) {
+        throw new Error('Ledger Confidential swap requires a transparent ZEC refund address')
+      }
+      const viewer =
+        hardwareViewer ?? (await resolveViewer(scope, input.refundAddress, refundSource))
+      const quoteViewer = shieldedRefund || hardwareViewer ? viewer : undefined
       this.assertActiveAccount(input.walletId, input.accountId, input.refundAddress)
       const confidentialQuote = confidential
         ? await this.options.quoteConfidential?.({
@@ -634,10 +671,13 @@ export class NativeZecIntentsSwapCoordinator {
       ) {
         throw new Error('Native ZEC Confidential quote requires a transparent deposit address')
       }
+      if (hardwareViewer && quote.depositMemo !== undefined) {
+        throw new Error('Ledger Confidential swap requires a deposit without a memo')
+      }
       if ((await this.list()).some(record => record.depositAddress === quote.depositAddress)) {
         throw new Error('Native ZEC Intents deposit address was reused')
       }
-      if (confidential) {
+      if (confidential && !hardwareViewer) {
         if (!this.options.authorizeConfidentialIdentity) {
           throw new Error('Native ZEC Confidential authorization is unavailable')
         }
@@ -660,7 +700,13 @@ export class NativeZecIntentsSwapCoordinator {
       }
       const quoteId = crypto.randomUUID()
       const oneClickOrder = createOneClickOrder(quote.depositAddress, quote.depositMemo, viewer)
-      assertNativeZecOrder(oneClickOrder, quote.depositAddress, input.refundAddress, input.network)
+      assertNativeZecOrder(
+        oneClickOrder,
+        quote.depositAddress,
+        input.refundAddress,
+        input.network,
+        hardwareViewer ? recipient : undefined
+      )
       const quoteBinding: QuoteBinding = Object.freeze({
         provider: 'near-intents',
         ...(input.userAction ? { userAction: input.userAction } : {}),

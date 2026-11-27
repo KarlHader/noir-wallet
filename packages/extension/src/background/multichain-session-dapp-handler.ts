@@ -882,7 +882,13 @@ export class BackgroundMultichainSessionDAppHandler {
       const scopes: Record<string, Caip25Session['scopes'][string]> = Object.create(null)
       for (const scope of supported) {
         const available = snapshot.accounts[scope.chainId]
-        let addresses = [...new Set(available.map(account => account.address))]
+        let addresses = [
+          ...new Set(
+            scope.family === 'zcash'
+              ? await this.getScopeAccounts(origin, scope)
+              : available.map(account => account.address)
+          )
+        ]
         const active = available.find(
           account =>
             account.reference.walletId === snapshot.activeReference?.walletId &&

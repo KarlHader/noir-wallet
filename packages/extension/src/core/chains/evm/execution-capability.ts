@@ -30,3 +30,16 @@ export function supportsEvmConfidentialShield(
     hardware.capabilities.includes('evm')
   )
 }
+
+export function supportsLedgerNativeZecConfidentialSwap(
+  source: ConfidentialShieldKeySource | null | undefined
+): boolean {
+  if (source?.kind !== 'hardware') return false
+  const hardware = 'hardware' in source ? source.hardware : source
+  return (
+    'vendor' in hardware &&
+    hardware.vendor === 'ledger' &&
+    hardware.capabilities.includes('zcash') &&
+    hardware.capabilities.includes('evm')
+  )
+}

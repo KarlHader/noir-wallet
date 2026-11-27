@@ -5,6 +5,8 @@ import { createRequire } from 'node:module'
 import {
   connectionAuthorizesAccount,
   DAppManager,
+  getConnectionAccountRefs,
+  getConnectionChainAuthorization,
   parseStoredDAppConnection
 } from '../../../src/core/dapp/dapp-manager.ts'
 import { initializeEvmSiteNetworks } from '../../../src/background/wallet-dapp-evm-networks.ts'
@@ -247,8 +249,16 @@ function balanceHandlerFixture(manager) {
     '@/core/wallet/hardware-wallet-data': {
       isZcashHardwareKeySource: keySource => keySource === 'keystone' || keySource === 'ledger'
     },
-    '../core/dapp/dapp-manager': { dappManager: manager, connectionAuthorizesAccount },
+    '../core/dapp/dapp-manager': {
+      dappManager: manager,
+      connectionAuthorizesAccount,
+      getConnectionAccountRefs,
+      getConnectionChainAuthorization
+    },
     '@/core/dapp/first-party-policy': { shouldAutoConnectDApp },
+    '@/core/chains/registry': {
+      getZcashChainId: () => 'bip122:00040fe8ec8471911baa1db1266ea15d'
+    },
     './credential-session': {
       credentialSession: {
         hasUnlockSession: async () => session.unlocked,
@@ -339,7 +349,7 @@ test('first-party silent account reads authorize without restoring the Zcash run
         { walletId: account.walletId, accountId: 'account-2' }
       ])
       state.currentAccountId = 'account-2'
-      assert.equal((await handler.getSilentAccounts(site)).shielded, 'zs-first')
+      assert.equal((await handler.getSilentAccounts(site)).shielded, 'zs-second')
       assert.deepEqual(
         [
           (await manager.getConnection(site)).boundWalletId,
@@ -347,7 +357,7 @@ test('first-party silent account reads authorize without restoring the Zcash run
         ],
         [account.walletId, account.accountId]
       )
-      enabled.delete(account.accountId)
+      enabled.delete('account-2')
       assert.equal(await handler.getSilentAccounts(site), null)
       assert.equal((await manager.getConnection(site)).boundAccountId, account.accountId)
     })
@@ -469,6 +479,84 @@ test('Zcash site bindings stay isolated while a non-Zcash account is active', as
   assert.equal((await handler.getSilentAccounts(firstSite)).shielded, 'zs-first')
   session.unlocked = false
   assert.equal(await handler.getSilentAccounts(firstSite), null)
+})
+
+test('Dashboard hides saved Zcash accounts while the active account only enables EVM', async () => {
+  const site = 'https://noirdevelop.refburrow.top'
+  const { manager } = managerFixture()
+  const { handler, state, enabled } = balanceHandlerFixture(manager)
+  await manager.setAuthorizedAccounts(site, {}, [account], account)
+  const verifyZcashAvailable = async () => {
+    assert.equal((await handler.getSilentAccounts(site))?.shielded, 'zs-first')
+    assert.deepEqual(await handler.getSessionAccounts(site), ['zs-first'])
+  }
+
+  enabled.delete('account-2')
+  await verifyZcashAvailable()
+  state.currentAccountId = 'account-2'
+
+  assert.equal(await handler.getSilentAccounts(site), null)
+  assert.deepEqual(await handler.getSessionAccounts(site), [])
+  assert.deepEqual(await manager.getAuthorizedAccounts(site), [account])
+
+  state.currentAccountId = account.accountId
+  await verifyZcashAvailable()
+})
+
+async function verifySavedDashboardSelection(kind) {
+  const site = 'https://noirdevelop.refburrow.top'
+  const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const second = { walletId: account.walletId, accountId: 'account-2' }
+  const { manager } = managerFixture()
+  const { handler, state } = balanceHandlerFixture(manager)
+  const saveSelection = accounts => {
+    if (kind === 'legacy') return manager.setAuthorizedAccounts(site, {}, accounts, account)
+    const scopes = [
+      { chainId, methods: ['zcash_getAccounts'], notifications: ['accountsChanged'], accounts }
+    ]
+    return manager.setCaip25Session(
+      site,
+      {},
+      [{ chainId, accounts, binding: account }],
+      { scopes },
+      { accounts, binding: account }
+    )
+  }
+  await saveSelection([account, second])
+  await handler.initialize()
+  const notifications = []
+  handler.broadcastEvent = async (_origin, _event, payload) => {
+    notifications.push(payload?.shielded ?? null)
+  }
+  assert.equal((await handler.getSilentAccounts(site))?.shielded, 'zs-first')
+  const revision = await manager.getAuthorizationRevision(site)
+  const isCurrent = ref =>
+    handler.isAuthorizedZcashAccountCurrent(site, ref.walletId, ref.accountId, revision)
+  assert.equal(await isCurrent(account), true)
+
+  state.currentAccountId = second.accountId
+  await handler.notifyAccountsChanged({ transparent: 't-second', shielded: 'zs-second' })
+  assert.deepEqual(notifications, ['zs-second'])
+  assert.equal((await handler.getSilentAccounts(site))?.shielded, 'zs-second')
+  assert.equal(await isCurrent(account), false)
+  assert.equal(await isCurrent(second), true)
+  assert.deepEqual(await handler.handleRequest({ method: 'zcash_getAddresses', origin: site }), {
+    transparent: 't-second',
+    shielded: 'zs-second'
+  })
+
+  await saveSelection([account])
+  assert.equal(await handler.getSilentAccounts(site), null)
+  assert.deepEqual(await handler.getSessionAccounts(site), [])
+  assert.deepEqual(await manager.getAuthorizedAccounts(site), [account])
+  state.currentAccountId = account.accountId
+  assert.equal((await handler.getSilentAccounts(site))?.shielded, 'zs-first')
+}
+
+test('saved Dashboard sessions follow the active Zcash account within the approved selection', async t => {
+  for (const kind of ['legacy', 'CAIP-25']) {
+    await t.test(kind, () => verifySavedDashboardSelection(kind))
+  }
 })
 
 test('an uncached site balance refreshes its bound account before returning', async () => {

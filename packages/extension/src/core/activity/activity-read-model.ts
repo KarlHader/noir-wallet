@@ -439,6 +439,18 @@ function isUnbroadcastUserCancellation(item: ActivityItem): boolean {
   ) {
     return false
   }
+  if (
+    item.failureCode === 'cancelled' &&
+    item.segments.some(
+      segment =>
+        segment.role === 'relay' &&
+        segment.target.kind === 'protocol' &&
+        segment.target.provider === 'Confidential Intents' &&
+        segment.failureCode === 'cancelled'
+    )
+  ) {
+    return false
+  }
   return item.segments.every(segment => segment.evidence?.transactionHash === undefined)
 }
 

@@ -399,6 +399,51 @@ test.describe('Hardware sign request handoff', () => {
     expect(isHardwareSignRequestFresh(request, 999)).toBe(false)
   })
 
+  test('preserves the Confidential order and its deadline in the hardware signing request', () => {
+    const order = {
+      depositAddress: 't1deposit',
+      viewer: {
+        chainFamily: 'evm',
+        walletAddress: '0x0000000000000000000000000000000000000001',
+        signingMode: 'public'
+      }
+    }
+    const request = {
+      kind: 'swap',
+      walletId: 'wallet-1',
+      accountId: 'account-1',
+      amount: '1',
+      to: order.depositAddress,
+      fundingSource: 'transparent',
+      createdAt: 1_000,
+      quoteBinding: {
+        provider: 'near-intents',
+        userAction: 'swap',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        fundingSource: 'transparent',
+        depositAddress: order.depositAddress,
+        oneClickOrder: order,
+        deadline: 2_000
+      }
+    }
+    const parsed = parsePreparedHardwareSignRequest({
+      request: parseHardwareSignRequest(request),
+      fullPcztBase64: 'YWJjZA=='
+    }).request
+    expect(parsed.quoteBinding.oneClickOrder).toEqual(order)
+    expect(isHardwareSignRequestFresh(parsed, 1_999)).toBe(true)
+    expect(isHardwareSignRequestFresh(parsed, 2_000)).toBe(false)
+    expect(() =>
+      parseHardwareSignRequest({
+        ...request,
+        quoteBinding: {
+          ...request.quoteBinding,
+          oneClickOrder: { ...order, depositAddress: 't1different' }
+        }
+      })
+    ).toThrow('Invalid hardware 1Click order binding')
+  })
+
   test('accepts only the supported field combinations for every Zcash flow', () => {
     const base = { walletId: 'wallet-1', accountId: 'account-1', amount: '1', createdAt: 1_000 }
     expect(parseHardwareSignRequest({ ...base, kind: 'shield' })).toMatchObject({ kind: 'shield' })

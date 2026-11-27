@@ -19,7 +19,8 @@ import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/
 import { NearMultichainSigningClient } from '@/infrastructure/keyring/multichain/near-signing-client'
 import { SolanaMultichainSigningClient } from '@/infrastructure/keyring/multichain/solana-signing-client'
 import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
-import { readWalletMetadata } from '@/lib/wallet-metadata-storage'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { readWalletMetadata, withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
 import { credentialSession } from './credential-session'
 import type {
   OneClickAccount,
@@ -39,6 +40,25 @@ export async function loadOneClickWallet(scope: OneClickAccount) {
   const wallet = snapshot.state.wallets.find(candidate => candidate.id === scope.walletId)
   const account = wallet?.accounts.find(candidate => candidate.id === scope.accountId)
   return wallet && account ? { wallet, account } : null
+}
+
+export async function hasOneClickWalletAccount(scope: OneClickAccount): Promise<boolean> {
+  if (scope.network !== DEFAULT_NETWORK) return false
+  if (await loadOneClickWallet(scope)) return true
+  return withUndeletedWalletAccountMetadata(
+    scope.walletId,
+    scope.accountId,
+    scope.network,
+    async () => {
+      const snapshot = await readActiveStorageV2Snapshot(storage)
+      return Boolean(
+        snapshot?.keyDomains.some(wallet => wallet.id === scope.walletId) &&
+        snapshot.accounts.some(
+          account => account.id === scope.accountId && account.keyDomainId === scope.walletId
+        )
+      )
+    }
+  )
 }
 
 function zcashP2pkh(address: string, scope: OneClickAccount): boolean {
@@ -148,7 +168,8 @@ async function resolveEvmSigner(scope: OneClickTokenScope) {
       : binding.address
     if (address.toLowerCase() !== expected) continue
     return async (challenge: OneClickChallenge) => {
-      if (!(await loadOneClickWallet(scope))) throw new Error('1Click order wallet is unavailable')
+      if (!(await hasOneClickWalletAccount(scope)))
+        throw new Error('1Click order wallet is unavailable')
       const prepared = await evmSigner.prepare(keyDomain.id, {
         kind: privateMode ? 'pea-evm-personal-message' : 'evm-personal-message',
         chainId,
@@ -225,7 +246,8 @@ async function resolveNativeSigner(scope: OneClickTokenScope) {
     chainFamily === 'btc' ? detectBitcoinAddressType(walletAddress, chainId) : undefined
   if (btcAddressType === 'p2pkh' || btcAddressType === 'p2sh-p2wpkh') return null
   return async (challenge: OneClickChallenge): Promise<Record<string, string>> => {
-    if (!(await loadOneClickWallet(scope))) throw new Error('1Click order wallet is unavailable')
+    if (!(await hasOneClickWalletAccount(scope)))
+      throw new Error('1Click order wallet is unavailable')
     const message = new TextEncoder().encode(challenge.message)
     if (chainFamily === 'near' && challenge.near) {
       const prepared = await nearSigner.prepare(key, {
