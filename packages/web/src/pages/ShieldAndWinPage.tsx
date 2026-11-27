@@ -1865,7 +1865,7 @@ export default function ShieldAndWinPage() {
                 <div className="mt-[clamp(20px,3vh,30px)] flex items-center gap-[clamp(14px,1.6vw,22px)] border-b border-[#262630] pb-[clamp(20px,3vh,28px)]">
                   <img
                     className="aspect-square h-auto w-[clamp(64px,6.5vw,96px)]"
-                    src="/shield-and-win/zec.svg"
+                    src="/shield-and-win/zec-coin.png"
                     alt=""
                   />
                   <div>
@@ -2077,7 +2077,7 @@ export default function ShieldAndWinPage() {
             <div className="min-h-0 flex-1 overflow-auto">
               <div className="px-5 pt-2 pb-5">
                 <div className="flex flex-col items-center gap-1.5 px-0 pt-2 pb-3.5 text-center">
-                  <img className="size-11" src="/shield-and-win/zec.svg" alt="" />
+                  <img className="size-11" src="/shield-and-win/zec-coin.png" alt="" />
                   <span className="font-['Doto',ui-monospace,monospace] text-[34px] leading-none font-normal text-[#ffcc00]">
                     {rewardText(claimTarget)}
                   </span>
@@ -2096,7 +2096,7 @@ export default function ShieldAndWinPage() {
                   >
                     <img
                       className="size-[30px] shrink-0 rounded-lg"
-                      src="/shield-and-win/zec.svg"
+                      src="/shield-and-win/zec-coin.png"
                       alt=""
                     />
                     <span className="min-w-0 flex-1">
@@ -2125,7 +2125,7 @@ export default function ShieldAndWinPage() {
                   >
                     <img
                       className="size-[30px] shrink-0 rounded-lg"
-                      src="/shield-and-win/zec.svg"
+                      src="/shield-and-win/zec-coin.png"
                       alt=""
                     />
                     <span className="min-w-0 flex-1">

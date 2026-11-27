@@ -130,6 +130,12 @@
     transform: translateY(28px);
   }
 }
+/* The sheets take focus themselves when they open (Campaign.tsx), without an outline */
+.cw-sheet:focus,
+.cw-phone:focus {
+  outline: none;
+}
+/* Close: no outline, just a soft round backdrop on hover and keyboard focus */
 .cw-close {
   position: absolute;
   top: 22px;
@@ -140,16 +146,22 @@
   height: 36px;
   padding: 0;
   border: 0;
+  border-radius: 50%;
   background: none;
   color: #fff;
   cursor: pointer;
+  transition: background-color 0.15s;
+}
+.cw-close:hover,
+.cw-close:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.12);
 }
 .cw-close svg {
   width: 24px;
   height: 24px;
   stroke-width: 2.2;
 }
-.cw-close:focus-visible,
 .cw-join:focus-visible,
 .cw-copy:focus-visible,
 .cw-steps a:focus-visible {

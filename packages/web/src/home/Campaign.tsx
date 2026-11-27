@@ -13,8 +13,8 @@ import { walletLinkProps } from './walletStore'
 
 const CAMPAIGN_PAGE = '/campaign'
 const SITE_LINK = 'https://www.zknoir.com'
-// Stand-in for the mock's 3D coin until that image is exported
-const COIN = '/shield-and-win/zec.svg'
+// The mock's 3D coin, also used on the campaign page
+const COIN = '/shield-and-win/zec-coin.png'
 const PHONE = '(max-width: 759px)'
 /** Phones see their sheet once per browser session. */
 const SEEN_KEY = 'noir:campaign-sheet-seen'
@@ -100,6 +100,17 @@ function useNow(running: boolean): number {
   return now
 }
 
+/**
+ * Opens a sheet with focus on the sheet itself rather than its first button, so the close button
+ * does not start out with a focus ring (the phone sheet opens on its own, which browsers treat
+ * like keyboard focus). Tab then moves into the sheet.
+ */
+function openSheet(dialog: HTMLDialogElement | null) {
+  if (!dialog || dialog.open) return
+  dialog.showModal()
+  dialog.focus()
+}
+
 /** Clicks on the dimmed page around a sheet close it. */
 function closeOnBackdrop(event: MouseEvent<HTMLDialogElement>) {
   if (event.target === event.currentTarget) event.currentTarget.close()
@@ -139,7 +150,7 @@ export default function Campaign({ inert }: { inert: boolean }) {
     } catch {
       // Storage blocked: show the sheet anyway.
     }
-    const timer = window.setTimeout(() => phoneRef.current?.showModal(), 1200)
+    const timer = window.setTimeout(() => openSheet(phoneRef.current), 1200)
     return () => window.clearTimeout(timer)
   }, [running])
 
@@ -173,7 +184,7 @@ export default function Campaign({ inert }: { inert: boolean }) {
         type="button"
         className="cw-badge"
         aria-label={`${title}. ${when}. See how to enter.`}
-        onClick={() => sheetRef.current?.showModal()}
+        onClick={() => openSheet(sheetRef.current)}
       >
         <Ticket title={title} when={when} {...time} />
       </button>
@@ -181,6 +192,7 @@ export default function Campaign({ inert }: { inert: boolean }) {
       <dialog
         ref={sheetRef}
         className="cw-sheet"
+        tabIndex={-1}
         aria-labelledby="cw-title"
         onClick={closeOnBackdrop}
       >
@@ -239,6 +251,7 @@ export default function Campaign({ inert }: { inert: boolean }) {
       <dialog
         ref={phoneRef}
         className="cw-phone"
+        tabIndex={-1}
         aria-labelledby="cw-phone-title"
         onClose={markSeen}
         onClick={closeOnBackdrop}
