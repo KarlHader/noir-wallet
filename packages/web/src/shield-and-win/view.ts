@@ -4,6 +4,7 @@ export const ENTRY_POLL_INTERVAL_MS = 4000
 export const ENTRY_POLL_LIMIT = 12
 export const REWARD_POLL_INTERVAL_MS = 4000
 export const REWARD_POLL_LIMIT = 30
+export const CAMPAIGN_POLL_INTERVAL_MS = 60_000
 
 export type BoardState = 'live' | 'upcoming' | 'ended-won' | 'ended-none' | 'missing'
 

@@ -976,18 +976,6 @@
   font-weight: 500;
 }
 
-.shield-win .tbc {
-  display: inline-block;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--gold);
-  border: 1px solid rgba(255, 204, 0, 0.4);
-  border-radius: 4px;
-  padding: 0 5px;
-  line-height: 18px;
-  vertical-align: 1px;
-}
-
 .shield-win .rules-foot {
   padding: 12px 22px 22px;
   font-size: 13px;

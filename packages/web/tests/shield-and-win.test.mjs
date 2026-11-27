@@ -762,8 +762,7 @@ test('the campaign page reserves a skeleton and keeps rules on the interface', (
   const participateBody = participate.slice(0, participate.indexOf('\n  }'))
   assert.equal(participateBody.includes('startEntryPoll'), false)
   assert.match(page, /NEAR Confidential/)
-  assert.match(page, /Claim\s+window/)
-  assert.match(page, /Full terms and eligibility restrictions apply/)
+  assert.match(page, /zknoir\.com reserves the right to interpret this campaign\./)
   assert.equal(page.includes('Loading the campaign.'), false)
   assert.match(page, /1 in 4,444/)
   assert.match(

@@ -17,6 +17,7 @@ import {
 } from '../shield-and-win/campaign-cache'
 import { claimMessage, utf8ToHex } from '../shield-and-win/claim'
 import {
+  CAMPAIGN_POLL_INTERVAL_MS,
   ENTRY_POLL_INTERVAL_MS,
   ENTRY_POLL_LIMIT,
   REWARD_POLL_INTERVAL_MS,
@@ -367,10 +368,6 @@ function EntriesRefreshButton({
   )
 }
 
-function Tbc() {
-  return <span className="tbc">TBC</span>
-}
-
 function shortAddress(value: string): string {
   if (value.length <= 8) return value
   return `${value.slice(0, 4)}...${value.slice(-4)}`
@@ -410,10 +407,10 @@ function RulesCopy({
     <>
       <ul>
         <li>
-          <b>How to join:</b> install Noir Wallet, create or import a wallet, then make a private
+          <b>How to join:</b> install Noir Wallet, create or import a wallet, then make a shield
           transfer of <b>{minimum} or more</b> into <b>NEAR Confidential</b> from your Public or
-          Private account (in the wallet: Shield → NEAR Confidential). Use the latest version of
-          Noir Wallet.
+          Shield account (in the wallet: Shield → NEAR Confidential). Use the latest version of Noir
+          Wallet.
         </li>
         <li>
           We count the USD value credited after network, bridge and protocol fees. Smaller transfers
@@ -455,20 +452,18 @@ function RulesCopy({
         </li>
         <li>
           The winner claims to a Zcash transparent address in Noir Wallet. We pay the network fee,
-          so the full {prize} ZEC arrives. Claim window <Tbc />.
+          so the full {prize} ZEC arrives.
         </li>
         <li>
           We never ask for your seed phrase or keys, and never publish your balances, addresses or
           the path of your funds. &quot;Draws so far&quot; is a total count only.
         </li>
         <li>
-          Entries per wallet, regions and age limits <Tbc />. Fees are shown before you sign.
+          {/*Entries per wallet, regions and age limits <Tbc />. */}Fees are shown before you sign.
           Winning isn&apos;t guaranteed.
         </li>
       </ul>
-      <p className="rules-foot">
-        Full terms and eligibility restrictions apply <Tbc />.
-      </p>
+      <p className="rules-foot">zknoir.com reserves the right to interpret this campaign.</p>
     </>
   )
 }
@@ -723,7 +718,7 @@ export default function ShieldAndWinPage() {
     if (!campaign) return
     const reward = `${campaign.reward_amount} ${campaign.reward_asset}`.trim()
     if (!reward) return
-    document.title = `Go Private, Win ${reward} · Noir Wallet`
+    document.title = `Go Shield, Win ${reward} · Noir Wallet`
   }, [campaign])
 
   useEffect(() => {
@@ -806,14 +801,21 @@ export default function ShieldAndWinPage() {
   }, [provider])
 
   useEffect(() => {
-    const controller = new AbortController()
     let stopped = false
-    void (async () => {
+    let controller = new AbortController()
+    const refresh = async () => {
+      controller.abort()
+      controller = new AbortController()
+      const { signal } = controller
       try {
-        const list = await getCampaigns(controller.signal)
+        const list = await getCampaigns(signal)
         if (stopped) return
         const next = selectCampaign(list)
-        setCampaign(next)
+        const current = campaignRef.current
+        const unchanged =
+          current === next ||
+          (current !== null && next !== null && JSON.stringify(current) === JSON.stringify(next))
+        if (!unchanged) setCampaign(next)
         setCampaignState('ready')
         if (next) writeCachedCampaign(next)
         else clearCachedCampaign()
@@ -823,10 +825,13 @@ export default function ShieldAndWinPage() {
         setCampaign(null)
         setCampaignState('error')
       }
-    })()
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), CAMPAIGN_POLL_INTERVAL_MS)
     return () => {
       stopped = true
       controller.abort()
+      window.clearInterval(timer)
     }
   }, [])
 
@@ -1351,7 +1356,7 @@ export default function ShieldAndWinPage() {
             )}
             {showFixedWin ? (
               <h1 id="title">
-                Go Private,
+                Go Shield,
                 <br />
                 {'Win'}
                 {prizeReady ? (
@@ -1374,7 +1379,7 @@ export default function ShieldAndWinPage() {
               <p className="sub">No campaign is available right now.</p>
             ) : (
               <p className="sub">
-                {'Try a private transfer'}
+                {'Try a shield transfer'}
                 {board.minimumValue ? (
                   <span className={campaignStart.reveal ? 'reveal' : undefined}>
                     {` (min ${board.minimumValue})`}
@@ -1418,7 +1423,7 @@ export default function ShieldAndWinPage() {
                     className={claimable.length > 0 ? 'btn ghost' : 'btn primary'}
                     onClick={onParticipate}
                   >
-                    Try a private transfer
+                    Try a shield transfer
                   </button>
                 </Tooltip>
               ) : null}
@@ -1497,7 +1502,7 @@ export default function ShieldAndWinPage() {
 
             <p className="assure">
               <AssureIcon />
-              Your private transfer lands in your own private balance. The money stays yours.
+              Your shield transfer lands in your own shield balance. The money stays yours.
             </p>
           </div>
 
@@ -1721,7 +1726,7 @@ export default function ShieldAndWinPage() {
                 </div>
                 <p className="claim-fine">
                   We ask for this address only because you won, and we don&apos;t link it to your
-                  Public or Private accounts.
+                  Public or Shield accounts.
                 </p>
                 {claimError ? (
                   <p className="form-error" id="shield-win-claim-error">

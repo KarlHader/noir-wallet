@@ -24,8 +24,8 @@ function CampaignBar({ inert }: { inert: boolean }) {
       <span className="promo-live" aria-hidden="true" />
       <span className="promo-name">Shield &amp; Win</span>
       <span className="promo-text">
-        Go private, win ZEC
-        <span className="promo-more">. Try a private transfer for an instant draw.</span>
+        Go shield, win ZEC
+        <span className="promo-more">. Try a shield transfer for an instant draw.</span>
       </span>
       <span className="promo-go">
         <span className="promo-go-label">Join now</span>
