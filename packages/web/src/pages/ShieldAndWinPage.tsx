@@ -311,7 +311,7 @@ function EntryRow({
           ) : null}
         </div>
       </div>
-      {copy.body ? <p className="text-[11px] leading-[18px] text-[#bbc1bc]">{copy.body}</p> : null}
+      {/* {copy.body ? <p className="text-[11px] leading-[18px] text-[#bbc1bc]">{copy.body}</p> : null} */}
     </li>
   )
 }
@@ -1754,7 +1754,7 @@ export default function ShieldAndWinPage() {
 
             {showEntry ? (
               <section
-                className="mt-[22px] max-w-[520px] overflow-hidden rounded-xl border border-[#303333] bg-[#1d1e1e]"
+                className="mt-[22px] w-full overflow-hidden rounded-xl border border-[#303333] bg-[#1d1e1e]"
                 aria-label="Your entries"
               >
                 <div className="flex items-center justify-between gap-3 border-b border-[#303333] bg-[#202222] px-5 py-4">
@@ -1797,7 +1797,7 @@ export default function ShieldAndWinPage() {
 
             {historicalWins.length > 0 ? (
               <section
-                className="mt-4 max-w-[520px] overflow-hidden rounded-xl border border-[#303333] bg-[#1d1e1e]"
+                className="mt-4 w-full overflow-hidden rounded-xl border border-[#303333] bg-[#1d1e1e]"
                 aria-label="Your wins"
               >
                 <h2 className="border-b border-[#303333] px-5 py-4 text-base leading-6 font-semibold text-[#f2f4f3]">
