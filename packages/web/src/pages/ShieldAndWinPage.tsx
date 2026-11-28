@@ -1647,7 +1647,7 @@ export default function ShieldAndWinPage() {
                     {` min ${board.minimumValue}`}
                   </span>
                 ) : null}
-                {' to get a chance for an instant draw.'}
+                {' to NEAR Confidential to enter the instant draw.'}
               </p>
             )}
 
