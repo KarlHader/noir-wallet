@@ -49,7 +49,7 @@ export const CAMPAIGN: SeoPage = {
   // The page's own heading until the campaign loads; then it names the prize (ShieldAndWinPage)
   title: 'Shield & Win · Noir Wallet',
   description:
-    'Shield funds with Noir Wallet to enter an instant prize draw, and see how many prizes are still up for grabs.',
+    'Shield funds to NEAR Confidential with Noir Wallet to enter an instant prize draw, and see how many prizes are still up for grabs.',
   heading: 'Shield & Win',
   listed: true
 }

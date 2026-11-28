@@ -239,6 +239,7 @@
   margin-top: 10px;
   font-size: 20px;
   line-height: 1.3;
+  text-wrap: pretty;
 }
 .cw-act {
   grid-column: 2;
@@ -316,6 +317,7 @@
   color: #e6e6e6;
   font-size: 15px;
   line-height: 1.3;
+  text-wrap: pretty;
 }
 .cw-steps a {
   display: inline-block;
@@ -434,4 +436,16 @@
   .cw-float {
     transition: none;
   }
+}
+.cw-note a {
+  color: var(--cw-yellow);
+  font-style: normal;
+  text-decoration: none;
+}
+.cw-note a:hover {
+  text-decoration: underline;
+}
+.cw-note a:focus-visible {
+  outline: 2px solid var(--cw-yellow);
+  outline-offset: 2px;
 }

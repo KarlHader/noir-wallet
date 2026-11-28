@@ -612,7 +612,8 @@ export default function ShieldAndWinPage() {
   const [allEntriesRetry, setAllEntriesRetry] = useState(0)
   const [phone, setPhone] = useState(detectPhone)
   const [now, setNow] = useState(() => Date.now())
-  const [rulesOpen, setRulesOpen] = useState(false)
+  // The home page's campaign sheet links to the rules with #rules
+  const [rulesOpen, setRulesOpen] = useState(() => window.location.hash === '#rules')
   const [notice, setNotice] = useState<string | null>(null)
   const [noticeWarn, setNoticeWarn] = useState(false)
   const [drawPending, setDrawPending] = useState(false)
@@ -1061,6 +1062,11 @@ export default function ShieldAndWinPage() {
     if (!dialog) return
     if (rulesOpen && !dialog.open) dialog.showModal()
     if (!rulesOpen && dialog.open) dialog.close()
+    // Once closed, a reload should not open them again
+    if (!rulesOpen && window.location.hash === '#rules') {
+      const { pathname, search } = window.location
+      window.history.replaceState(window.history.state, '', pathname + search)
+    }
   }, [rulesOpen])
 
   useEffect(() => {

@@ -1,6 +1,7 @@
 /**
  * Shield & Win campaign entry on the home page, per the design mock ("Go Private, Win …"). The
- * prize, minimum and dates come from the campaign API, the same data the campaign page shows.
+ * prize, minimum and dates come from the campaign API, the same data the campaign page shows;
+ * the copy is built in campaignCopy.ts.
  * Desktop: a countdown ticket in the bottom-right corner (clear of the support chat) opens a
  * sheet with the three steps and Join Now; its close button hides it until the next visit.
  * Phones cannot run the extension, so on every visit a sheet sends people to a computer and
@@ -9,6 +10,7 @@
 import './campaign.css'
 import { type MouseEvent, useEffect, useRef, useState } from 'react'
 import { getCampaigns, selectCampaign, type ShieldWinCampaign } from '../shield-and-win/api'
+import { entryCopy } from './campaignCopy'
 import { Icon } from './Icon'
 import { walletLinkProps } from './walletStore'
 
@@ -55,24 +57,6 @@ function dateLabel(seconds: number): string {
     hourCycle: 'h23'
   }).format(new Date(seconds * 1000))
   return `${text} UTC`
-}
-
-function prizeOf(campaign: ShieldWinCampaign): string {
-  return `${campaign.reward_amount} ${campaign.reward_asset}`.trim()
-}
-
-function minimumOf(campaign: ShieldWinCampaign): string {
-  const amount = Number(campaign.min_usd_value)
-  return Number.isFinite(amount) && amount > 0
-    ? `at least $${campaign.min_usd_value}`
-    : 'any amount'
-}
-
-function winnersOf(campaign: ShieldWinCampaign): string {
-  const prize = prizeOf(campaign)
-  if (campaign.max_winners === 1) return `One winner gets ${prize}`
-  if (campaign.max_winners === 0) return `Every winning draw gets ${prize}`
-  return `Up to ${campaign.max_winners} winners get ${prize} each`
 }
 
 function useCampaign(): ShieldWinCampaign | null {
@@ -153,13 +137,13 @@ export default function Campaign({ inert }: { inert: boolean }) {
 
   if (!campaign || !phase) return null
 
-  const title = `Go Private, Win ${prizeOf(campaign)}`
+  const copy = entryCopy(campaign)
+  const title = copy.title
   const time = countdown(phase.target, now)
   const when =
     phase.kind === 'upcoming'
       ? `Starts ${dateLabel(campaign.start_time)}`
       : `Ends ${dateLabel(campaign.end_time)}`
-  const minimum = minimumOf(campaign)
 
   const copyLink = () => {
     const done = () => setCopied(true)
@@ -200,10 +184,10 @@ export default function Campaign({ inert }: { inert: boolean }) {
         <div className="cw-sheet-in">
           <div className="cw-head">
             <h2 id="cw-title">
-              {title}
+              {copy.heading}
               <img src={COIN} width={92} height={92} alt="" />
             </h2>
-            <p className="cw-sub">Complete 3 steps to enter the draw:</p>
+            <p className="cw-sub">{copy.lede}</p>
             <div className="cw-act">
               <p className="cw-clock">
                 {phase.kind === 'upcoming' && <span className="cw-clock-label">Starts in</span>}
@@ -217,26 +201,18 @@ export default function Campaign({ inert }: { inert: boolean }) {
             </div>
           </div>
           <ol className="cw-steps">
-            <li>
-              <h3>1. Set up Noir</h3>
-              <p>Install Noir, then create a new wallet or import your existing one.</p>
-              <a {...walletLinkProps}>Add Noir to your browser extension →</a>
-            </li>
-            <li>
-              <h3>2. Add funds (new wallets only)</h3>
-              <p>Deposit {minimum} to your public address. Already have funds? Skip this step.</p>
-            </li>
-            <li>
-              <h3>3. Shield once</h3>
-              <p>
-                Move {minimum} from your public balance to your shielded balance. That’s it. Your
-                entry is confirmed in the app.
-              </p>
-            </li>
+            {copy.steps.map((step, index) => (
+              <li key={step.title}>
+                <h3>
+                  {index + 1}. {step.title}
+                </h3>
+                <p>{step.body}</p>
+                {index === 0 && <a {...walletLinkProps}>Add to Chrome →</a>}
+              </li>
+            ))}
           </ol>
           <p className="cw-note">
-            Entries close {dateLabel(campaign.end_time)}. {winnersOf(campaign)}, paid to the public
-            address you shielded from.
+            {copy.facts} · <a href={`${CAMPAIGN_PAGE}#rules`}>Full rules</a>
           </p>
           <button
             type="button"
