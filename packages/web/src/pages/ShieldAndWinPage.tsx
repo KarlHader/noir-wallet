@@ -19,6 +19,7 @@ import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../shield-an
 import { DrawResultDialog } from '../shield-and-win/DrawResultDialog'
 import { PrizeBar, PrizeBoxes, PrizesLeft } from '../shield-and-win/PrizeBoxes'
 import { prizeBoard } from '../shield-and-win/prizes'
+import { revealDemoEntry } from '../shield-and-win/reveal-demo'
 import { needsReveal, readReveals, saveReveal } from '../shield-and-win/reveals'
 import {
   CAMPAIGN_POLL_INTERVAL_MS,
@@ -675,6 +676,11 @@ export default function ShieldAndWinPage() {
   const [revealingId, setRevealingId] = useState<number | null>(null)
   const [resultEntry, setResultEntry] = useState<ShieldWinEntry | null>(null)
   const revealTimer = useRef(0)
+  // Branch previews only (reveal-demo.ts): ?reveal-demo=win or =lose opens the dialog with a sample
+  const [demoSample] = useState(() =>
+    revealDemoEntry(window.location.hostname, window.location.search)
+  )
+  const [demoEntry, setDemoEntry] = useState<ShieldWinEntry | null>(null)
   const [claimTarget, setClaimTarget] = useState<ShieldWinEntry | null>(null)
   const [walletPayout, setWalletPayout] = useState<string | null>(null)
   const [manualPayout, setManualPayout] = useState('')
@@ -1211,6 +1217,12 @@ export default function ShieldAndWinPage() {
   useEffect(() => {
     seenView.current = null
   }, [address])
+
+  useEffect(() => {
+    if (!demoSample) return
+    const timer = window.setTimeout(() => setDemoEntry(demoSample), 700)
+    return () => window.clearTimeout(timer)
+  }, [demoSample])
 
   useEffect(() => {
     if (!address || !entriesReady || entriesError) return
@@ -2214,6 +2226,17 @@ export default function ShieldAndWinPage() {
           void openClaim(entry)
         }}
       />
+      {demoSample ? (
+        <DrawResultDialog
+          entry={demoEntry}
+          label="ETH $12.40 · demo"
+          minimum={board.minimumValue}
+          prizesLeft={prizes ? prizes.left : null}
+          campaignOpen={board.canJoin}
+          onClose={() => setDemoEntry(null)}
+          onClaim={() => setDemoEntry(null)}
+        />
+      ) : null}
 
       <dialog
         ref={claimRef}

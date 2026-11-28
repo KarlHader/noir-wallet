@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readStored, removeStored, writeStored } from '../src/lib/storage.ts'
+import { revealDemoEntry } from '../src/shield-and-win/reveal-demo.ts'
 import { MAX_REVEALS, needsReveal, readReveals, saveReveal } from '../src/shield-and-win/reveals.ts'
 
 function memoryStorage(initial = {}) {
@@ -101,4 +102,23 @@ test('bad stored reveals are dropped, and only the newest are kept', () => {
   assert.equal(next.has(1), false)
   assert.equal(next.has(MAX_REVEALS + 1), true)
   assert.equal(readReveals(storage).size, MAX_REVEALS)
+})
+
+test('the reveal demo runs on branch previews and locally, never on the live site', () => {
+  const win = revealDemoEntry('feat-shield-win-reveal.noir-wallet.pages.dev', '?reveal-demo=win')
+  assert.equal(win?.draw_result, 'WON')
+  assert.equal(win?.reward_status, 'UNCLAIMED')
+  assert.equal(revealDemoEntry('localhost', '?reveal-demo=lose')?.draw_result, 'NOT_WON')
+  assert.equal(revealDemoEntry('127.0.0.1', '?reveal-demo=win')?.draw_result, 'WON')
+  for (const host of [
+    'www.zknoir.com',
+    'zknoir.com',
+    'noir-wallet.pages.dev',
+    'feat.noir-wallet.pages.dev.example.com',
+    'example.com'
+  ]) {
+    assert.equal(revealDemoEntry(host, '?reveal-demo=win'), null, host)
+  }
+  assert.equal(revealDemoEntry('localhost', ''), null)
+  assert.equal(revealDemoEntry('localhost', '?reveal-demo=jackpot'), null)
 })
