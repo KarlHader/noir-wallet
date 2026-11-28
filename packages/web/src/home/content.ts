@@ -17,14 +17,21 @@ export const IMG = {
   ethChip: `${DIR}imgImage902.png`,
   arbChip: `${DIR}imgGroup1948761781.svg`,
   bnbChip: `${DIR}imgGroup1948761777.svg`,
-  // Shield glyph in the middle of How Noir Wallet Works
+  // How Noir Wallet Works: the shield glyph in the middle and the diagram's other icons
   shieldGlyph: `${DIR}imgGroup1948763176.svg`,
+  worksWallet: `${DIR}works-wallet.svg`,
+  worksIncognito: `${DIR}works-incognito.svg`,
+  worksSend: `${DIR}works-send.svg`,
+  worksReceive: `${DIR}works-receive.svg`,
+  worksKey: `${DIR}works-key.svg`,
   // Hardware wallet marks, the same files the extension uses
   ledger: `${DIR}ledger.svg`,
   keystone: `${DIR}keystone.png`,
-  // "Backed by" band: the YZi Labs logo exported from the design mock (black, 150 × 36)
+  // The hero band's logos, exported from the design mock in black: YZi Labs ("Backed by",
+  // 150 × 36) and Shielded Labs ("Trusted by", 171 × 34)
   yzi: `${DIR}yzi-labs.svg`,
-  // The Chrome Web Store logo (256 × 223), on the hero's Get Noir Wallet button
+  shieldedLabs: `${DIR}shielded-labs.svg`,
+  // The Chrome logo in the site's greens, on the hero's Get Noir Wallet button
   chrome: `${DIR}chrome.svg`
 } as const
 
@@ -97,23 +104,23 @@ export type Feature = {
 
 export const FEATURES: Feature[] = [
   {
-    id: 'transfer',
-    title: 'Send & Receive Privately',
-    body: 'Send tokens in seconds without revealing who sent what to whom.',
-    alt: 'Noir Wallet home on the Shield account, $4,489.21 across privacy providers, with the Send and Receive buttons called out.',
-    layers: [{ src: PHONES.send.src, x: -20, y: -10, w: 464, h: 667 }]
-  },
-  {
     id: 'shield',
-    title: 'Shield Funds Easily',
-    body: 'Move funds in and out of your private balance in one click, across multiple privacy providers.',
+    title: 'Shield Your Balance',
+    body: 'Hide your balance from public view in one click, and unshield it whenever you need.',
     alt: 'Noir Wallet on the Public account, $1,406.56, with the ZEC row and its one-click Shield button called out.',
     layers: [{ src: `${DIR}shield-token.webp`, x: -37, y: -30, w: 558, h: 708, clip: 685 }]
   },
   {
+    id: 'transfer',
+    title: 'Send & Receive Privately',
+    body: 'Send and receive funds on-chain without revealing your wallet details.',
+    alt: 'Noir Wallet home on the Shield account, $4,489.21 across privacy providers, with the Send and Receive buttons called out.',
+    layers: [{ src: PHONES.send.src, x: -20, y: -10, w: 464, h: 667 }]
+  },
+  {
     id: 'defi',
-    title: 'Use Defi Privately',
-    body: 'Smoothly switch private account to access DApps',
+    title: 'Use DeFi Privately',
+    body: 'Trade and run your DeFi strategies from a clean on-chain identity, with no public link to your main account.',
     alt: 'Noir Wallet on the Incognito account, $1,232.06, connected to app.aave.com as 0x69...a8f4, in front of the app it is connected to.',
     // One picture: the wallet, the blurred app behind it and the address callout
     layers: [{ src: `${DIR}defi.webp`, x: -41, y: 18, w: 570, h: 577 }]
@@ -129,7 +136,12 @@ export const PROVIDERS: { name: string; icon: string; soon?: boolean }[] = [
   { name: 'ZAMA', icon: `${DIR}imgGroup1948763186.svg`, soon: true }
 ]
 
-export const DEFI_LEAVES = ['Lending', 'Perps', 'Cash Out']
+/** How Noir Wallet Works: what the Incognito account is for, each with its icon. */
+export const DEFI_USES: { icon: string; title: string; body: string }[] = [
+  { icon: `${DIR}works-trade.svg`, title: 'Trade', body: 'Trades not linked to you' },
+  { icon: `${DIR}works-lend.svg`, title: 'Lend & Borrow', body: 'Your positions stay unlinked' },
+  { icon: `${DIR}works-predict.svg`, title: 'Predict', body: 'Bets not tied to your wallet' }
+]
 
 /** Choose How Visible Each Move Is: the three accounts every wallet has. */
 export const ACCOUNTS: {
@@ -146,7 +158,7 @@ export const ACCOUNTS: {
     intro: 'Receive at your usual address and make regular transfers.',
     detail: 'Your main account. Create it in Noir or import a wallet you already use.',
     who: 'Anyone who knows your address can look up its onchain activity.',
-    when: 'You want to keep the address people already pay.'
+    when: 'When privacy is not a concern.'
   },
   {
     id: 'shield',
@@ -155,15 +167,15 @@ export const ACCOUNTS: {
     detail:
       'Your combined private balance across supported privacy rails, including the Zcash shielded pool and NEAR Confidential Intents.',
     who: 'Your balance stays inside the privacy rails that hold it.',
-    when: 'Available routes depend on the asset and network.'
+    when: 'When you want to move funds with a minimal onchain footprint.'
   },
   {
     id: 'incognito',
     name: 'Incognito',
     intro: 'Use DeFi without connecting your main address.',
     detail: 'A separate address derived from the same recovery phrase and funded through Shield.',
-    who: 'Apps see your Incognito address. Funding through Shield avoids a direct onchain link to Public.',
-    when: 'Activity across apps on one Incognito address can be viewed together.'
+    who: 'Apps and the public see your Incognito address, which is not linked to you.',
+    when: 'When you want your trades and strategies to be protected.'
   }
 ]
 

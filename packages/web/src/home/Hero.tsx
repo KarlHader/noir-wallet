@@ -5,7 +5,8 @@
  * it passes, and the chain marks pick up a shield one after another, then fade back to their
  * original color.
  * Hovering the grid shows each dot's number; clicking the wallet image opens the interactive
- * extension demo. Below the grid runs the "Backed by YZi Labs" band, with the wallet over it.
+ * extension demo. Below the grid runs the band with the backers' logos ("Backed by YZi Labs",
+ * "Trusted by Shielded Labs"), with the wallet over it.
  */
 import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { AppsComingSoon } from './ComingSoon'
@@ -468,7 +469,7 @@ export function Hero({ onTry }: { onTry: () => void }) {
                 alt="Noir Wallet home: a Shield balance of $4,489.21 across privacy providers, with $1,406.56 available to shield, above the Public and Incognito accounts."
               />
             </picture>
-            {/* The wallet image opens the demo: the hint shows on hover and on keyboard focus. */}
+            {/* The wallet image opens the demo; the "Try the extension" pill above it says so. */}
             <button
               type="button"
               className="hero-phone-hit"
@@ -486,8 +487,20 @@ export function Hero({ onTry }: { onTry: () => void }) {
       </div>
 
       <div className="band">
-        <span>Backed by</span>
-        <img className="band-logo" src={IMG.yzi} width={150} height={36} alt="YZi Labs" />
+        <p className="band-group">
+          <span>Backed by</span>
+          <img className="band-logo" src={IMG.yzi} width={150} height={36} alt="YZi Labs" />
+        </p>
+        <p className="band-group">
+          <span>Trusted by</span>
+          <img
+            className="band-logo"
+            src={IMG.shieldedLabs}
+            width={171}
+            height={34}
+            alt="Shielded Labs"
+          />
+        </p>
       </div>
     </section>
   )

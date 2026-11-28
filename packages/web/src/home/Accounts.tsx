@@ -10,7 +10,7 @@ export function Accounts() {
     <section className="sec-n accounts" aria-labelledby="accounts-title">
       <div className="wrap-n">
         <p className="eyebrow" data-reveal="up">
-          Noir Wallet Types
+          Account Types
         </p>
         <h2 className="h2" id="accounts-title" data-reveal="up">
           Choose How Visible Each Move Is
@@ -41,9 +41,9 @@ export function Accounts() {
                   <p className="acct-detail">{account.detail}</p>
                 </div>
                 <dl>
-                  <dt>Who can see it</dt>
+                  <dt>Who can see</dt>
                   <dd>{account.who}</dd>
-                  <dt>Use it when</dt>
+                  <dt>When to use</dt>
                   <dd>{account.when}</dd>
                 </dl>
               </div>
