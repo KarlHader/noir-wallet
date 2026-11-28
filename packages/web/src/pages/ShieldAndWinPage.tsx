@@ -363,23 +363,6 @@ function CloseIcon() {
   )
 }
 
-function AssureIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 3 5 6v5.2c0 4.3 2.9 8 7 9.8 4.1-1.8 7-5.5 7-9.8V6l-7-3Z" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
-  )
-}
-
 function selectedTransparentAddress(
   source: PayoutSource,
   walletAddress: string | null,
@@ -843,7 +826,7 @@ export default function ShieldAndWinPage() {
     if (!campaign) return
     const reward = `${campaign.reward_amount} ${campaign.reward_asset}`.trim()
     if (!reward) return
-    document.title = `Go Shield, Win ${reward} · Noir Wallet`
+    document.title = `Shield ${board.minimumValue ? board.minimumValue : null}, Win ${reward} · Noir Wallet`
   }, [campaign])
 
   useEffect(() => {
@@ -1603,7 +1586,7 @@ export default function ShieldAndWinPage() {
                 id="title"
                 className="pt-[clamp(18px,3vh,28px)] text-[clamp(48px,min(6vw,10vh),96px)] leading-[1.02] font-semibold tracking-[-0.035em] max-[760px]:text-[clamp(44px,13vw,60px)]"
               >
-                Go Shield,
+                Shield{board.minimumValue ? ` ${board.minimumValue}` : ' and'},
                 <br />
                 {'Win'}
                 {prizeReady ? (
@@ -1641,7 +1624,7 @@ export default function ShieldAndWinPage() {
               </p>
             ) : (
               <p className="pt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
-                {'Shield'}
+                {'Every'}
                 {board.minimumValue ? (
                   <span
                     className={
@@ -1653,7 +1636,21 @@ export default function ShieldAndWinPage() {
                     {` min ${board.minimumValue}`}
                   </span>
                 ) : null}
-                {' to NEAR Confidential to enter the instant draw.'}
+                {' shield into EVM gets an instant draw. Your '}
+                {board.minimumValue ? (
+                  <span
+                    className={
+                      campaignStart.reveal
+                        ? 'animate-shield-fade motion-reduce:animate-none'
+                        : undefined
+                    }
+                  >
+                    {board.minimumValue}
+                  </span>
+                ) : (
+                  'shield'
+                )}
+                {' stays in your own balance.'}
               </p>
             )}
 
@@ -1822,11 +1819,6 @@ export default function ShieldAndWinPage() {
                 </div>
               </section>
             ) : null}
-
-            <p className="mt-[clamp(22px,3.5vh,34px)] pt-2 flex items-center gap-2.5 text-[15px] text-[#a7a9ad] [&_svg]:size-5 [&_svg]:shrink-0 [&_svg]:text-[#3dffbe]">
-              <AssureIcon />
-              Your shield transfer lands in your own shield balance. The money stays yours.
-            </p>
           </div>
 
           <aside
