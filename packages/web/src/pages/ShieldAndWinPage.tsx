@@ -1645,7 +1645,7 @@ export default function ShieldAndWinPage() {
               </p>
             ) : (
               <p className="pt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
-                {'Shield your EVM address'}
+                {'Shield your EVM assets'}
                 {board.minimumValue ? (
                   <span
                     className={
@@ -1654,10 +1654,10 @@ export default function ShieldAndWinPage() {
                         : undefined
                     }
                   >
-                    {` with min ${board.minimumValue}`}
+                    {` (${board.minimumValue} minimum)`}
                   </span>
                 ) : null}
-                {' to get an instant draw. Your '}
+                {' for an instant draw every time. Your '}
                 {board.minimumValue ? (
                   <span
                     className={
