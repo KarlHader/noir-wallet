@@ -130,7 +130,7 @@ export const FEATURES: Feature[] = [
 /** Supported privacy providers: the first two are integrated, the rest are coming soon. */
 export const PROVIDERS: { name: string; icon: string; soon?: boolean }[] = [
   { name: 'Zcash Shield', icon: `${DIR}imgGroup1948762866.svg` },
-  { name: 'Near Confidential', icon: `${DIR}imgImage1037.png` },
+  { name: 'NEAR Confidential', icon: `${DIR}imgImage1037.png` },
   { name: 'Railgun', icon: `${DIR}imgGroup1948763189.svg`, soon: true },
   { name: 'Privacy Pool', icon: `${DIR}imgGroup1948763187.svg`, soon: true },
   { name: 'ZAMA', icon: `${DIR}imgGroup1948763186.svg`, soon: true }
@@ -157,7 +157,7 @@ export const ACCOUNTS: {
     name: 'Public',
     intro: 'Receive at your usual address and make regular transfers.',
     detail: 'Your main account. Create it in Noir or import a wallet you already use.',
-    who: 'Anyone who knows your address can look up its onchain activity.',
+    who: 'Anyone who knows your address can look up its on-chain activity.',
     when: 'When privacy is not a concern.'
   },
   {
@@ -167,7 +167,7 @@ export const ACCOUNTS: {
     detail:
       'Your combined private balance across supported privacy rails, including the Zcash shielded pool and NEAR Confidential Intents.',
     who: 'Your balance stays inside the privacy rails that hold it.',
-    when: 'When you want to move funds with a minimal onchain footprint.'
+    when: 'When you want to move funds with a minimal on-chain footprint.'
   },
   {
     id: 'incognito',
@@ -193,12 +193,12 @@ export const HARDWARE_STEPS: {
   {
     icon: 'shield',
     title: 'Shield Funds',
-    body: 'Choose the assets to move, then move them into your Shield Vault.'
+    body: 'Choose the assets to move, then move them into your Shield balance.'
   },
   {
     icon: 'transfer',
     title: 'Transfer Privately',
-    body: 'Use your Ledger to send private transactions from your Shield Vault whenever you need to.'
+    body: 'Use your Ledger to send private transactions from your Shield balance whenever you need to.'
   }
 ]
 
@@ -206,7 +206,7 @@ export const HARDWARE_STEPS: {
 const AUDIT_REPORT_URL =
   'https://github.com/blocksecteam/audit-reports/blob/main/rust/blocksec_noirwallet_zcash_wallet_wasm_signed_20260609.pdf'
 
-/** Your Key Open Code: four points, each with a large, blurred icon on the right. */
+/** Your Keys, Open Code: four points, each with a large, blurred icon on the right. */
 export const TRUST_POINTS: {
   icon: 'custody' | 'backup' | 'audit' | 'code'
   title: string
@@ -221,7 +221,7 @@ export const TRUST_POINTS: {
   {
     icon: 'backup',
     title: 'One Backup',
-    body: 'Incognito is derived from the same recovery phrase using HDwallet technology, so there is no second phrase to store.'
+    body: 'Incognito is derived from the same recovery phrase using HD wallet technology, so there is no second phrase to store.'
   },
   {
     icon: 'audit',

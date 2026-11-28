@@ -53,7 +53,7 @@ import {
   walletErrorMessage,
   type NoirEthereumProvider
 } from '../shield-and-win/wallet'
-import { poolOf } from '../home/campaignCopy'
+import { poolOf, shortDate } from '../home/campaignCopy'
 import { Tooltip } from '../components/Tooltip'
 import { CAMPAIGN } from '../seo'
 import '../tailwind.css'
@@ -481,6 +481,15 @@ function minimumAmount(campaign: ShieldWinCampaign, minimumValue: string): strin
   return campaign.min_usd_value.startsWith('$')
     ? campaign.min_usd_value
     : `$${campaign.min_usd_value}`
+}
+
+/** The note above the footer: "Ends when all prizes are won or on Dec 3, 16:00 UTC, …" */
+function footerEnding(campaign: ShieldWinCampaign): string {
+  if (campaign.status === 'SOLD_OUT' || campaign.status === 'ENDED') return ''
+  const deadline = shortDate(campaign.end_time)
+  const won = campaign.max_winners === 1 ? 'the prize is won' : 'all prizes are won'
+  if (campaign.max_winners === 0) return `Ends on ${deadline}.`
+  return `Ends when ${won} or on ${deadline}, whichever comes first.`
 }
 
 function endingCopy(campaign: ShieldWinCampaign): string {
@@ -1943,7 +1952,7 @@ export default function ShieldAndWinPage() {
       <footer className="px-4 pt-[22px] pb-[26px] text-center text-[13px] leading-[1.6] text-[#8b8e93]">
         {prizeReady && board.prizePoolLabel ? (
           <p>
-            {board.prizePoolLabel}. The campaign ends when it is no longer active.{' '}
+            {board.prizePoolLabel}. {campaign ? footerEnding(campaign) : ''}{' '}
             <button
               type="button"
               className="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[length:inherit] leading-[inherit] text-[#bcbcc8] underline decoration-white/30 underline-offset-[3px] hover:text-white"

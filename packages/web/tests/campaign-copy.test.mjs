@@ -25,10 +25,10 @@ const LIVE = {
   assets: []
 }
 
-test('the ticket names the whole pool and the sheet one prize', () => {
+test('the ticket and the sheet name the whole prize pool', () => {
   const copy = entryCopy(LIVE)
   assert.equal(copy.title, 'Go Private, Win 1 ZEC')
-  assert.equal(copy.heading, 'Shield $10. Win 0.1 ZEC.')
+  assert.equal(copy.heading, 'Shield $10. Win 1 ZEC.')
   assert.equal(
     copy.lede,
     'Shield your EVM assets ($10 minimum) for an instant draw every time. Your $10 stays in your own balance.'
