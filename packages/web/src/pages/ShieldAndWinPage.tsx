@@ -16,8 +16,10 @@ import {
   writeCachedCampaign
 } from '../shield-and-win/campaign-cache'
 import { claimMessage, isTransparentZcashAddress, utf8ToHex } from '../shield-and-win/claim'
+import { DrawResultDialog } from '../shield-and-win/DrawResultDialog'
 import { PrizeBar, PrizeBoxes, PrizesLeft } from '../shield-and-win/PrizeBoxes'
 import { prizeBoard } from '../shield-and-win/prizes'
+import { needsReveal, readReveals, saveReveal } from '../shield-and-win/reveals'
 import {
   CAMPAIGN_POLL_INTERVAL_MS,
   ENTRIES_LIST_POLL_INTERVAL_MS,
@@ -74,6 +76,42 @@ const PUBLIC_TOOLTIP_SRC = '/shield-and-win/select-public-tooltip.png'
 const ENTRY_REFRESH_COOLDOWN_MS = 60_000
 const NO_ZCASH_ADDRESS = 'This account has no Zcash address. Enter a transparent address.'
 const INVALID_TRANSPARENT_ADDRESS = 'Enter a valid transparent Zcash address.'
+
+/** Reveal waits a moment before the result opens; less with reduced motion */
+const REVEAL_DELAY_MS = 1200
+const REVEAL_DELAY_REDUCED_MS = 400
+const SMALL_BUTTON =
+  "inline-flex cursor-pointer items-center justify-center gap-1.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-3.5 [&_svg]:shrink-0 h-[28px] shrink-0 rounded border-transparent bg-[#00d18a] px-3 text-[13px] text-black hover:bg-[#1ee3a0] hover:text-black"
+
+function revealHint(count: number): string {
+  return count === 1 ? 'Your draw is ready to reveal.' : `${count} draws are ready to reveal.`
+}
+
+/** Lucide gift: a draw waiting to be revealed */
+function GiftIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20 12v9H4v-9M2 7h20v5H2zM12 21V7M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+    </svg>
+  )
+}
+
+function RevealSpinner() {
+  return (
+    <span
+      className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-r-transparent motion-reduce:animate-none"
+      aria-hidden="true"
+    />
+  )
+}
 
 type PayoutSource = 'wallet' | 'manual'
 
@@ -214,13 +252,22 @@ function EntryRow({
   phone,
   claimBusy,
   assetLabels,
-  onClaim
+  onClaim,
+  hidden,
+  revealing,
+  revealBlocked,
+  onReveal
 }: {
   entry: ShieldWinEntry
   phone: boolean
   claimBusy: boolean
   assetLabels: ReadonlyMap<string, ShieldWinAsset>
   onClaim: (entry: ShieldWinEntry) => void
+  /** The draw result is not revealed yet (reveals.ts): show Reveal instead of the result */
+  hidden: boolean
+  revealing: boolean
+  revealBlocked: boolean
+  onReveal: (entry: ShieldWinEntry) => void
 }) {
   const view = entryView(entry)
   const copy = entryCopy(view, entry)
@@ -229,7 +276,8 @@ function EntryRow({
   return (
     <li
       className={
-        view === 'won' || view === 'claiming' || view === 'sending' || view === 'claimed'
+        !hidden &&
+        (view === 'won' || view === 'claiming' || view === 'sending' || view === 'claimed')
           ? 'flex min-w-0 flex-col gap-2.5 rounded-lg border border-[#303333] bg-[#24271f] px-5 py-4'
           : 'flex min-w-0 flex-col gap-2.5 rounded-lg border border-[#303333] bg-[#232525] px-5 py-4'
       }
@@ -261,27 +309,50 @@ function EntryRow({
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[11px] leading-[18px] text-[#a1a5a5]">
-            {view === 'notwon' ? 'Draw result' : 'Reward status'}
+            {hidden || view === 'notwon' ? 'Draw result' : 'Reward status'}
           </span>
-          <span
-            className={
-              view === 'claimed'
-                ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[#3b3420] text-[#f0cb45]'
-                : view === 'won' || view === 'claiming' || view === 'sending'
-                  ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[rgba(255,204,0,0.12)] text-[#ffcc00]'
-                  : view === 'failed'
-                    ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[rgba(255,161,0,0.12)] text-[#ffc04d]'
-                    : 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[#2b2e2e] text-[#c4c8c7]'
-            }
-          >
-            {copy.title}
-          </span>
+          {hidden ? (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[rgba(61,255,190,0.08)] text-[#3dffbe] shadow-[inset_0_0_0_1px_rgba(61,255,190,0.35)]">
+              <i
+                className="size-1.5 rounded-full bg-[#3dffbe] shadow-[0_0_6px_#3dffbe]"
+                aria-hidden="true"
+              />
+              Ready to reveal
+            </span>
+          ) : (
+            <span
+              className={
+                view === 'claimed'
+                  ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[#3b3420] text-[#f0cb45]'
+                  : view === 'won' || view === 'claiming' || view === 'sending'
+                    ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[rgba(255,204,0,0.12)] text-[#ffcc00]'
+                    : view === 'failed'
+                      ? 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[rgba(255,161,0,0.12)] text-[#ffc04d]'
+                      : 'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] leading-[18px] font-medium bg-[#2b2e2e] text-[#c4c8c7]'
+              }
+            >
+              {copy.title}
+            </span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2.5">
-          {view === 'won' ? (
+          {hidden ? (
+            phone ? null : (
+              <button
+                type="button"
+                className={SMALL_BUTTON}
+                disabled={revealBlocked}
+                aria-busy={revealing}
+                onClick={() => onReveal(entry)}
+              >
+                {revealing ? <RevealSpinner /> : <GiftIcon />}
+                {revealing ? 'Revealing…' : 'Reveal'}
+              </button>
+            )
+          ) : view === 'won' ? (
             <small className="text-xs text-[#ffcc00]">{rewardText(entry)}</small>
           ) : null}
-          {view === 'won' && !phone ? (
+          {hidden ? null : view === 'won' && !phone ? (
             <button
               type="button"
               className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-[28px] shrink-0 rounded border-transparent bg-[#00d18a] px-3.5 text-[13px] text-black hover:bg-[#1ee3a0] hover:text-black"
@@ -599,6 +670,11 @@ export default function ShieldAndWinPage() {
   const [drawPending, setDrawPending] = useState(false)
   const [copied, setCopied] = useState(false)
   const [claimOpen, setClaimOpen] = useState(false)
+  // Draw results stay hidden until revealed (reveals.ts); the revealed one opens in a dialog
+  const [revealed, setRevealed] = useState<ReadonlySet<number>>(() => readReveals())
+  const [revealingId, setRevealingId] = useState<number | null>(null)
+  const [resultEntry, setResultEntry] = useState<ShieldWinEntry | null>(null)
+  const revealTimer = useRef(0)
   const [claimTarget, setClaimTarget] = useState<ShieldWinEntry | null>(null)
   const [walletPayout, setWalletPayout] = useState<string | null>(null)
   const [manualPayout, setManualPayout] = useState('')
@@ -653,7 +729,15 @@ export default function ShieldAndWinPage() {
   const view = entryView(latest)
   const copy = entryCopy(view, latest)
   const orderedEntries = sortedEntries(entries)
-  const claimable = unclaimedWins(mergeEntries(entries, wins))
+  const knownEntries = mergeEntries(entries, wins)
+  // This campaign's results stay hidden until revealed (reveals.ts). Wins from earlier campaigns
+  // are listed under "Earlier wins", so there is nothing left to reveal.
+  const resultHidden = (entry: ShieldWinEntry) =>
+    entry.campaign_id === campaign?.id && needsReveal(entry, revealed)
+  // Only revealed wins can be claimed; the rest wait behind Reveal, newest first
+  const claimable = unclaimedWins(knownEntries).filter(entry => !resultHidden(entry))
+  const unrevealed = sortedEntries(knownEntries).filter(resultHidden)
+  const latestHidden = latest !== null && resultHidden(latest)
   const rewardKey = inFlightKey(entries, wins)
   const showEntry =
     Boolean(address) && entriesReady && !entriesError && !(drawPending && view === 'none')
@@ -689,6 +773,9 @@ export default function ShieldAndWinPage() {
     setEntryRefreshCooling(false)
     setAssetLabels(new Map())
     setDrawPending(false)
+    window.clearTimeout(revealTimer.current)
+    setRevealingId(null)
+    setResultEntry(null)
     setClaimOpen(false)
     setClaimBusy(false)
     setClaimTarget(null)
@@ -835,6 +922,7 @@ export default function ShieldAndWinPage() {
       entryRefreshAbort.current?.abort()
       allEntriesAbort.current?.abort()
       window.clearTimeout(entryRefreshCooldownTimer.current)
+      window.clearTimeout(revealTimer.current)
     }
   }, [])
 
@@ -1132,8 +1220,8 @@ export default function ShieldAndWinPage() {
     }
     if (seenView.current === view) return
     seenView.current = view
-    setLiveText(`${copy.title}. ${copy.body}`)
-  }, [address, entriesReady, entriesError, view, copy.title, copy.body])
+    setLiveText(latestHidden ? revealHint(1) : `${copy.title}. ${copy.body}`)
+  }, [address, entriesReady, entriesError, view, copy.title, copy.body, latestHidden])
 
   useEffect(() => {
     const onVisible = () => {
@@ -1248,6 +1336,22 @@ export default function ShieldAndWinPage() {
       if (isAbortError(error)) return
       await copyPageLink()
     }
+  }
+
+  /** Reveal: a short wait, then the result is saved as revealed and opens in its dialog */
+  function onReveal(entry: ShieldWinEntry) {
+    if (phone || claimBusy || revealingId !== null) return
+    setRevealingId(entry.id)
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    revealTimer.current = window.setTimeout(
+      () => {
+        if (!mountedRef.current) return
+        setRevealed(current => saveReveal(entry.id, current))
+        setRevealingId(null)
+        setResultEntry(entry)
+      },
+      reduced ? REVEAL_DELAY_REDUCED_MS : REVEAL_DELAY_MS
+    )
   }
 
   async function openClaim(entry: ShieldWinEntry) {
@@ -1447,6 +1551,8 @@ export default function ShieldAndWinPage() {
     hint = notice
   } else if (drawPending) {
     hint = DRAW_PENDING_MESSAGE
+  } else if (unrevealed.length > 0) {
+    hint = revealHint(unrevealed.length)
   } else if (!provider && walletReady && board.canJoin) {
     hint = INSTALL_HINT
   } else if (provider && accountReady && !address && board.canJoin && claimable.length === 0) {
@@ -1505,6 +1611,10 @@ export default function ShieldAndWinPage() {
       claimBusy={claimBusy}
       assetLabels={assetLabels}
       onClaim={item => void openClaim(item)}
+      hidden={resultHidden(entry)}
+      revealing={revealingId === entry.id}
+      revealBlocked={claimBusy || revealingId !== null}
+      onReveal={onReveal}
     />
   )
 
@@ -1671,6 +1781,26 @@ export default function ShieldAndWinPage() {
                   Claim
                 </button>
               ) : null}
+              {actionsReady && !phone && unrevealed.length > 0 ? (
+                <button
+                  type="button"
+                  className={
+                    claimable.length > 0
+                      ? "inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 min-w-[226px] rounded px-7 text-[17px] max-[760px]:w-full border-[#3a3a3a] bg-[#0b0b0b] text-white hover:border-[#6a6a6a] hover:text-white"
+                      : "inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 min-w-[226px] rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
+                  }
+                  disabled={claimBusy || revealingId !== null}
+                  aria-busy={revealingId !== null}
+                  onClick={() => onReveal(unrevealed[0])}
+                >
+                  {revealingId !== null ? <RevealSpinner /> : <GiftIcon />}
+                  {revealingId !== null
+                    ? 'Revealing…'
+                    : claimable.length > 0
+                      ? 'Reveal next draw'
+                      : 'Reveal your draw'}
+                </button>
+              ) : null}
               {showInstall ? (
                 <a
                   className="inline-flex cursor-pointer items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
@@ -1691,7 +1821,7 @@ export default function ShieldAndWinPage() {
                   <button
                     type="button"
                     className={
-                      claimable.length > 0
+                      claimable.length > 0 || unrevealed.length > 0
                         ? "inline-flex cursor-default items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-[#3a3a3a] bg-[#0b0b0b] text-white hover:border-[#6a6a6a] hover:text-white"
                         : "inline-flex cursor-default items-center justify-center gap-2.5 border font-['DM_Sans',system-ui,sans-serif] leading-none font-medium no-underline transition-[background-color,border-color] duration-150 disabled:cursor-default disabled:opacity-[0.55] [&_svg]:block [&_svg]:size-[18px] [&_svg]:shrink-0 h-14 rounded px-7 text-[17px] max-[760px]:w-full border-transparent bg-[#00d18a] text-black hover:bg-[#1ee3a0] hover:text-black"
                     }
@@ -2067,6 +2197,23 @@ export default function ShieldAndWinPage() {
           ) : null}
         </div>
       </dialog>
+
+      <DrawResultDialog
+        entry={resultEntry}
+        label={
+          resultEntry
+            ? `${assetInfo(resultEntry.destination_asset, assetLabels).symbol} ${formatEntryUsd(resultEntry.usd_value)}`
+            : ''
+        }
+        minimum={board.minimumValue}
+        prizesLeft={prizes ? prizes.left : null}
+        campaignOpen={board.canJoin}
+        onClose={() => setResultEntry(null)}
+        onClaim={entry => {
+          setResultEntry(null)
+          void openClaim(entry)
+        }}
+      />
 
       <dialog
         ref={claimRef}
