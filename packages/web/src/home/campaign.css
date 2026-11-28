@@ -1,0 +1,451 @@
+/* Shield & Win campaign entry (Campaign.tsx), per the design mock: an orange countdown ticket,
+   a dark sheet in the campaign yellow on desktop, and a "use a computer" sheet on phones. */
+.cw {
+  --cw-orange: #ffa200;
+  --cw-yellow: #ffcc00;
+}
+
+/* ---------- Ticket: orange tab, dark card that warms up toward the coin on the right ---------- */
+.cw-ticket {
+  position: relative;
+  display: block;
+  width: 392px;
+  max-width: 100%;
+  padding-top: 38px;
+  text-align: left;
+}
+.cw-tab {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  height: 39px;
+  padding: 0 42px 0 13px;
+  border-radius: 8px 0 0 0;
+  background: var(--cw-orange);
+  clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 100%, 0 100%);
+  color: #fff;
+  font-size: 20px;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.cw-card {
+  display: block;
+  padding: 13px 120px 15px 15px;
+  border: 1px solid var(--cw-orange);
+  border-radius: 0 8px 8px;
+  background: linear-gradient(90deg, #000 38%, #4a2f02 72%, #9a6300 100%);
+}
+.cw-time {
+  display: flex;
+  align-items: baseline;
+  gap: 26px;
+  padding-bottom: 10px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.7), transparent) left bottom / 100% 1px
+    no-repeat;
+  color: #fff;
+  font-size: 22px;
+  line-height: 1.25;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cw-when {
+  display: block;
+  margin-top: 8px;
+  color: #9e9e9e;
+  font-size: 13px;
+  line-height: 1.3;
+}
+.cw-coin {
+  position: absolute;
+  right: 6px;
+  top: 4px;
+  width: 100px;
+  height: 100px;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5));
+}
+
+/* ---------- Desktop: the ticket floats bottom right, clear of the support chat button and its
+   greeting bubble, with a close button on its top-right corner ---------- */
+.cw-float {
+  position: fixed;
+  z-index: 59;
+  right: 16px;
+  bottom: 140px;
+  transition: transform 0.2s ease;
+}
+.cw-float:hover {
+  transform: translateY(-3px);
+}
+.cw-badge {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  filter: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.6));
+}
+.cw-badge:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 4px;
+  border-radius: 10px;
+}
+.cw-dismiss {
+  position: absolute;
+  top: -12px;
+  right: -8px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background: rgba(10, 10, 10, 0.88);
+  color: #fff;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+.cw-dismiss:hover {
+  background: #262626;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+.cw-dismiss:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+.cw-dismiss svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.4;
+}
+
+/* ---------- Sheets: native dialogs pinned to the bottom, over a dimmed, blurred page. A window
+   too short for a sheet scrolls it rather than cutting it off. ---------- */
+.cw-sheet,
+.cw-phone {
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  max-height: 100dvh;
+  margin: auto 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Room for the coin that rises above the sheet's top edge */
+.cw-sheet {
+  padding-top: 16px;
+}
+.cw-sheet::backdrop,
+.cw-phone::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+/* The dialogs themselves slide in, so the scroll area never grows while they do */
+.cw-sheet[open],
+.cw-phone[open] {
+  animation: cw-up 0.32s ease-out;
+}
+@keyframes cw-up {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+}
+/* The sheets take focus themselves when they open (Campaign.tsx), without an outline */
+.cw-sheet:focus,
+.cw-phone:focus {
+  outline: none;
+}
+/* Close: no outline, just a soft round backdrop on hover and keyboard focus */
+.cw-close {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.cw-close:hover,
+.cw-close:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.12);
+}
+.cw-close svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 2.2;
+}
+.cw-join:focus-visible,
+.cw-copy:focus-visible,
+.cw-steps a:focus-visible {
+  outline: 2px solid var(--cw-yellow);
+  outline-offset: 2px;
+}
+
+/* Desktop sheet: title, countdown and Join Now, three steps with arrows between them, fine print,
+   and the mock's deep margin below it */
+.cw-sheet-in {
+  position: relative;
+  padding: 30px max(var(--gutter), calc((100% - 1212px) / 2)) 104px;
+  background: #171717;
+}
+.cw-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 32px;
+  padding-right: 48px;
+}
+.cw-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: var(--cw-yellow);
+  font-size: clamp(28px, 2.4vw, 36px);
+  font-weight: 700;
+  line-height: 1.2;
+}
+/* The coin rises a little above the sheet, as in the mock */
+.cw-head h2 img {
+  width: 92px;
+  height: 92px;
+  margin: -56px 0 -20px;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5));
+}
+.cw-sub {
+  grid-column: 1;
+  margin-top: 10px;
+  font-size: 20px;
+  line-height: 1.3;
+  text-wrap: pretty;
+}
+.cw-act {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 30px;
+}
+.cw-clock {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  font-size: 20px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cw-clock-label {
+  color: #9e9e9e;
+  font-size: 15px;
+}
+.cw-join {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 48px;
+  padding: 0 30px;
+  border-radius: 8px;
+  background: var(--cw-yellow);
+  color: #000;
+  font-size: 18px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.cw-join:hover {
+  background: #ffd83d;
+}
+.cw-join svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.4;
+}
+.cw-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 35px;
+  margin-top: 30px;
+}
+.cw-steps li {
+  position: relative;
+  min-height: 138px;
+  padding: 20px 23px;
+  border-radius: 6px;
+  background: #232323;
+}
+/* Yellow arrow between neighbouring steps */
+.cw-steps li + li::before {
+  content: '';
+  position: absolute;
+  left: -27px;
+  top: 25px;
+  border-top: 9px solid transparent;
+  border-bottom: 9px solid transparent;
+  border-left: 14px solid var(--cw-yellow);
+  border-radius: 2px;
+}
+.cw-steps h3 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.cw-steps p {
+  margin-top: 12px;
+  color: #e6e6e6;
+  font-size: 15px;
+  line-height: 1.3;
+  text-wrap: pretty;
+}
+.cw-steps a {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--cw-yellow);
+  font-size: 15px;
+  line-height: 1.3;
+  text-decoration: none;
+}
+.cw-steps a:hover {
+  text-decoration: underline;
+}
+.cw-note {
+  margin-top: 30px;
+  color: #8b8e93;
+  font-size: 15px;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+/* Phone sheet: the ticket hangs over the top edge (flow-root keeps its negative margin from
+   collapsing into the sheet's), then why and where to go, and the mock's deep bottom margin */
+.cw-phone-in {
+  position: relative;
+  display: flow-root;
+  margin-top: 82px;
+  padding: 0 18px 100px;
+  border-radius: 24px 24px 0 0;
+  background: #161616;
+  text-align: center;
+}
+/* The sheet's top edge meets the card under the orange tab; the close button sits just above */
+.cw-phone .cw-ticket {
+  width: 100%;
+  margin-top: -38px;
+}
+.cw-phone .cw-close {
+  top: -82px;
+  right: 6px;
+}
+.cw-laptop {
+  display: block;
+  margin-top: 46px;
+  font-size: 44px;
+  line-height: 1;
+}
+.cw-phone h2 {
+  margin-top: 22px;
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1.3;
+}
+.cw-phone p {
+  max-width: 300px;
+  margin: 14px auto 0;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.cw-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 50px;
+  margin-top: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: #2e2e2e;
+  color: #fff;
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+.cw-copy svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Phones never see the floating ticket (they get their own sheet); narrower desktops get a
+   stacked sheet */
+@media (max-width: 759px) {
+  .cw-float {
+    display: none;
+  }
+}
+@media (max-width: 1099px) {
+  .cw-sheet-in {
+    padding-bottom: 40px;
+  }
+  .cw-head {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 16px;
+  }
+  .cw-act {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .cw-steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .cw-steps li {
+    min-height: 0;
+  }
+  .cw-steps li + li::before {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cw-sheet[open],
+  .cw-phone[open] {
+    animation: none;
+  }
+  .cw-float {
+    transition: none;
+  }
+}
+.cw-note a {
+  color: var(--cw-yellow);
+  font-style: normal;
+  text-decoration: none;
+}
+.cw-note a:hover {
+  text-decoration: underline;
+}
+.cw-note a:focus-visible {
+  outline: 2px solid var(--cw-yellow);
+  outline-offset: 2px;
+}

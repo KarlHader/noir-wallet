@@ -1,0 +1,2415 @@
+/* Noir Wallet home page. Layout and motion come from Demo Day direction 1, "1 in 4,444"; the
+   colors are taken from the previous site. */
+:root {
+  --bg: #000;
+  --card: #191919;
+  --card-line: #696969;
+  --panel: #12121c;
+  --line: #363636;
+  --hair: #1f1f1f;
+  --tile: rgba(255, 255, 255, 0.06);
+  --sub: #bcbcc8;
+  --mute: #8b8e93;
+  --mute-2: #a7a9ad;
+  --green: #00d18a;
+  --mint: #3dffbe;
+  --gold: #ffcc00;
+  --amber: #ffa100;
+  --gutter: clamp(16px, 5vw, 80px);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+/* /frost and /v2/beta load this stylesheet too but keep their Tailwind look, so page-wide rules
+   only apply when index.html marks the page as the home page. */
+:where(:root[data-page='home']) {
+  background: #000;
+  color-scheme: dark;
+  scroll-behavior: smooth;
+}
+:where(:root[data-page='home']) body {
+  margin: 0;
+  background: #000;
+  color: #fff;
+  /* Longhands, not the `font` shorthand: the shorthand resets font-variation-settings, and a CSS
+     minifier that reorders declarations (Vite 8's Lightning CSS does) can move it after the opsz
+     below and drop it. */
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.55;
+  /* The design mock (Figma) always uses optical size 14 for DM Sans, so large text comes out
+     wider than the browser's automatic choice. */
+  font-variation-settings: 'opsz' 14;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+:where(:root[data-page='home']) img {
+  display: block;
+  max-width: 100%;
+}
+:where(:root[data-page='home']) a {
+  color: inherit;
+}
+:where(:root[data-page='home']) :is(h1, h2, h3, p, dl, dd, ol, ul) {
+  margin: 0;
+}
+:where(:root[data-page='home']) :is(ol, ul) {
+  padding: 0;
+  list-style: none;
+}
+.doto {
+  font-family: 'Doto', ui-monospace, monospace;
+  font-weight: 400;
+}
+.wrap {
+  width: calc(100% - 2 * var(--gutter));
+  max-width: 1280px;
+  margin: 0 auto;
+}
+/* The extension demo uses the real extension's letterforms, not the design mock's optical size. */
+.xd {
+  font-variation-settings: normal;
+}
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+:where(:root[data-page='home']) [id] {
+  scroll-margin-top: 88px;
+}
+
+/* ---------- header ---------- */
+.site-head {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.86);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid #111;
+}
+/* Brand on the left, nav centered on the page, install button on the right (80 px from the edges
+   at 1512, as in the mock) */
+.wrap-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 24px;
+  width: calc(100% - 2 * var(--gutter));
+  max-width: 1352px;
+  height: 82px;
+  margin: 0 auto;
+}
+.wrap-head .btn {
+  justify-self: end;
+  gap: 6px;
+  padding: 0 12px;
+  font-weight: 400;
+}
+.wrap-head .btn svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.6;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  justify-self: start;
+  gap: 6px;
+  text-decoration: none;
+  font-size: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.brand img {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+.brand span {
+  background: linear-gradient(90deg, #fff 0%, #999 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.brand:hover span {
+  background-image: linear-gradient(90deg, #fff 0%, var(--mint) 100%);
+}
+.site-nav {
+  display: flex;
+  justify-content: center;
+  gap: clamp(20px, 3.6vw, 54px);
+}
+.site-nav a {
+  font-family: 'Doto', ui-monospace, monospace;
+  font-size: 16px;
+  text-decoration: none;
+  color: #fff;
+  padding: 10px 0;
+  transition: color 0.16s;
+}
+.site-nav a:hover {
+  color: var(--mint);
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 4px;
+  background: var(--green);
+  color: #000;
+  font:
+    500 15px/1 'DM Sans',
+    system-ui,
+    sans-serif;
+  text-decoration: none;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.btn:hover {
+  background: var(--mint);
+}
+.btn:focus-visible,
+.site-nav a:focus-visible,
+.brand:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+.btn svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+/* The Chrome logo on the hero's install button (the wallet is a Chrome extension) */
+.btn .btn-chrome {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+.btn .ext {
+  width: 30px;
+  height: 30px;
+  margin: -8px -9px -8px -9px;
+  stroke-width: 1.2;
+}
+.btn-ghost {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  border: 1px solid #424242;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: #5c5c5c;
+}
+/* Apps that are not out yet (ComingSoon.tsx): greyed out, not clickable, tagged Soon like the
+   upcoming privacy providers */
+.btn-soon,
+.btn-soon:hover {
+  cursor: default;
+  color: #8b8e93;
+  background: rgba(14, 14, 14, 0.92);
+  border-color: #2e2e2e;
+}
+.btn-soon svg {
+  opacity: 0.75;
+}
+/* The hero's column is narrow: the Soon buttons size to their content so all three fit a row */
+.hero .cta-row .btn.btn-soon {
+  min-width: 0;
+  padding: 0 16px;
+}
+.btn-soon em {
+  padding: 0 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #7d8086;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 20px;
+}
+/* Phones: the install button takes its own row, the two Soon buttons share the next */
+@media (max-width: 759px) {
+  .cta-row:has(.btn-soon) > .btn:not(.btn-soon) {
+    flex: 1 1 100%;
+  }
+  .cta-row:has(.btn-soon) > .btn-soon {
+    flex: 1;
+    min-width: 0;
+    padding: 0 12px;
+  }
+}
+.btn-sm {
+  min-height: 40px;
+  font-size: 14px;
+  padding: 0 14px;
+}
+/* Hint for phones that the wallet has to be installed in desktop Chrome */
+.desk-note {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid #2c2c2c;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--sub);
+}
+.desk-note .btn {
+  flex: none;
+}
+
+/* ---------- hero: per the design mock, dot grid + copy + new wallet UI on the right ---------- */
+.hero {
+  position: relative;
+  display: grid;
+  padding-top: 18px;
+  overflow: hidden;
+}
+/* The dot grid and the wallet share one grid cell, so the hero is as tall as the taller of the
+   two (the wallet is longer than the grid and fades out toward the bottom). */
+.hero-stage,
+.hero-phone-layer {
+  grid-area: 1 / 1;
+}
+/* Hero content column: narrower than the page's content width; the copy and the wallet both
+   align to it. */
+.hero-wrap {
+  width: calc(100% - 2 * var(--gutter));
+  max-width: 1066px;
+  margin: 0 auto;
+}
+.hero-stage {
+  position: relative;
+}
+.field {
+  display: block;
+  width: 100%;
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.hero-copy {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.hero-copy .inner {
+  max-width: 520px;
+  padding-top: 36px;
+}
+.hero-copy .inner > * {
+  pointer-events: auto;
+}
+.hero h1 {
+  /* Breaks after "Privacy-first" at every width, as in the mock */
+  max-width: 8.8em;
+  font-size: clamp(36px, 3.7vw, 56px);
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.lede {
+  max-width: 504px;
+  margin: 23px 0 55px;
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.5;
+  color: #d9d9d9;
+  text-transform: capitalize;
+}
+.cta-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.hero .cta-row {
+  gap: 10px;
+}
+.hero .cta-row .btn {
+  min-width: 177px;
+  min-height: 42px;
+  font-size: 16px;
+}
+.hero .cta-row .btn:not(.btn-ghost) {
+  font-weight: 400;
+}
+/* In the mock the buttons start 16 px left of the copy */
+@media (min-width: 1000px) {
+  .hero .cta-row {
+    margin-left: -16px;
+  }
+}
+
+/* Chains on the dot grid: solid dot + thin ring + same-color name, dimmed overall as a
+   background. While shielding, each mark the scan wave reaches turns into a dashed shield. */
+.chain-mark {
+  --c: #6284f5;
+  position: absolute;
+  z-index: 1;
+  width: 0;
+  height: 0;
+  opacity: 0.5;
+  pointer-events: none;
+}
+.chain-mark.tone-zec {
+  --c: #ffcc00;
+}
+.chain-mark.tone-arb {
+  --c: #3564ab;
+}
+.chain-mark.tone-bnb {
+  --c: #ffbf19;
+}
+.chain-mark.tone-base {
+  --c: #0038ff;
+}
+.chain-mark::before {
+  content: '';
+  position: absolute;
+  left: -6.5px;
+  top: -6.5px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--c);
+  transition: background 0.45s ease var(--wave, 0ms);
+}
+.chain-mark::after {
+  content: '';
+  position: absolute;
+  left: -15.5px;
+  top: -15.5px;
+  width: 31px;
+  height: 31px;
+  border-radius: 50%;
+  border: 1px solid var(--ring, var(--c));
+  transition: border-color 0.45s ease var(--wave, 0ms);
+}
+.chain-mark > span {
+  position: absolute;
+  left: 22.5px;
+  top: -9.5px;
+  font:
+    400 15px/1.2 'DM Sans',
+    system-ui,
+    sans-serif;
+  color: var(--c);
+  white-space: nowrap;
+  transition: color 0.45s ease var(--wave, 0ms);
+}
+.chain-mark[data-flip] > span {
+  left: auto;
+  right: 22.5px;
+}
+/* Ethereum and Zcash glow slightly in the mock */
+.chain-mark.tone-eth > span,
+.chain-mark.tone-zec > span {
+  text-shadow: 0 0 6px color-mix(in srgb, var(--c) 50%, transparent);
+}
+.is-shield .chain-mark {
+  --c: var(--mint);
+}
+.is-shield .chain-mark::after {
+  border-style: dashed;
+  animation: spin 10s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tip {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  font-size: 14px;
+  padding: 5px 9px;
+  border-radius: 4px;
+  background: #0b0b0b;
+  border: 1px solid #333;
+  color: #b8b8b8;
+  transform: translate(-50%, -150%);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.tip.on {
+  opacity: 1;
+}
+
+/* Wallet home screenshot (exported from the design mock, with the blurred fade-out at the
+   bottom already baked into the image): layered over the dot grid. The container width is the
+   phone frame width; frameStyle scales the image up and shifts it to cut off the padding. */
+.hero-phone-layer {
+  position: relative;
+  z-index: 3;
+  padding-top: 234px;
+  pointer-events: none;
+}
+.hero-phone {
+  position: relative;
+  display: flow-root;
+  width: 375px;
+  max-width: 100%;
+  margin-left: auto;
+  pointer-events: auto;
+}
+.hero-phone img {
+  width: var(--fw);
+  max-width: none;
+  height: auto;
+  margin-left: var(--fx);
+  margin-top: var(--fy);
+  transition: filter 0.2s;
+}
+/* Clicking the wallet image opens the demo. A "Try the extension" pill above the wallet says so;
+   hovering the wallet brightens it and the pill. */
+.hero-phone-hit {
+  position: absolute;
+  inset: 0 0 35%;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.hero-phone-hit:focus-visible {
+  outline: none;
+}
+.hero-phone:hover img {
+  filter: brightness(1.08);
+}
+.hero-phone-hint {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 14px);
+  translate: -50% 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(61, 255, 190, 0.55);
+  background: rgba(10, 12, 14, 0.82);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font:
+    500 15px/1 'DM Sans',
+    system-ui,
+    sans-serif;
+  white-space: nowrap;
+  transition:
+    border-color 0.18s,
+    background-color 0.18s;
+}
+/* A soft mint ring goes out from the pill every few seconds */
+.hero-phone-hint::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  animation: try-pulse 2.8s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes try-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(61, 255, 190, 0.45);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 10px rgba(61, 255, 190, 0);
+  }
+}
+.hero-phone-hint svg {
+  width: 16px;
+  height: 16px;
+  color: var(--mint);
+}
+.hero-phone-hit:hover .hero-phone-hint,
+.hero-phone-hit:focus-visible .hero-phone-hint {
+  border-color: var(--mint);
+  background-color: rgba(14, 38, 30, 0.92);
+}
+.hero-phone-hit:focus-visible .hero-phone-hint {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+/* The backers' band ("Backed by", "Trusted by"), 31 px under the dot grid; its text lines up with
+   the buttons (x = 212 at 1512). The wallet passes over it. */
+/* The band always shows on the first screen: 31 px under the dot grid as in the mock (Hero.tsx
+   puts the grid's height in --field-h), rising to the bottom edge of a shorter window (83 px
+   header with its border + 100 px band), but never over the copy and buttons. */
+.band {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  top: max(380px, min(calc(49px + var(--field-h, 622px)), calc(100svh - 183px)));
+  display: flex;
+  align-items: center;
+  gap: 88px;
+  height: 100px;
+  padding-left: max(var(--gutter), calc((100% - 1088px) / 2));
+  background: #ebba37;
+  color: #000;
+}
+.band-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.band-group > span {
+  font-size: 20px;
+  font-weight: 300;
+  line-height: 1.5;
+  text-transform: capitalize;
+}
+.band-logo {
+  width: auto;
+  height: 36px;
+}
+/* From 1000 to 1199 px the wallet reaches over the band's right part, so the two groups get
+   smaller to stay clear of it */
+@media (min-width: 1000px) and (max-width: 1199px) {
+  .band {
+    gap: 40px;
+  }
+  .band-group {
+    gap: 10px;
+  }
+  .band-group > span {
+    font-size: 17px;
+  }
+  .band-logo {
+    height: 28px;
+  }
+}
+/* The bottom of the hero fades to black under the wallet, as in the mock */
+.hero::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  right: 0;
+  bottom: 30px;
+  height: 200px;
+  background: linear-gradient(transparent, #000);
+  pointer-events: none;
+}
+/* Placeholder while the demo chunk is still loading */
+.xo-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(3, 3, 6, 0.84);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  color: var(--mute-2);
+  font-size: 14px;
+}
+
+/* Below 1000: the copy overlays the dot grid and the wallet sits centered below it */
+@media (max-width: 999px) {
+  .hero {
+    display: flex;
+    flex-direction: column;
+  }
+  .hero-phone-layer {
+    order: 2;
+    padding-top: 0;
+  }
+  .hero-phone {
+    margin: -64px auto 0;
+  }
+}
+
+/* ---------- Section frame: the design mock's 1236 px content column, a mint eyebrow and a
+   46 px title ---------- */
+.wrap-n {
+  width: calc(100% - 2 * var(--gutter));
+  max-width: 1236px;
+  margin: 0 auto;
+}
+.sec-n {
+  padding-top: clamp(96px, 11vw, 166px);
+}
+.eyebrow {
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.5;
+  color: #00ffa3;
+  text-transform: uppercase;
+}
+.h2 {
+  margin-top: 10px;
+  font-size: clamp(32px, 3.05vw, 46px);
+  font-weight: 600;
+  line-height: 1.2;
+}
+.sec-lede {
+  max-width: 732px;
+  margin-top: 18px;
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.5;
+}
+/* Panels and cells: dark fill with a 1 px border that fades from gray to dark gray downward.
+   Under a mouse pointer the border turns mint around it (--spot, see the card hover styles). */
+.acct-body,
+.hw-steps li,
+.trust-grid li {
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background:
+    linear-gradient(#16161d, #16161d) padding-box,
+    radial-gradient(
+        300px circle at var(--mx, 50%) var(--my, 50%),
+        rgb(61 255 190 / calc(var(--spot, 0) * 0.95)),
+        transparent 70%
+      )
+      border-box,
+    linear-gradient(180deg, #696969, #343434) border-box;
+}
+
+/* ---------- Key Features: gray band, the wallet picture on the left, three cards on the right.
+   At 1512 the picture starts at x = 202 and the cards at x = 756, as in the mock. ---------- */
+.kf {
+  margin-top: 25px;
+  background: #16161d;
+  overflow: hidden;
+  /* Clips the same, but does not make the band a scroll container, so the box can pin */
+  overflow: clip;
+}
+.kf-travel {
+  display: none;
+}
+.kf-box {
+  display: grid;
+  grid-template-columns: minmax(0, 434px) minmax(0, 592px);
+  justify-content: space-between;
+  column-gap: 40px;
+  width: calc(100% - 2 * var(--gutter));
+  max-width: 1236px;
+  margin: 0 auto;
+  padding: 70px clamp(0px, 1.7vw, 26px) 8px clamp(0px, 4.2vw, 64px);
+}
+/* The pictures sit on the mock's 434 × 647 stage in percentages (KeyFeatures.tsx), so the stage
+   scales as a whole */
+.kf-stage {
+  position: relative;
+  aspect-ratio: 434 / 647;
+}
+.kf-shot {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.45s ease;
+}
+.kf-shot.on {
+  opacity: 1;
+}
+.kf-layer {
+  position: absolute;
+  overflow: hidden;
+}
+.kf-layer img {
+  width: 100%;
+  height: auto;
+  max-width: none;
+}
+.kf-side {
+  padding-top: 8px;
+}
+.kf-title {
+  padding-left: 31px;
+  font-size: clamp(34px, 3.05vw, 46px);
+  font-weight: 600;
+  line-height: 1.2;
+}
+.kf-tabs {
+  display: grid;
+  gap: 26px;
+  margin-top: 34px;
+}
+/* The selected card is lighter and gets a 3 px mint bar on its left edge */
+.kf-tab {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  min-height: 139px;
+  padding: 28px 31px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    box-shadow 0.2s;
+}
+.kf-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.kf-tab.on {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: -3px 0 0 var(--mint);
+}
+.kf-tab:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+.kf-tab b {
+  font-size: clamp(22px, 1.85vw, 28px);
+  font-weight: 700;
+  line-height: 1.2;
+}
+/* The text reads as written, in sentence case; only the titles use title case */
+.kf-tab span {
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.5;
+  color: #d9d9d9;
+}
+.kf-tab.on span {
+  color: #fff;
+}
+/* Wide screens: the box pins right under the 83 px header while the band scrolls on for another
+   140vh, in which the features follow one another (KeyFeatures.tsx); then the page moves on. On
+   short windows the picture and the cards shrink so the pinned box still fits. */
+@media (min-width: 1100px) {
+  @supports (overflow: clip) {
+    .kf-box {
+      position: sticky;
+      top: 83px;
+      padding-top: clamp(24px, calc(100vh - 784px), 70px);
+    }
+    .kf-stage {
+      width: min(434px, calc((100vh - 131px) * 434 / 647));
+    }
+    .kf-travel {
+      display: block;
+      height: 140vh;
+    }
+  }
+}
+@media (min-width: 1100px) and (max-height: 760px) {
+  .kf-tabs {
+    gap: 14px;
+    margin-top: 20px;
+  }
+  .kf-tab {
+    min-height: 0;
+    gap: 12px;
+    padding: 22px 28px 16px;
+  }
+}
+
+/* ---------- How Noir Wallet Works (Workflow.tsx): the design mock's 1256 × 536 canvas, scaled
+   down as a whole when narrow. Every line brightens toward where it leads. ---------- */
+.works-sec {
+  padding-top: clamp(100px, 11.6vw, 175px);
+}
+.works-fit {
+  margin-top: 32px;
+  height: calc(536px * var(--k, 1));
+}
+.works {
+  position: relative;
+  left: 50%;
+  width: 1256px;
+  height: 536px;
+  transform: translateX(-50%) scale(var(--k, 1));
+  transform-origin: top center;
+}
+/* Everything is placed on the canvas; the path's wrapper only shapes the phone layout */
+.wk-path {
+  display: contents;
+}
+.works > *,
+.wk-path > * {
+  position: absolute;
+}
+.wk-lines {
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.wk-lines path {
+  fill: none;
+}
+.wk-bracket,
+.wk-drop {
+  stroke: #f0616d;
+  stroke-dasharray: 2 2;
+}
+.wk-drop {
+  stroke: #ffa200;
+}
+.wk-drop.is-public {
+  stroke: #8b8e93;
+}
+/* Cells: a dark fill with a 1 px border that fades from gray to dark gray downward */
+.wk-acct,
+.wk-core,
+.wk-chip,
+.wk-defi li,
+.wk-seed {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#191919, #191919) padding-box,
+    linear-gradient(180deg, #696969, #343434) border-box;
+}
+.wk-nolink {
+  left: 376px;
+  top: 0;
+  width: 155px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #f0616d;
+  border-radius: 23px;
+  background: #1c0f0f;
+  font-size: 16px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.wk-acct {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-radius: 16px;
+  white-space: nowrap;
+}
+.wk-acct b {
+  margin-top: 10px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.wk-pub {
+  left: 0;
+  top: 188px;
+  width: 193px;
+  height: 113px;
+  padding-top: 20px;
+}
+.wk-pub img {
+  width: 26px;
+  height: 26px;
+}
+.wk-pub span {
+  margin-top: 5px;
+  font-size: 12px;
+  font-weight: 300;
+  line-height: 1.2;
+  color: #8b8e93;
+}
+.wk-priv {
+  left: 698px;
+  top: 201px;
+  width: 212px;
+  height: 96px;
+  padding-top: 14px;
+  background:
+    linear-gradient(180deg, #ffa100, #996100) padding-box,
+    linear-gradient(180deg, #997f49, #ffd37a) border-box;
+}
+.wk-priv img {
+  width: 28px;
+  height: 28px;
+}
+/* The two-way links, Shield / Unshield and Fund privately / Return: the label, the line out, the
+   line back, the label */
+.wk-link {
+  top: 202px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: #00ffa3;
+}
+.wk-link.is-shield {
+  left: 196px;
+  width: 98px;
+}
+.wk-link.is-fund {
+  left: 572px;
+  width: 126px;
+  color: #ffa100;
+}
+.wk-tag {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 17px;
+  white-space: nowrap;
+}
+.wk-link .wk-wire {
+  align-self: stretch;
+}
+.wk-link .is-out {
+  margin-top: 9px;
+}
+.wk-link .is-back {
+  margin: 26px 0 8px;
+}
+/* A line with a spark (i) that runs along it, --run pixels; a line back is mirrored, so it
+   brightens toward the other end and its spark runs the other way */
+.wk-wire {
+  --run: 82px;
+  position: relative;
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, rgb(61 255 190 / 0.1), #3dffbe);
+}
+.is-fund .wk-wire,
+.wk-down {
+  --run: 110px;
+  background: linear-gradient(90deg, rgb(255 161 0 / 0.1), #ffa200);
+}
+.wk-wire.is-back {
+  scale: -1 1;
+}
+.wk-wire i {
+  position: absolute;
+  left: 0;
+  top: -1px;
+  width: 16px;
+  height: 4px;
+  border-radius: 2px;
+  background: #e9fff7;
+  box-shadow:
+    0 0 6px var(--mint),
+    0 0 12px rgba(61, 255, 190, 0.6);
+  opacity: 0;
+  animation: wk-run 2.4s linear infinite;
+}
+.is-fund .wk-wire i,
+.wk-down i {
+  background: #fff1d6;
+  box-shadow:
+    0 0 6px #ffa200,
+    0 0 12px rgba(255, 162, 0, 0.6);
+}
+/* One round every 2.4 s: out from Public through Shield and Incognito to the DeFi uses (the fan,
+   0.9 s), then back from Incognito through Shield to Public */
+.is-fund .is-out i {
+  animation-delay: 0.45s;
+}
+.is-fund .is-back i {
+  animation-delay: 1.2s;
+}
+.is-shield .is-back i {
+  animation-delay: 1.65s;
+}
+.wk-down i {
+  animation-delay: 0.9s;
+}
+@keyframes wk-run {
+  0% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  26% {
+    opacity: 1;
+  }
+  30%,
+  100% {
+    transform: translateX(var(--run));
+    opacity: 0;
+  }
+}
+.wk-down {
+  display: none;
+}
+.wk-shield {
+  left: 283px;
+  top: 98px;
+  width: 297px;
+  height: 301px;
+}
+.wk-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px dashed var(--green);
+  border-radius: 36px;
+}
+.wk-core {
+  position: absolute;
+  inset: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 41px;
+  gap: 4px;
+  border-radius: 30px;
+}
+.wk-core img {
+  width: 123px;
+  height: 133px;
+}
+.wk-core b {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.wk-chip {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  height: 96px;
+  padding-top: 13px;
+  border-radius: 12px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.wk-chip img {
+  width: 26px;
+  height: 32.5px;
+}
+.wk-send {
+  left: -66px;
+  top: -36px;
+  width: 159px;
+}
+.wk-recv {
+  left: 201px;
+  top: 241px;
+  width: 175px;
+}
+.wk-lines .wk-fan-line {
+  stroke: url(#wk-fan-fade);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.wk-lines .wk-fan-spark {
+  stroke: #ffc44d;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 18 82;
+  stroke-dashoffset: 100;
+  filter: drop-shadow(0 0 4px #ffa200);
+  animation: wk-fan 2.4s linear infinite 0.9s;
+}
+@keyframes wk-fan {
+  0% {
+    stroke-dashoffset: 100;
+    opacity: 1;
+  }
+  40% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  41%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+/* What Incognito is for: a dashed orange frame with the heading, three uses and a closing note */
+.wk-defi {
+  left: 951px;
+  top: 23px;
+  width: 305px;
+  height: 484px;
+  padding: 53px 17px 0 23px;
+  border: 1px dashed #ffa100;
+  border-radius: 6px;
+}
+.wk-defi-title {
+  display: block;
+  max-width: 260px;
+  margin-left: 3px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #ffa100;
+}
+.wk-defi ul {
+  display: grid;
+  gap: 13px;
+  margin-top: 17px;
+}
+.wk-defi li,
+.wk-fresh {
+  position: relative;
+  height: 72px;
+  border-radius: 12px;
+}
+/* Each use: its icon and name, centred in the card */
+.wk-defi li {
+  display: flex;
+  align-items: center;
+  padding-left: 46px;
+}
+.wk-use-icon {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  translate: 0 -50%;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: rgb(255 161 0 / 0.2);
+}
+.wk-use-icon img {
+  width: auto;
+  height: auto;
+}
+.wk-defi li b,
+.wk-fresh b {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.wk-fresh span {
+  display: block;
+  margin-top: 7px;
+  font-size: 14px;
+  line-height: 1.2;
+  color: #8b8e93;
+}
+.wk-fresh {
+  margin-top: 13px;
+  padding: 12px 0 0 21px;
+  border: 1px dashed #4f4f4f;
+}
+/* One seed phrase behind every account */
+.wk-seed {
+  left: 0;
+  top: 451px;
+  width: 913px;
+  height: 85px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 16px;
+  font-size: 16px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.wk-seed img {
+  width: 11px;
+  height: 22px;
+  margin: 0 6px;
+  rotate: -135deg;
+}
+.wk-seed strong {
+  font-size: 20px;
+  font-weight: 700;
+  color: #00ffa3;
+}
+.wk-seed em {
+  margin-left: 4px;
+  padding: 4px 13px;
+  border: 1px solid #00d18a;
+  border-radius: 18px;
+  font-style: normal;
+  color: #00d18a;
+}
+
+/* Supported privacy providers: one centered row of chips; the upcoming ones are dimmed and
+   tagged Soon */
+.providers {
+  margin-top: 79px;
+  text-align: center;
+}
+.providers h3 {
+  font-size: clamp(22px, 1.75vw, 26px);
+  font-weight: 600;
+  line-height: 1.2;
+  color: #8b8e93;
+}
+.providers ul {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 30px;
+}
+.provider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 75px;
+  padding: 0 22px 0 20px;
+  border: 1px solid #424242;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.provider img {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+}
+.provider b {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.provider.is-soon img,
+.provider.is-soon b {
+  opacity: 0.5;
+}
+.provider em {
+  margin-left: -6px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #8b8e93;
+  font-size: 16px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 25px;
+}
+
+/* ---------- Choose How Visible Each Move Is: three panels side by side, each with its account
+   card peeking out over the top edge (the panel's opaque fill hides the rest of the card) ---------- */
+.acct-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 139px;
+}
+.acct {
+  position: relative;
+  --edge: #fff;
+}
+/* Neighbouring panels share one border line */
+.acct + .acct {
+  margin-left: -1px;
+}
+.acct-shield {
+  --edge: var(--mint);
+}
+.acct-incognito {
+  --edge: var(--amber);
+}
+.acct-body {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  min-height: 513px;
+  padding: 46px 20px 24px 24px;
+  box-shadow: 0 -2px 0 var(--edge);
+}
+.acct-shield .acct-body {
+  background:
+    radial-gradient(50% 32% at 50% 0%, rgba(61, 255, 190, 0.2), transparent) padding-box,
+    linear-gradient(#16161d, #16161d) padding-box,
+    linear-gradient(180deg, #696969, #343434) border-box;
+}
+.acct h3 {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.acct-shield h3 {
+  color: #00ffa3;
+}
+.acct-incognito h3 {
+  color: var(--amber);
+}
+/* Tall enough that the divider below lines up across the three panels */
+.acct-about {
+  min-height: 160px;
+  margin-top: 22px;
+}
+.acct-about p,
+.acct dt,
+.acct dd {
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.5;
+}
+.acct-detail {
+  margin-top: 20px;
+  color: #999;
+}
+.acct dl {
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+.acct dt {
+  color: var(--mute);
+}
+.acct dd {
+  margin-top: 10px;
+}
+.acct dd + dt {
+  margin-top: 20px;
+}
+.acct-card {
+  position: absolute;
+  left: 8.5%;
+  top: -55px;
+  width: 83.5%;
+  aspect-ratio: 343 / 160;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  color: #fff;
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Cards sit straight; pointing at a column lifts its card and tilts it, which is the state the
+   mock shows for Public */
+@media (hover: hover) {
+  .acct:hover .acct-card {
+    transform: translateY(-45px) rotate(-6.9deg);
+  }
+}
+.acct-public .acct-card {
+  background:
+    linear-gradient(118deg, #fff 8%, #a8a8c9 100%) padding-box,
+    linear-gradient(180deg, #fff, #999) border-box;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.25);
+  color: #000;
+}
+.acct-shield .acct-card {
+  background:
+    linear-gradient(105deg, rgba(0, 209, 138, 0.6), rgba(0, 209, 138, 0.18) 75%) padding-box,
+    linear-gradient(#000, #000) padding-box,
+    linear-gradient(180deg, #11aa76, #003f2a) border-box;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+}
+.acct-incognito .acct-card {
+  border-radius: 12px;
+  background:
+    radial-gradient(75% 140% at 25% 50%, rgba(255, 161, 0, 0.5), rgba(255, 161, 0, 0.1)) padding-box,
+    linear-gradient(#000, #000) padding-box,
+    linear-gradient(rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.1)) border-box;
+}
+.acct-dot {
+  position: absolute;
+  left: 14px;
+  top: 22px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #00ffa3;
+}
+.acct-public .acct-dot {
+  left: 13px;
+  top: 20px;
+  width: 10px;
+  height: 10px;
+  background: rgba(0, 0, 0, 0.3);
+}
+.acct-incognito .acct-dot {
+  background: var(--amber);
+}
+.acct-name {
+  position: absolute;
+  left: 30px;
+  top: 17px;
+  font-size: 14px;
+  line-height: 18px;
+}
+.acct-incognito .acct-name {
+  font-weight: 500;
+}
+.acct-amount {
+  position: absolute;
+  right: 14px;
+  top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 38px;
+  letter-spacing: -0.6px;
+  -webkit-mask-image: linear-gradient(90deg, #000 20%, rgba(0, 0, 0, 0.6));
+  mask-image: linear-gradient(90deg, #000 20%, rgba(0, 0, 0, 0.6));
+}
+.acct-amount i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.acct-public .acct-amount {
+  color: #333;
+}
+
+/* ---------- Ledger Supported: brands next to the title, then three steps ---------- */
+.hardware {
+  padding-top: clamp(96px, 10.4vw, 157px);
+}
+.hw-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px 48px;
+}
+.hw-brands {
+  display: flex;
+  align-items: center;
+  gap: 52px;
+  margin-right: 11px;
+  padding-bottom: 7px;
+}
+.hw-brands li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.hw-brands img {
+  width: auto;
+  height: 30px;
+}
+.hw-brands li + li img {
+  height: 42px;
+}
+.hw-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 44px;
+}
+.hw-steps li {
+  min-height: 202px;
+  padding: 26px 8px 22px 20px;
+}
+.hw-steps li + li {
+  margin-left: -1px;
+}
+.hw-icon {
+  display: block;
+  width: 48px;
+  height: 42px;
+  overflow: visible;
+}
+.hw-steps h3 {
+  margin-top: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.hw-steps p {
+  max-width: 380px;
+  margin-top: 18px;
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.5;
+}
+
+/* ---------- Your Key Open Code: 2 × 2 cards, each with a large blurred icon on its right ---------- */
+.trust-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 30px;
+  margin-top: 78px;
+}
+.trust-grid li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 219px;
+  padding: 39px 36px 16px;
+  overflow: hidden;
+}
+.trust-grid h3 {
+  position: relative;
+  font-size: clamp(24px, 1.85vw, 28px);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.trust-grid p {
+  position: relative;
+  max-width: 386px;
+  margin-top: 20px;
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.5;
+}
+.trust-grid a {
+  position: relative;
+  align-self: flex-start;
+  margin-top: auto;
+  padding-top: 16px;
+  color: var(--mint);
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.5;
+  text-decoration: none;
+  text-transform: capitalize;
+}
+.trust-grid a:hover {
+  text-decoration: underline;
+}
+.trust-grid a:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+.trust-icon {
+  position: absolute;
+  top: 34px;
+  right: 26px;
+  width: 168px;
+  height: 168px;
+  opacity: 0.3;
+  filter: blur(5px);
+}
+.trust-grid li:first-child p {
+  max-width: 375px;
+}
+
+/* ---------- Closing: big heading + buttons, with the statue and the large "Noir Wallet"
+   wordmark below ---------- */
+.end {
+  position: relative;
+  z-index: 1;
+  padding-top: clamp(110px, 13.2vw, 200px);
+  text-align: center;
+}
+.end h2 {
+  font-size: clamp(36px, 4.4vw, 60px);
+  line-height: 1.2;
+  font-weight: 600;
+}
+.end .cta-row {
+  justify-content: center;
+  gap: 20px;
+  margin-top: 38px;
+}
+.end .btn {
+  min-height: 50px;
+  font-size: 16px;
+  padding: 0 25px;
+}
+.end .btn svg:not(.ext) {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+}
+.end .desk-note {
+  max-width: 460px;
+  margin: 24px auto 0;
+  text-align: left;
+}
+.site-foot {
+  position: relative;
+  margin-top: -136px;
+  padding-bottom: 0;
+  text-align: center;
+  overflow: hidden;
+}
+.statue {
+  position: relative;
+  /* Its own stacking context: the gradients inside paint over the particle canvas but never
+     cover the buttons in .end above. */
+  isolation: isolate;
+  height: clamp(320px, 48.2vw, 729px);
+}
+.statue img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 0;
+  transition: opacity 0.8s ease;
+}
+/* Particle canvas (Statue.tsx / particles.ts): fades in once ready, with the original image still
+   underneath as usual (as in ReactBits' Image Opacity 1). */
+.statue canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+}
+.statue.is-live canvas {
+  opacity: 1;
+}
+
+.statue::before,
+.statue::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  height: 150px;
+  pointer-events: none;
+}
+.statue::before {
+  top: 0;
+  background: linear-gradient(#000, transparent);
+}
+.statue::after {
+  top: 0;
+  bottom: 0;
+  height: auto;
+  background: linear-gradient(transparent, #000);
+}
+.social {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  gap: 26px;
+  margin-top: -212px;
+}
+.social a {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: #fff;
+  transition: color 0.15s;
+}
+.social a:hover {
+  color: var(--mint);
+}
+.social a:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.foot-copy {
+  position: relative;
+  margin-top: 16px;
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.2;
+  text-transform: capitalize;
+}
+/* Other pages' footer (FeedbackRewards.tsx): no statue, so nothing to overlap */
+.site-foot.is-plain {
+  margin-top: 0;
+  padding-top: clamp(88px, 9vw, 140px);
+}
+.site-foot.is-plain .social {
+  margin-top: 0;
+}
+.wordmark {
+  margin-top: -15px;
+  /* The page ends partway through the letters, as in the mock */
+  margin-bottom: -0.4em;
+  filter: blur(6px);
+  font-size: clamp(64px, 13.3vw, 200px);
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  opacity: 0.3;
+  background: linear-gradient(180deg, #fff 17%, #000 103%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---------- Narrow screens ---------- */
+/* Below 1100: Key Features stacks, the cards first and the picture below them */
+@media (max-width: 1099px) {
+  .kf-box {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    row-gap: 48px;
+    padding: 72px 0 0;
+  }
+  .kf-side {
+    order: -1;
+    width: 100%;
+    max-width: 640px;
+    padding-top: 0;
+  }
+  .kf-title {
+    padding-left: 0;
+    text-align: center;
+  }
+  .kf-stage {
+    width: min(434px, 100%);
+  }
+  .trust-icon {
+    right: 8px;
+  }
+}
+/* Below 1000: the account panels stack (each card still peeking over its panel), security turns
+   into one column, and the "Backed by" band moves under the wallet */
+@media (max-width: 999px) {
+  .acct-grid {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 120px;
+    max-width: 480px;
+    margin: 150px auto 0;
+  }
+  .acct + .acct {
+    margin-left: 0;
+  }
+  .acct-body {
+    min-height: 0;
+  }
+  .acct-about {
+    min-height: 0;
+    padding-bottom: 24px;
+  }
+  .trust-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hero::after {
+    display: none;
+  }
+  .band {
+    z-index: 4;
+    top: max(380px, min(calc(100% - 80px), calc(100svh - 163px)));
+    justify-content: center;
+    height: 80px;
+    padding: 0;
+  }
+}
+@media (max-width: 759px) {
+  .site-nav {
+    display: none;
+  }
+  .wrap-head {
+    grid-template-columns: auto auto;
+    justify-content: space-between;
+  }
+  .brand img {
+    width: 32px;
+    height: 32px;
+  }
+  .desk-note {
+    display: flex;
+  }
+  .field,
+  .chain-mark,
+  .tip {
+    display: none;
+  }
+  .hero-copy {
+    position: relative;
+  }
+  .hero-copy .hero-wrap {
+    width: calc(100% - 64px);
+  }
+  .hero-copy .inner {
+    padding-top: 35px;
+  }
+  .hero h1 {
+    font-size: 40px;
+  }
+  /* Room above the wallet for its "Try the extension" pill */
+  .hero-phone {
+    width: 252px;
+    margin: 88px auto 0;
+  }
+  .lede {
+    margin-bottom: 54px;
+  }
+  .hero .cta-row .btn {
+    flex: 1;
+    min-width: 0;
+  }
+  .chain-mark > span {
+    font-size: 13px;
+  }
+  /* Phones show the callout image from the mobile mock (see Hero.tsx) */
+  .hero-phone img {
+    width: var(--fw-m);
+    margin-left: var(--fx-m);
+    margin-top: var(--fy-m);
+  }
+  /* Phones: the band stays pinned to the bottom of the screen while the page scrolls, and the
+     page ends with room for it so it never covers the footer */
+  .band {
+    position: fixed;
+    z-index: 45;
+    top: auto;
+    bottom: 0;
+    gap: 28px;
+    height: 64px;
+  }
+  .band-group {
+    flex-direction: column;
+    gap: 3px;
+  }
+  :where(:root[data-page='home']) body {
+    padding-bottom: 64px;
+  }
+  /* The support chat would sit on the band, and Zendesk Messaging ignores its offset settings
+     (lib/zendesk.ts), so lift its launcher and the greeting beside it by the band's height. Its
+     elements have no classes: the launcher has a fixed id and the greeting is its fixed sibling.
+     Only pages with the band (the home page) are affected. */
+  :root:has(.band) iframe#launcher,
+  :root:has(.band) div:has(> iframe#launcher) > div[style*='position: fixed'] {
+    translate: 0 -64px;
+  }
+  .band-group > span {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .band-logo {
+    height: 24px;
+  }
+
+  .kf-box {
+    padding-top: 56px;
+  }
+  .kf-tab {
+    min-height: 0;
+    gap: 10px;
+    padding: 20px 20px 18px 22px;
+  }
+  .kf-tab b {
+    font-size: 21px;
+  }
+  .kf-tab span {
+    font-size: 15px;
+  }
+
+  /* How Noir Wallet Works becomes one column. The dashed bracket for "no public link" runs down
+     the left, from the middle of the Public account to the middle of the Incognito account. */
+  .works-fit {
+    height: auto;
+    margin-top: 40px;
+  }
+  .works {
+    left: auto;
+    width: auto;
+    height: auto;
+    max-width: 380px;
+    margin: 0 auto;
+    padding-left: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: none;
+  }
+  .works > *,
+  .wk-path > * {
+    position: relative;
+    left: auto;
+    top: auto;
+  }
+  .wk-lines {
+    display: none;
+  }
+  .wk-path {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+  }
+  .wk-path::before {
+    content: '';
+    position: absolute;
+    left: -24px;
+    top: 44px;
+    bottom: 40px;
+    width: 24px;
+    border: 1px dashed #f0616d;
+    border-right: 0;
+    border-radius: 6px 0 0 6px;
+  }
+  .wk-path > .wk-nolink {
+    position: absolute;
+    left: -23.5px;
+    top: 50%;
+    z-index: 1;
+    width: auto;
+    height: 30px;
+    padding: 0 12px;
+    font-size: 13px;
+    translate: -50% -50%;
+    rotate: -90deg;
+  }
+  .wk-acct {
+    width: 100%;
+  }
+  .wk-pub {
+    height: 88px;
+    padding-top: 13px;
+  }
+  .wk-pub img {
+    width: 24px;
+    height: 24px;
+  }
+  .wk-acct b {
+    margin-top: 8px;
+    font-size: 18px;
+  }
+  .wk-pub span {
+    margin-top: 4px;
+  }
+  .wk-priv {
+    height: 80px;
+    padding-top: 13px;
+  }
+  .wk-priv img {
+    width: 26px;
+    height: 26px;
+  }
+  .wk-link,
+  .wk-link.is-shield,
+  .wk-link.is-fund {
+    left: auto;
+    width: 100%;
+    height: 76px;
+    flex-direction: row;
+    justify-content: center;
+    gap: 10px;
+  }
+  .wk-tag {
+    font-size: 13px;
+  }
+  .wk-link .wk-wire,
+  .wk-down {
+    --run: 38px;
+    align-self: center;
+    width: 2px;
+    height: 52px;
+    margin: 0;
+    background: linear-gradient(180deg, rgb(61 255 190 / 0.1), #3dffbe);
+  }
+  .is-fund .wk-wire,
+  .wk-down {
+    background: linear-gradient(180deg, rgb(255 161 0 / 0.1), #ffa200);
+  }
+  .wk-wire.is-back {
+    scale: 1 -1;
+  }
+  .wk-wire i {
+    left: -1px;
+    top: 0;
+    width: 4px;
+    height: 14px;
+    animation-name: wk-drop;
+  }
+  .wk-shield {
+    width: 230px;
+    height: 232px;
+    margin: 40px 0;
+  }
+  .wk-core {
+    inset: 12px;
+    padding-top: 22px;
+    gap: 2px;
+  }
+  .wk-core img {
+    width: 96px;
+    height: 104px;
+  }
+  .wk-core b {
+    font-size: 21px;
+  }
+  .wk-chip {
+    gap: 6px;
+    width: 130px;
+    height: 76px;
+    padding-top: 10px;
+    font-size: 15px;
+  }
+  .wk-chip img {
+    width: 21px;
+    height: 26px;
+  }
+  .wk-send {
+    left: -40px;
+    top: -34px;
+    width: 130px;
+  }
+  .wk-recv {
+    left: auto;
+    right: -40px;
+    top: auto;
+    bottom: -34px;
+    width: 140px;
+  }
+  .wk-down {
+    display: block;
+    --run: 30px;
+    height: 44px;
+  }
+  .wk-defi {
+    width: 100%;
+    height: auto;
+    padding: 22px 16px 16px;
+  }
+  .wk-defi-title {
+    max-width: none;
+    margin-left: 0;
+    font-size: 17px;
+  }
+  .wk-defi ul {
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .wk-defi li,
+  .wk-fresh {
+    height: 68px;
+  }
+  .wk-fresh {
+    margin-top: 10px;
+  }
+  .wk-seed {
+    width: 100%;
+    height: auto;
+    margin-top: 16px;
+    padding: 16px;
+    flex-wrap: wrap;
+    font-size: 15px;
+    white-space: normal;
+    text-align: center;
+  }
+  .wk-seed strong {
+    font-size: 17px;
+    white-space: nowrap;
+  }
+
+  .providers {
+    margin-top: 64px;
+  }
+  .providers ul {
+    gap: 8px;
+  }
+  .provider {
+    gap: 10px;
+    height: 54px;
+    padding: 0 14px;
+  }
+  .provider img {
+    width: 26px;
+    height: 26px;
+  }
+  .provider b {
+    font-size: 16px;
+  }
+  .provider em {
+    margin-left: -2px;
+    padding: 0 7px;
+    font-size: 13px;
+    line-height: 22px;
+  }
+
+  .acct-grid {
+    margin-top: 130px;
+  }
+  .acct-body {
+    padding: 36px 20px 28px;
+  }
+
+  .hw-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .hw-brands {
+    gap: 28px;
+    margin-right: 0;
+    padding-bottom: 0;
+  }
+  .hw-steps {
+    grid-template-columns: minmax(0, 1fr);
+    margin-top: 32px;
+  }
+  .hw-steps li {
+    min-height: 0;
+    padding: 22px 20px 24px;
+  }
+  .hw-steps li + li {
+    margin-top: -1px;
+    margin-left: 0;
+  }
+  .hw-steps p {
+    margin-top: 10px;
+  }
+
+  .trust-grid {
+    gap: 16px;
+    margin-top: 40px;
+  }
+  .trust-grid li {
+    min-height: 0;
+    padding: 28px 22px 18px;
+  }
+  .trust-grid p {
+    max-width: 75%;
+  }
+  .trust-icon {
+    top: 18px;
+    right: 0;
+    width: 120px;
+    height: 120px;
+  }
+
+  .end .cta-row {
+    margin-top: 28px;
+  }
+  .site-foot {
+    margin-top: -24px;
+  }
+  .statue img {
+    object-position: 30% 0;
+  }
+  .social {
+    margin-top: -120px;
+    gap: 32px;
+  }
+  .foot-copy {
+    margin-top: 16px;
+    font-size: 13px;
+  }
+}
+@keyframes wk-drop {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  26% {
+    opacity: 1;
+  }
+  30%,
+  100% {
+    transform: translateY(var(--run));
+    opacity: 0;
+  }
+}
+
+/* Text for screen readers only (TypeIn keeps a heading's plain text here) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Motion: scroll reveals and typed headings (useReveals in motion.ts, TypeIn.tsx).
+   The root only has .reveals when motion is allowed; without it everything simply shows. ---------- */
+/* A soft fade with a short rise: long and gently eased, so nothing seems to jump */
+:root.reveals [data-reveal='up']:not([data-in]) {
+  opacity: 0;
+  translate: 0 14px;
+}
+:root.reveals [data-reveal='up'][data-in] {
+  animation: reveal-up 1.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) calc(var(--order, 0) * 110ms)
+    backwards;
+}
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    translate: 0 14px;
+  }
+}
+/* Typed headings (.tc is one typed character, .tc-last the final one): the characters appear in
+   turn with a mint caret after the newest one; the caret blinks twice on the last character and
+   goes. Each character is drawn from its data-ch, so the heading's text (its .sr-only copy) is in
+   the page once. */
+.tc::before {
+  content: attr(data-ch);
+}
+[data-reveal='type'] {
+  --type-step: 17ms;
+}
+:root.reveals [data-reveal='type'] .tc {
+  opacity: 0;
+}
+:root.reveals [data-reveal='type'][data-in] .tc {
+  animation: type-ch var(--type-step) linear
+    calc(var(--order, 0) * 110ms + var(--c) * var(--type-step)) forwards;
+}
+:root.reveals [data-reveal='type'][data-in] .tc-last {
+  animation-name: type-end;
+  animation-duration: 1.6s;
+}
+/* Linear, with the caret switched off in explicit keyframes: a step timing function can end a
+   few characters on their first frame in Chrome, which leaves a caret behind */
+@keyframes type-ch {
+  0%,
+  95% {
+    opacity: 1;
+    box-shadow: 0.06em 0 0 var(--mint);
+  }
+  100% {
+    opacity: 1;
+    box-shadow: 0.06em 0 0 transparent;
+  }
+}
+@keyframes type-end {
+  0%,
+  24%,
+  50%,
+  74% {
+    opacity: 1;
+    box-shadow: 0.06em 0 0 var(--mint);
+  }
+  25%,
+  49%,
+  75%,
+  100% {
+    opacity: 1;
+    box-shadow: 0.06em 0 0 transparent;
+  }
+}
+@media print {
+  :root.reveals [data-reveal]:not([data-in]),
+  :root.reveals [data-reveal='type'] .tc {
+    opacity: 1;
+    translate: none;
+  }
+}
+
+/* ---------- Cards under a mouse pointer: a soft mint glow and a brighter edge follow it
+   (useSpotlight in motion.ts sets --mx and --my); some cards also lift or move their icon ---------- */
+@property --spot {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+.spot {
+  position: relative;
+  isolation: isolate;
+  transition:
+    --spot 0.35s ease,
+    transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.spot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(
+    420px circle at var(--mx, 50%) var(--my, 50%),
+    rgb(61 255 190 / 0.13),
+    transparent 70%
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+.trust-icon {
+  transition:
+    opacity 0.45s ease,
+    filter 0.45s ease,
+    transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.hw-icon {
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.provider {
+  transition:
+    transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 0.25s ease,
+    background-color 0.25s ease;
+}
+@media (hover: hover) {
+  .spot:hover {
+    --spot: 1;
+  }
+  .spot:hover::before {
+    opacity: 1;
+  }
+  .trust-grid li:hover {
+    transform: translateY(-4px);
+  }
+  .trust-grid li:hover .trust-icon {
+    opacity: 0.5;
+    filter: blur(2px);
+    transform: scale(1.06) rotate(-4deg);
+  }
+  .hw-steps li:hover .hw-icon {
+    transform: translateY(-3px) scale(1.06);
+  }
+  .provider:hover {
+    transform: translateY(-3px);
+    border-color: rgb(61 255 190 / 0.55);
+    background-color: rgb(255 255 255 / 0.09);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(:root[data-page='home']) {
+    scroll-behavior: auto;
+  }
+  .is-shield .chain-mark::after,
+  .hero-phone-hint::after,
+  .wk-wire i,
+  .wk-fan-spark {
+    animation: none;
+  }
+  .wk-wire i,
+  .wk-fan-spark {
+    display: none;
+  }
+  .chain-mark::before,
+  .chain-mark::after,
+  .chain-mark > span,
+  .kf-shot,
+  .acct-card,
+  .spot,
+  .spot::before,
+  .trust-icon,
+  .hw-icon,
+  .provider {
+    transition: none;
+  }
+  .trust-grid li:hover,
+  .trust-grid li:hover .trust-icon,
+  .hw-steps li:hover .hw-icon,
+  .provider:hover {
+    transform: none;
+  }
+}

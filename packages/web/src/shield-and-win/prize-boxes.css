@@ -1,0 +1,396 @@
+/* The campaign's prizes as encrypted boxes above the panel (PrizeBoxes.tsx), and the panel's prize
+   bar and count. The row of boxes uses the panel's side padding and the bar's gap, so the wire
+   from the box in the draw lands on its bar segment. */
+.bx-row {
+  --bx-pad-x: clamp(22px, 2.4vw, 32px);
+  --bx-pad-y: clamp(22px, 2.4vw, 32px);
+  --bx-gap: 16px;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(var(--bx-cols, 10), minmax(0, 1fr));
+  gap: 4px;
+  align-items: end;
+  margin: 0 0 var(--bx-gap);
+  padding: 0 var(--bx-pad-x);
+  list-style: none;
+}
+.bx-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.bx {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.bx-box {
+  display: block;
+  width: min(100%, 64px);
+  height: auto;
+  overflow: visible;
+  transition:
+    transform 0.5s ease,
+    filter 0.5s ease;
+}
+.bx-box path,
+.bx-box rect {
+  vector-effect: non-scaling-stroke;
+}
+.bx-shadow {
+  fill: rgba(0, 0, 0, 0.6);
+  transition:
+    transform 0.5s ease,
+    fill 0.5s ease;
+}
+.bx-front,
+.bx-top,
+.bx-side,
+.bx-hole,
+.bx-lid {
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+
+/* Sealed: dark glass with mint edges, a lock and scrambled bits */
+.bx .bx-front,
+.bx .bx-top {
+  stroke: rgba(61, 255, 190, 0.45);
+}
+.bx .bx-side {
+  fill: #07110d;
+  stroke: rgba(61, 255, 190, 0.3);
+}
+.bx-lock rect,
+.bx-lock path {
+  fill: none;
+  stroke: #3dffbe;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.bx-lock {
+  opacity: 0.8;
+}
+.bx-bit {
+  fill: #3dffbe;
+}
+.bx-vent {
+  fill: none;
+  stroke: rgba(61, 255, 190, 0.35);
+  stroke-width: 1;
+  stroke-linecap: round;
+}
+
+/* In the draw: lifted and lit */
+.bx.is-now .bx-box {
+  transform: translateY(-6px);
+  filter: drop-shadow(0 0 8px rgba(61, 255, 190, 0.55));
+}
+.bx.is-now .bx-front,
+.bx.is-now .bx-top {
+  stroke: #c6ffeb;
+}
+.bx.is-now .bx-side {
+  fill: #0b2219;
+  stroke: rgba(198, 255, 235, 0.6);
+}
+.bx.is-now .bx-lock {
+  opacity: 1;
+}
+.bx.is-now .bx-shadow {
+  transform: translateY(6px);
+  fill: rgba(61, 255, 190, 0.18);
+}
+
+/* Opened: grey, lid up, the prize amount on the front */
+.bx.is-open .bx-front {
+  fill: #1b1e25;
+  stroke: #444955;
+}
+.bx.is-open .bx-side {
+  fill: #121419;
+  stroke: #3a3e48;
+}
+.bx-hole {
+  fill: #040506;
+  stroke: #5c6170;
+}
+.bx-lid {
+  fill: #343944;
+  stroke: #6a6f7c;
+}
+.bx-amount {
+  font:
+    600 12px/1 'DM Sans',
+    system-ui,
+    sans-serif;
+  fill: #eef0f4;
+  text-anchor: middle;
+}
+.bx-amount.is-small {
+  font-size: 9.5px;
+}
+
+/* The campaign is over: what nobody won stays sealed, dimmed */
+.bx-row[data-stage='ended'] .bx.is-sealed .bx-box {
+  filter: grayscale(0.85) brightness(0.6);
+}
+
+.bx-label {
+  margin-top: 5px;
+  height: 10px;
+  font:
+    400 10px/1 'Doto',
+    ui-monospace,
+    monospace;
+  letter-spacing: 0.08em;
+  color: rgba(61, 255, 190, 0.5);
+  white-space: nowrap;
+}
+.bx.is-now .bx-label {
+  color: #3dffbe;
+  text-shadow: 0 0 8px rgba(61, 255, 190, 0.8);
+}
+.bx.is-open .bx-label {
+  color: #7d818b;
+}
+
+/* The wire from the box in the draw down to its bar segment */
+.bx-wire {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 3px);
+  width: 2px;
+  height: calc(var(--bx-gap) + var(--bx-pad-y) - 2px);
+  margin-left: -1px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: linear-gradient(#c6ffeb, #3dffbe);
+  box-shadow: 0 0 8px rgba(61, 255, 190, 0.8);
+  transform-origin: top;
+}
+.bx-wire i {
+  position: absolute;
+  left: -1px;
+  top: -12px;
+  width: 4px;
+  height: 12px;
+  border-radius: 2px;
+  background: #fff;
+  opacity: 0;
+}
+
+/* Inside the panel: the prize bar and count */
+.bx-bar {
+  display: grid;
+  grid-template-columns: repeat(var(--bx-cols, 10), minmax(0, 1fr));
+  gap: 4px;
+  margin: 0 0 clamp(16px, 2.4vh, 22px);
+  padding: 0;
+  list-style: none;
+}
+.bx-bar li {
+  box-sizing: border-box;
+  height: 8px;
+  border: 1px solid rgba(61, 255, 190, 0.32);
+  border-radius: 4px;
+  transition:
+    background-color 0.4s ease,
+    border-color 0.4s ease,
+    box-shadow 0.4s ease;
+}
+.bx-bar li.is-open {
+  background: #2b2e38;
+  border-color: #2b2e38;
+}
+.bx-bar li.is-now {
+  background: #3dffbe;
+  border-color: #3dffbe;
+  box-shadow: 0 0 12px rgba(61, 255, 190, 0.65);
+}
+.bx-count {
+  font-size: 15px;
+  color: #a7a9ad;
+  white-space: nowrap;
+}
+.bx-count b {
+  display: inline-block;
+  font-size: 22px;
+  font-weight: 600;
+  color: #3dffbe;
+  font-variant-numeric: tabular-nums;
+}
+.bx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The box in the draw floats, its bits flicker and a light runs down its wire */
+  .bx-row[data-stage='live'] .bx.is-now .bx-box {
+    animation: bx-float 3.2s ease-in-out infinite;
+  }
+  .bx-row[data-stage='live'] .bx.is-now .bx-bit {
+    animation: bx-flicker 1.6s steps(3) var(--bx-d, 0s) infinite;
+  }
+  .bx-row[data-stage='live'] .bx-wire {
+    animation: bx-wire-in 0.5s ease-out 0.7s both;
+  }
+  .bx-row[data-stage='live'] .bx-wire i {
+    animation: bx-spark 2.2s linear 1.2s infinite;
+  }
+  .bx-bar li.is-now {
+    animation: bx-pulse 2.2s ease-in-out infinite;
+  }
+  /* A prize won while the page is open: its box flashes and its lid flips up, its segment
+     flashes, and the count ticks down */
+  .bx.is-opening .bx-box {
+    animation: bx-flash 1.2s ease-out;
+  }
+  .bx.is-opening .bx-lid {
+    transform-box: view-box;
+    transform-origin: 34px 14px;
+    animation: bx-lid 0.7s cubic-bezier(0.3, 1.4, 0.5, 1) 0.15s both;
+  }
+  .bx.is-opening .bx-amount {
+    animation: bx-fade-in 0.4s ease 0.45s both;
+  }
+  .bx-bar li.is-opening {
+    animation: bx-segment 0.9s ease;
+  }
+  .bx-count b.is-ticking {
+    animation: bx-tick 0.9s ease 0.5s both;
+  }
+}
+@keyframes bx-float {
+  0%,
+  100% {
+    transform: translateY(-6px);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+@keyframes bx-flicker {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes bx-wire-in {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes bx-spark {
+  0% {
+    top: -12px;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+@keyframes bx-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 8px rgba(61, 255, 190, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(61, 255, 190, 0.85);
+  }
+}
+@keyframes bx-flash {
+  0% {
+    transform: translateY(-8px) scale(1.06);
+    filter: drop-shadow(0 0 16px rgba(61, 255, 190, 0.95)) brightness(1.6);
+  }
+  100% {
+    transform: none;
+    filter: none;
+  }
+}
+@keyframes bx-lid {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes bx-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes bx-segment {
+  0%,
+  100% {
+    transform: none;
+  }
+  30% {
+    transform: scaleY(1.7);
+    background: #fff;
+    border-color: #fff;
+    box-shadow: 0 0 16px rgba(255, 255, 255, 0.8);
+  }
+}
+@keyframes bx-tick {
+  0% {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  60% {
+    transform: translateY(1px);
+    opacity: 1;
+    color: #fff;
+    text-shadow: 0 0 14px rgba(61, 255, 190, 0.9);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+/* Phones: the panel is padded 18px across and 20px down, the boxes are small and unlabelled */
+@media (max-width: 760px) {
+  .bx-row {
+    --bx-pad-x: 18px;
+    --bx-pad-y: 20px;
+    --bx-gap: 12px;
+    gap: 3px;
+  }
+  .bx-bar {
+    gap: 3px;
+  }
+  .bx-label {
+    display: none;
+  }
+}
+@media (max-width: 440px) {
+  .bx-each {
+    display: none;
+  }
+}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { submitSignup } from '../lib/frost-signup'
+import '../tailwind.css'
 
 export default function FrostVotePage() {
   const [email, setEmail] = useState('')
