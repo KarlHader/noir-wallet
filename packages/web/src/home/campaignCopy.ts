@@ -87,8 +87,8 @@ export function entryCopy(campaign: ShieldWinCampaign): EntryCopy {
     title: `Go Private, Win ${poolOf(campaign)}`,
     heading: minimum ? `Shield ${minimum}. Win ${prize}.` : `Shield and win ${prize}.`,
     lede: minimum
-      ? `Every min ${minimum} shield into EVM gets an instant draw. Your ${minimum} stays in your own balance.`
-      : 'Every shield into EVM gets an instant draw. Your funds stay in your own balance.',
+      ? `Shield your EVM assets (${minimum} minimum) for an instant draw every time. Your ${minimum} stays in your own balance.`
+      : 'Shield your EVM assets for an instant draw every time. Your funds stay in your own balance.',
     steps: [
       { title: 'Get Noir', body: 'Install the extension, then create or import a wallet.' },
       minimum

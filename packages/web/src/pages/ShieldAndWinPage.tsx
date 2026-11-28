@@ -53,6 +53,7 @@ import {
   walletErrorMessage,
   type NoirEthereumProvider
 } from '../shield-and-win/wallet'
+import { poolOf } from '../home/campaignCopy'
 import { Tooltip } from '../components/Tooltip'
 import { CAMPAIGN } from '../seo'
 import '../tailwind.css'
@@ -483,12 +484,16 @@ function minimumAmount(campaign: ShieldWinCampaign, minimumValue: string): strin
 }
 
 function endingCopy(campaign: ShieldWinCampaign): string {
-  if (campaign.status === 'ACTIVE') {
-    const deadline = deadlineLabel(campaign.end_time)
-    const when = deadline ? `, or at the deadline ${deadline}` : ''
-    return `The campaign ends the moment it's won${when}. It may end with no winner.`
+  if (campaign.status !== 'ACTIVE') {
+    return `The campaign status is ${campaignStatusWord(campaign.status)}.`
   }
-  return `The campaign status is ${campaignStatusWord(campaign.status)}.`
+  const deadline = deadlineLabel(campaign.end_time)
+  if (campaign.max_winners === 0) {
+    return deadline ? `The campaign ends on ${deadline}.` : ''
+  }
+  return deadline
+    ? `The campaign ends when all prizes are won or on ${deadline}, whichever comes first.`
+    : 'The campaign ends when all prizes are won.'
 }
 
 function RulesCopy({
@@ -500,65 +505,48 @@ function RulesCopy({
 }) {
   const minimum = minimumAmount(campaign, minimumValue)
   const prize = prizeAmount(campaign)
+  const pool = poolOf(campaign)
   const ending = endingCopy(campaign)
   return (
     <>
       <ul>
         <li>
-          <b>How to join:</b> install Noir Wallet, create or import a wallet, then make a shield
-          transfer of <b>{minimum} or more</b> into <b>NEAR Confidential</b> from your Public or
-          Incognito account (in the wallet: Shield → NEAR Confidential). Use the latest version of
-          Noir Wallet.
+          <b>How to Join:</b> Shield your EVM assets ({minimum} minimum) for an instant draw every
+          time. Your {minimum} stays in your own balance. Use the latest version of Noir Wallet.
         </li>
         <li>
-          We count the USD value credited after network, bridge and protocol fees. Smaller transfers
-          can&apos;t be added together.
+          <b>Eligibility:</b> Only successful shield transfers into NEAR Confidential qualify.
+          Smaller transfers cannot be combined. Other privacy providers, withdrawals, internal
+          transfers, swaps, and failed or refunded transactions are excluded.
         </li>
         <li>
-          Each eligible transfer gets one automatic draw as soon as it&apos;s credited, at{' '}
-          <strong>1 in 444</strong> (about 0.225%). That doesn&apos;t mean someone wins every 444
-          draws.
+          <b>Instant Draw:</b> Each eligible transfer automatically gets one draw with a{' '}
+          <b>1 in 444 chance of winning (~0.225%)</b>. Each transfer can only be drawn once.
         </li>
         <li>
+          <b>Prize Pool:</b>{' '}
           {campaign.max_winners === 0 ? (
-            <>
-              There is <b>no winner cap</b>. Each prize is <b>{prize}</b>.
-            </>
+            <b>No winner cap. Each prize is {prize}.</b>
           ) : campaign.max_winners === 1 ? (
-            <>
-              There is <b>one prize of {prize}</b>.
-            </>
+            <b>One prize of {prize}.</b>
           ) : (
-            <>
-              There are{' '}
-              <b>
-                up to {campaign.max_winners} prizes of {prize}
-              </b>
-              .
-            </>
+            <b>
+              {pool} in total — {campaign.max_winners} prizes of {prize} each.
+            </b>
           )}{' '}
           {ending}
         </li>
         <li>
-          Only transfers into NEAR Confidential count. Zcash Shield, Railgun, Privacy Pool, ZAMA,
-          moving funds out of or within NEAR Confidential, sending to another address, swaps, and
-          failed or refunded transfers don&apos;t count.
+          <b>Claim:</b> Winners receive the full {prize} to a transparent Zcash address in Noir
+          Wallet, with network fees covered.
         </li>
         <li>
-          The draw runs once per transfer on our server. Refreshing, closing or reinstalling never
-          draws again.
+          <b>Privacy &amp; Security:</b> We never ask for your recovery phrase or private keys, or
+          publicly disclose your balances, addresses, or transaction paths.
         </li>
         <li>
-          The winner claims to a Zcash transparent address in Noir Wallet. We pay the network fee,
-          so the full {prize} arrives.
-        </li>
-        <li>
-          We never ask for your seed phrase or keys, and never publish your balances, addresses or
-          the path of your funds. &quot;Draws so far&quot; is a total count only.
-        </li>
-        <li>
-          {/*Entries per wallet, regions and age limits <Tbc />. */}Fees are shown before you sign.
-          Winning isn&apos;t guaranteed.
+          <b>Disclaimer:</b> Fees are displayed before signing. Winning is not guaranteed, and
+          prizes may remain unawarded.
         </li>
       </ul>
       <p className="border-t border-[#232323] px-[22px] pt-3 pb-[22px] text-[13px] text-[#8b8e93]">
@@ -1624,7 +1612,7 @@ export default function ShieldAndWinPage() {
               </p>
             ) : (
               <p className="pt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
-                {'Every'}
+                {'Shield your EVM assets'}
                 {board.minimumValue ? (
                   <span
                     className={
@@ -1633,10 +1621,10 @@ export default function ShieldAndWinPage() {
                         : undefined
                     }
                   >
-                    {` min ${board.minimumValue}`}
+                    {` (${board.minimumValue} minimum)`}
                   </span>
                 ) : null}
-                {' shield into EVM gets an instant draw. Your '}
+                {' for an instant draw every time. Your '}
                 {board.minimumValue ? (
                   <span
                     className={

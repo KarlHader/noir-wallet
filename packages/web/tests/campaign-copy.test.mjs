@@ -31,7 +31,7 @@ test('the ticket names the whole pool and the sheet one prize', () => {
   assert.equal(copy.heading, 'Shield $10. Win 0.1 ZEC.')
   assert.equal(
     copy.lede,
-    'Every min $10 shield into EVM gets an instant draw. Your $10 stays in your own balance.'
+    'Shield your EVM assets ($10 minimum) for an instant draw every time. Your $10 stays in your own balance.'
   )
   assert.deepEqual(
     copy.steps.map(step => step.title),
