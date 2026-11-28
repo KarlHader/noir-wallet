@@ -137,10 +137,10 @@ export const PROVIDERS: { name: string; icon: string; soon?: boolean }[] = [
 ]
 
 /** How Noir Wallet Works: what the Incognito account is for, each with its icon. */
-export const DEFI_USES: { icon: string; title: string; body: string }[] = [
-  { icon: `${DIR}works-trade.svg`, title: 'Trade', body: 'Trades not linked to you' },
-  { icon: `${DIR}works-lend.svg`, title: 'Lend & Borrow', body: 'Your positions stay unlinked' },
-  { icon: `${DIR}works-predict.svg`, title: 'Predict', body: 'Bets not tied to your wallet' }
+export const DEFI_USES: { icon: string; title: string }[] = [
+  { icon: `${DIR}works-trade.svg`, title: 'Trade' },
+  { icon: `${DIR}works-lend.svg`, title: 'Lend & Borrow' },
+  { icon: `${DIR}works-predict.svg`, title: 'Predict' }
 ]
 
 /** Choose How Visible Each Move Is: the three accounts every wallet has. */
@@ -188,17 +188,17 @@ export const HARDWARE_STEPS: {
   {
     icon: 'usb',
     title: 'Connect Your Ledger',
-    body: 'Add wallet by clicking [Connect a hardware wallet], connect your ledger and select networks.'
+    body: 'Add a wallet by clicking “Connect a hardware wallet,” then connect your Ledger and select your networks.'
   },
   {
     icon: 'shield',
     title: 'Shield Funds',
-    body: 'Choose your available assets and move it into Shield wallet.'
+    body: 'Choose the assets to move, then move them into your Shield Vault.'
   },
   {
     icon: 'transfer',
     title: 'Transfer Privately',
-    body: 'You can always use ledger to initiate private transactions from your shield wallet when you need.'
+    body: 'Use your Ledger to send private transactions from your Shield Vault whenever you need to.'
   }
 ]
 

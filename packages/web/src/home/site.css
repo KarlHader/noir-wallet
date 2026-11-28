@@ -1181,13 +1181,17 @@
   height: 72px;
   border-radius: 12px;
 }
+/* Each use: its icon and name, centred in the card */
 .wk-defi li {
-  padding: 10px 0 0 46px;
+  display: flex;
+  align-items: center;
+  padding-left: 46px;
 }
 .wk-use-icon {
   position: absolute;
   left: 11px;
-  top: 20px;
+  top: 50%;
+  translate: 0 -50%;
   display: grid;
   place-items: center;
   width: 24px;
@@ -1206,7 +1210,6 @@
   font-weight: 600;
   line-height: 1.2;
 }
-.wk-defi li > span:last-child,
 .wk-fresh span {
   display: block;
   margin-top: 7px;

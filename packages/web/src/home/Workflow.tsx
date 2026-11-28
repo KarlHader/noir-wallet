@@ -146,7 +146,6 @@ export function Workflow() {
                       <img src={use.icon} width={15} height={15} alt="" />
                     </span>
                     <b>{use.title}</b>
-                    <span>{use.body}</span>
                   </li>
                 ))}
               </ul>
