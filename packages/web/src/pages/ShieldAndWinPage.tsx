@@ -28,7 +28,6 @@ import {
   boardView,
   campaignStatusWord,
   closedCampaignHint,
-  deadlineLabel,
   entryCopy,
   entryView,
   formatEntryUsd,
@@ -54,6 +53,7 @@ import {
   type NoirEthereumProvider
 } from '../shield-and-win/wallet'
 import { Tooltip } from '../components/Tooltip'
+import { shortDate } from '../home/campaignCopy'
 import { CAMPAIGN } from '../seo'
 import '../tailwind.css'
 
@@ -482,13 +482,51 @@ function minimumAmount(campaign: ShieldWinCampaign, minimumValue: string): strin
     : `$${campaign.min_usd_value}`
 }
 
-function endingCopy(campaign: ShieldWinCampaign): string {
-  if (campaign.status === 'ACTIVE') {
-    const deadline = deadlineLabel(campaign.end_time)
-    const when = deadline ? `, or at the deadline ${deadline}` : ''
-    return `The campaign ends the moment it's won${when}. It may end with no winner.`
+/** "December 3, 2026", in UTC */
+function longDate(seconds: number): string {
+  const ms = seconds * 1000
+  if (!Number.isFinite(ms)) return ''
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  }).format(new Date(ms))
+}
+
+/** Every prize together: the prize times the number of prizes, multiplied as exact decimals */
+function poolAmount(campaign: ShieldWinCampaign): string {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(campaign.reward_amount)
+  if (!match || campaign.max_winners <= 0) return prizeAmount(campaign)
+  const fraction = match[2] ?? ''
+  const digits = (BigInt(match[1] + fraction) * BigInt(campaign.max_winners))
+    .toString()
+    .padStart(fraction.length + 1, '0')
+  const whole = digits.slice(0, digits.length - fraction.length)
+  const decimals = digits.slice(digits.length - fraction.length).replace(/0+$/, '')
+  return [decimals ? `${whole}.${decimals}` : whole, campaign.reward_asset]
+    .filter(part => part.length > 0)
+    .join(' ')
+}
+
+/** The note above the footer: "Ends when all prizes are won or on Dec 3, 16:00 UTC, …" */
+function footerEnding(campaign: ShieldWinCampaign): string {
+  if (campaign.status === 'SOLD_OUT' || campaign.status === 'ENDED') return ''
+  const deadline = shortDate(campaign.end_time)
+  const won = campaign.max_winners === 1 ? 'the prize is won' : 'all prizes are won'
+  if (campaign.max_winners === 0) return `Ends on ${deadline}.`
+  return `Ends when ${won} or on ${deadline}, whichever comes first.`
+}
+
+/** When the campaign ends: once every prize is won, or at its deadline */
+function endingCopy(campaign: ShieldWinCampaign, deadline: string): string {
+  if (campaign.status === 'SOLD_OUT' || campaign.status === 'ENDED') {
+    return `The campaign status is ${campaignStatusWord(campaign.status)}.`
   }
-  return `The campaign status is ${campaignStatusWord(campaign.status)}.`
+  const won = campaign.max_winners === 1 ? 'the prize is won' : 'all prizes are won'
+  if (!deadline) return `The campaign ends when ${won}.`
+  if (campaign.max_winners === 0) return `The campaign ends on ${deadline}.`
+  return `The campaign ends when ${won} or on ${deadline}, whichever comes first.`
 }
 
 function RulesCopy({
@@ -500,65 +538,48 @@ function RulesCopy({
 }) {
   const minimum = minimumAmount(campaign, minimumValue)
   const prize = prizeAmount(campaign)
-  const ending = endingCopy(campaign)
+  const ending = endingCopy(campaign, longDate(campaign.end_time))
   return (
     <>
       <ul>
         <li>
-          <b>How to join:</b> install Noir Wallet, create or import a wallet, then make a shield
-          transfer of <b>{minimum} or more</b> into <b>NEAR Confidential</b> from your Public or
-          Incognito account (in the wallet: Shield → NEAR Confidential). Use the latest version of
-          Noir Wallet.
+          <b>How to Join:</b> Shield your EVM address with {minimum} or more for an instant draw.
+          Your shielded funds stay in your own wallet balance. Use the latest version of Noir
+          Wallet.
         </li>
         <li>
-          We count the USD value credited after network, bridge and protocol fees. Smaller transfers
-          can&apos;t be added together.
+          <b>Eligibility:</b> Only successful shield transfers into NEAR Confidential qualify.
+          Smaller transfers cannot be combined. Other privacy providers, withdrawals, internal
+          transfers, swaps, and failed or refunded transactions are excluded.
         </li>
         <li>
-          Each eligible transfer gets one automatic draw as soon as it&apos;s credited, at{' '}
-          <strong>1 in 444</strong> (about 0.225%). That doesn&apos;t mean someone wins every 444
-          draws.
+          <b>Instant Draw:</b> Each eligible transfer automatically gets one draw with a{' '}
+          <b>1 in 444 chance of winning (~0.225%)</b>. Each transfer can only be drawn once.
         </li>
         <li>
+          <b>Prize Pool:</b>{' '}
           {campaign.max_winners === 0 ? (
-            <>
-              There is <b>no winner cap</b>. Each prize is <b>{prize}</b>.
-            </>
+            <b>{prize} for each winning draw, with no cap on winners.</b>
           ) : campaign.max_winners === 1 ? (
-            <>
-              There is <b>one prize of {prize}</b>.
-            </>
+            <b>One prize of {prize}.</b>
           ) : (
-            <>
-              There are{' '}
-              <b>
-                up to {campaign.max_winners} prizes of {prize}
-              </b>
-              .
-            </>
+            <b>
+              {poolAmount(campaign)} in total — {campaign.max_winners} prizes of {prize} each.
+            </b>
           )}{' '}
           {ending}
         </li>
         <li>
-          Only transfers into NEAR Confidential count. Zcash Shield, Railgun, Privacy Pool, ZAMA,
-          moving funds out of or within NEAR Confidential, sending to another address, swaps, and
-          failed or refunded transfers don&apos;t count.
+          <b>Claim:</b> Winners receive the full {prize} to a transparent Zcash address in Noir
+          Wallet, with network fees covered.
         </li>
         <li>
-          The draw runs once per transfer on our server. Refreshing, closing or reinstalling never
-          draws again.
+          <b>Privacy &amp; Security:</b> We never ask for your recovery phrase or private keys, or
+          publicly disclose your balances, addresses, or transaction paths.
         </li>
         <li>
-          The winner claims to a Zcash transparent address in Noir Wallet. We pay the network fee,
-          so the full {prize} arrives.
-        </li>
-        <li>
-          We never ask for your seed phrase or keys, and never publish your balances, addresses or
-          the path of your funds. &quot;Draws so far&quot; is a total count only.
-        </li>
-        <li>
-          {/*Entries per wallet, regions and age limits <Tbc />. */}Fees are shown before you sign.
-          Winning isn&apos;t guaranteed.
+          <b>Disclaimer:</b> Fees are displayed before signing. Winning is not guaranteed, and
+          prizes may remain unawarded.
         </li>
       </ul>
       <p className="border-t border-[#232323] px-[22px] pt-3 pb-[22px] text-[13px] text-[#8b8e93]">
@@ -1624,7 +1645,7 @@ export default function ShieldAndWinPage() {
               </p>
             ) : (
               <p className="pt-[clamp(18px,3vh,28px)] max-w-[31em] text-[clamp(17px,1.4vw,21px)] leading-[1.55] text-[#bcbcc8]">
-                {'Every'}
+                {'Shield your EVM address'}
                 {board.minimumValue ? (
                   <span
                     className={
@@ -1633,10 +1654,10 @@ export default function ShieldAndWinPage() {
                         : undefined
                     }
                   >
-                    {` min ${board.minimumValue}`}
+                    {` with min ${board.minimumValue}`}
                   </span>
                 ) : null}
-                {' shield into EVM gets an instant draw. Your '}
+                {' to get an instant draw. Your '}
                 {board.minimumValue ? (
                   <span
                     className={
@@ -1955,7 +1976,7 @@ export default function ShieldAndWinPage() {
       <footer className="px-4 pt-[22px] pb-[26px] text-center text-[13px] leading-[1.6] text-[#8b8e93]">
         {prizeReady && board.prizePoolLabel ? (
           <p>
-            {board.prizePoolLabel}. The campaign ends when it is no longer active.{' '}
+            {board.prizePoolLabel}. {campaign ? footerEnding(campaign) : ''}{' '}
             <button
               type="button"
               className="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[length:inherit] leading-[inherit] text-[#bcbcc8] underline decoration-white/30 underline-offset-[3px] hover:text-white"

@@ -64,7 +64,7 @@ export interface EntryStep {
 export interface EntryCopy {
   /** The ticket's title, with the whole prize pool */
   readonly title: string
-  /** The sheet's heading, with one prize */
+  /** The sheet's heading, with the whole prize pool too */
   readonly heading: string
   readonly lede: string
   readonly steps: readonly [EntryStep, EntryStep, EntryStep]
@@ -76,6 +76,7 @@ export function entryCopy(campaign: ShieldWinCampaign): EntryCopy {
   const minimum = minimumOf(campaign)
   const suggested = suggestedOf(campaign)
   const prize = prizeOf(campaign)
+  const pool = poolOf(campaign)
   const prizes =
     campaign.max_winners === 1
       ? `1 prize of ${prize}`
@@ -84,11 +85,11 @@ export function entryCopy(campaign: ShieldWinCampaign): EntryCopy {
         : `Prizes of ${prize}`
 
   return {
-    title: `Go Private, Win ${poolOf(campaign)}`,
-    heading: minimum ? `Shield ${minimum}. Win ${prize}.` : `Shield and win ${prize}.`,
+    title: `Go Private, Win ${pool}`,
+    heading: minimum ? `Shield ${minimum}. Win ${pool}.` : `Shield and win ${pool}.`,
     lede: minimum
-      ? `Every min ${minimum} shield into EVM gets an instant draw. Your ${minimum} stays in your own balance.`
-      : 'Every shield into EVM gets an instant draw. Your funds stay in your own balance.',
+      ? `Shield your EVM address with min ${minimum} to get an instant draw. Your ${minimum} stays in your own balance.`
+      : 'Shield your EVM address to get an instant draw. Your funds stay in your own balance.',
     steps: [
       { title: 'Get Noir', body: 'Install the extension, then create or import a wallet.' },
       minimum

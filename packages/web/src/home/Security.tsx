@@ -1,5 +1,5 @@
 /**
- * Your Key Open Code (design mock): four cards in a 2 × 2 grid. Each has a large icon on its
+ * Your Keys, Open Code (design mock's "Your Key Open Code"): four cards in a 2 × 2 grid. Each has a large icon on its
  * right that fades from white to transparent and is blurred into the background; the shapes
  * follow Lucide's shield-user, layers, badge-check and code-xml (ISC license).
  */
@@ -69,7 +69,7 @@ export function Security() {
           Security and Trust
         </p>
         <h2 className="h2" id="trust-title" data-reveal="up">
-          Your Key Open Code
+          Your Keys, Open Code
         </h2>
         <ul className="trust-grid">
           {TRUST_POINTS.map(point => (

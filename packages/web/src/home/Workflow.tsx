@@ -2,7 +2,7 @@
  * How Noir Wallet Works (the design mock's diagram): the Public account shields into the Shield
  * balance, which funds the Incognito account privately, and Incognito is what you trade, lend and
  * predict with. A dashed bracket marks that Public and Incognito have no public link, and the bar
- * underneath says both come from one seed phrase. The supported privacy providers follow.
+ * underneath says both come from one recovery phrase. The supported privacy providers follow.
  * On desktop the diagram is laid out on the mock's 1256 × 536 canvas and scales down as a whole
  * when the container narrows; on phones it becomes one column. Sparks run along the lines: out
  * from Public through Shield and Incognito to the DeFi uses, then back along Return and Unshield.
@@ -68,7 +68,7 @@ export function Workflow() {
           style={{ '--k': k } as CSSProperties}
         >
           <div className="works">
-            {/* Desktop: the "no public link" bracket, the dashed lines down to the seed phrase
+            {/* Desktop: the "no public link" bracket, the dashed lines down to the recovery phrase
                 bar, and the fan out to the DeFi uses */}
             <svg className="wk-lines" viewBox="0 0 1256 536" aria-hidden="true">
               <defs>
@@ -158,7 +158,7 @@ export function Workflow() {
             <p className="wk-seed">
               <img src={IMG.worksKey} width={11} height={22} alt="" />
               <span>
-                Just one seed phrase, <strong>no extra backup</strong>
+                Just one recovery phrase, <strong>no extra backup</strong>
               </span>
               <em>HD wallet</em>
             </p>
