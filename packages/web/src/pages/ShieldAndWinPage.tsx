@@ -28,6 +28,7 @@ import {
   boardView,
   campaignStatusWord,
   closedCampaignHint,
+  deadlineLabel,
   entryCopy,
   entryView,
   formatEntryUsd,
@@ -52,8 +53,8 @@ import {
   walletErrorMessage,
   type NoirEthereumProvider
 } from '../shield-and-win/wallet'
+import { poolOf, shortDate } from '../home/campaignCopy'
 import { Tooltip } from '../components/Tooltip'
-import { shortDate } from '../home/campaignCopy'
 import { CAMPAIGN } from '../seo'
 import '../tailwind.css'
 
@@ -482,33 +483,6 @@ function minimumAmount(campaign: ShieldWinCampaign, minimumValue: string): strin
     : `$${campaign.min_usd_value}`
 }
 
-/** "December 3, 2026", in UTC */
-function longDate(seconds: number): string {
-  const ms = seconds * 1000
-  if (!Number.isFinite(ms)) return ''
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'UTC',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric'
-  }).format(new Date(ms))
-}
-
-/** Every prize together: the prize times the number of prizes, multiplied as exact decimals */
-function poolAmount(campaign: ShieldWinCampaign): string {
-  const match = /^(\d+)(?:\.(\d+))?$/.exec(campaign.reward_amount)
-  if (!match || campaign.max_winners <= 0) return prizeAmount(campaign)
-  const fraction = match[2] ?? ''
-  const digits = (BigInt(match[1] + fraction) * BigInt(campaign.max_winners))
-    .toString()
-    .padStart(fraction.length + 1, '0')
-  const whole = digits.slice(0, digits.length - fraction.length)
-  const decimals = digits.slice(digits.length - fraction.length).replace(/0+$/, '')
-  return [decimals ? `${whole}.${decimals}` : whole, campaign.reward_asset]
-    .filter(part => part.length > 0)
-    .join(' ')
-}
-
 /** The note above the footer: "Ends when all prizes are won or on Dec 3, 16:00 UTC, …" */
 function footerEnding(campaign: ShieldWinCampaign): string {
   if (campaign.status === 'SOLD_OUT' || campaign.status === 'ENDED') return ''
@@ -518,15 +492,17 @@ function footerEnding(campaign: ShieldWinCampaign): string {
   return `Ends when ${won} or on ${deadline}, whichever comes first.`
 }
 
-/** When the campaign ends: once every prize is won, or at its deadline */
-function endingCopy(campaign: ShieldWinCampaign, deadline: string): string {
-  if (campaign.status === 'SOLD_OUT' || campaign.status === 'ENDED') {
+function endingCopy(campaign: ShieldWinCampaign): string {
+  if (campaign.status !== 'ACTIVE') {
     return `The campaign status is ${campaignStatusWord(campaign.status)}.`
   }
-  const won = campaign.max_winners === 1 ? 'the prize is won' : 'all prizes are won'
-  if (!deadline) return `The campaign ends when ${won}.`
-  if (campaign.max_winners === 0) return `The campaign ends on ${deadline}.`
-  return `The campaign ends when ${won} or on ${deadline}, whichever comes first.`
+  const deadline = deadlineLabel(campaign.end_time)
+  if (campaign.max_winners === 0) {
+    return deadline ? `The campaign ends on ${deadline}.` : ''
+  }
+  return deadline
+    ? `The campaign ends when all prizes are won or on ${deadline}, whichever comes first.`
+    : 'The campaign ends when all prizes are won.'
 }
 
 function RulesCopy({
@@ -538,14 +514,14 @@ function RulesCopy({
 }) {
   const minimum = minimumAmount(campaign, minimumValue)
   const prize = prizeAmount(campaign)
-  const ending = endingCopy(campaign, longDate(campaign.end_time))
+  const pool = poolOf(campaign)
+  const ending = endingCopy(campaign)
   return (
     <>
       <ul>
         <li>
-          <b>How to Join:</b> Shield your EVM address with {minimum} or more for an instant draw.
-          Your shielded funds stay in your own wallet balance. Use the latest version of Noir
-          Wallet.
+          <b>How to Join:</b> Shield your EVM assets ({minimum} minimum) for an instant draw every
+          time. Your {minimum} stays in your own balance. Use the latest version of Noir Wallet.
         </li>
         <li>
           <b>Eligibility:</b> Only successful shield transfers into NEAR Confidential qualify.
@@ -559,12 +535,12 @@ function RulesCopy({
         <li>
           <b>Prize Pool:</b>{' '}
           {campaign.max_winners === 0 ? (
-            <b>{prize} for each winning draw, with no cap on winners.</b>
+            <b>No winner cap. Each prize is {prize}.</b>
           ) : campaign.max_winners === 1 ? (
             <b>One prize of {prize}.</b>
           ) : (
             <b>
-              {poolAmount(campaign)} in total — {campaign.max_winners} prizes of {prize} each.
+              {pool} in total — {campaign.max_winners} prizes of {prize} each.
             </b>
           )}{' '}
           {ending}
