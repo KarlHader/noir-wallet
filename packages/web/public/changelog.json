@@ -2,14 +2,14 @@
   "schemaVersion": 1,
   "releases": {
     "2.1.3": {
-      "notifyUpdate": true,
+      "notifyUpdate": false,
       "changes": [
         "Continue eligible EVM swaps after token approval within the fees you already confirmed.",
         "Try a lower network fee when you have insufficient funds for an eligible Public Swap."
       ]
     },
     "2.1.2": {
-      "notifyUpdate": true,
+      "notifyUpdate": false,
       "changes": [
         "Swap transparent ZEC into NEAR Confidential from Shield on supported Ledger accounts.",
         "Complete required Ledger signatures during swap confirmation.",
@@ -21,14 +21,14 @@
       ]
     },
     "2.1.1": {
-      "notifyUpdate": true,
+      "notifyUpdate": false,
       "changes": [
         "Shield prepares the quote before opening confirmation.",
         "Eligible swaps continue after token approval when gas still fits the fee limits you confirmed."
       ]
     },
     "2.1.0": {
-      "notifyUpdate": true,
+      "notifyUpdate": false,
       "changes": [
         "Open Home on Shield and switch between Public, Shield, and Incognito balances.",
         "Use separate Shield Receive and Unshield flows for native Zcash and supported Confidential routes.",
